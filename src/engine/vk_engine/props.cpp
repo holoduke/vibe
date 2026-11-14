@@ -593,12 +593,30 @@ void VulkanEngine::tick_spacejet(float dt) {
                     // keeps the jet's velocity (incl. dive), falls h metres.
                     // Light drag (fx.cpp) shortens range ~4 %.
                     glm::vec3 v0 = f.fwd * f.speed;
+                    // Airstrike: a level release (the aircraft may still be
+                    // settling onto its run altitude - a climbing release
+                    // lobbed the bomb from 900 m out).
+                    if (f.strike) v0 = glm::normalize(glm::vec3(f.fwd.x, 0.0f, f.fwd.z) + glm::vec3(1e-4f)) * f.speed;
                     float vy = v0.y;
                     float t_fall = (vy + std::sqrt(vy * vy + 2.0f * kG * h)) / kG;
                     glm::vec3 impact = f.pos + glm::vec3(v0.x, 0.0f, v0.z) * (t_fall * 0.96f);
+                    {
+                        // Free-fall bombs: integrate the same gravity + quadratic
+                        // drag the bomb itself flies with (fx.cpp) down to the
+                        // target's height. The closed form above (drag as a flat
+                        // 4 %) fell 14 m short from a 180 m release.
+                        glm::vec3 bp = f.pos - f.up * 1.5f, bv = v0;
+                        const float sdt = 0.02f;
+                        for (int k = 0; k < 900 && bp.y > f.target.y; ++k) {
+                            const float sp = glm::length(bv);
+                            bv += (glm::vec3(0.0f, -kG, 0.0f) - bv * (sp * 0.00025f)) * sdt;
+                            bp += bv * sdt;
+                        }
+                        impact = bp;
+                    }
                     // Parachute bombs (3 runs in 5): short forward carry until the
                     // canopy bites, then a slow descent drifting with the wind.
-                    const bool chute = ((f.id * 7u + uint32_t(f.sorties)) % 5u) < 3u;
+                    const bool chute = !f.strike && ((f.id * 7u + uint32_t(f.sorties)) % 5u) < 3u;
                     if (chute)
                         impact = f.pos + glm::vec3(v0.x, 0.0f, v0.z) * 0.74f +
                                  glm::vec3(wind_vel_.x, 0.0f, wind_vel_.z) * (h / 8.5f);
@@ -611,12 +629,18 @@ void VulkanEngine::tick_spacejet(float dt) {
                         f.bomb_dropped = true;
                         Bomb b{};
                         b.pos = f.pos - f.up * 1.5f;
-                        b.vel = f.fwd * f.speed;
+                        b.vel = v0;
                         b.prev_pos = b.pos;
                         b.chute = chute;
                         b.phase = float(f.id) * 1.7f;
+                        if (f.strike) {
+                            b.strike = true;
+                            b.size = 1.6f;
+                            airstrike_.phase = 2;
+                            airstrike_.t = 0.0f;
+                        }
                         bombs_.push_back(b);
-                        log::infof("[jets] bomb away -> (%.0f, %.0f)", f.target.x, f.target.z);
+                        log::infof("[jets] bomb away -> (%.0f, %.0f)%s from (%.0f, %.0f, %.0f) h %.0f along %.1f speed %.0f t %.1f", f.target.x, f.target.z, f.strike ? " (airstrike)" : "", f.pos.x, f.pos.y, f.pos.z, h, along, f.speed, f.t);
                         // Pull up and reverse.
                         f.mode = JetMode::Turn;
                         f.mode_t = 0.0f;
@@ -999,6 +1023,43 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp,
                                              glm::vec3(0.0f, 0.0f, kick));
     glm::mat4 view_inv_recoil = view_inv * recoil_offset;
 
+    if (weapon_ == 1) {
+        // Airstrike tablet: a ruggedised slab held low on the right, tilted
+        // up toward the eye, with a lit screen (status colour), a target
+        // reticle on it and a stub antenna. Camera space: +X right, +Y up,
+        // -Z forward; the cube mesh is a unit cube.
+        const float now = static_cast<float>(glfwGetTime());
+        const glm::mat4 base = view_inv *
+            glm::translate(glm::mat4(1.0f), glm::vec3(0.155f, -0.165f + 0.004f * std::sin(now * 1.3f), -0.40f)) *
+            glm::rotate(glm::mat4(1.0f), glm::radians(-14.0f), glm::vec3(0.0f, 1.0f, 0.0f)) *
+            glm::rotate(glm::mat4(1.0f), glm::radians(52.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+        auto box = [&](glm::vec3 c, glm::vec3 size, glm::vec4 col, glm::vec3 emis, bool full) {
+            draw_part(cube_mesh_, base * glm::translate(glm::mat4(1.0f), c) * glm::scale(glm::mat4(1.0f), size),
+                      col, emis, full);
+        };
+        const glm::vec4 shell(0.07f, 0.075f, 0.07f, 1.0f), rubber(0.03f, 0.03f, 0.03f, 1.0f);
+        // Status colour: ready = green, inbound = amber (blinking), bomb
+        // away = red, cooldown = dim.
+        glm::vec3 scr(0.05f, 0.9f, 0.45f);
+        float lum = 1.6f;
+        if (airstrike_.phase == 1) { scr = glm::vec3(1.0f, 0.62f, 0.08f); lum = 1.2f + 0.9f * (0.5f + 0.5f * std::sin(now * 10.0f)); }
+        else if (airstrike_.phase == 2) { scr = glm::vec3(1.0f, 0.12f, 0.05f); lum = 2.4f; }
+        else if (airstrike_.phase == 3) { scr = glm::vec3(0.3f, 0.35f, 0.32f); lum = 0.6f; }
+        box(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.215f, 0.014f, 0.150f), shell, glm::vec3(0.0f), false);          // body
+        for (float sx : { -1.0f, 1.0f })                                                                    // rubber corners
+            for (float sz : { -1.0f, 1.0f })
+                box(glm::vec3(sx * 0.103f, 0.0f, sz * 0.070f), glm::vec3(0.022f, 0.018f, 0.022f), rubber, glm::vec3(0.0f), false);
+        box(glm::vec3(0.0f, 0.0078f, 0.0f), glm::vec3(0.185f, 0.0012f, 0.122f), glm::vec4(scr * 0.10f, 1.0f), scr * (0.35f * lum), true);   // screen
+        // Reticle: cross + box, brighter than the screen.
+        const glm::vec3 hot = scr * (1.5f * lum);
+        box(glm::vec3(0.0f, 0.0090f, 0.0f), glm::vec3(0.150f, 0.0008f, 0.0022f), glm::vec4(scr, 1.0f), hot, true);
+        box(glm::vec3(0.0f, 0.0090f, 0.0f), glm::vec3(0.0022f, 0.0008f, 0.100f), glm::vec4(scr, 1.0f), hot, true);
+        for (float sx : { -1.0f, 1.0f }) box(glm::vec3(sx * 0.026f, 0.0090f, 0.0f), glm::vec3(0.0022f, 0.0008f, 0.054f), glm::vec4(scr, 1.0f), hot, true);
+        for (float sz : { -1.0f, 1.0f }) box(glm::vec3(0.0f, 0.0090f, sz * 0.026f), glm::vec3(0.054f, 0.0008f, 0.0022f), glm::vec4(scr, 1.0f), hot, true);
+        box(glm::vec3(0.094f, 0.004f, -0.105f), glm::vec3(0.008f, 0.008f, 0.070f), rubber, glm::vec3(0.0f), false);                     // antenna
+        box(glm::vec3(0.094f, 0.004f, -0.142f), glm::vec3(0.010f, 0.010f, 0.010f), glm::vec4(scr, 1.0f), scr * lum, true);             // antenna LED
+        return;
+    }
     if (!viewmodel_gltf_.empty()) {
         glm::mat4 root = view_inv_recoil * viewmodel_root_offset_;
         for (const auto& vm : viewmodel_gltf_) {

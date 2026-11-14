@@ -31,9 +31,8 @@ namespace qlike {
 void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     TerrainData& td = terrain_data_;
     if (td.heights.empty() || size < 0.6f) return;
-    // The ray-marched terrain is procedural (FBM in the shader): a heightmap
-    // crater would only sink the physics ground with no visible hole.
-    if (rt_.terrain_raymarch_enabled) return;
+    // (Raymarched terrain too: its FBM adds the sculpt-delta height texture
+    // this updates, and the baked height the grass / air-skip read.)
     // Only at the surface (callers pass ground blasts, but stay defensive).
     if (pos.y > sample_terrain_height(pos.x, pos.z) + 4.0f) return;
     if (std::max(std::abs(pos.x), std::abs(pos.z)) < 26.0f) return;      // castle plateau
@@ -206,6 +205,28 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     };
     reseat(scatter_.inst_cpu, scatter_.inst_mapped, scatter_.inst_dy);
     reseat(scatter_.plant_cpu, scatter_.plant_mapped, scatter_.plant_dy);
+
+    // Mud: remember the crater for the terrain shader (newest kMaxCraters).
+    craters_.push_back(glm::vec4(pos.x, h0, pos.z, Rc));
+    if (int(craters_.size()) > kMaxCraters) craters_.erase(craters_.begin());
+    // No grass in the bowl or on the ejecta ring (R channel of the RG8
+    // presence mask, 2 m texels; the raymarched blades and the green ground
+    // tint both read it).
+    if (!grass_mask_data_.empty()) {
+        const int dim = int(std::lround(std::sqrt(double(grass_mask_data_.size() / 2))));
+        const float cpm = float(dim) / 2048.0f;
+        const float cxm = (pos.x + 1024.0f) * cpm, czm = (pos.z + 1024.0f) * cpm;
+        const float rr = Rc * 1.35f * cpm;
+        for (int mz = std::max(0, int(czm - rr) - 1); mz <= std::min(dim - 1, int(czm + rr) + 1); ++mz)
+            for (int mx = std::max(0, int(cxm - rr) - 1); mx <= std::min(dim - 1, int(cxm + rr) + 1); ++mx) {
+                const float d = std::sqrt((float(mx) + 0.5f - cxm) * (float(mx) + 0.5f - cxm) +
+                                          (float(mz) + 0.5f - czm) * (float(mz) + 0.5f - czm));
+                const float keep = glm::smoothstep(rr * 0.75f, rr + 0.5f, d);
+                uint8_t& m = grass_mask_data_[(size_t(mz) * size_t(dim) + size_t(mx)) * 2];
+                m = uint8_t(float(m) * keep);
+            }
+        reupload_grass_mask();
+    }
 
     log::infof("[crater] r %.1f m depth %.1f m at (%.0f, %.0f, %.0f): %dx%d cells, %.2f ms",
                Rc, D, pos.x, pos.y, pos.z, rw, rh,

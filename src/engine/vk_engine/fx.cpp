@@ -206,7 +206,9 @@ void VulkanEngine::spawn_explosion(glm::vec3 pos, float size, bool ground) {
     if (ground) spawn_impact_decal(pos + glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0, -1, 0));
     // Big ground blasts (bombs, crashes, falling wreckage) shred the forest.
     if (ground && size >= 0.7f) blast_vegetation(pos, 7.5f * size);
-    if (ground && size >= 0.9f) make_crater(pos, size);
+    // Craters cost a ~12 ms hitch each (height textures, physics, GPU
+    // drain): only where they can be seen - not for every far-off bomb.
+    if (ground && size >= 0.9f && glm::distance(pos, player_.eye_position()) < 380.0f) make_crater(pos, size);
 
     const float dist = glm::distance(pos, player_.eye_position());
     cam_shake_ = std::max(cam_shake_, size * glm::clamp(1.0f - dist / 700.0f, 0.0f, 1.0f) * 1.6f);
@@ -407,6 +409,15 @@ void VulkanEngine::tick_fx(float dt) {
             b.vel += (glm::vec3(0.0f, -kFxG, 0.0f) + drag) * dt;
         }
         b.pos += b.vel * dt;
+        // Smoke trail: a point every ~25 ms, kept 2.2 s (free-fall bombs).
+        if (!b.chute) {
+            b.trail_acc += dt;
+            if (b.trail.empty() || b.trail_acc >= 0.025f) {
+                b.trail.push_back({ b.pos, b.t });
+                b.trail_acc = 0.0f;
+            }
+            while (!b.trail.empty() && b.t - b.trail.front().t > 2.2f) b.trail.erase(b.trail.begin());
+        }
         bool boom = false;
         glm::vec3 at = b.pos;
         glm::vec3 seg = b.pos - b.prev_pos;
@@ -419,7 +430,8 @@ void VulkanEngine::tick_fx(float dt) {
         if (!boom && b.pos.y <= gh) { boom = true; at = glm::vec3(b.pos.x, gh, b.pos.z); }
         if (!boom && b.t > 30.0f) { boom = true; }
         if (boom) {
-            spawn_explosion(at, 1.0f, true);
+            spawn_explosion(at, b.size, true);
+            if (b.strike) { airstrike_.phase = 3; airstrike_.t = 0.0f; }
             it = bombs_.erase(it);
         } else {
             ++it;
@@ -684,12 +696,47 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
                          2.4f * flick, glm::vec3(1.0f, 0.42f, 0.08f));
         }
     }
-    // Falling bombs: short smoke wisp.
+    // Falling bombs: a smoke trail along the actual (parabolic) path -
+    // thin and dense at the bomb, widening and thinning out behind it.
     for (const auto& b : bombs_) {
         if (b.chute) continue;
-        glm::vec3 d = glm::normalize(b.vel + glm::vec3(1e-4f));
-        smoke.segment(b.pos - d * 8.0f, b.pos, min_w(b.pos, 0.35f, 0.8f), 0.35f,
-                      glm::vec3(0.8f));
+        const size_t n = b.trail.size();
+        for (size_t i = 0; i + 1 <= n; ++i) {
+            const glm::vec3 p0 = b.trail[i].p;
+            const glm::vec3 p1 = (i + 1 < n) ? b.trail[i + 1].p : b.pos;
+            const float age = glm::clamp((b.t - b.trail[i].t) / 2.2f, 0.0f, 1.0f);
+            const float w = glm::mix(0.22f, 1.5f, age) * (b.strike ? 1.3f : 1.0f);
+            const float a = 0.5f * (1.0f - age) * (1.0f - age);
+            smoke.segment(p0, p1, min_w(p0, w, 0.9f), a, glm::vec3(0.82f, 0.80f, 0.78f));
+        }
+    }
+    // Airstrike marker: a pulsing ring + a light column on the marked
+    // target while the aircraft is inbound / the bomb is falling, and a
+    // thin aim ring under the crosshair while the tablet is in hand.
+    {
+        auto ring = [&](glm::vec3 c, float r, float w, float alpha, glm::vec3 tint) {
+            const int N = 28;
+            glm::vec3 prev{};
+            for (int i = 0; i <= N; ++i) {
+                const float a = 6.2831853f * float(i) / float(N);
+                glm::vec3 p(c.x + std::cos(a) * r, 0.0f, c.z + std::sin(a) * r);
+                p.y = std::max(sample_terrain_height(p.x, p.z), rt_.water_level) + 0.25f;
+                if (i > 0) glow.segment(prev, p, min_w(p, w, 1.6f), alpha, tint);
+                prev = p;
+            }
+        };
+        if (airstrike_.phase == 1 || airstrike_.phase == 2) {
+            const glm::vec3 t = airstrike_.target;
+            const float pulse = 0.6f + 0.4f * std::sin(now * 9.0f);
+            const glm::vec3 red(1.0f, 0.16f, 0.05f);
+            ring(t, 6.0f, 0.22f, 2.2f * pulse, red);
+            ring(t, 2.0f + 4.0f * glm::fract(now * 0.8f), 0.12f, 1.2f, red);
+            glow.segment(t + glm::vec3(0.0f, 0.3f, 0.0f), t + glm::vec3(0.0f, 70.0f, 0.0f), min_w(t, 0.35f, 2.0f),
+                         1.3f * pulse, red);
+        } else if (weapon_ == 1 && airstrike_.aim_valid && airstrike_.phase == 0) {
+            ring(airstrike_.aim, 6.0f, 0.10f, 1.4f, glm::vec3(0.2f, 1.0f, 0.5f));
+            ring(airstrike_.aim, 0.6f, 0.08f, 1.4f, glm::vec3(0.2f, 1.0f, 0.5f));
+        }
     }
     // Laser bolts: from the barrel (converging onto the flight line) to
     // the bolt's nose. Thin white-hot core + magenta halo, additive.
@@ -1068,6 +1115,125 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     vkinit::transition_image(cmd, scene_color_image_,
                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
+// ---------------------------------------------------------------------
+// Weapon 2: airstrike tablet. Mark a ground point; a friendly aircraft
+// flies a bomb run on it (the jets' own ballistic release solution) and
+// drops one heavy free-fall bomb.
+// ---------------------------------------------------------------------
+bool VulkanEngine::airstrike_ground_point(glm::vec3 origin, glm::vec3 dir, glm::vec3& out) const {
+    // Heightfield march along the view ray (terrain or water surface).
+    float t = 1.5f, t_prev = 0.0f;
+    for (int i = 0; i < 400 && t < 1200.0f; ++i) {
+        const glm::vec3 p = origin + dir * t;
+        const float g = std::max(sample_terrain_height(p.x, p.z), rt_.water_level);
+        const float h = p.y - g;
+        if (h <= 0.0f) {
+            float a = t_prev, b = t;
+            for (int k = 0; k < 10; ++k) {
+                const float m = 0.5f * (a + b);
+                const glm::vec3 q = origin + dir * m;
+                if (q.y - std::max(sample_terrain_height(q.x, q.z), rt_.water_level) > 0.0f) a = m; else b = m;
+            }
+            out = origin + dir * b;
+            out.y = std::max(sample_terrain_height(out.x, out.z), rt_.water_level);
+            return true;
+        }
+        t_prev = t;
+        t += std::max(0.6f, h * 0.5f);
+    }
+    return false;
+}
+
+void VulkanEngine::call_airstrike(glm::vec3 target) {
+    auto ground_h = [&](float x, float z) { return std::max(sample_terrain_height(x, z), rt_.water_level); };
+    // Approach over the player's shoulder: from behind the player toward
+    // the mark, so the run (and the bomb's arc) is seen from the side /
+    // behind.
+    const glm::vec3 eye = player_.eye_position();
+    glm::vec3 los(target.x - eye.x, 0.0f, target.z - eye.z);
+    if (glm::length(los) < 5.0f) { los = player_.forward(); los.y = 0.0f; }
+    los = glm::normalize(los + glm::vec3(1e-4f, 0.0f, 0.0f));
+    // ACROSS the player's line of sight (alternating sides, angled 25 deg
+    // away from the player): the bomb's arc is seen side-on and never
+    // passes over the player on its way down.
+    static bool flip = false; flip = !flip;
+    const glm::vec3 side = glm::vec3(-los.z, 0.0f, los.x) * (flip ? 1.0f : -1.0f);
+    glm::vec3 dir = glm::normalize(side * 0.906f + los * 0.423f);
+    airstrike_.target = target;
+    airstrike_.phase = 1;
+    airstrike_.t = 0.0f;
+    if (spacejet_meshes_.empty()) {
+        // No aircraft asset: release the bomb from where the run would have.
+        Bomb b{};
+        const float h = 110.0f, v = 125.0f;
+        const float t_fall = std::sqrt(2.0f * h / kFxG);
+        b.pos = target + glm::vec3(0.0f, h, 0.0f) - dir * (v * t_fall * 0.96f);
+        b.vel = dir * v;
+        b.prev_pos = b.pos;
+        b.strike = true; b.size = 1.6f;
+        bombs_.push_back(b);
+        airstrike_.phase = 2;
+        return;
+    }
+    SpacejetFlight f{};
+    f.strike = true;
+    f.mode = JetMode::BombRun;
+    f.bomb_dropped = false;
+    f.target = target;
+    f.cruise_alt = 100.0f;
+    f.pos = target - dir * 1100.0f;
+    f.pos.y = std::max(target.y + 105.0f, ground_h(f.pos.x, f.pos.z) + 70.0f);
+    f.fwd = dir;
+    f.up = glm::vec3(0.0f, 1.0f, 0.0f);
+    f.speed = 125.0f;
+    f.scale = 1.15f;
+    f.sortie_max = 0;                       // one run, then egress
+    f.id = ++spacejet_next_id_;
+    f.prev_pos = f.pos; f.prev_fwd = f.fwd; f.prev_up = f.up;
+    airstrike_.jet_id = f.id;
+    spacejet_flights_.push_back(f);
+    log::infof("[airstrike] target (%.0f, %.0f, %.0f) marked - aircraft inbound", target.x, target.y, target.z);
+}
+
+void VulkanEngine::tick_airstrike(float dt, bool fire_pressed) {
+    // Test hook: QLIKE_TEST_STRIKE=<metres>[,<frame>] equips the tablet and
+    // marks the ground that far ahead of the camera at that frame (200).
+    {
+        static float dist = -1.0f; static int at = 200; static bool init = false;
+        if (!init) { init = true; if (const char* e = std::getenv("QLIKE_TEST_STRIKE")) std::sscanf(e, "%f,%d", &dist, &at); }
+        if (dist > 0.0f && int(frame_number_) == at) {
+            weapon_ = 1;
+            glm::vec3 fw = player_.forward(); fw.y = 0.0f; fw = glm::normalize(fw + glm::vec3(1e-4f, 0.0f, 0.0f));
+            glm::vec3 t = player_.eye_position() + fw * dist;
+            t.y = std::max(sample_terrain_height(t.x, t.z), rt_.water_level);
+            call_airstrike(t);
+        }
+    }
+    airstrike_.t += dt;
+    airstrike_.aim_valid = false;
+    if (weapon_ == 1 && state_ == State::Playing)
+        airstrike_.aim_valid = airstrike_ground_point(player_.eye_position(), player_.forward(), airstrike_.aim);
+    switch (airstrike_.phase) {
+    case 0:
+        if (fire_pressed && airstrike_.aim_valid) call_airstrike(airstrike_.aim);
+        break;
+    case 1: {
+        // Aircraft lost (shot down / timed out) before the release: ready again.
+        bool alive = false;
+        for (const auto& f : spacejet_flights_)
+            if (f.id == airstrike_.jet_id && !f.dead && !f.destroying && f.mode == JetMode::BombRun) alive = true;
+        if (!alive || airstrike_.t > 45.0f) { airstrike_.phase = 0; airstrike_.t = 0.0f; }
+        break;
+    }
+    case 2:
+        if (airstrike_.t > 20.0f) { airstrike_.phase = 0; airstrike_.t = 0.0f; }   // bomb lost
+        break;
+    default:
+        if (airstrike_.t > 2.5f) { airstrike_.phase = 0; airstrike_.t = 0.0f; }    // short cooldown
+        break;
+    }
 }
 
 } // namespace qlike

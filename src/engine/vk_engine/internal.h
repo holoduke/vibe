@@ -368,6 +368,9 @@ struct SceneUBO {
     glm::vec4  rm_ground_green;
     glm::vec4  rm_red_sand;
     glm::vec4  rm_rock;
+    // Bomb craters (mud material): xyz centre, w bowl radius; crater_info.x = count.
+    glm::vec4  craters[24];
+    glm::vec4  crater_info;
 };
 
 // ---- KHR ray tracing entry points ----

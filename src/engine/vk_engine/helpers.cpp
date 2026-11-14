@@ -37,7 +37,8 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 6096 (grass_rm_params + grass_rm_params2, grass blade shadows).
 //     → 6208 (lamp_lights[2], road lanterns).
 //     → 6272 (raymarched terrain palette, 4 x vec4).
-static_assert(sizeof(SceneUBO) == 6272, "scene ubo layout");
+//     → 6672 (craters[24] + crater_info).
+static_assert(sizeof(SceneUBO) == 6672, "scene ubo layout");
 
 RtFuncs g_rt;
 

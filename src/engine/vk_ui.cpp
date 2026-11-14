@@ -318,6 +318,35 @@ void VulkanEngine::build_hud_ui() {
                        IM_COL32(255, 255, 255, 255), msg);
     }
 
+    // Weapon line (bottom centre): which weapon, and the airstrike state.
+    {
+        ImGuiIO& io_w = ImGui::GetIO();
+        ImDrawList* dl_w = ImGui::GetForegroundDrawList();
+        char msg[128];
+        ImU32 col = IM_COL32(200, 200, 200, 200);
+        if (weapon_ == 1) {
+            switch (airstrike_.phase) {
+            case 0:  snprintf(msg, sizeof(msg), airstrike_.aim_valid ? "[2] AIRSTRIKE  -  click to mark the target"
+                                                                     : "[2] AIRSTRIKE  -  aim at the ground");
+                     col = IM_COL32(90, 255, 150, 235); break;
+            case 1:  snprintf(msg, sizeof(msg), "[2] AIRSTRIKE  -  target marked, aircraft inbound");
+                     col = IM_COL32(255, 180, 40, 245); break;
+            case 2:  snprintf(msg, sizeof(msg), "[2] AIRSTRIKE  -  BOMB AWAY");
+                     col = IM_COL32(255, 70, 40, 255); break;
+            default: snprintf(msg, sizeof(msg), "[2] AIRSTRIKE  -  stand by");
+                     col = IM_COL32(170, 170, 170, 220); break;
+            }
+        } else {
+            snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike");
+            if (airstrike_.phase == 1) { snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike: aircraft inbound"); col = IM_COL32(255, 180, 40, 230); }
+            if (airstrike_.phase == 2) { snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike: BOMB AWAY"); col = IM_COL32(255, 70, 40, 245); }
+        }
+        const ImVec2 ts = ImGui::CalcTextSize(msg);
+        const ImVec2 p((io_w.DisplaySize.x - ts.x) * 0.5f, io_w.DisplaySize.y - ts.y - 18.0f);
+        dl_w->AddRectFilled(ImVec2(p.x - 8.0f, p.y - 4.0f), ImVec2(p.x + ts.x + 8.0f, p.y + ts.y + 4.0f), IM_COL32(0, 0, 16, 150), 4.0f);
+        dl_w->AddText(p, col, msg);
+    }
+
     // Last-target damage indicator — industry-standard FPS placement:
     // a single bar at TOP-CENTER showing the most-recently-hit plane's
     // remaining health. Fades out 3 s after the last hit. Bars float-

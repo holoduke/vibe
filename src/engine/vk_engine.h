@@ -1042,6 +1042,7 @@ private:
         float     loop_done   = 0.0f;       // accumulated loop angle
         float     turn_g      = 0.0f;       // current lateral load (for vapour)
         bool      bomb_dropped = false;
+        bool      strike = false;           // player-called airstrike: friendly, plain bomb, one run
         // Contrail: exhaust positions sampled every ~40 ms (newest last).
         struct TrailPt { glm::vec3 p; float t; float g; float smoke = 0.0f; };
         std::vector<TrailPt> trail;
@@ -1082,8 +1083,34 @@ private:
         bool      chute = false;
         float     open = 0.0f;      // canopy inflation 0..1
         float     phase = 0.0f;     // pendulum phase
+        // Player-called airstrike bomb: heavier (bigger blast / crater).
+        bool      strike = false;
+        float     size = 1.0f;
+        // Smoke trail: positions sampled along the fall (newest last).
+        struct TrailPt { glm::vec3 p; float t; };
+        std::vector<TrailPt> trail;
+        float     trail_acc = 0.0f;
     };
     std::vector<Bomb> bombs_;
+    // Craters, newest last (make_crater): xyz centre, w bowl radius. The
+    // terrain shader turns them to churned mud + ejecta (scene UBO).
+    static constexpr int kMaxCraters = 24;
+    std::vector<glm::vec4> craters_;
+    // ---- Weapons: 0 = laser gun, 1 = airstrike tablet (keys 1 / 2) ----
+    int  weapon_ = 0;
+    bool prev_weapon_key_[2]{};
+    bool airstrike_click_ = false;
+    struct Airstrike {
+        int       phase = 0;        // 0 ready, 1 aircraft inbound, 2 bomb falling, 3 cooldown
+        glm::vec3 target{};
+        float     t = 0.0f;         // time in phase
+        uint32_t  jet_id = 0;
+        bool      aim_valid = false;
+        glm::vec3 aim{};            // ground point under the crosshair (tablet equipped)
+    } airstrike_;
+    void tick_airstrike(float dt, bool fire_pressed);
+    bool airstrike_ground_point(glm::vec3 origin, glm::vec3 dir, glm::vec3& out) const;
+    void call_airstrike(glm::vec3 target);
     // Unit vector from a parachute bomb toward its canopy.
     glm::vec3 bomb_chute_axis(const Bomb& b) const;
     // Explosion instance (fx.cpp). Rendered as layered effects: flash

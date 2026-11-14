@@ -1482,6 +1482,17 @@ float grassEligibility(vec2 worldXZ, float terrainY) {
 // verge weights; the bisector-partitioned second loop gives a road-space
 // UV (across, along) that stays continuous through the bends, so the
 // cobble rows follow the curve. Returns (road_w, verge_w).
+// How much a bomb crater has destroyed the surface at q (1 in the bowl,
+// fading out over the rim): paving and verge give way to the crater mud.
+float crater_cover(vec2 q) {
+    float c = 0.0;
+    int nc = int(scene.crater_info.x + 0.5);
+    for (int i = 0; i < nc && i < 24; ++i) {
+        float r = length(q - scene.craters[i].xz) / max(scene.craters[i].w, 0.5);
+        c = max(c, 1.0 - smoothstep(1.05, 1.45, r));
+    }
+    return c;
+}
 vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
     road_uv = vec2(0.0);
     r_dir = vec2(0.0, 1.0);
@@ -1523,7 +1534,7 @@ vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
     float jit = (noise2(q * 1.7) - 0.5) * 0.45 + (noise2(q * 0.31 + 17.0) - 0.5) * 0.6;
     float road_w  = 1.0 - smoothstep(hw - 0.12, hw + 0.12, rd + jit);
     float verge_w = (1.0 - smoothstep(hw + 0.4 * vw, hw + vw + 0.5, rd + jit * 1.6)) * (1.0 - road_w);
-    return vec2(road_w, verge_w);
+    return vec2(road_w, verge_w) * (1.0 - crater_cover(q));
 }
 
 // Layered material: rock base, grass on flats, snow up high (with
@@ -1614,6 +1625,30 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
     // Ground saturation (settings).
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
     col = max(mix(vec3(lum), col, scene.rm_rock.w), vec3(0.0));
+    // Bomb craters (scene.craters): churned, wet mud in the bowl - darkest
+    // at the bottom where water collects - and dry thrown earth on the rim,
+    // reaching out in irregular rays. Applied after everything else so no
+    // grass / sand tint survives in the hole.
+    {
+        int nc = int(scene.crater_info.x + 0.5);
+        for (int i = 0; i < nc && i < 24; ++i) {
+            vec4  c  = scene.craters[i];
+            vec2  dv = pos.xz - c.xz;
+            float r  = length(dv) / max(c.w, 0.5);
+            if (r > 2.1) continue;
+            float ang = atan(dv.y, dv.x);
+            float ray = noise2(vec2(ang * 4.0 + c.x * 0.37, c.z * 0.37)) * 0.65 +
+                        noise2(vec2(ang * 11.0 - c.z * 0.21, c.x * 0.21)) * 0.35;      // ejecta rays
+            float n1 = noise2(pos.xz * 1.7 + 3.0), n2 = noise2(pos.xz * 6.3);
+            float bowl   = 1.0 - smoothstep(0.82, 1.06 + 0.12 * (n1 - 0.5), r);
+            float ejecta = (1.0 - smoothstep(1.0, 1.15 + 0.9 * ray, r)) * (1.0 - bowl);
+            vec3  soil = vec3(0.115, 0.085, 0.055) * mix(0.78, 1.22, n1);
+            vec3  mud  = vec3(0.062, 0.044, 0.029) * mix(0.75, 1.25, n2);
+            mud = mix(mud * 0.5, mud, smoothstep(0.0, 0.5, r));
+            col = mix(col, soil, ejecta * 0.85);
+            col = mix(col, mud, bowl);
+        }
+    }
     return col;
 }
 

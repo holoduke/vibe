@@ -79,6 +79,8 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   rm_ground_green;  // rgb, w = red sand amount
     vec4   rm_red_sand;      // rgb, w = patch scale
     vec4   rm_rock;          // rgb, w = ground saturation
+    vec4   craters[24];      // xyz centre, w bowl radius
+    vec4   crater_info;      // x = count
 } scene;
 
 #endif

@@ -220,7 +220,7 @@ void VulkanEngine::tick_aa(float dt) {
         const SpacejetFlight* tgt = nullptr;
         float best = kRange;
         for (const auto& f : spacejet_flights_) {
-            if (f.dead || f.destroying) continue;
+            if (f.dead || f.destroying || f.strike) continue;   // strike = the player's own aircraft
             float d = glm::distance(f.pos, v.pos);
             if (d < best && f.pos.y > v.pos.y + 15.0f) { best = d; tgt = &f; }
         }
@@ -381,7 +381,7 @@ void VulkanEngine::tick_sam(float dt) {
         const SpacejetFlight* tgt = nullptr;
         float best = kSamRange;
         for (const auto& f : spacejet_flights_) {
-            if (f.dead || f.destroying) continue;
+            if (f.dead || f.destroying || f.strike) continue;
             if (f.pos.y < v.pos.y + 30.0f) continue;
             bool engaged = false;
             for (const auto& s : sam_missiles_) if (!s.dead && s.target_id == f.id) engaged = true;

@@ -612,6 +612,12 @@ void VulkanEngine::run(const RunOptions& opts) {
         // as the E key above. Only fires while playing so a 9 in the
         // pause menu / chat input wouldn't flip it.
         if (state_ != State::Playing) fly_mode_ = false;
+        // Weapon select: 1 = laser gun, 2 = airstrike tablet.
+        if (state_ == State::Playing) {
+            if (in.weapon1 && !prev_weapon_key_[0]) weapon_ = 0;
+            if (in.weapon2 && !prev_weapon_key_[1]) weapon_ = 1;
+        }
+        prev_weapon_key_[0] = in.weapon1; prev_weapon_key_[1] = in.weapon2;
         if (in.fly_key && !prev_fly_key_ && state_ == State::Playing) {
             fly_mode_ = !fly_mode_;
             player_.velocity = glm::vec3(0.0f);
@@ -762,6 +768,10 @@ void VulkanEngine::run(const RunOptions& opts) {
                     }
                     terrain_stroke_active_ = false;
                 }
+            } else if (weapon_ == 1) {
+                // Airstrike tablet: a click marks the ground under the crosshair.
+                airstrike_click_ = in.fire;
+                fire_cooldown_ = 0.0f;
             } else {
                 float rps = std::max(0.0f, game_.fire_rate_rps);
                 if (rps <= 0.0f) {
@@ -779,6 +789,9 @@ void VulkanEngine::run(const RunOptions& opts) {
                 }
             }
         }
+
+        tick_airstrike(state_ == State::Playing ? frame_dt : 0.0f, airstrike_click_ && state_ == State::Playing);
+        airstrike_click_ = false;
 
         // Fixed-timestep physics: accumulate frame dt, drain in fixed ticks.
         last_physics_ticks_ = 0;
