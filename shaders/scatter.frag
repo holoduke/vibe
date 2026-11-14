@@ -17,6 +17,7 @@ layout(location = 7) in vec2 vUv;
 layout(location = 8) in vec3 vObj;
 layout(location = 9) flat in vec4 vInst;
 layout(location = 10) flat in vec2 vRotSeed;
+layout(location = 11) in vec3 vStoneN;
 
 layout(push_constant) uniform PC {
     mat4 mvp;
@@ -28,7 +29,7 @@ layout(push_constant) uniform PC {
     vec4 grass_params;   // .y = 1 for plants
 } pc;
 
-// The ray-marched stone surface always lies BEHIND its hull: keep early-Z.
+// (Stones are real geometry now; the depth write below is the raster depth.)
 layout(depth_greater) out float gl_FragDepth;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outMotion;
@@ -59,34 +60,19 @@ void main() {
     vec3 wpos = vWorldPos;
     gl_FragDepth = gl_FragCoord.z;
     float stone_cav = 0.0, stone_ground = 0.0;
+    vec3 tex_n = N;      // normal for the texture projection weights (the smooth one)
     if (!plant) {
-        // Ray-marched stone: every instance its own shape (seed from its
-        // position), half sunk in the ground.
+        // Stone: real geometry with a real normal (scatter.vert). Added
+        // here: fine cracks / grain as a detail normal + cavity.
         float sc = max(vInst.w, 1e-3);
         float rc = cos(vRotSeed.x), rsn = sin(vRotSeed.x);
-        vec3 cw = scene.camera_pos.xyz - vInst.xyz;
-        vec3 co = vec3(rc * cw.x + rsn * cw.z, cw.y, -rsn * cw.x + rc * cw.z) / sc;
-        const vec3 kOff = kRockC - vec3(0.0, 0.30, 0.0);        // stone centre 0.3 above its base
-        vec3 ro = vObj + kOff;
-        vec3 rdo = normalize(vObj - co);
         float seed = vRotSeed.y;
-        // Per-stone variety: lumpiness, layered ones, and flat slab pieces.
-        float sv = fract(seed * 0.618);
-        float s_amp = 0.15 + 0.22 * fract(seed * 0.37);
-        float s_strata = sv < 0.22 ? -1.0 : (sv > 0.72 ? 0.5 : 0.0);
         float fp = distance(vWorldPos, scene.camera_pos.xyz) * 2.0 * scene.viewport.w / sc;
         float fine = 1.0 - smoothstep(0.006, 0.03, fp);
-        float eps = max(fp * 0.6, 0.0015);
-        float th = rock_march(ro, rdo, 3.4, seed, s_amp, s_strata, fine, eps);
-        if (th < 0.0) discard;
-        vec3 po = ro + rdo * th;
-        rock_sdf(po, seed, s_amp, s_strata, fine, stone_cav);
-        vec3 no = rock_normal(po, seed, s_amp, s_strata, fine, max(eps * 1.2, 0.002));
-        vec3 pl = (po - kOff) * sc;
-        wpos = vec3(rc * pl.x - rsn * pl.z, pl.y, rsn * pl.x + rc * pl.z) + vInst.xyz;
+        vec3 ngo = normalize(vStoneN);
+        vec3 no = rock_detail_normal(vObj, ngo, seed, fine, 0.0, max(fp * 0.7, 0.0025), stone_cav);
         N = normalize(vec3(rc * no.x - rsn * no.z, no.y, rsn * no.x + rc * no.z));
-        vec4 clipr = pc.mvp * vec4(wpos, 1.0);
-        gl_FragDepth = clipr.z / max(clipr.w, 1e-4);
+        tex_n = normalize(vec3(rc * ngo.x - rsn * ngo.z, ngo.y, rsn * ngo.x + rc * ngo.z));
         // Foot of the stone: soil-stained, normal eased toward the ground.
         stone_ground = 1.0 - smoothstep(0.02, 0.30, (wpos.y - vInst.y) / sc);
         N = normalize(mix(N, vec3(0.0, 1.0, 0.0), stone_ground * 0.5));
@@ -100,7 +86,7 @@ void main() {
 
     // Rock albedo: 2-axis "biplanar" sample of the terrain rock layer
     // (slot 7) — full triplanar is overkill for fist-sized clutter.
-    vec3 bw = abs(N);
+    vec3 bw = abs(tex_n);
     vec2 uvA = wpos.zy * 2.0;
     vec2 uvB = wpos.xz * 2.0;
     float wA = bw.x + bw.z * 0.5;

@@ -13,6 +13,7 @@ layout(location = 3) in vec4 inPosScale;   // .xyz base world, .w scale
 layout(location = 4) in vec4 inRotTint;    // .x rotY, .yzw tint
 
 #include "scene_ubo.glsl"
+#include "rock_sdf.glsl"
 
 layout(push_constant) uniform PC {
     mat4 mvp;
@@ -35,6 +36,7 @@ layout(location = 7) out vec2 vUv;
 layout(location = 8) out vec3 vObj;            // rock: object-space hull point
 layout(location = 9) flat out vec4 vInst;      // rock: base xyz, scale
 layout(location = 10) flat out vec2 vRotSeed;  // rock: rotY, shape seed
+layout(location = 11) out vec3 vStoneN;        // stone: object-space surface normal
 
 layout(set = 0, binding = 6) uniform sampler2D u_terrain_shadow;
 layout(set = 0, binding = 7) uniform sampler2DShadow u_sun_shadow_map;
@@ -81,14 +83,36 @@ void main() {
 
     float c = cos(rot), s = sin(rot);
     mat3 R = mat3(vec3(c, 0, s), vec3(0, 1, 0), vec3(-s, 0, c));
-    // Stones are ray-marched in the fragment shader (rock_sdf.glsl); the
-    // mesh is only a hull around the implicit surface.
+    // Stones: the unit icosphere is pushed out to the stone's own shape
+    // (rock_sdf.glsl stone_radius: a block broken along random planes, per-
+    // stone seed). Real geometry with a real normal - the fragment shader
+    // only adds fine detail (no ray march, no discard).
     vec3 lpos = inPos;
-    if (pc.grass_params.y < 0.5) lpos = normalize(inPos) * 1.88;
-    vObj = lpos;
-    vInst = vec4(base, scale * fade);
     vRotSeed = vec2(rot, fract(sin(dot(base.xz, vec2(41.3, 17.9))) * 951.135) * 40.0);
-    vec3 world = R * (lpos * scale * fade) + base;
+    vec3 squash = vec3(1.0);
+    vec3 stone_n = vec3(0.0, 1.0, 0.0);
+    if (pc.grass_params.y < 0.5) {
+        float seed = vRotSeed.y;
+        float sv = fract(seed * 0.618);
+        vec3 d = normalize(inPos);
+        // Surface point and two neighbours on the sphere -> analytic normal.
+        vec3 t1 = normalize(cross(d, abs(d.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+        vec3 t2 = cross(d, t1);
+        const float e = 0.06;
+        vec3 d1 = normalize(d + t1 * e), d2 = normalize(d + t2 * e);
+        vec3 p0 = d * stone_radius(d, seed), p1 = d1 * stone_radius(d1, seed), p2 = d2 * stone_radius(d2, seed);
+        // Stone-local: centre 0.30 above the base (the lower part sits in
+        // the ground). Flat pieces (sv < 0.22) are squashed.
+        if (sv < 0.22) squash = vec3(1.0, 0.45, 1.0);
+        lpos = vec3(0.0, 0.30, 0.0) + p0;
+        vec3 nn = cross(p1 - p0, p2 - p0);
+        if (dot(nn, d) < 0.0) nn = -nn;
+        stone_n = normalize(nn / squash);
+    }
+    vObj = lpos;
+    vStoneN = stone_n;
+    vInst = vec4(base, scale * fade);
+    vec3 world = R * (lpos * squash * scale * fade) + base;
     // Plants: wind sway weighted by uv.y (0 at the root, 1 at the tips).
     if (pc.grass_params.y > 0.5 && plant_sway > 0.0) {
         float t = pc.grass_params.z;

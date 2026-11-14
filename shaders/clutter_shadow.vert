@@ -36,7 +36,10 @@ void main() {
     }
     float c = cos(inRotTint.x), sn = sin(inRotTint.x);
     mat3 R = mat3(vec3(c, 0, sn), vec3(0, 1, 0), vec3(-sn, 0, c));
-    vec3 world = R * (inPos * s * fade) + base;
+    // Stones (not plants): the unit sphere, centred 0.30 above the base like
+    // scatter.vert's shaped stone (close enough for a pebble's shadow).
+    vec3 lp = pc.p.y > 0.5 ? inPos : vec3(0.0, 0.30, 0.0) + normalize(inPos);
+    vec3 world = R * (lp * s * fade) + base;
     if (pc.p.y > 0.5 && plant_sway > 0.0) {   // plant wind sway (scatter.vert)
         float t = pc.p.x;
         float ph = dot(base.xz, vec2(0.37, 0.23));

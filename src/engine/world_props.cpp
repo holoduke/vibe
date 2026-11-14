@@ -10,6 +10,7 @@
 #include <glm/common.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <map>
 #include <random>
@@ -1000,34 +1001,46 @@ void build_slab_rock(LevelMesh& m, float seed) {
                 : n1 * b.rad[k];
             if (glm::length(pts[k]) > 1.6f) pts[k] *= 1.6f / glm::length(pts[k]);   // near-parallel edges
         }
-        const uint32_t base = uint32_t(m.verts.size());
-        // Slightly SMALLER than the ray-marched surface (which is carved up to
-        // ~0.09 below the nominal faces): shadow / AO rays leaving the visible
-        // surface must start outside this mesh, or the rock shadows itself.
-        const float th = b.th + 0.018f - 0.10f;
-        for (auto& pt : pts) pt *= std::max(0.0f, 1.0f - 0.10f / std::max(glm::length(pt), 0.2f));
-        for (int s = 0; s < 2; ++s)                          // 0 bottom ring, 1 top ring
-            for (int k = 0; k < 5; ++k) {
-                const glm::vec2 d = glm::length(pts[k]) > 1e-4f ? glm::normalize(pts[k]) : glm::vec2(1.0f, 0.0f);
-                const glm::vec3 p = C + glm::vec3(pts[k].x + b.off.x, b.yc + (s ? th : -th), pts[k].y + b.off.y);
-                // Corner normal (shared vertices): the hull is this mesh pushed out along it.
-                push_v(m, { p, glm::normalize(glm::vec3(d.x, s ? 1.0f : -1.0f, d.y)), 0.0f, 4.0f });
-            }
-        // Orientation: make the side faces point outward whatever the corner order.
+        // The bed as real, flat-shaded geometry: bottom, five sides, a
+        // chamfer ring and the top - every face with its own vertices and
+        // its own normal (shared corner normals shaded the block like a
+        // pillow). This mesh is what is drawn, what casts the ray-traced
+        // shadow and what the colliders are derived from.
+        const float th = b.th + 0.018f;
+        const float cham = 0.035f;
+        glm::vec3 r0[5], r1[5], r2[5];                       // bottom ring, shoulder ring, top ring (inset)
+        for (int k = 0; k < 5; ++k) {
+            const glm::vec2 q = pts[k] + b.off;
+            const glm::vec2 in = pts[k] * (1.0f - cham / std::max(glm::length(pts[k]), 0.2f)) + b.off;
+            r0[k] = C + glm::vec3(q.x, b.yc - th, q.y);
+            r1[k] = C + glm::vec3(q.x, b.yc + th - cham, q.y);
+            r2[k] = C + glm::vec3(in.x, b.yc + th, in.y);
+        }
         float area = 0.0f;
         for (int k = 0; k < 5; ++k) area += pts[k].x * pts[(k + 1) % 5].y - pts[(k + 1) % 5].x * pts[k].y;
-        const bool ccw = area > 0.0f;
-        auto tri = [&](uint32_t a, uint32_t b2, uint32_t c) {
-            if (ccw) m.idx.insert(m.idx.end(), { base + a, base + c, base + b2 });
-            else     m.idx.insert(m.idx.end(), { base + a, base + b2, base + c });
+        const bool ccw = area > 0.0f;                        // corner order seen from above
+        // One flat triangle; `out` = a direction the face must look toward.
+        auto face = [&](glm::vec3 a, glm::vec3 b2, glm::vec3 c, glm::vec3 out) {
+            glm::vec3 n = glm::cross(b2 - a, c - a);
+            if (glm::dot(n, n) < 1e-12f) return;
+            n = glm::normalize(n);
+            if (glm::dot(n, out) < 0.0f) { std::swap(b2, c); n = -n; }
+            const uint32_t v0 = uint32_t(m.verts.size());
+            push_v(m, { a, n, 0.0f, 4.0f }); push_v(m, { b2, n, 0.0f, 4.0f }); push_v(m, { c, n, 0.0f, 4.0f });
+            m.idx.insert(m.idx.end(), { v0, v0 + 1, v0 + 2 });
         };
-        for (uint32_t k = 0; k < 5; ++k) {
-            const uint32_t k2 = (k + 1) % 5;
-            tri(k, k2, 5 + k2); tri(k, 5 + k2, 5 + k);       // side
+        (void)ccw;
+        const glm::vec3 up(0.0f, 1.0f, 0.0f);
+        const glm::vec3 ctr = C + glm::vec3(b.off.x, b.yc, b.off.y);
+        for (int k = 0; k < 5; ++k) {
+            const int k2 = (k + 1) % 5;
+            const glm::vec3 outw = glm::normalize((r0[k] + r0[k2]) * 0.5f - ctr + glm::vec3(1e-5f, 0.0f, 0.0f));
+            face(r0[k], r0[k2], r1[k2], outw); face(r0[k], r1[k2], r1[k], outw);            // side
+            face(r1[k], r1[k2], r2[k2], outw + up); face(r1[k], r2[k2], r2[k], outw + up);  // chamfer
         }
-        for (uint32_t k = 1; k + 1 < 5; ++k) {
-            tri(5, 5 + k + 1, 5 + k);                        // top (facing up)
-            tri(0, k, k + 1);                                // bottom
+        for (int k = 1; k + 1 < 5; ++k) {
+            face(r2[0], r2[k], r2[k + 1], up);                                               // top
+            face(r0[0], r0[k], r0[k + 1], -up);                                              // bottom
         }
     }
 }
@@ -1085,10 +1098,16 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
         for (int l = 0; l < kVegLods; ++l) build_bush(a.lods[l], p, l, lo, tiny, hi);
         finish(a); out.push_back(std::move(a));
     }
+    // Rock LOD meshes: the surface of rock_sdf.glsl's shape function without
+    // its finest detail (cracks / grain are added per pixel in cube.frag by
+    // evaluating the same function at the mesh surface). Real geometry: the
+    // same mesh is drawn, casts the ray-traced shadow and is collided with.
+    // 20480 / 5120 / 1280 / 80 triangles.
+    const Ico rock_l0 = make_ico(5), rock_l1 = make_ico(4);
     for (int v = 0; v < 8; ++v) {                      // rocks (species 3)
         VegArchetype a; a.species = 3;
-        // Deterministic in the variant index: shaders/rock_sdf.glsl ray-marches
-        // the same function (rock_params) for the visible surface.
+        // Deterministic in the variant index: shaders/rock_sdf.glsl evaluates
+        // the same function (rock_params) for the per-pixel detail.
         float sd = 3.7f + 6.1f * float(v);
         float strata = (v % 2 == 0) ? 0.55f : 0.0f;
         float amp = 0.26f + 0.1f * glm::fract(float(v) * 0.37f);
@@ -1097,19 +1116,69 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
             finish(a); out.push_back(std::move(a));
             continue;
         }
-        const Ico* ic[kVegLods] = { &ultra, &hi, &lo, &tiny };
-        for (int l = 0; l < kVegLods; ++l)
-            add_blob(a.lods[l], *ic[l], glm::vec3(0.0f, 0.35f, 0.0f), glm::vec3(1.0f), 0.0f, sd,
-                     amp, 1.6f, strata, -0.2f, glm::vec2(0.0f, 4.0f), 0.0f);
-        // Same mid-scale lumps as rock_sdf.glsl, so the ray-traced shadow and
-        // the collider follow the ray-marched surface.
-        for (int l = 0; l < kVegLods; ++l)
-            for (auto& vx : a.lods[l].verts) {
-                const glm::vec3 q = vx.p - glm::vec3(0.0f, 0.35f, 0.0f);
-                const float len = glm::length(q);
-                if (len < 1e-4f || vx.p.y < -0.19f) continue;
-                vx.p += (q / len) * ((fbm(vx.p * 4.3f + glm::vec3(sd), 3) - 0.5f) * 0.11f);
+        // A boulder is what is left of a block broken along a handful of
+        // planes: radius along a direction = the SOFT minimum of the
+        // distances to 13 random planes (soft = worn edges) - flat faces
+        // meeting in rounded arrises, like fractured rock, instead of a
+        // noise-displaced ball. Star-shaped by construction, so pushing an
+        // icosphere out to it always gives a valid closed mesh. On top: a
+        // little low-frequency swelling, mid-scale lumps, and for the
+        // layered variants (v % 3 == 2) recessed bedding joints.
+        (void)strata; (void)amp;
+        const int np = 13;
+        glm::vec3 pn[13]; float ph[13];
+        {
+            std::mt19937 pr{ uint32_t(1337 + v * 977) };
+            std::uniform_real_distribution<float> PU(0.0f, 1.0f);
+            for (int k = 0; k < np; ++k) {
+                glm::vec3 n(PU(pr) * 2.0f - 1.0f, PU(pr) * 2.0f - 1.0f, PU(pr) * 2.0f - 1.0f);
+                if (k < 2) n.y = std::abs(n.y) + 0.9f;            // a top face or two
+                if (k == 2) n = glm::vec3(n.x * 0.3f, -1.0f, n.z * 0.3f);   // roughly flat underside
+                pn[k] = glm::normalize(n + glm::vec3(1e-4f));
+                ph[k] = 0.62f + 0.36f * PU(pr);
             }
+        }
+        const bool layered = (v % 3) == 2;
+        const glm::vec3 bedN = glm::normalize(glm::vec3(0.18f * std::sin(sd), 1.0f, 0.18f * std::cos(sd)));
+        auto shape = [&](glm::vec3 d) {
+            const float ks = 13.0f;
+            float acc = std::exp(-ks * 1.30f);
+            for (int k = 0; k < np; ++k) {
+                const float c = glm::dot(d, pn[k]);
+                if (c > 0.05f) acc += std::exp(-ks * (ph[k] / c));
+            }
+            float r = -std::log(acc) / ks;
+            r *= 1.0f + 0.14f * (fbm(d * 1.4f + glm::vec3(sd), 3) - 0.5f);
+            glm::vec3 q = d * r;
+            q += d * ((fbm(q * 4.3f + glm::vec3(sd), 3) - 0.5f) * 0.07f);          // mid-scale lumps
+            if (layered) {
+                // Bedding: slightly tilted layers; the joints between them
+                // are weathered back a few centimetres.
+                const float bcoord = glm::dot(q, bedN) * 3.4f + 0.5f * fbm(q * 0.9f + glm::vec3(sd * 1.7f), 2);
+                const float fr = bcoord - std::floor(bcoord);
+                const float joint = 1.0f - glm::smoothstep(0.0f, 0.10f, fr) * (1.0f - glm::smoothstep(0.86f, 1.0f, fr));
+                const glm::vec3 lateral = q - bedN * glm::dot(q, bedN);
+                q -= lateral * (0.075f * joint);
+            }
+            return glm::vec3(0.0f, 0.35f, 0.0f) + q;
+        };
+        const Ico* ic[kVegLods] = { &rock_l0, &rock_l1, &ultra, &lo };
+        for (int l = 0; l < kVegLods; ++l) {
+            LevelMesh& m = a.lods[l];
+            for (const glm::vec3& d : ic[l]->v) push_v(m, { shape(glm::normalize(d)), glm::normalize(d), 0.0f, 4.0f });
+            for (uint32_t idx : ic[l]->f) m.idx.push_back(idx);
+            std::vector<glm::vec3> nacc(m.verts.size(), glm::vec3(0.0f));
+            for (size_t i = 0; i + 2 < m.idx.size(); i += 3) {
+                const uint32_t i0 = m.idx[i], i1 = m.idx[i + 1], i2 = m.idx[i + 2];
+                const glm::vec3 fn = glm::cross(m.verts[i1].p - m.verts[i0].p, m.verts[i2].p - m.verts[i0].p);
+                nacc[i0] += fn; nacc[i1] += fn; nacc[i2] += fn;
+            }
+            m.bmin = glm::vec3(1e9f); m.bmax = glm::vec3(-1e9f);
+            for (size_t i = 0; i < m.verts.size(); ++i) {
+                m.verts[i].n = glm::normalize(nacc[i] + glm::vec3(1e-9f));
+                m.bmin = glm::min(m.bmin, m.verts[i].p); m.bmax = glm::max(m.bmax, m.verts[i].p);
+            }
+        }
         finish(a); out.push_back(std::move(a));
     }
     return out;
@@ -1324,7 +1393,27 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
     }
     // Trees. max_trees counts trees only (out already holds the rocks).
 
+    // Test hook: QLIKE_TEST_ROCKS=1 lines up one rock of every variant on the
+    // open castle road (from about (-45, 52) toward the gate) for inspection.
+    if (std::getenv("QLIKE_TEST_ROCKS")) {
+        for (int k = 0; k < 8; ++k) {
+            const float x = -45.0f + 1.25f * float(k) + ((k & 1) ? 2.6f : -2.6f);
+            const float z = 52.0f - 3.9f * float(k);
+            add_rock_ex(x, z, k % 3 == 1 ? 2.2f : 1.3f, k % 3 == 1 ? 0.5f : 0.85f, k, 0.12f);
+        }
+    }
     const size_t rocks_placed = out.size();
+    {   // Dev aid: the rocks nearest the castle (where to look when tuning them).
+        std::vector<size_t> ord(out.size());
+        for (size_t i = 0; i < ord.size(); ++i) ord[i] = i;
+        auto d2 = [&](size_t i) { return out[i].pos_scale.x * out[i].pos_scale.x + out[i].pos_scale.z * out[i].pos_scale.z; };
+        std::partial_sort(ord.begin(), ord.begin() + std::min<size_t>(8, ord.size()), ord.end(), [&](size_t a, size_t b) { return d2(a) < d2(b); });
+        for (size_t k = 0; k < std::min<size_t>(8, ord.size()); ++k) {
+            const auto& r = out[ord[k]];
+            log::infof("[rock] near castle: (%.1f, %.1f, %.1f) scale %.2f ysq %.2f arch %d", r.pos_scale.x, r.pos_scale.y, r.pos_scale.z,
+                       r.pos_scale.w, r.rot_arch_phase.w, int(r.rot_arch_phase.y + 0.5f));
+        }
+    }
     for (int a = 0; a < P.tree_attempts && int(out.size() - rocks_placed) < P.max_trees; ++a) {
         float x = (u() * 2.0f - 1.0f) * ext, z = (u() * 2.0f - 1.0f) * ext;
         if (std::sqrt(x * x + z * z) < P.castle_clear) continue;

@@ -41,12 +41,11 @@ void build_rock_mesh_data(std::vector<Vertex>& verts,
         3,9,4, 3,4,2, 3,2,6, 3,6,8, 3,8,9,
         4,9,5, 2,4,11, 6,2,10, 8,6,7, 9,8,1,
     };
-    // ONE subdivision round (80 tris / 240 verts). Two rounds looked
-    // marginally rounder but cost 4x the vertex invocations — at tens of
-    // thousands of instances the vertex stage dominated the whole frame
-    // (60k x 960 verts = 58M VS invocations, ~100 ms). Clutter reads at
-    // a glance; nobody counts facets on a fist-sized rock.
-    for (int round = 0; round < 1; ++round) {
+    // Two subdivision rounds, vertices SHARED: 162 vertices / 320 triangles
+    // of a unit sphere. scatter.vert pushes every vertex out to the stone's
+    // own shape (rock_sdf.glsl's radial function with a per-stone seed), so
+    // each stone is real geometry - no per-pixel ray march, no hull.
+    for (int round = 0; round < 2; ++round) {
         std::vector<glm::vec3> np;
         std::vector<uint32_t>  nf;
         np.reserve(faces.size() * 2);
@@ -64,30 +63,21 @@ void build_rock_mesh_data(std::vector<Vertex>& verts,
         pos = std::move(np);
         faces = std::move(nf);
     }
-    // Displace by direction hash (3 octaves of pseudo-noise) and
-    // flatten the bottom third.
-    for (auto& p : pos) {
-        float n = hash31(p * 2.1f) * 0.5f +
-                  hash31(p * 4.7f + glm::vec3(13.0f)) * 0.3f +
-                  hash31(p * 9.3f + glm::vec3(41.0f)) * 0.2f;
-        float r = 0.78f + n * 0.44f;            // 0.78..1.22
-        p *= r;
-        if (p.y < -0.35f) p.y = -0.35f - (p.y + 0.35f) * 0.15f;
-    }
-    // Flat-face normals (one normal per triangle, vertices unshared).
+    // Weld the duplicated corners.
     verts.clear();
     idx.clear();
-    verts.reserve(faces.size());
-    idx.reserve(faces.size());
-    for (size_t f = 0; f < faces.size(); f += 3) {
-        glm::vec3 a = pos[faces[f]], b = pos[faces[f + 1]],
-                  c = pos[faces[f + 2]];
-        glm::vec3 n = glm::normalize(glm::cross(b - a, c - a));
-        uint32_t base = uint32_t(verts.size());
-        verts.push_back({ a, n, glm::vec2(0.0f) });
-        verts.push_back({ b, n, glm::vec2(0.0f) });
-        verts.push_back({ c, n, glm::vec2(0.0f) });
-        idx.insert(idx.end(), { base, base + 1, base + 2 });
+    std::vector<glm::vec3> uniq;
+    for (uint32_t fi : faces) {
+        const glm::vec3 p = pos[fi];
+        uint32_t found = UINT32_MAX;
+        for (uint32_t k = 0; k < uint32_t(uniq.size()); ++k)
+            if (glm::dot(uniq[k] - p, uniq[k] - p) < 1e-10f) { found = k; break; }
+        if (found == UINT32_MAX) {
+            found = uint32_t(uniq.size());
+            uniq.push_back(p);
+            verts.push_back({ p, p, glm::vec2(0.0f) });
+        }
+        idx.push_back(found);
     }
 }
 

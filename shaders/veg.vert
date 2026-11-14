@@ -77,44 +77,13 @@ void main() {
         Pl = inPosition - inNormal * (r * (1.0 - g));
         mat0 = 0;
     }
-    // Rock: the mesh is only a bounding hull for the per-pixel ray march
-    // (rock_sdf.glsl) - blow it up into a sphere that encloses the surface.
+    // Rock: a real mesh (world_props.cpp builds it from rock_sdf.glsl's
+    // shape function). The tag carries the variant so cube.frag can add the
+    // fine detail of the same function per pixel.
     float rock_tag = 0.0;
     if (matRaw == 4) {
         vec4 air = arch[uint(I.rot_arch_phase.y + 0.5)];
-        if (air.z < -0.5) {
-            rock_tag = air.z;
-            float rv = -air.z - 1.0;
-            float ramp = 0.26 + 0.1 * fract(rv * 0.37);
-            const vec3 rc = vec3(0.0, 0.35, 0.0);
-            float Rb = (1.0 + ramp + 0.12) * 1.30;
-            // Slab formations: the mesh is the stack of beds itself, pushed
-            // out along its corner normals. Others: a sphere.
-            bool slab = abs(mod(rv, 3.0) - 1.0) < 0.5;
-            Pl = slab ? inPosition + inNormal * 0.42 : rc + normalize(inPosition - rc) * Rb;
-            // Camera inside (or touching) the hull: its front faces would be
-            // clipped / culled and the rock vanished when you walked up to
-            // it. Shrink the hull to a small ball around the camera instead;
-            // the fragment shader then marches from the eye (rock_tag < -1000).
-            float cr = cos(I.rot_arch_phase.x), sr = sin(I.rot_arch_phase.x);
-            float rsc = I.pos_scale.w, rys = I.rot_arch_phase.w > 0.0 ? I.rot_arch_phase.w : 1.0;
-            vec3 cw = scene.camera_pos.xyz - I.pos_scale.xyz;
-            vec3 co = vec3(cr * cw.x + sr * cw.z, cw.y, -sr * cw.x + cr * cw.z) / vec3(rsc, rsc * rys, rsc);
-            float mh = 0.4 / max(rsc, 0.05), mv = 0.4 / max(rsc * rys, 0.05);
-            bool cam_in = slab
-                ? (abs(co.x) < 2.15 + mh && abs(co.z) < 2.15 + mh && co.y > -0.45 - mv && co.y < 1.25 + mv)
-                : (distance(co, rc) < Rb + 0.35 / max(rsc, 0.05));
-            if (cam_in) {
-                // Slabs: shrink the stack around the eye so that the eye sits
-                // in the middle of the second bed (a convex prism: its back
-                // faces cover every view direction).
-                // Only that one bed is kept; the others collapse to a point.
-                bool bed1 = abs(inPosition.y - (0.35 - 0.055)) < 0.107;
-                Pl = slab ? co + (bed1 ? vec3(inPosition.x, sign(inPosition.y - 0.295) * 0.125, inPosition.z) * (2.0 / max(rsc * rys, 0.05)) * vec3(rys, 1.0, rys) : vec3(0.0))
-                          : co + normalize(inPosition - rc) * (0.2 / max(rsc, 0.05));
-                rock_tag -= 1000.0;
-            }
-        }
+        if (air.z < -0.5) rock_tag = air.z;
     }
     if (matRaw >= 7) {                           // wind weight from the position in the tree
 
@@ -237,7 +206,7 @@ void main() {
     if (mat0 == 5) { vUv = imp_uv; vColor = inNormal.z < 1.5 ? vec3(0.075, 0.16, 0.08) : vec3(0.16, 0.28, 0.07); }
     vVegInfo = vec4(fd, (ve & 0x80000000u) != 0u ? 1.0 : 0.0,
                     mat0 == 5 ? inNormal.z : rock_tag, I.rot_arch_phase.z);
-    if (rock_tag < -0.5) {      // object-space hull point + the instance transform for the march
+    if (rock_tag < -0.5) {      // object-space surface point + the instance transform (per-pixel detail)
         vObjectPos    = Pl;
         vShellBase    = I.pos_scale.xyz;
         vObjectNormal = vec3(s, ysq, I.rot_arch_phase.x);

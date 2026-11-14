@@ -1349,66 +1349,46 @@ void main() {
                                                   vec2(0.06711056, 0.00583715))));
         if (vVegInfo.y > 0.5 ? (n >= vVegInfo.x) : (n < vVegInfo.x)) discard;
     }
-    // ---- Ray-marched rock (GPU vegetation, material 4) ----------------
+    // ---- Rock (GPU vegetation, material 4) ------------------------------
+    // The mesh IS the rock (world_props.cpp: chiselled boulders at up to 20k
+    // triangles, flat-shaded slab beds). What is added here is only the
+    // relief no mesh LOD carries - cracks, pitting, grain, the grikes of a
+    // limestone pavement - as a small height field over the surface: its
+    // gradient bends the mesh normal, its cavity term darkens the cracks.
+    // No ray march, no discard, no depth write: silhouette, depth, ray-
+    // traced shadow and collider are this one mesh from every angle.
     if (vVegInfo.z < -0.5 && pc.grass_params.w < -0.5 && pc.grass_params.x > 0.5) {
-        // Tag < -1000: the camera is inside the hull (veg.vert) - we look at
-        // the inside of a small ball around the eye, i.e. its back faces.
-        bool r_inside = vVegInfo.z < -500.0;
-        if (r_inside == gl_FrontFacing) discard;
-        float r_variant = -(r_inside ? vVegInfo.z + 1000.0 : vVegInfo.z) - 1.0;
+        float r_variant = -vVegInfo.z - 1.0;
         float rs = vObjectNormal.x, rysq = vObjectNormal.y, rrot = vObjectNormal.z;
         float rc = cos(rrot), rsn = sin(rrot);
         vec3  rscl = vec3(rs, rs * rysq, rs);
-        // World -> object: undo translation, rotation (veg.vert) and scale.
-        vec3 cw = scene.camera_pos.xyz - vShellBase;
-        vec3 co = vec3(rc * cw.x + rsn * cw.z, cw.y, -rsn * cw.x + rc * cw.z) / rscl;
-        vec3 rdo = vObjectPos - co;
-        float dist_o = length(rdo);
-        rdo /= max(dist_o, 1e-5);
-        // Outside: start at the hull. Inside: start at the eye.
-        vec3 ro = r_inside ? co : vObjectPos;
-        float seed, amp, strata;
-        rock_params(r_variant, seed, amp, strata);
+        float seed = 3.7 + 6.1 * r_variant;
+        bool  slab = abs(mod(r_variant, 3.0) - 1.0) < 0.5;
         // Detail follows the pixel footprint (object units per pixel).
-        float cam_d = r_inside ? 0.6 * rs : distance(vWorldPos, scene.camera_pos.xyz);
+        float cam_d = distance(vWorldPos, scene.camera_pos.xyz);
         float fp = cam_d * 2.0 * scene.viewport.w / max(rs, 0.05);
         float fine = 1.0 - smoothstep(0.006, 0.03, fp);
-        float eps = max(fp * 0.6, 0.0012);
-        float r_tmax = r_inside ? 5.5 : 3.6;
-        if (strata < 0.0) {
-            // Slab formations: clip the ray to the stack's bounding box first
-            // (most rays of a flat, wide pavement miss it; the slab SDF is
-            // expensive to march through empty space).
-            const vec3 bmn = vec3(-1.80, -0.02, -1.80), bmx = vec3(1.80, 1.20, 1.80);
-            vec3 inv = 1.0 / (rdo + vec3(1e-6));
-            vec3 t0s = (bmn - ro) * inv, t1s = (bmx - ro) * inv;
-            vec3 tmn = min(t0s, t1s), tmx = max(t0s, t1s);
-            float tn = max(max(tmn.x, tmn.y), max(tmn.z, 0.0));
-            float tf = min(min(tmx.x, tmx.y), min(tmx.z, r_tmax));
-            if (tf <= tn) discard;
-            ro += rdo * tn;
-            r_tmax = tf - tn;
-        }
-        float th = rock_march(ro, rdo, r_tmax, seed, amp, strata, fine, eps);
-        if (th < 0.0) discard;
-        vec3 po = ro + rdo * th;
+        vec3 po = vObjectPos;
+        vec3 wposr = vWorldPos;
+        // Mesh normal, world -> object (inverse-transpose of rotate * scale).
+        vec3 Ng = normalize(vNormal);
+        vec3 ngo = normalize(vec3(rc * Ng.x + rsn * Ng.z, Ng.y, -rsn * Ng.x + rc * Ng.z) * rscl);
         float cav;
-        rock_sdf(po, seed, amp, strata, fine, cav);
-        vec3 no = rock_normal(po, seed, amp, strata, fine, max(eps * 1.2, 0.002));
-        // Object -> world.
-        vec3 pl = po * rscl;
-        vec3 wposr = vec3(rc * pl.x - rsn * pl.z, pl.y, rsn * pl.x + rc * pl.z) + vShellBase;
+        float grike = slab ? smoothstep(0.75, 0.95, ngo.y) * (1.0 - smoothstep(0.02, 0.10, fp)) : 0.0;
+        vec3 no = rock_detail_normal(po, ngo, seed, fine, grike, max(fp * 0.7, 0.0025), cav);
         vec3 nl = no / rscl;
         vec3 Nr = normalize(vec3(rc * nl.x - rsn * nl.z, nl.y, rsn * nl.x + rc * nl.z));
-        // The lower part sits in the ground (the mesh version squashes it flat).
-        vec4 clipr = pc.mvp * vec4(wposr, 1.0);
-        gl_FragDepth = max(gl_FragCoord.z, clipr.z / max(clipr.w, 1e-4));
-        // Albedo: the rock set, triplanar at the HIT point, with darker
-        // cracks, pale weathered ledges and a little moss on sheltered tops.
-        vec3 alb = triplanar_sample(u_albedo[7], wposr * 0.22, Nr) * vec3(1.4, 1.34, 1.27);
-        float big = rk_vnoise(po * 1.7 + seed);
-        alb *= mix(0.80, 1.12, big);
-        alb *= 1.0 - 0.55 * clamp(cav, 0.0, 1.0);
+        // Albedo: the rock set, triplanar by the MESH normal (weights from the
+        // detail normal flickered per pixel into streaky static), around a
+        // natural grey with large patches of warmer / cooler stone, darker
+        // cracks, pale worn edges and moss on sheltered tops.
+        vec3 tex = triplanar_sample(u_albedo[7], wposr * 0.22, Ng);
+        float tl = dot(tex, vec3(0.333));
+        vec3 alb = mix(vec3(tl), tex, 0.85) * vec3(1.10, 1.06, 1.0);
+        alb = mix(alb, vec3(0.30, 0.29, 0.27), 0.25);                          // tame the texture contrast
+        float big = rk_fbm(po * 0.9 + seed, 2);
+        alb *= mix(0.82, 1.10, big) * mix(vec3(1.04, 1.0, 0.94), vec3(0.95, 0.98, 1.03), rk_vnoise(po * 0.55 - seed));
+        alb *= 1.0 - 0.38 * clamp(cav, 0.0, 1.0);
         float moss = smoothstep(0.55, 0.9, Nr.y) * smoothstep(0.45, 0.75, rk_fbm(po * 2.6 - seed, 3)) * 0.55;
         alb = mix(alb, vec3(0.10, 0.17, 0.05), moss);
         float snr = smoothstep(scene.terrain_h_high.x + 10.0, scene.terrain_h_high.z, wposr.y) * smoothstep(0.35, 0.75, Nr.y);

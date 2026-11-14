@@ -151,9 +151,9 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
     int rock_variant = 0;
     for (size_t a = 0; a < veg_arch_.size(); ++a) {
         const bool rock = veg_arch_[a].species == 3;
-        // Rocks: .z = -(variant + 1) (the ray-marched surface derives its
-        // shape parameters from it); radius covers the inflated hull.
-        ainfo.push_back(glm::vec4(veg_arch_[a].radius * (rock ? 1.45f : 1.0f), veg_arch_[a].height * 0.5f,
+        // Rocks: .z = -(variant + 1) (cube.frag derives the shape parameters
+        // of the per-pixel detail from it).
+        ainfo.push_back(glm::vec4(veg_arch_[a].radius, veg_arch_[a].height * 0.5f,
                                   rock ? -float(++rock_variant) : float(veg_has_imp_[a]),
                                   float(veg_arch_[a].species)));
     }
