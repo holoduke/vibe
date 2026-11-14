@@ -159,11 +159,16 @@ float terrainH_mesh(vec2 wp) {
     return textureLod(u_heightmap_full, uv, 0.0).r;
 }
 
+// 1 = also with the raymarched terrain: blades stand on the baked
+// heightmap (9 octaves at 1 m, incl. road / sculpt / crater deltas) plus
+// the close-range relief. Profiling: the 8-octave FBM evaluated on every
+// march step was ~70 % of this pass (3.3 -> 1.0 ms at 3440x1369), and the
+// bake follows the drawn 10-12 octave surface at least as well as those 8
+// octaves did.
+#define QLIKE_GRASS_BAKED_HEIGHT 1
 float terrainH_lod(vec2 wp, float ray_t) {
-    // Mesh-terrain mode: one bilinear fetch instead of 8 octaves of FBM
-    // per march step (the main cost of this pass), and the blades stand on
-    // the surface actually drawn.
-    if (pc.emissive.x > 0.5) return terrainH_mesh(wp);
+    // One bilinear fetch instead of 8 octaves of FBM per march step.
+    if (pc.emissive.x > 0.5 || QLIKE_GRASS_BAKED_HEIGHT == 1) return terrainH_mesh(wp);
     vec2 p = wp * TERRAIN_SCALE;
     const int oct_full = 8;
     int   oct_min = max(2, min(oct_full, int(pc.emissive.w)));
@@ -189,7 +194,7 @@ float terrainH_lod(vec2 wp, float ray_t) {
 }
 
 // Backwards-compat: rest of the shader still calls sampleHeight.
-float sampleHeight(vec2 wp_xz) { return pc.emissive.x > 0.5 ? terrainH_mesh(wp_xz) : terrainH(wp_xz); }
+float sampleHeight(vec2 wp_xz) { return (pc.emissive.x > 0.5 || QLIKE_GRASS_BAKED_HEIGHT == 1) ? terrainH_mesh(wp_xz) : terrainH(wp_xz); }
 // Close-range ground relief of terrain_raymarch.frag (rm_ground_detail:
 // rills + side cracks + sand ripples, the dirt texture's displacement at
 // its mean; CPU twin raymarch_ground_relief). The raymarched ground
@@ -292,6 +297,16 @@ struct MapCtx {
 float g_blade_rot = 0.0;
 float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     out_blade_hit = false;
+    // Open air (raymarched terrain): one fetch of the baked heightmap
+    // instead of the 8-octave FBM. The rendered surface is at most ~0.8 m
+    // above the bake (finer octaves + close-range relief) and blades < 1 m,
+    // so 2 m of margin is always clear. This is the same skip the terrain
+    // pass uses; without it every step from the camera to the ground paid
+    // for the full FBM (the bulk of this pass).
+    if (pc.emissive.x < 0.5) {
+        float hm = p.y - terrainH_mesh(p.xz);
+        if (hm > 3.0) return 0.5 * (hm - 2.0);
+    }
     float terrainY = sampleHeight_lod_ray(p.xz, ray_t, p.y);
     float distToTerrain = 0.5 * (p.y - terrainY);
 
