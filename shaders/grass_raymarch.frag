@@ -383,8 +383,21 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     // before kMaxDist when the user's grass-distance slider was set
     // above 100 m).
     int rad = (ray_t > ctx.kMaxD * 0.35) ? 0 : 1;
-    for (int dy = -rad; dy <= rad; ++dy) {
-        for (int dx = -rad; dx <= rad; ++dx) {
+    // Centre cell first: its blades are usually the nearest, and a small
+    // `d` early lets the slab test below reject most of the other blades.
+    const ivec2 kCellOrder[9] = ivec2[9](ivec2(0, 0), ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1),
+                                         ivec2(1, 1), ivec2(-1, 1), ivec2(1, -1), ivec2(-1, -1));
+    // 3x3 only close up (blades are large on screen there and one cut off
+    // at a cell border would show); from 8 m the four cells nearest the
+    // sample (its own + the three toward the quadrant it sits in); past the
+    // cutoff above just its own.
+    const bool quad = rad > 0 && ray_t > 2.5;
+    const int ncell = (rad > 0) ? (quad ? 4 : 9) : 1;
+    const ivec2 qs = ivec2(lp.x >= 0.0 ? 1 : -1, lp.z >= 0.0 ? 1 : -1);
+    for (int ci = 0; ci < ncell; ++ci) {
+        {
+            const ivec2 cofs = quad ? ivec2((ci & 1) != 0 ? qs.x : 0, (ci & 2) != 0 ? qs.y : 0) : kCellOrder[ci];
+            const int dx = cofs.x, dy = cofs.y;
             vec2 nId = cellId + vec2(float(dx), float(dy));
             // Density-driven per-cell skip — only hash the cells we
             // didn't already reject by mask.
@@ -394,12 +407,22 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
             // Per-BLADE-CELL edge noise and near boost (stable: they depend on
             // the cell, not on where along the ray this sample is).
             vec2  cw = nId * kPeriod;
-            float en = hash12(floor(cw / 0.9)) * 0.6 + hash12(floor(cw / 2.7) + 17.0) * 0.4;
-            float elig_n = elig + (en - 0.5) * 0.35 * edge_soft * elig_gate;
-            if (elig_n < kEligThresh) continue;
-            float edge_k = mix(1.0, smoothstep(kEligThresh, kEligThresh + 0.55, elig_n), edge_soft);
-            float cdist = distance(vec3(cw.x, p.y, cw.y), scene.camera_pos.xyz);
-            float dens_n = density_eff + near_boost * (1.0 - smoothstep(3.5, 10.0, cdist));
+            // The edge noise only matters near a patch border: well inside a
+            // meadow (elig above the fade band whatever the noise) the two
+            // hashes are skipped - this loop runs 9x per march step.
+            float edge_k = 1.0;
+            if (elig < kEligThresh + 0.55 + 0.18 * edge_soft) {
+                float en = hash12(floor(cw / 0.9)) * 0.6 + hash12(floor(cw / 2.7) + 17.0) * 0.4;
+                float elig_n = elig + (en - 0.5) * 0.35 * edge_soft * elig_gate;
+                if (elig_n < kEligThresh) continue;
+                edge_k = mix(1.0, smoothstep(kEligThresh, kEligThresh + 0.55, elig_n), edge_soft);
+            }
+            // Near-density boost: only within its range (no sqrt beyond it).
+            float dens_n = density_eff;
+            if (near_boost > 0.0 && ray_t < 11.5) {
+                float cdist = distance(vec3(cw.x, p.y, cw.y), scene.camera_pos.xyz);
+                dens_n += near_boost * (1.0 - smoothstep(3.5, 10.0, cdist));
+            }
             const int nb = (rad > 0) ? clamp(int(ceil(dens_n)), 1, 3) : 1;
             for (int bi = 0; bi < nb; ++bi) {
             vec4 r = hash42(nId + vec2(31.7, 47.3) * float(bi));
@@ -409,6 +432,10 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
             np.xz = rotate2d(r.z * kPi2) * np.xz;
             np.xz += (r.xy - 0.5) * kPeriod;
             float bh = clamp(pc.grass_params.w, 0.05, 3.0) * 0.36 * mix(0.45, 1.0, edge_k);
+            // Cheap reject before the wind / silhouette maths: a blade is a
+            // thin slab in its local z (distance >= |z| - thickness) and has a
+            // top (1.75 x its scale). Further than the best so far: skip.
+            if (abs(np.z) - 0.004 >= d || np.y - 1.75 * bh >= d) continue;
             // Wind sway + a per-blade static lean (some blades stand, some
             // splay out), bending with height.
             float wind_t = pc.color.z + r.w * kPi2;
@@ -576,7 +603,7 @@ void main() {
         // Past 50 m blades are sub-pixel and the cone-safety overhead
         // is pure cost — extend the ramp to 2.0 by 120 m so distant
         // rays cover 3× the ground per iteration.
-        float step_f = mix(0.70, 0.95, smoothstep(15.0, 50.0, t));
+        float step_f = mix(0.82, 0.95, smoothstep(15.0, 50.0, t));   // was 0.70: the blade field is close to a true distance
         step_f = mix(step_f, 2.0, smoothstep(50.0, 120.0, t));
         t += d * step_f;
     }
