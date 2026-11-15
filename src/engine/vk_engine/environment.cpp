@@ -47,6 +47,39 @@ void VulkanEngine::env_swap_base() {
     std::swap(rt_.auto_golden_hour, env_base_.auto_golden_hour);
 }
 
+// CPU copy of scene_ubo.glsl cloud_shadow() (keep in sync): how much direct
+// sun the clouds let through at a world point.
+float VulkanEngine::cloud_shadow_at(glm::vec3 wp) const {
+    const float k = cloud_shadow_k_now_;
+    if (k <= 0.001f) return 1.0f;
+    auto hash = [](float x, float y, float z) {
+        const uint32_t qx = uint32_t(int32_t(x)) * 1597334673u, qy = uint32_t(int32_t(y)) * 3812015801u,
+                       qz = uint32_t(int32_t(z)) * 2798796415u;
+        return float((qx ^ qy ^ qz) * 1597334673u) * (1.0f / 4294967295.0f);
+    };
+    auto hvalue = [&](glm::vec2 p) {
+        const glm::vec2 i = glm::floor(p);
+        glm::vec2 f = p - i;
+        f = f * f * (3.0f - 2.0f * f);
+        const float a = hash(i.x, i.y, 7.0f), b = hash(i.x + 1.0f, i.y, 7.0f);
+        const float c = hash(i.x, i.y + 1.0f, 7.0f), d = hash(i.x + 1.0f, i.y + 1.0f, 7.0f);
+        return glm::mix(glm::mix(a, b, f.x), glm::mix(c, d, f.x), f.y);
+    };
+    const float pr = glm::radians(rt_.sun_pitch_deg), yr = glm::radians(rt_.sun_yaw_deg);
+    const glm::vec3 L(std::cos(pr) * std::sin(yr), std::sin(pr), std::cos(pr) * std::cos(yr));
+    const float size = std::max(cloud_a_.y, 0.2f);
+    const float alt = cloud_a_.z + 0.30f * cloud_a_.w;
+    const glm::vec2 p = glm::vec2(wp.x, wp.z) + glm::vec2(L.x, L.z) / std::max(L.y, 0.12f) * std::max(alt - wp.y, 0.0f);
+    const glm::vec2 q = (p + glm::vec2(cloud_b_)) / (6500.0f * size);
+    const float wn = hvalue(q) * 0.7f + hvalue(q * 2.17f + 13.0f) * 0.3f;
+    const float cov = glm::clamp(cloud_a_.x, 0.0f, 1.0f);
+    const float map_cov = glm::smoothstep(0.2f, 0.8f, glm::clamp(glm::smoothstep(0.2f, 0.8f, wn) + (cov - 0.5f) * 1.5f, 0.0f, 1.0f));
+    const glm::vec2 qs = (p + glm::vec2(cloud_b_) * 1.6f) / (1900.0f * size);
+    const float lump = hvalue(qs) * 0.6f + hvalue(qs * 2.3f + 5.0f) * 0.4f;
+    const float opac = glm::smoothstep(0.30f, 0.78f, map_cov * (0.62f + 0.75f * lump)) * glm::clamp(cloud_b_.z, 0.3f, 1.5f);
+    return 1.0f - k * glm::clamp(opac, 0.0f, 1.0f);
+}
+
 const char* VulkanEngine::weather_name() const {
     const float w = weather_state_;
     if (w < 0.18f) return "clear";

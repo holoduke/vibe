@@ -1089,7 +1089,9 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         // sun_dir as a normalized direction (xyz) regardless.
         // Sun hidden behind a mountain (as seen from the eye): no screen-space
         // shafts and no lens flare from it.
-        const float sun_eye_vis = sun_horizon_visibility(current_frame_view_.eye_pos);
+        // ... or behind a cloud: glare, shafts and flare dim with it.
+        const float sun_eye_vis = sun_horizon_visibility(current_frame_view_.eye_pos) *
+                                  glm::mix(0.25f, 1.0f, cloud_shadow_at(current_frame_view_.eye_pos));
         pc_data.sun_dir   = glm::vec4(sun, rt_.sun_shaft_intensity * sun_eye_vis);
         // .a scaled by sun_glare_strength so the user can dial down
         // every sun-derived compose-pass effect together: procedural

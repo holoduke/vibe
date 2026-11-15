@@ -567,14 +567,22 @@ void VulkanEngine::build_menu_ui() {
                 bool forced = rt_.weather_manual >= 0.0f;
                 if (ImGui::Checkbox("Force weather", &forced)) rt_.weather_manual = forced ? weather_state_ : -1.0f;
                 if (forced) ImGui::SliderFloat("0 clear .. 1 thunderstorm", &rt_.weather_manual, 0.0f, 1.0f, "%.2f");
-                const float wp[5] = { 0.05f, 0.30f, 0.50f, 0.75f, 0.95f };
-                const char* wn[5] = { "Clear", "Fair", "Overcast", "Rain", "Storm" };
-                for (int i = 0; i < 5; ++i) {
-                    if (i) ImGui::SameLine();
-                    if (ImGui::Button(wn[i])) rt_.weather_manual = wp[i];
+                // Weather type: six stops, left = fine, right = worst.
+                {
+                    static const float kTypeVal[6] = { 0.05f, 0.45f, 0.60f, 0.74f, 0.88f, 1.00f };
+                    static const char* kTypeName[6] = { "Clear", "Cloudy", "Stormy", "Rainy", "Heavy storm", "Lightning storm" };
+                    const float cur = rt_.weather_manual >= 0.0f ? rt_.weather_manual : weather_state_;
+                    int type = 0;
+                    for (int i = 1; i < 6; ++i)
+                        if (std::abs(kTypeVal[i] - cur) < std::abs(kTypeVal[type] - cur)) type = i;
+                    if (ImGui::SliderInt("Weather type", &type, 0, 5, kTypeName[type]))
+                        rt_.weather_manual = kTypeVal[type];
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Clear - Cloudy - Stormy (dark and windy) - Rainy - Heavy storm - Lightning storm.\n"
+                                          "Sets the weather and holds it; 'Random' hands it back to the weather system.");
+                    ImGui::SameLine();
+                    if (ImGui::Button("Random")) rt_.weather_manual = -1.0f;
                 }
-                ImGui::SameLine();
-                if (ImGui::Button("Random")) rt_.weather_manual = -1.0f;
                 ImGui::Text("Now: %s (%.2f)", weather_name(), weather_state_);
             }
         }

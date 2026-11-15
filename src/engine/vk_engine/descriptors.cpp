@@ -8,6 +8,7 @@
 #include "engine/vk_engine/internal.h"
 #include "engine/voxel/voxel_world.h"
 
+#include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -778,10 +779,23 @@ void VulkanEngine::update_scene_ubo() {
     // y / z: cloud cover and cloud-shadow contrast (scene_ubo.glsl cloud_shadow).
     data.crater_info = glm::vec4(float(craters_.size()),
                                  (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_coverage * 0.80f, 0.0f, 1.0f) : 0.0f,
-                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? env_cloud_shadow_k_ : 0.0f,
+                                 // (0.72 -> 0.88 of it: a cumulus takes most of the direct sun)
+                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? env_cloud_shadow_k_ * 1.22f : 0.0f,
                                  // .w: light level of the haze / fog colours (1 by day, the
                                  // night fill-light factor after dark)
                                  env_amb_k_);
+    // The cloud layer for the cloud-shadow function (scene_ubo.glsl): the
+    // same numbers clouds.comp renders with, incl. its wind offset.
+    {
+        const float ct = static_cast<float>(glfwGetTime());
+        const glm::vec2 wind = glm::vec2(1.0f, 0.35f) * (rt_.cloud_speed * ct * 0.6f);
+        cloud_a_ = glm::vec4(glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), glm::clamp(rt_.cloud_scale, 0.3f, 4.0f),
+                             glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f), glm::clamp(rt_.cloud_tower_m, 300.0f, 12000.0f));
+        cloud_b_ = glm::vec4(wind, std::max(0.0f, rt_.cloud_density), 0.0f);
+        data.cloud_a = cloud_a_;
+        data.cloud_b = cloud_b_;
+        cloud_shadow_k_now_ = data.crater_info.z;
+    }
     for (size_t i = 0; i < 16; ++i)
         data.ripples[i] = i < water_ripples_.size()
             ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);

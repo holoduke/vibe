@@ -386,6 +386,8 @@ struct SceneUBO {
     glm::vec4  flash_col;
     glm::mat4  flash_vp;     // flashlight shadow map of the small plants (zero = off)
     glm::vec4  lamp_info;    // x = bit mask of lanterns with a small-plant shadow map
+    glm::vec4  cloud_a;      // cloud layer: coverage, size, base altitude, tallest (clouds.comp params)
+    glm::vec4  cloud_b;      // xy = wind offset of the weather field (m), z = density
 };
 
 // ---- KHR ray tracing entry points ----

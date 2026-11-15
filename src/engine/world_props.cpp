@@ -752,6 +752,20 @@ void build_pine(LevelMesh& m, const PineParams& p, int lod, const Ico& lo, const
         o.leaf_count = 14;
         o.leaf_size = 2.3f;
         o.length[1] = 23.87f * glm::clamp(p.r0 / 2.6f, 0.75f, 1.3f);
+        // More variation between individuals: bough angle, droop, twist.
+        const float v1 = glm::fract(p.seed * 5.3f), v2 = glm::fract(p.seed * 9.1f);
+        o.angle[1] += (v1 - 0.5f) * 26.0f;
+        o.gnarliness[1] = 0.04f + 0.10f * v2;
+        o.force_strength = -0.001f - 0.006f * v1;
+        if (p.H > 18.0f) {
+            // Old pine: a tall bare trunk, heavy, a high crown of long boughs.
+            o.radius[0] = 1.05f * 1.7f;
+            o.start[1] = 0.46f + 0.10f * v2;
+            o.children[0] = glm::clamp(int(p.H * 3.2f), 56, 80);
+            o.length[1] *= 1.25f;
+            o.leaf_size = 2.7f;
+            o.gnarliness[0] = 0.09f;
+        }
         build_ez_tree(m, o, kVegDetail[lod], p.H);
         return;
     }
@@ -801,6 +815,26 @@ void build_oak(LevelMesh& m, const OakParams& p, int lod, const Ico& lo, const I
         o.length[0] = 37.24f * glm::clamp(1.0f / wide, 0.8f, 1.35f);
         o.length[1] = 11.08f * glm::clamp(wide, 0.8f, 1.4f) * 1.5f;
         o.length[2] = 12.39f * 0.9f;
+        // More variation between individuals: limb curl, twist, fork angle.
+        const float v1 = glm::fract(p.seed * 5.3f), v2 = glm::fract(p.seed * 9.1f);
+        o.gnarliness[1] = -0.04f - 0.16f * v1;
+        o.gnarliness[2] = -0.08f - 0.18f * v2;
+        o.twist[0] = -0.35f + 0.5f * v2;
+        o.angle[2] = 46.0f + 26.0f * v1;
+        if (p.H > 10.5f) {
+            // Old oak: a massive short trunk, more and heavier limbs that reach
+            // far out and curl, a broad dense crown.
+            o.radius[0] = 1.41f * 1.85f;
+            o.radius[1] = 0.9f * 1.25f;
+            o.children[0] += 2;
+            o.children[1] = 5;
+            o.length[0] *= 0.82f;
+            o.length[1] *= 1.30f;
+            o.gnarliness[1] -= 0.10f;
+            o.leaf_count = 12;
+            o.leaf_size *= 1.12f;
+            o.start[1] = 0.36f;
+        }
         build_ez_tree(m, o, kVegDetail[lod], p.H * 1.2f);
         return;
     }
@@ -1074,6 +1108,13 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
         for (int l = 0; l < kVegLods; ++l) build_pine(a.lods[l], p, l, lo, hi);
         finish(a); out.push_back(std::move(a));
     }
+    // Old pines: 3 giants (20 m+), for the old-growth stands.
+    for (int v = 0; v < 3; ++v) {
+        VegArchetype a; a.species = 0; a.old = true;
+        PineParams p{ 20.5f + 2.0f * float(v) + 1.5f * U(rng), 9, 3.5f + 0.5f * U(rng), U(rng) * 6.28f, (U(rng) - 0.5f) * 0.9f };
+        for (int l = 0; l < kVegLods; ++l) build_pine(a.lods[l], p, l, lo, hi);
+        finish(a); out.push_back(std::move(a));
+    }
     // Broadleaf: 7 variants - wide oak, tall narrow (birch / poplar-like),
     // round ash, young tree; crown shape + branch count + outer clumps.
     for (int v = 0; v < 7; ++v) {
@@ -1087,6 +1128,15 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
                      4 + int(U(rng) * 3.5f), U(rng) * 6.28f, (1.8f + 0.9f * U(rng)) * crown.x,
                      glm::vec3((U(rng) - 0.5f) * 0.8f, 0.0f, (U(rng) - 0.5f) * 0.8f),
                      crown, 4 + int(U(rng) * 4.0f) };
+        for (int l = 0; l < kVegLods; ++l) build_oak(a.lods[l], p, l, lo, hi, tiny, ultra);
+        finish(a); out.push_back(std::move(a));
+    }
+    // Old oaks: 3 veterans - wide, heavy-limbed, for the old-growth stands.
+    for (int v = 0; v < 3; ++v) {
+        VegArchetype a; a.species = 1; a.old = true;
+        const glm::vec2 crown(1.40f + 0.12f * float(v), 0.95f);
+        OakParams p{ 11.0f + 1.0f * float(v) + 1.0f * U(rng), 6, U(rng) * 6.28f, 3.2f * crown.x,
+                     glm::vec3((U(rng) - 0.5f) * 1.0f, 0.0f, (U(rng) - 0.5f) * 1.0f), crown, 7 };
         for (int l = 0; l < kVegLods; ++l) build_oak(a.lods[l], p, l, lo, hi, tiny, ultra);
         finish(a); out.push_back(std::move(a));
     }
@@ -1193,7 +1243,11 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
     std::vector<VegInstance> out;
     if (hm.heights.empty() || arch.empty()) return out;
     std::vector<int> by_species[4];
-    for (size_t i = 0; i < arch.size(); ++i) by_species[arch[i].species].push_back(int(i));
+    std::vector<int> old_trees[2];                     // old-growth pines / broadleaf
+    for (size_t i = 0; i < arch.size(); ++i) {
+        if (arch[i].old && arch[i].species < 2) old_trees[arch[i].species].push_back(int(i));
+        else by_species[arch[i].species].push_back(int(i));
+    }
     std::mt19937 rng(uint32_t(P.seed) ^ 0x9E3779B9u);
     std::uniform_real_distribution<float> U(0.0f, 1.0f);
     auto u = [&]() { return U(rng); };
@@ -1438,8 +1492,14 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         if (pt) pine = u() < pt->pine_share;
         float scale = 0.75f + 0.55f * u();
         if (pt) scale *= std::clamp(pt->tree_size, 0.3f, 2.5f);
-        if (!try_mark(x, z, (pine ? 1.6f : 2.4f) * scale)) continue;
-        const auto& pool = by_species[pine ? 0 : 1];
+        // Old-growth stands: patches of the forest (a few hundred metres
+        // across) where the veterans stand - bigger, further apart, with a
+        // few ordinary trees between them.
+        const float og = fbm(glm::vec3(x * 0.0048f, 57.0f, z * 0.0048f), 2);
+        const bool old_tree = og > 0.57f && !old_trees[pine ? 0 : 1].empty() && u() < 0.72f;
+        if (old_tree) scale = 0.95f + 0.35f * u();
+        if (!try_mark(x, z, (pine ? 1.6f : 2.4f) * scale * (old_tree ? 2.1f : 1.0f))) continue;
+        const auto& pool = old_tree ? old_trees[pine ? 0 : 1] : by_species[pine ? 0 : 1];
         int ai = pool[size_t(u() * float(pool.size())) % pool.size()];
         VegInstance vi{};
         vi.pos_scale = glm::vec4(x, h - 0.05f, z, scale);
@@ -1449,6 +1509,7 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         cols.push_back({ glm::vec3(x - tr, h - 0.5f, z - tr),
                          glm::vec3(x + tr, h + arch[size_t(ai)].height * scale * 0.6f, z + tr) });
         if (pine) ++st.pines; else ++st.broadleaf;
+        if (old_tree) ++st.old;
     }
     // Bushes (no collision).
     int bushes = 0;

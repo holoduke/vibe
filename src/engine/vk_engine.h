@@ -1247,6 +1247,11 @@ private:
     bool  weather_init_ = false;
     float env_rain_ = 0.0f;           // rain intensity 0..1
     float env_wet_ = 0.0f;            // ground wetness 0..1
+    // Cloud layer as last sent to the shaders (for the CPU copy of the
+    // cloud-shadow function: sun glare when a cloud passes in front).
+    glm::vec4 cloud_a_{0.0f}, cloud_b_{0.0f};
+    float cloud_shadow_k_now_ = 0.0f;
+    float cloud_shadow_at(glm::vec3 wp) const;
     float env_amb_k_ = 1.0f;          // night fill-light factor (1 by day and on a clear full-moon night)
     float env_moon_vis_ = 1.0f;       // moon not hidden by terrain from the player (eased 0..1)
     float env_moon_ = 1.0f;           // moonlight in the sky right now, 0..1 (phase, height, setting)

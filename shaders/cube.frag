@@ -777,6 +777,41 @@ float pom_shade(int hix, vec2 uv, vec3 Lt, float hs, vec2 gdx, vec2 gdy) {
 // / metal maps ship with the brush textures, so they come from the texture
 // slot (ambientCG set) - values from the sets' roughness-map means.
 // Returns (roughness, metallic).
+// Army paint for the vehicles: a three-colour disruptive pattern in the
+// part's own space (it stays put when the turret turns), with what a
+// vehicle in the field picks up - dust on the upward faces and low down,
+// rain streaks down the sides, chipped paint in small specks. Parts that
+// are already dark (tracks, barrels, tyres) keep their colour.
+float ap_hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float ap_noise(vec3 x) {
+    vec3 i = floor(x), f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(ap_hash(i), ap_hash(i + vec3(1, 0, 0)), f.x), mix(ap_hash(i + vec3(0, 1, 0)), ap_hash(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(ap_hash(i + vec3(0, 0, 1)), ap_hash(i + vec3(1, 0, 1)), f.x), mix(ap_hash(i + vec3(0, 1, 1)), ap_hash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+vec3 army_paint(vec3 op, vec3 on, vec3 base) {
+    float lum = dot(base, vec3(0.2126, 0.7152, 0.0722));
+    if (lum < 0.10) return base;                                // rubber, tracks, gun steel
+    vec3 q = op * 1.35;
+    float a = ap_noise(q) * 0.62 + ap_noise(q * 2.3 + 7.1) * 0.28 + ap_noise(q * 5.1 + 3.3) * 0.10;
+    float b = ap_noise(q * 0.9 + 19.7) * 0.62 + ap_noise(q * 2.1 + 31.4) * 0.28 + ap_noise(q * 4.7 + 11.9) * 0.10;
+    vec3 col = vec3(0.115, 0.140, 0.070);                       // olive drab
+    col = mix(col, vec3(0.150, 0.115, 0.070), smoothstep(0.545, 0.565, a));   // earth brown
+    col = mix(col, vec3(0.028, 0.032, 0.026), smoothstep(0.585, 0.605, b));   // black
+    col *= clamp(lum / 0.16, 0.55, 1.5);                        // lighter and darker panels stay so
+    // Weathering.
+    float fine = ap_noise(op * 23.0) * 0.6 + ap_noise(op * 61.0) * 0.4;
+    col *= 0.86 + 0.28 * fine;                                  // uneven matt paint
+    float streak = ap_noise(vec3(op.x * 9.0, op.y * 0.7, op.z * 9.0));
+    col *= 1.0 - 0.22 * smoothstep(0.55, 0.9, streak) * (1.0 - abs(on.y));      // rain streaks on the sides
+    float dust = clamp(max(on.y, 0.0) * 0.55 + (1.0 - smoothstep(0.2, 1.3, op.y)) * 0.5, 0.0, 1.0) *
+                 smoothstep(0.25, 0.75, ap_noise(op * 3.1 + 5.0));
+    col = mix(col, vec3(0.21, 0.185, 0.14), dust * 0.55);       // dry mud and dust
+    float chip = smoothstep(0.80, 0.86, ap_noise(op * 37.0)) * smoothstep(0.45, 0.7, ap_noise(op * 4.3 + 2.0));
+    col = mix(col, vec3(0.30, 0.29, 0.27), chip * 0.7);         // bare primer where the paint chipped
+    return col;
+}
+
 vec2 surface_rough_metal(int tex_idx, bool foliage, bool mesh_draw) {
     if (foliage) return vec2(0.55, 0.0);
     // Hand-held props (flashlight.cpp) pick a metal by a negative index.
@@ -1715,6 +1750,7 @@ void main() {
     // before indexing to keep the access well-defined regardless of any
     // hoisting the optimiser might do.
     vec3 albedo = vColor;
+    if (int(vTexParams.y - 0.5) == -7) albedo = army_paint(vObjectPos, normalize(vObjectNormal), albedo);
     // Baked sky visibility for terrain pixels (set in the is_terrain
     // block, multiplied into the ambient terms downstream — Phase 5).
     float terrain_sky_vis = 1.0;

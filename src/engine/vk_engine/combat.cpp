@@ -107,7 +107,10 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
     float speed = std::max(10.0f, game_.bullet_speed);
     uint32_t id = physics_->add_dynamic_cylinder_ccd(
         spawn, kProjectileRad, kProjectileHalf, orient,
-        dir * speed, std::max(0.1f, game_.bullet_mass));
+        // + the shooter's own velocity, as any projectile has: fired while
+        // strafing, successive bolts then stay on one line of sight instead
+        // of forming a row of parallel beams.
+        dir * speed + player_.velocity, std::max(0.1f, game_.bullet_mass));
     if (id == 0) return;
 
     muzzle_flash_timer_ = kMuzzleFlashDuration;

@@ -579,10 +579,10 @@ void VulkanEngine::draw_aa(VkCommandBuffer cmd, const glm::mat4& vp, const glm::
             pc.prev_mvp = prev_vp * prev_model;
             pc.grass_params = glm::vec4(0.0f, 0.0f, 0.0f, -1.0f);   // static-mesh mode, vertex UVs
             if (!depth_only) {
-                pc.color = glm::vec4(tex_on ? g.tint : g.fallback, 1.0f);
-                pc.tex_params = (tex_on && g.tex_albedo >= 0)
-                    ? glm::vec4(float(g.tex_albedo), float(g.tex_normal), g.uv_scale, 0.0f)
-                    : glm::vec4(-1.0f, -1.0f, 1.0f, 0.0f);
+                // Vehicles are painted, not textured: the part's flat colour goes
+                // in and cube.frag lays the army paint over it (.y = -7).
+                pc.color = glm::vec4(g.fallback, 1.0f);
+                pc.tex_params = glm::vec4(-1.0f, -7.0f, 1.0f, 0.0f);
             }
             vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
         }

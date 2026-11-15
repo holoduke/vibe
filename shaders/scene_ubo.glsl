@@ -90,6 +90,8 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   flash_col;        // rgb colour x intensity, w cos(inner cone angle)
     mat4   flash_vp;         // flashlight shadow map (small plants): world -> clip, [3][3] = 0 when off
     vec4   lamp_info;        // x = bit mask: lantern i has a small-plant shadow map
+    vec4   cloud_a;          // the cloud layer, as clouds.comp sees it: x coverage, y size, z base altitude (m), w tallest (m)
+    vec4   cloud_b;          // xy = wind offset of the weather field (m), z = density
 } scene;
 
 // Light from muzzle flashes and tracer rounds: each is a sphere of light
@@ -264,16 +266,41 @@ float cs_noise(vec2 p) {
     return mix(mix(cs_hash(i), cs_hash(i + vec2(1.0, 0.0)), f.x),
                mix(cs_hash(i + vec2(0.0, 1.0)), cs_hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
+// The same weather field clouds.comp builds its clouds from (same hash,
+// same scale, same wind), so the shadow on the ground lies under the cloud
+// that is actually between that point and the sun.
+vec3 cl_hash33(vec3 p) {
+    uvec3 q = uvec3(ivec3(p)) * uvec3(1597334673u, 3812015801u, 2798796415u);
+    q = (q.x ^ q.y ^ q.z) * uvec3(1597334673u, 3812015801u, 2798796415u);
+    return vec3(q) * (1.0 / 4294967295.0);
+}
+float cl_hvalue(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = cl_hash33(vec3(i, 7.0)).x, b = cl_hash33(vec3(i + vec2(1, 0), 7.0)).x;
+    float c = cl_hash33(vec3(i + vec2(0, 1), 7.0)).x, d = cl_hash33(vec3(i + vec2(1, 1), 7.0)).x;
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+// How much of the direct sunlight the clouds let through at `wp` (1 = open
+// sky). crater_info.z is the strength (0 when the sky is one grey deck:
+// the light is uniformly dim then, and that is applied to the sun itself).
 float cloud_shadow(vec3 wp) {
     float k = scene.crater_info.z;
     if (k <= 0.001) return 1.0;
     vec3 L = scene.sun_direction.xyz;
-    vec2 p = wp.xz + L.xz / max(L.y, 0.2) * (1800.0 - wp.y);
-    p = p * 0.0021 + scene.water_params.w * vec2(0.0090, 0.0033);
-    float n = cs_noise(p) * 0.55 + cs_noise(p * 2.13 + 11.7) * 0.30 + cs_noise(p * 4.7 + 3.1) * 0.15;
-    float cov = scene.crater_info.y;
-    float c = smoothstep(1.0 - cov - 0.12, 1.0 - cov + 0.12, n);
-    return 1.0 - k * c;
+    float size = max(scene.cloud_a.y, 0.2);
+    // Where the ray toward the sun passes through the lower third of the layer.
+    float alt = scene.cloud_a.z + 0.30 * scene.cloud_a.w;
+    vec2 p = wp.xz + L.xz / max(L.y, 0.12) * max(alt - wp.y, 0.0);
+    vec2 q = (p + scene.cloud_b.xy) / (6500.0 * size);
+    float wn = cl_hvalue(q) * 0.7 + cl_hvalue(q * 2.17 + 13.0) * 0.3;
+    float cov = clamp(scene.cloud_a.x, 0.0, 1.0);
+    float map_cov = smoothstep(0.2, 0.8, clamp(smoothstep(0.2, 0.8, wn) + (cov - 0.5) * 1.5, 0.0, 1.0));
+    // The cloud's own lumps and gaps (the 3D shape noise, approximated in 2D).
+    vec2 qs = (p + scene.cloud_b.xy * 1.6) / (1900.0 * size);
+    float lump = cl_hvalue(qs) * 0.6 + cl_hvalue(qs * 2.3 + 5.0) * 0.4;
+    float opac = smoothstep(0.30, 0.78, map_cov * (0.62 + 0.75 * lump)) * clamp(scene.cloud_b.z, 0.3, 1.5);
+    return 1.0 - k * clamp(opac, 0.0, 1.0);
 }
 
 #endif

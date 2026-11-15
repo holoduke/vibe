@@ -2310,6 +2310,22 @@ void main() {
         float fres = min(0.88, F0 + (1.0 - F0) * fv5);
 
         vec3 refl = reflect(rd, wnor);
+        // Reflections lose sharpness with distance: one pixel of far water
+        // covers many wavelets, each mirroring a slightly different
+        // direction, and what it shows is the average - mostly a vertical
+        // smear, as the wave slopes face the viewer. The reflected ray is
+        // spread at random per pixel and frame (more with distance); the
+        // temporal filter integrates that into a soft, stretched reflection.
+        {
+            float rdist = distance(wpos, ro);
+            float spread = 0.004 + 0.085 * smoothstep(8.0, 260.0, rdist);
+            vec2 rs = fract(sin(vec2(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)),
+                                     dot(gl_FragCoord.xy, vec2(39.3468, 11.135))) +
+                                float(scene.rt_flags.w & 63) * 1.618) * 43758.5453) - 0.5;
+            vec3 side = normalize(cross(refl, vec3(0.0, 1.0, 0.0)) + vec3(1e-5));
+            refl = normalize(refl + vec3(0.0, 1.0, 0.0) * (rs.y * spread * 2.2) + side * (rs.x * spread * 0.7));
+            refl.y = max(refl.y, 0.004);
+        }
         // Sky reflection — horizon→zenith gradient + sun halo. Used
         // directly when the reflection ray escapes the terrain or
         // when RT reflections are off.
@@ -3166,13 +3182,25 @@ void main() {
     // ~0.5 m one that takes over right under the camera.
     vec3 rm_det_tint = vec3(1.0);
     {
-        float dw = (1.0 - smoothstep(18.0, 45.0, t)) * (1.0 - rm_road.x);
+        float dw = (1.0 - smoothstep(34.0, 95.0, t)) * (1.0 - rm_road.x);   // (was 18 - 45 m)
         if (dw > 0.01) {
             const int kSoil = 9, kRock = 7;
             float rockw = 1.0 - smoothstep(0.5, 0.8, nor.y);
             float fp = t * 2.0 * scene.viewport.w;                       // ~metres per pixel
             // Soil: planar from above. Rock: project along the wall.
             vec2 uvS = pos.xz * 0.45;
+            // Parallax: the photographed height field shifts the texture
+            // against the view, so stones and clods stand up from the ground
+            // instead of being painted on it (two refinement steps, near only).
+            if (t < 30.0) {
+                vec3 pT = normalize(vec3(1.0, 0.0, 0.0) - nor * nor.x);
+                vec3 pB = cross(nor, pT);
+                vec2 vts = vec2(dot(-rd, pT), dot(-rd, pB)) / max(dot(-rd, nor), 0.25);
+                float pk = 0.045 * (1.0 - smoothstep(14.0, 30.0, t));          // 10 cm of relief per 2 m tile
+                float lodP = log2(max(t * 2.0 * scene.viewport.w * 0.45 * float(textureSize(u_albedo[kSoil], 0).x), 1.0));
+                for (int pi = 0; pi < 2; ++pi)
+                    uvS = pos.xz * 0.45 + vts * ((textureLod(u_normal[kSoil], uvS, lodP).a - 0.5) * pk);
+            }
             vec2 uvR = (abs(nor.x) > abs(nor.z) ? pos.zy : pos.xy) * 0.30;
             uvR = mix(pos.xz * 0.30, uvR, smoothstep(0.35, 0.6, 1.0 - nor.y));
             float lodS = log2(max(fp * 0.45 * float(textureSize(u_albedo[kSoil], 0).x), 1.0));
@@ -3193,11 +3221,11 @@ void main() {
                 nD.a  = mix(nD.a, nD.a * (0.5 + nF.a), fw * (1.0 - rockw));
                 aD = mix(aD, aD * aF, fw * (1.0 - rockw) * 0.8);
             }
-            vec3 dn = vec3((nD.xy * 2.0 - 1.0) * 0.85, 1.0);
+            vec3 dn = vec3((nD.xy * 2.0 - 1.0) * 1.35, 1.0);              // (was 0.85)
             vec3 dT = normalize(vec3(1.0, 0.0, 0.0) - nor * nor.x);
             vec3 dB = cross(nor, dT);
             nor = normalize(mix(nor, normalize(dT * dn.x + dB * dn.y + nor * dn.z), dw));
-            float cav = mix(0.80, 1.05, smoothstep(0.15, 0.85, nD.a));  // pits darker, bumps a touch brighter
+            float cav = mix(0.62, 1.10, smoothstep(0.15, 0.85, nD.a));  // pits darker, bumps a touch brighter
             rm_det_tint = mix(vec3(1.0), clamp(mix(vec3(1.0), aD, 0.55), vec3(0.6), vec3(1.5)) * cav, dw);
         }
     }
@@ -3869,7 +3897,18 @@ void main() {
     // A puddle is a small mirror: flat normal (plus rain rings), darker
     // bed, Fresnel reflection of the sky and a sun glint.
     {
-        float wet = scene.ripple_info.z;
+        // The beach where the water laps: the sand is soaked (darker, a
+        // thin mirror of water on it) up to a waterline that moves in and
+        // out with the wavelets.
+        float shore = 0.0, shore_foam = 0.0;
+        if (scene.water_params.x > 0.5) {
+            float tw = scene.water_params.w;
+            float lap = 0.045 * sin(tw * 0.8 + pos.x * 0.31 + pos.z * 0.23) + 0.03 * sin(tw * 1.37 + pos.x * 0.83 - pos.z * 0.57);
+            float above = pos.y - scene.water_params.y - lap;
+            shore = (1.0 - smoothstep(0.03, 0.42, above)) * smoothstep(0.80, 0.93, nor.y);
+            shore_foam = (1.0 - smoothstep(0.0, 0.035, abs(above - 0.012))) * smoothstep(0.8, 0.93, nor.y);
+        }
+        float wet = max(scene.ripple_info.z, shore);
         float pd = distance(pos, ro);
         if (wet > 0.01 && pd < 400.0) {
             float flatn = smoothstep(0.90, 0.985, nor.y);
@@ -3890,12 +3929,20 @@ void main() {
             float cov = scene.crater_info.y;
             skyr = mix(skyr, vec3(dot(skyr, vec3(0.2126, 0.7152, 0.0722))), cov);
             float film = max(puddle, 0.11 * wet * smoothstep(0.5, 0.95, nor.y));
+            film = max(film, 0.62 * shore);                          // the glassy sheet on wet sand
             col *= mix(1.0, 0.55, puddle);
+            col *= mix(1.0, 0.58, shore * (1.0 - puddle));           // soaked sand is darker
             col += skyr * Fw * film * ao_shaped;
             float sg = max(dot(normalize(rr), sunDir), 0.0);
             float sg2 = sg * sg; float sg8 = sg2 * sg2 * sg2 * sg2;
             float sg64 = sg8 * sg8 * sg8 * sg8 * sg8 * sg8 * sg8 * sg8;
             col += scene.sun_color.rgb * scene.sun_color.a * sg64 * sg64 * sha * cl_sh * film * 1.5;
+            // A thin line of foam where the water runs out.
+            if (shore_foam > 0.01) {
+                float fb = noise2(pos.xz * 9.0 + vec2(scene.water_params.w * 0.4, 0.0)) * 0.6 + noise2(pos.xz * 23.0) * 0.4;
+                col = mix(col, (scene.sun_color.rgb * scene.sun_color.a * (0.25 + 0.75 * sha) + scene.sky_color.rgb * 0.6) * 0.55,
+                          shore_foam * smoothstep(0.35, 0.65, fb) * 0.75);
+            }
         }
     }
 

@@ -47,7 +47,7 @@ struct WorldPropParams {
     float bush_density    = 1.0f;
 };
 
-struct WorldPropStats { int formations = 0, boulders = 0, pines = 0, broadleaf = 0, bushes = 0; };
+struct WorldPropStats { int formations = 0, boulders = 0, pines = 0, broadleaf = 0, bushes = 0, old = 0; };
 
 // Vegetation archetype: one species variant with a 4-level LOD chain in
 // local space (base at origin, y up). Vertex uv = (wind weight, material:
@@ -56,6 +56,7 @@ constexpr int kVegLods = 4;
 constexpr int kVegRtLevels = 4;   // BLAS detail levels for ray tracing (one per mesh LOD)
 struct VegArchetype {
     int species = 0;                 // 0 pine, 1 broadleaf, 2 bush, 3 rock
+    bool old = false;                // old-growth tree (placed in old-growth stands only)
     game::LevelMesh lods[kVegLods];
     float radius = 1.0f;             // bounding-sphere radius (scale 1)
     float height = 1.0f;

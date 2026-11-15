@@ -101,7 +101,10 @@ void main() {
         // bucket k holds the elements with priority <= kDetail[k].
         // Full detail from 60 px of bounding radius for trees, 25 px for the
         // (much smaller) bushes.
-        float detail = clamp(pow(px / (ai.w > 1.5 ? 25.0 : 60.0), 1.2), 0.03, 1.0);
+        // (exponent 0.8, was 1.2: crowns keep far more of their branches and
+        // leaves at medium range - half size on screen now draws 57 % of the
+        // tree instead of 43 %, a quarter 33 % instead of 19 %.)
+        float detail = clamp(pow(px / (ai.w > 1.5 ? 25.0 : 60.0), 0.8), 0.03, 1.0);
         uint lod = detail > 0.5 ? 0u : (detail > 0.22 ? 1u : (detail > 0.09 ? 2u : 3u));
         // Far away the mesh hands over to the billboard with a dithered blend.
         const float kImp = 7.0;
