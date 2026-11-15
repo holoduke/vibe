@@ -360,7 +360,8 @@ void VulkanEngine::update_scene_ubo() {
                                  rt_.atmosphere_intensity * 3.14159265f, 0.0f, 0.0f);
     {
         // Road lanterns (dusk / night only): the two nearest to the eye.
-        const float night = 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
+        const float night = env_night_ >= 0.0f ? env_night_
+                                               : 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
         data.lamp_lights[0] = data.lamp_lights[1] = glm::vec4(0.0f);
         if (night > 0.01f && !lamp_lights_.empty()) {
             const glm::vec3 eye = player_.eye_position();
@@ -748,8 +749,15 @@ void VulkanEngine::update_scene_ubo() {
     for (size_t i = 0; i < 16; ++i)
         data.ripples[i] = i < water_ripples_.size()
             ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);
-    data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), 0.0f, 0.0f, 0.0f);
-    data.rm_rock         = glm::vec4(rt_.rm_rock_color, glm::clamp(rt_.rm_ground_saturation, 0.0f, 2.0f));
+    data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_rain_, env_wet_, 0.0f);
+    // Wet ground is darker and a little more saturated.
+    if (env_wet_ > 0.001f) {
+        const float k = 1.0f - 0.34f * env_wet_;
+        for (glm::vec4* c : { &data.rm_ground_dry, &data.rm_ground_green, &data.rm_red_sand })
+            *c = glm::vec4(glm::vec3(*c) * k, c->w);
+    }
+    data.rm_rock         = glm::vec4(rt_.rm_rock_color * (1.0f - 0.30f * env_wet_),
+                                     glm::clamp(rt_.rm_ground_saturation * (1.0f + 0.25f * env_wet_), 0.0f, 2.0f));
     {
         const float deg2rad = 3.14159265358979f / 180.0f;
         if (rt_.water_style == 2) {

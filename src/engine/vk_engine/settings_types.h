@@ -94,6 +94,16 @@ struct RtSettings {
         float hdr_peak_nits  = 1000.0f;  // display peak (tonemap shoulder)
         float aerial_scale = 6.0f;
         float aerial_max_km = 8.0f;
+        // Day / night + weather (environment.cpp). The clock moves the sun
+        // (and the moon at night); the weather wanders between clear sky and
+        // thunderstorm. Both DRIVE the sun / sky / cloud / fog settings.
+        bool  day_night_enabled = true;
+        float time_of_day = 10.0f;           // hours, 0..24
+        float day_length_minutes = 24.0f;    // real minutes per 24 h day; 0 = clock stopped
+        bool  weather_enabled = true;
+        float weather_bad_chance = 0.35f;    // 0 = always fair, 1 = always rain / storm
+        float weather_change_minutes = 4.0f; // average real minutes between weather changes
+        float weather_manual = -1.0f;        // < 0 = random; 0..1 = forced (0 clear .. 1 thunderstorm)
         // Volumetric clouds (physical sky only).
         int   clouds_enabled = 1;
         float cloud_coverage = 0.45f;

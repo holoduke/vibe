@@ -270,7 +270,7 @@ void VulkanEngine::tick_flags(float dt) {
     float ang = 0.6f + 0.5f * std::sin(wind_t_ * 0.031f) + 0.2f * std::sin(wind_t_ * 0.11f);
     float spd = 7.5f + 3.0f * std::sin(wind_t_ * 0.37f) + 2.0f * std::sin(wind_t_ * 1.13f + 1.7f)
               + 1.5f * std::sin(wind_t_ * 2.9f);
-    wind_vel_ = glm::vec3(std::cos(ang), 0.0f, std::sin(ang)) * std::max(1.0f, spd);
+    wind_vel_ = glm::vec3(std::cos(ang), 0.0f, std::sin(ang)) * (std::max(1.0f, spd) * env_wind_scale_);
 
     const float h = 1.0f / 120.0f;
     const glm::vec3 g(0.0f, -9.81f, 0.0f);
@@ -937,6 +937,45 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         const float rc = vs * (0.22f + 0.9f * (1.0f - std::exp(-t * 3.0f)));
         mist.billboard(s.pos + glm::vec3(0.0f, 0.10f * vs, 0.0f), rc, cam_right, cam_up * 0.45f,
                        glm::vec3(0.26f * fade * fade * in_k, 1.0f, s.seed + 50.0f));
+    }
+
+    // Rain: streaks in a box that travels with the camera. Stateless - each
+    // streak's position is a hash, advanced by time along the fall velocity
+    // and wrapped into the box in WORLD space, so drops keep falling where
+    // they were when the camera moves. Drawn with the droplet shader.
+    if (env_rain_ > 0.01f && !(rt_.water_enabled && eye.y < rt_.water_level)) {
+        const glm::vec3 box(20.0f, 14.0f, 20.0f);
+        const glm::vec3 fall = glm::vec3(wind_vel_.x * 0.22f, -9.2f, wind_vel_.z * 0.22f);
+        const glm::vec3 fdir = glm::normalize(fall);
+        const int n = int(5200.0f * env_rain_);
+        const float tr = static_cast<float>(std::fmod(glfwGetTime(), 600.0));
+        uint32_t hs = 0x9E3779B9u;
+        auto h01 = [&hs]() { hs ^= hs << 13; hs ^= hs >> 17; hs ^= hs << 5; return float(hs & 0xFFFFFF) / 16777216.0f; };
+        spray.v.reserve(spray.v.size() + size_t(n) * 6);
+        for (int i = 0; i < n; ++i) {
+            const glm::vec3 b(h01(), h01(), h01());
+            const float spd = 0.85f + 0.3f * h01();
+            glm::vec3 w = b * box + fall * (tr * spd);
+            // wrap around the eye
+            glm::vec3 rel = w - eye;
+            rel -= box * glm::floor(rel / box + 0.5f);
+            const glm::vec3 p = eye + rel;
+            const float dist = glm::length(rel);
+            if (dist < 0.6f) continue;
+            // Long streaks (a ~1/12 s exposure): thin short ones are averaged
+            // away by the temporal upscaler.
+            const float len = 0.80f * spd;
+            const float wd = min_w(p, 0.007f, 1.05f);
+            // sub-pixel streaks are drawn a pixel wide, proportionally fainter; fade at the box edge
+            float a = glm::clamp(0.007f / wd, 0.30f, 1.0f) * 0.60f;
+            a *= 1.0f - glm::smoothstep(7.5f, 10.0f, dist);
+            const glm::vec3 side = glm::normalize(glm::cross(fdir, eye - p)) * wd;
+            const glm::vec3 p0 = p - fdir * len;
+            const glm::vec3 one(1.0f);
+            Vertex q0{p0 - side, one, {0.0f, -1.0f}}, q1{p0 + side, one, {0.0f, 1.0f}};
+            Vertex q2{p + side, one, {a, 1.0f}},      q3{p - side, one, {a, -1.0f}};
+            spray.v.insert(spray.v.end(), { q0, q1, q2, q0, q2, q3 });
+        }
     }
 
     // ---- Volumes (fireball / smoke / dust), sorted far to near ----

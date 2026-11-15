@@ -26,7 +26,7 @@ layout(push_constant) uniform PC {
     vec4 eye;       // xyz world camera (m), w = time (s)
     vec4 sun;       // xyz toward sun, w = mode
     vec4 params;    // x coverage, y density, z wind speed (m/s), w sun intensity (engine units * pi)
-    vec4 params2;   // x frame index, y camera planet radius (km)
+    vec4 params2;   // x frame index, y camera planet radius (km), z direct-light factor
 } pc;
 
 const float kCloudBottom = 1500.0;
@@ -148,7 +148,7 @@ void render(ivec2 px) {
     float cth = dot(rd, sun);
     float phase = mix(hg(cth, 0.75), hg(cth, -0.25), 0.3);
     vec3 sun_t = textureLod(u_trans, trans_uv(pc.params2.y + 2.5, max(sun.y, 0.0)), 0.0).rgb;
-    vec3 sun_l = sun_t * pc.params.w;
+    vec3 sun_l = sun_t * pc.params.w * pc.params2.z;   // z: direct-light factor (dusk, overcast)
     // Ambient: sky radiance toward the zenith (unit-sun LUT * intensity).
     vec3 amb = textureLod(u_skyview, skyview_uv(1.2, 0.0), 0.0).rgb * pc.params.w * 1.6;
     vec3 L = vec3(0.0);

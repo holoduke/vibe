@@ -17,6 +17,7 @@ enum class ClipID : uint8_t {
     Jump,
     Laser,      // player laser gun (assets/sounds/laser_shot.wav)
     AaBurst,    // anti-aircraft burst, the unmodified recording (assets/sounds/aa_burst.wav)
+    Rain,       // rain bed, 8 s with a Hann envelope (assets/sounds/rain_bed.wav, synthesised)
     Splash,     // water splash (assets/sounds/water_splash.wav, synthesised)
     SamLaunch,  // missile launch: bang + rocket roar (assets/sounds/sam_launch.wav, synthesised)
     JetFlyby1,  // jet flybys (15 s recordings, one pass each)

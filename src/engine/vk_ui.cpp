@@ -338,6 +338,15 @@ void VulkanEngine::build_hud_ui() {
             }
         } else {
             snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike");
+            if (rt_.day_night_enabled || rt_.weather_enabled) {
+                const int hh = int(rt_.time_of_day) % 24, mm = int((rt_.time_of_day - std::floor(rt_.time_of_day)) * 60.0f);
+                if (rt_.day_night_enabled && rt_.weather_enabled)
+                    snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike     %02d:%02d  %s", hh, mm, weather_name());
+                else if (rt_.day_night_enabled)
+                    snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike     %02d:%02d", hh, mm);
+                else
+                    snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike     %s", weather_name());
+            }
             if (airstrike_.phase == 1) { snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike: aircraft inbound"); col = IM_COL32(255, 180, 40, 230); }
             if (airstrike_.phase == 2) { snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike: BOMB AWAY"); col = IM_COL32(255, 70, 40, 245); }
         }
@@ -586,9 +595,33 @@ void VulkanEngine::build_menu_ui() {
             ImGui::SeparatorText("Materials");
         ImGui::Checkbox("textures enabled", &rt_.textures_enabled);
 
+        ImGui::SeparatorText("Time of day & weather");
+        ImGui::Checkbox("Day / night cycle", &rt_.day_night_enabled);
+        if (rt_.day_night_enabled) {
+            ImGui::SliderFloat("Time of day (h)", &rt_.time_of_day, 0.0f, 24.0f, "%.2f");
+            ImGui::SliderFloat("Clock speed: minutes per day", &rt_.day_length_minutes, 0.0f, 120.0f, "%.1f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Real minutes one full 24 h day takes. 24 = one game hour per minute.\n"
+                                  "Smaller is faster. 0 stops the clock at the time set above.");
+        }
+        ImGui::Checkbox("Weather", &rt_.weather_enabled);
+        if (rt_.weather_enabled) {
+            ImGui::SliderFloat("Bad weather chance", &rt_.weather_bad_chance, 0.0f, 1.0f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("How often a weather change picks rain or a storm.\n0 = always fair, 1 = always bad.");
+            ImGui::SliderFloat("Weather change every (min)", &rt_.weather_change_minutes, 0.3f, 30.0f, "%.1f");
+            bool forced = rt_.weather_manual >= 0.0f;
+            if (ImGui::Checkbox("Force weather", &forced)) rt_.weather_manual = forced ? weather_state_ : -1.0f;
+            if (forced) ImGui::SliderFloat("0 clear .. 1 thunderstorm", &rt_.weather_manual, 0.0f, 1.0f, "%.2f");
+            ImGui::Text("Now: %s (%.2f)", weather_name(), weather_state_);
+        }
         ImGui::SeparatorText("Sun");
+        ImGui::BeginDisabled(rt_.day_night_enabled);
         ImGui::SliderFloat("pitch (deg)", &rt_.sun_pitch_deg, 5.0f, 89.0f);
         ImGui::SliderFloat("yaw (deg)", &rt_.sun_yaw_deg, -180.0f, 180.0f);
+        ImGui::EndDisabled();
+        if (rt_.day_night_enabled || rt_.weather_enabled)
+            ImGui::TextDisabled("Sun, sky, cloud and fog values are driven by the clock / weather;\nturn those off to edit them by hand.");
         if (ImGui::Button("Recalculate shadows")) shadow_rebake_request_ = true;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Re-bakes the precomputed ground shadow and ambient-occlusion maps\n"

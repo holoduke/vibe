@@ -2079,6 +2079,33 @@ vec3 water_ripples(vec2 p) {
                 (1.0 - smoothstep(0.06 * s, 0.26 * s + 0.10 * s * age, dist)) *
                 clamp(1.0 - age / (0.6 + 0.35 * s), 0.0, 1.0);
     }
+    // Rain: every cell of a jittered grid gets drops at random moments;
+    // each makes one small ring that widens and dies in under a second.
+    float rain = scene.ripple_info.y;
+    if (rain > 0.01) {
+        float tm = scene.water_params.w;
+        for (int L = 0; L < 3; ++L) {
+            float sc = 1.9 + 1.3 * float(L);
+            vec2 q = p * sc + vec2(17.3, 5.1) * float(L);
+            vec2 id = floor(q);
+            vec2 fq = fract(q) - 0.5;
+            float h1 = fract(sin(dot(id, vec2(127.1, 311.7)) + float(L) * 3.7) * 43758.5453);
+            float h2 = fract(sin(dot(id, vec2(269.5, 183.3)) + float(L) * 9.1) * 43758.5453);
+            float ph = tm * (0.9 + 0.5 * h1) + h2 * 11.0;
+            float cyc = floor(ph);
+            float tt = fract(ph);
+            // a new drop position each cycle; light rain skips most cycles
+            float h3 = fract(sin(dot(id + cyc, vec2(41.3, 289.1))) * 43758.5453);
+            if (h3 > rain * 0.9 + 0.08) continue;
+            vec2 c = (vec2(fract(h3 * 17.0), fract(h3 * 53.0)) - 0.5) * 0.5;
+            vec2 d = fq - c;
+            float r = length(d);
+            float rr = tt * 0.42;
+            float band = smoothstep(0.07, 0.0, abs(r - rr));
+            float wv = sin((r - rr) * 55.0) * band * (1.0 - tt) * (1.0 - tt);
+            g += d / max(r, 1e-3) * (wv * 0.30);
+        }
+    }
     return vec3(g, clamp(foam, 0.0, 1.0));
 }
 

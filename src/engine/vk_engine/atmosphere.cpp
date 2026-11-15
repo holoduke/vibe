@@ -344,9 +344,10 @@ void VulkanEngine::dispatch_clouds(VkCommandBuffer cmd) {
     pc.inv_vp = fv.inv_vp;
     pc.eye = glm::vec4(fv.eye_pos, static_cast<float>(glfwGetTime()));
     pc.params = glm::vec4(glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), std::max(0.0f, rt_.cloud_density),
-                          rt_.cloud_speed, rt_.atmosphere_intensity * 3.14159265f);
+                          rt_.cloud_speed,
+                          (env_applied_ ? env_base_.atmosphere_intensity * env_cloud_k_ : rt_.atmosphere_intensity) * 3.14159265f);
     pc.params2 = glm::vec4(float(frame_number_ % 64), kBottomRadiusKm + std::max(fv.eye_pos.y, 1.0f) * 0.001f,
-                           0.0f, 0.0f);
+                           env_cloud_direct_, 0.0f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_pipeline_layout_, 0, 1, &cloud_set_, 0, nullptr);
     auto barrier = [&]() {

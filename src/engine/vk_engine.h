@@ -1182,6 +1182,29 @@ private:
     void  spawn_water_splash(glm::vec3 pos, float scale);
     void  tick_water_fx(float dt);
     bool  player_swimming_ = false;
+    // Environment driver (environment.cpp): day / night clock + weather.
+    struct EnvBase {
+        float sun_pitch_deg = 0, sun_yaw_deg = 0, sun_intensity = 0, atmosphere_intensity = 0;
+        glm::vec3 sun_color{1.0f}, sky_color{1.0f};
+        float cloud_coverage = 0, cloud_density = 0, cloud_speed = 0, fog_density = 0, grass_wind = 0;
+        bool  auto_golden_hour = true;
+    };
+    EnvBase env_base_{};              // the user's values while the driver overrides rt_
+    bool  env_applied_ = false;
+    float weather_state_ = 0.0f, weather_target_ = 0.0f, weather_timer_ = 0.0f;
+    bool  weather_init_ = false;
+    float env_rain_ = 0.0f;           // rain intensity 0..1
+    float env_wet_ = 0.0f;            // ground wetness 0..1
+    float env_night_ = -1.0f;         // lantern factor 0..1 (< 0: clock off)
+    float env_lightning_ = 0.0f;      // current flash brightness
+    float env_wind_scale_ = 1.0f;
+    float env_cloud_k_ = 1.0f, env_cloud_direct_ = 1.0f;   // cloud light: sky level, direct factor
+    float lightning_timer_ = 6.0f, lightning_t_ = -1.0f, lightning_seed_ = 0.0f;
+    uint32_t rain_voice_[2]{};
+    void  apply_environment(float dt);
+    void  env_swap_base();
+    void  tick_rain_audio(float rain);
+    const char* weather_name() const;
     float swim_ripple_acc_ = 0.0f;
     float swim_stroke_t_ = 0.0f;       // swim bob phase
     float player_water_prev_sub_ = 0.0f;

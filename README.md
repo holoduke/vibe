@@ -1,104 +1,126 @@
-# quake-like
+# Vulcan3D Vibecoded — a 100 % AI-written Vulkan ray-tracing game engine
 
-Vulkan 1.3 + KHR ray-query first-person shooter. C++20, Windows-first.
+**A real-time C++ / Vulkan 1.3 first-person game engine with hardware ray tracing, a raymarched
+open world, dynamic weather and a day/night cycle — written entirely by AI through conversation.
+No human has read or written the code.**
 
-A small-arena combat playground that pushes modern rendering techniques
-on a single graphics queue: inline RT shadows / GI, denoised via SVGF,
-upscaled via FSR2 / FSR3 frame-gen, on procedural CDLOD heightmap
-terrain with grass and water.
+![Vulkan 1.3](https://img.shields.io/badge/Vulkan-1.3-red) ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey) ![Ray tracing](https://img.shields.io/badge/ray%20tracing-KHR%20ray%20query-green) ![Vibe coded](https://img.shields.io/badge/vibe%20coded-100%25-purple)
 
-## Building
+![Daylight: castle, lake, forest and mountains](docs/screenshots/day.png)
+
+## What is this?
+
+This repository is an experiment in **vibe coding**: building software by describing what you want
+and looking only at the result. The rule of the project is simple:
+
+> **The human never looks at the code.** They play the game, look at the picture, and say what is
+> wrong or what should come next ("the shadow edges are spiky", "add rain", "make it faster in
+> fullscreen"). An AI coding agent ([Claude Code](https://claude.com/claude-code)) does everything
+> else: architecture, C++, GLSL shaders, debugging, profiling, regression testing and commits.
+
+The goal is to find out how far that goes when the bar is deliberately high:
+
+- **High-quality, modern graphics** — ray-traced shadows, global illumination and reflections,
+  a physical sky, volumetric clouds and fog, the latest upscalers and frame generation.
+- **High performance** — every feature is profiled on the GPU and has to earn its milliseconds.
+- **Real engineering, not a tech demo** — settings that persist, test hooks, regression
+  screenshots, validation-layer runs, crash diagnostics.
+
+If you are curious whether an AI can build a non-trivial 3D engine without a human reading the
+source: this is one data point, with the full commit history as the log.
+
+## Screenshots
+
+| Sunrise with volumetric light | Night: moonlight, stars, lanterns |
+|---|---|
+| ![Sunrise god rays over the forest](docs/screenshots/sunrise.png) | ![Night sky with stars and a lit lantern](docs/screenshots/night.png) |
+
+| Rain | Under water |
+|---|---|
+| ![Rain and overcast sky](docs/screenshots/rain.png) | ![Underwater view with Snell's window](docs/screenshots/underwater.png) |
+
+| Water splash and ripples |
+|---|
+| ![A bullet splash on the lake](docs/screenshots/splash.png) |
+
+## Features
+
+### Rendering
+- **Vulkan 1.3 deferred renderer** with inline hardware ray tracing (`VK_KHR_ray_query`):
+  ray-traced soft sun shadows, ambient occlusion, global illumination and reflections against a
+  TLAS / BLAS scene, with alpha-tested foliage in the ray queries.
+- **Upscaling and frame generation**: NVIDIA DLSS Super Resolution, DLSS Ray Reconstruction and
+  DLSS Frame Generation (Streamline, with Reflex), AMD FSR 3.1 upscaling and FSR 3 frame
+  generation, AMD Anti-Lag 2. The GPU vendor is detected and the best path is picked automatically.
+- **Raymarched procedural terrain** (FBM heightfield with a baked height map for fast skipping),
+  with roads, bomb craters that turn to mud, and close-range ground relief.
+- **Raymarched SDF grass** plus GPU-driven vegetation: compute-shader culling, hi-Z occlusion,
+  LOD buckets, procedural trees, 15 species of ground plants.
+- **Physical sky** (Hillaire atmosphere LUTs), **volumetric clouds**, **froxel volumetric fog**
+  with ray-traced light shafts, aerial perspective, auto exposure, bloom, lens flare,
+  ACES / AgX / PBR-Neutral tonemapping and HDR10 output.
+
+### World simulation
+- **Day / night cycle**: the sun follows a real diurnal arc; golden hour, blue hour, moonlight,
+  stars and road lanterns that light up at dusk. The clock speed is a setting.
+- **Dynamic weather**: clear, fair, overcast, rain and thunderstorms. Weather drives cloud cover,
+  fog, light colour, wind, rain streaks, rings on the water, wet ground, rain sound, lightning
+  and thunder. How often the weather turns bad is a setting.
+- **Water**: reflective lake with splashes and expanding ripples when shot, swimming and diving,
+  and an underwater view with light absorption, caustics, light shafts and Snell's window.
+- **Combat sandbox**: laser rifle, an airstrike tablet that calls in a bomber, anti-aircraft
+  vehicles, jets that can be shot down, volumetric explosions, an optional destructible voxel tower,
+  cloth flags, [Jolt Physics](https://github.com/jrouwe/JoltPhysics) rigid bodies.
+
+## Build and run
+
+Windows, Visual Studio 2022, Vulkan SDK 1.3 and a GPU with ray-query support
+(NVIDIA RTX 20-series or newer, AMD RX 6000-series or newer, Intel Arc).
 
 ```powershell
 ./build.ps1 -Config Release
-./build/quake_like.exe
+./build/quake_like.exe        # run from the repository root
 ```
 
-Requires Visual Studio 2022 + Vulkan SDK 1.3.x with ray-query support
-(RTX 2060+, RX 6700+, Arc A380+). Dependencies are pulled by CMake's
-`FetchContent` (GLFW, glm, ImGui, VMA, Vulkan-Bootstrap, JoltPhysics,
-tinygltf, tinyexr, miniaudio, FastNoiseLite). FidelityFX is vendored
-under `external/`.
+Dependencies (GLFW, glm, Dear ImGui, VMA, vk-bootstrap, Jolt Physics, tinygltf, miniaudio, …)
+are fetched by CMake. FidelityFX and the NVIDIA Streamline SDK are vendored under `external/`.
 
-## Rendering pipeline (high level)
+## Controls
 
-| Pass | What |
-|------|------|
-| Depth pre-pass | Brushes + dyn props + terrain (depth only). |
-| World colour | cube.frag draws brushes / dyn props / terrain with inline RT shadows (PCSS or half-rate consumer), AO (off / GTAO-cheap / RTAO / HBAO), GI (ReSTIR), SPOM parallax, anti-tile, FBM far detail. MRT writes scene_color + motion_vec. |
-| Sun shadow LR | Half-rate occlusion image — bilateral-upsampled in cube.frag when enabled. |
-| Grass raymarch | SDF blades over the heightmap, marched in screen space. |
-| Water plane | 64×64 subdivided rasterised plane with depth-bias, foam, atmospheric water tint, RT reflections. |
-| Tessellation (optional) | Near terrain chunks get GPU tess for vertex displacement. |
-| SVGF | Variance-moments reprojection + 3-pass à-trous (toggle). |
-| FSR3 / FSR2 / TAA | Upscale chain. |
-| Bloom | Karis-averaged down + tent up mip chain. |
-| Compose | Tonemap + lens flare + chromatic + vignette + ImGui. |
+| Key | Action |
+|---|---|
+| W A S D, mouse | Move, look |
+| Space / Shift / Ctrl | Jump (double jump) / sprint / crawl. In water: rise / swim fast / dive |
+| Left mouse | Fire, or mark the airstrike target |
+| 1 / 2 | Laser rifle / airstrike tablet |
+| V | Free-fly camera |
+| Esc | Pause menu with every graphics, weather and gameplay setting |
 
-## Terrain
+Settings are saved to `qlike_settings.cfg`. Time of day, clock speed and weather live in the
+pause menu under **Graphics Settings → Time of day & weather**.
 
-CDLOD heightmap chunks, 8 LOD levels (strides 1/2/4/8/16/32/64/128),
-per-LOD distance + density sliders, CD-LOD morph for LOD 0→1, vertex
-skirts on chunk edges for crack-free seams. Optional GPU tessellation
-near the camera. Per-chunk VBO supersample (1×/2×/4×/8×) inside a
-configurable near-radius for dense LOD 0 mesh past heightmap
-resolution. 5-material procedural splat + 2 PNG materials (stylized
-grass + rocky-rugged) with anti-tile rotated-sample blend, gated by
-the grass-eligibility mask. Per-pixel SPOM + per-vertex displacement
-both sample the same rocky height map — they stay aligned. Atmospheric
-fog (exp² distance + height attenuation + Mie sun-aligned forward scatter).
+## How it is developed
 
-## Combat
+1. The human plays the build and describes a wish or a defect in plain language.
+2. The AI agent reads the code base, researches the technique, implements it, builds, launches
+   the game with test hooks, takes screenshots and GPU timings, and compares them to a baseline.
+3. The agent commits and pushes; the human looks at the result — never at the diff.
 
-- Lasers fire as glowing cylinders, gravity-arced, ricochet on shallow hits.
-- Particle sparks via Jolt rigid bodies.
-- Spacejet flyovers (1.5-4 s cadence, 95-130 m altitude, biased toward
-  multi-jet formations) — shootable, 3-hit kill, big screen-flash + sphere
-  burst on destruction. Hit-test uses segment-vs-AABB (no tunneling on
-  fast closures).
-- Top-centre damage HUD shows last-hit jet's health, fades over 3 s.
-
-## Movement
-
-Quake-feel ground accel + air-accel, double jump (1 air jump, +10%
-height; up to +20% bonus when strafe-jumping).
-
-## In-game controls
-
-- WASD + Space (jump) + Shift (sprint) + Ctrl (crawl)
-- Mouse-look + LMB (fire) / RMB (alt; sculpt-lower in edit mode)
-- E — toggle terrain edit mode (sculpt brush)
-- 9 — toggle terrain wireframe
-- [ / ] — shrink / grow sculpt brush
-- Q / R — cycle brush mode (raise / lower / erosion / paint)
-- F12 — screenshot
-- ESC — pause menu (all sliders live here)
+Everything in this repository — engine, shaders, tools, synthesised sound effects, this README —
+was produced that way.
 
 ## Project layout
 
-- `src/engine/` — Vulkan engine: pipelines, descriptors, terrain,
-  SVGF, FSR, sun shadow, grass, water, audio.
-- `src/game/` — gameplay: player movement, physics integration, level.
-- `shaders/` — GLSL 4.60 (compiled to SPIR-V via glslang at build time).
-- `assets/` — meshes, textures, audio.
-- `docs/` — implementation plans (terrain migration, ReSTIR, SVGF, FSR3, etc.).
-- `external/FidelityFX-FSR2`, `external/FidelityFX-SDK` — vendored upscalers.
+- `src/engine/` — Vulkan engine: passes, ray tracing, terrain, vegetation, weather, water, audio, UI.
+- `src/game/` — player movement, collision, level.
+- `shaders/` — GLSL 4.60, compiled to SPIR-V at build time.
+- `assets/` — models, textures, sounds.
+- `docs/` — design notes and screenshots.
 
-## Tuning surface
+## Keywords
 
-Most rendering knobs are live sliders in the pause menu (Quality,
-Terrain, Terrain LOD, Grass, Water, Fog, AO, Shadow, Bloom). Settings
-persist in `qlike_settings.cfg`.
-
-## Recent backlog highlights
-
-- SVGF deep denoiser (variance moments + 3-pass à-trous)
-- HBAO (ao_mode 3)
-- Dense LOD 0 supersample with per-chunk hysteresis
-- Anti-tile rotated 2nd sample on terrain splat
-- Realistic atmospheric fog (Mie scattering + height attenuation)
-- 8-LOD CDLOD with per-band UI sliders, AABB-clamp distance picker
-- Rasterised water plane with depth-bias + 64×64 subdiv to kill
-  shoreline wobble
-- Stylized grass + rocky-rugged texture integration with grass-mask
-  gating
+Vulkan game engine, C++ Vulkan renderer, real-time ray tracing, ray query, deferred rendering,
+DLSS 3 frame generation, DLSS ray reconstruction, FSR 3, raymarched terrain, SDF grass,
+volumetric clouds, volumetric fog, physical sky, day night cycle, dynamic weather system, rain,
+water rendering, underwater shader, GPU-driven rendering, vibe coding, AI-generated code,
+AI-written game engine, Claude Code, LLM coding experiment.

@@ -90,7 +90,27 @@ vec3 atmo_sky(vec3 dir) {
         vec3 ts = textureLod(u_atmo_trans, trans_uv(pc.atmo.z, dir.y), 0.0).rgb;
         L += ts * disc * 60.0;
     }
-    return L * atmo_sun_illum();
+    vec3 sky = L * atmo_sun_illum();
+    // Stars: wherever (and whenever) the sky itself is dark. Points on a
+    // direction grid, a few hundred visible, brightness and tint varied;
+    // extinction dims them toward the horizon.
+    float sky_l = dot(sky, vec3(0.2126, 0.7152, 0.0722));
+    float night_k = 1.0 - smoothstep(0.004, 0.05, sky_l);
+    if (night_k > 0.0 && dir.y > 0.0) {
+        vec3 q = dir * 210.0;
+        vec3 id = floor(q);
+        vec3 h = fract(sin(vec3(dot(id, vec3(127.1, 311.7, 74.7)), dot(id, vec3(269.5, 183.3, 246.1)),
+                                dot(id, vec3(113.5, 271.9, 124.6)))) * 43758.5453);
+        if (h.x > 0.972) {
+            vec3 c = id + 0.25 + 0.5 * h;
+            float d2 = dot(q - c, q - c);
+            float mag = (h.x - 0.972) / 0.028;
+            float pt = exp(-d2 * 26.0) * (0.15 + 2.2 * mag * mag * mag);
+            vec3 tint = mix(vec3(1.0, 0.82, 0.62), vec3(0.72, 0.84, 1.0), h.y);
+            sky += tint * pt * night_k * 0.09 * smoothstep(0.0, 0.25, dir.y);
+        }
+    }
+    return sky;
 }
 // Aerial perspective at world distance d_km: rgb in-scatter (unit sun),
 // a = transmittance. Slices are quadratic in distance (atmosphere.comp).

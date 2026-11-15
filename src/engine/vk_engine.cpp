@@ -106,6 +106,7 @@ void VulkanEngine::init() {
     audio_->load_clip(ClipID::AaBurst, "assets/sounds/aa_burst.wav");
     audio_->load_clip(ClipID::SamLaunch, "assets/sounds/sam_launch.wav");
     audio_->load_clip(ClipID::Splash, "assets/sounds/water_splash.wav");
+    audio_->load_clip(ClipID::Rain, "assets/sounds/rain_bed.wav");
     // Full jet flyby recordings; tick_jet_audio() times their peak to each
     // jet's predicted closest approach.
     audio_->load_clip(ClipID::JetFlyby1, "assets/sounds/jet_flyby_1.mp3");
@@ -1078,6 +1079,8 @@ void VulkanEngine::run(const RunOptions& opts) {
         // DLSS: output (re)creation + compose rebind, never mid-recording.
         ensure_dlss_bindings();
         ensure_cloud_target();
+        // Day / night clock + weather drive the sun, sky, clouds, fog and wind.
+        apply_environment(state_ == State::Playing ? frame_dt : 0.0f);
 
         // Heightmap-shadow texture is sampled by cube.frag's mesh-terrain
         // branch and grass.vert (raster grass). When raymarch terrain is on

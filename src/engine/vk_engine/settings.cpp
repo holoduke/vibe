@@ -268,6 +268,13 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("cloud_coverage", s.rt_.cloud_coverage);
     f("cloud_density", s.rt_.cloud_density);
     f("cloud_speed", s.rt_.cloud_speed);
+    f("day_night_enabled", s.rt_.day_night_enabled);
+    f("time_of_day", s.rt_.time_of_day);
+    f("day_length_minutes", s.rt_.day_length_minutes);
+    f("weather_enabled", s.rt_.weather_enabled);
+    f("weather_bad_chance", s.rt_.weather_bad_chance);
+    f("weather_change_minutes", s.rt_.weather_change_minutes);
+    f("weather_manual", s.rt_.weather_manual);
     f("tonemap_mode", s.rt_.tonemap_mode);
     f("hdr_output", s.rt_.hdr_output);
     f("radiance_cache", s.rt_.radiance_cache);
@@ -559,6 +566,13 @@ void VulkanEngine::save_settings() const {
             return;
         }
         f << "# quake-like RT settings - auto-generated; safe to edit\n";
+        // The clock / weather driver overrides sun, sky, cloud and fog
+        // values at run time: save the user's own ones.
+        struct BaseSwap {
+            VulkanEngine* e;
+            explicit BaseSwap(VulkanEngine* x) : e(x) { if (e->env_applied_) e->env_swap_base(); }
+            ~BaseSwap() { if (e->env_applied_) e->env_swap_base(); }
+        } base_swap(const_cast<VulkanEngine*>(this));
         visit_settings(*this, [&](const char* key, const auto& v) {
             f << key << " = ";
             write_value(f, v);
