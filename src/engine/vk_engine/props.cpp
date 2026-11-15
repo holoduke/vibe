@@ -344,8 +344,13 @@ void VulkanEngine::tick_spacejet(float dt) {
     // ---- Spawn waves ----
     int alive = 0;
     for (const auto& f : spacejet_flights_) if (!f.dead && !f.destroying) ++alive;
+    // Game setting 'Aircraft' off: no new waves, and the ones in the air are
+    // withdrawn (the player's own airstrike aircraft is exempt).
+    if (!game_.aircraft_enabled)
+        for (auto& f : spacejet_flights_)
+            if (!f.strike && !f.dead && !f.destroying) { f.dead = true; f.trail.clear(); }
     spacejet_spawn_timer_ -= dt;
-    if (spacejet_spawn_timer_ <= 0.0f && alive < 14) {
+    if (game_.aircraft_enabled && spacejet_spawn_timer_ <= 0.0f && alive < 14) {
         spacejet_spawn_timer_ = frand_range(R, 3.5f, 8.0f);
         int wave = 2 + int(xorshift32(R) % 3u);              // 2..4 jets
         float bearing = frand(R) * 6.2831853f;
@@ -561,7 +566,7 @@ void VulkanEngine::tick_spacejet(float dt) {
                     b.prev_pos = b.pos;
                     b.chute = ((lead->id * 7u + uint32_t(lead->sorties)) % 5u) < 3u;
                     b.phase = float(f.id) * 1.7f;
-                    bombs_.push_back(b);
+                    if (game_.aircraft_bombs) bombs_.push_back(b);
                 }
                 if (!lead->bomb_dropped) f.bomb_dropped = false;
             } else {
@@ -639,7 +644,7 @@ void VulkanEngine::tick_spacejet(float dt) {
                             airstrike_.phase = 2;
                             airstrike_.t = 0.0f;
                         }
-                        bombs_.push_back(b);
+                        if (game_.aircraft_bombs || f.strike) bombs_.push_back(b);
                         log::infof("[jets] bomb away -> (%.0f, %.0f)%s from (%.0f, %.0f, %.0f) h %.0f along %.1f speed %.0f t %.1f", f.target.x, f.target.z, f.strike ? " (airstrike)" : "", f.pos.x, f.pos.y, f.pos.z, h, along, f.speed, f.t);
                         // Pull up and reverse.
                         f.mode = JetMode::Turn;

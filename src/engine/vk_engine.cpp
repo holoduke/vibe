@@ -796,6 +796,8 @@ void VulkanEngine::run(const RunOptions& opts) {
                     }
                     terrain_stroke_active_ = false;
                 }
+            } else if (!game_.weapons_enabled) {
+                airstrike_click_ = false;            // game setting: player weapons off
             } else if (weapon_ == 1) {
                 // Airstrike tablet: a click marks the ground under the crosshair.
                 airstrike_click_ = in.fire;

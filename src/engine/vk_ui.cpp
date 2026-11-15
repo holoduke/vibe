@@ -483,6 +483,21 @@ void VulkanEngine::build_menu_ui() {
 
     // ----- Game tab --------------------------------------------------------
     if (ImGui::BeginTabItem("Game")) {
+        ImGui::SeparatorText("Action");
+        ImGui::Checkbox("Aircraft", &game_.aircraft_enabled);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Enemy jets fly sorties over the map. Off: the sky is empty. Your own airstrike aircraft still comes when called.");
+        if (!game_.aircraft_enabled) ImGui::BeginDisabled();
+        ImGui::Checkbox("Aircraft drop bombs", &game_.aircraft_bombs);
+        if (!game_.aircraft_enabled) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Off: the jets only fly over.");
+        ImGui::Checkbox("Anti-aircraft fire", &game_.aa_enabled);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The gun vehicles and missile launchers engage aircraft. Off: they stay parked and hold fire.");
+        ImGui::Checkbox("Player weapons", &game_.weapons_enabled);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Left mouse fires the laser rifle / marks airstrikes. Off: no shooting.");
+        if (ImGui::Button("Peaceful (all off)")) game_.aircraft_enabled = game_.aircraft_bombs = game_.aa_enabled = game_.weapons_enabled = false;
+        ImGui::SameLine();
+        if (ImGui::Button("War (all on)")) game_.aircraft_enabled = game_.aircraft_bombs = game_.aa_enabled = game_.weapons_enabled = true;
+        ImGui::SeparatorText("Physics and weapons");
         ImGui::SliderFloat("gravity (m/s^2)", &game_.gravity, 0.5f, 1250.0f, "%.1f",
                            ImGuiSliderFlags_Logarithmic);
         ImGui::SliderInt("cubes / minute", &game_.cubes_per_minute, 0, 1000);

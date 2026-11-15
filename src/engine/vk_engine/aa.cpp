@@ -257,7 +257,7 @@ void VulkanEngine::tick_aa(float dt) {
         // Test hook: QLIKE_TEST_AAFIRE=1 keeps every gun firing, target or not.
         static const bool kTestAaFire = std::getenv("QLIKE_TEST_AAFIRE") != nullptr;
         if (kTestAaFire) v.cooldown = 0.0f;
-        const bool on_target = kTestAaFire || (tgt && std::abs(dy) < 0.035f && std::abs(dp) < 0.035f);
+        const bool on_target = kTestAaFire || (game_.aa_enabled && tgt && std::abs(dy) < 0.035f && std::abs(dp) < 0.035f);
         const float interval = 0.080f;     // 12.5 rds/s (alternating barrels)
         const int   kClipRounds = 12;
         const glm::vec3 snd_pos = glm::vec3(v.pos) + glm::vec3(0.0f, 2.0f, 0.0f);
@@ -372,6 +372,7 @@ void VulkanEngine::tick_sam(float dt) {
     // ---- Launchers: acquire, slew, lock, launch ----
     for (auto& v : aa_) {
         if (v.kind != 1) continue;
+        if (!game_.aa_enabled) { v.lock_t = 0.0f; continue; }   // game setting: hold fire
         if (v.rails == 0u) {
             v.reload_t -= dt;
             if (v.reload_t <= 0.0f) v.rails = 0xFu;

@@ -819,6 +819,11 @@ struct GameSettings {
         // Scales spark count + initial speed at spawn. 1.0 = default. Use
         // smaller values for subtle effects, larger for explosions.
         float spark_scale   = 1.0f;
+        // What is going on in the world. Off = a quiet landscape.
+        bool  aircraft_enabled = true;    // enemy jets fly sorties over the map
+        bool  aircraft_bombs   = true;    // ... and drop bombs (off: fly-overs only)
+        bool  aa_enabled       = true;    // anti-aircraft guns and missile launchers fire
+        bool  weapons_enabled  = true;    // the player can shoot / call airstrikes
 
         bool operator==(const GameSettings&) const = default;
 };

@@ -509,6 +509,10 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("fire_rate_rps", s.game_.fire_rate_rps);
     f("bullet_speed", s.game_.bullet_speed);
     f("spark_scale", s.game_.spark_scale);
+    f("aircraft_enabled", s.game_.aircraft_enabled);
+    f("aircraft_bombs", s.game_.aircraft_bombs);
+    f("aa_enabled", s.game_.aa_enabled);
+    f("weapons_enabled", s.game_.weapons_enabled);
     f("player_pos_x", s.player_.position.x);
     f("player_pos_y", s.player_.position.y);
     f("player_pos_z", s.player_.position.z);
