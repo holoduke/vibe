@@ -113,6 +113,11 @@ struct RtSettings {
         float cloud_coverage = 0.45f;
         float cloud_density  = 1.0f;
         float cloud_speed    = 8.0f;   // wind, m/s
+        float cloud_scale    = 1.0f;   // size of the cloud shapes (1 = default)
+        float cloud_base_m   = 1500.0f; // altitude of the cloud base
+        float cloud_tower_m  = 4200.0f; // how tall the tallest clouds grow above the base
+        float cloud_softness = 0.13f;  // edge softness (0 = hard, crisp .. 0.6 = smoky)
+        float cloud_erosion  = 0.45f;  // how much the fine detail eats into the edges
         // Froxel volumetric fog (RT-shadowed sun shafts).
         int   fog_volumetric = 1;
         float fog_density = 0.005f;        // 1/m at the reference height

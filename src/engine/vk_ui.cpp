@@ -627,6 +627,16 @@ void VulkanEngine::build_menu_ui() {
             ImGui::SliderFloat("cloud cover", &cloud_cov, 0.0f, 1.0f, "%.2f");
             ImGui::SliderFloat("cloud thickness", &cloud_dens, 0.1f, 3.0f, "%.2f");
             ImGui::SliderFloat("cloud wind (m/s)", &cloud_speed, 0.0f, 40.0f, "%.1f");
+            ImGui::SeparatorText("Shape");
+            ImGui::SliderFloat("cloud size", &rt_.cloud_scale, 0.4f, 3.0f, "%.2fx");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Size of the cloud shapes: small puffs .. huge banks.");
+            ImGui::SliderFloat("cloud base height (m)", &rt_.cloud_base_m, 500.0f, 5000.0f, "%.0f");
+            ImGui::SliderFloat("tallest clouds (m)", &rt_.cloud_tower_m, 500.0f, 10000.0f, "%.0f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far the tallest clouds tower above their base. Low = flat sheets, high = thunderheads.");
+            ImGui::SliderFloat("edge softness", &rt_.cloud_softness, 0.02f, 0.6f, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Low = crisp, hard-edged cumulus. High = soft, smoky edges.");
+            ImGui::SliderFloat("edge detail", &rt_.cloud_erosion, 0.0f, 0.8f, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("How much the fine cauliflower detail eats into the cloud edges.");
         }
 
         if (ImGui::CollapsingHeader("Fog and haze")) {

@@ -179,7 +179,9 @@ struct CloudPC {
     glm::vec4 eye;      // xyz camera (m), w time (s)
     glm::vec4 sun;      // xyz toward sun, w mode
     glm::vec4 params;   // coverage, density, wind m/s, sun intensity (engine * pi)
-    glm::vec4 params2;  // frame, camera planet radius (km)
+    glm::vec4 params2;  // frame, camera planet radius (km), direct-light factor, cloud size
+    glm::vec4 params3;  // cloud base altitude (m), tallest cloud (m), edge softness, erosion
+    glm::vec4 light_col; // direct light colour
 };
 }  // namespace
 
@@ -347,7 +349,10 @@ void VulkanEngine::dispatch_clouds(VkCommandBuffer cmd) {
                           rt_.cloud_speed,
                           (env_applied_ ? env_base_.atmosphere_intensity * env_cloud_k_ : rt_.atmosphere_intensity) * 3.14159265f);
     pc.params2 = glm::vec4(float(frame_number_ % 64), kBottomRadiusKm + std::max(fv.eye_pos.y, 1.0f) * 0.001f,
-                           env_cloud_direct_, 0.0f);
+                           env_cloud_direct_, glm::clamp(rt_.cloud_scale, 0.3f, 4.0f));
+    pc.params3 = glm::vec4(glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f), glm::clamp(rt_.cloud_tower_m, 300.0f, 12000.0f),
+                           glm::clamp(rt_.cloud_softness, 0.01f, 1.0f), glm::clamp(rt_.cloud_erosion, 0.0f, 1.0f));
+    pc.light_col = glm::vec4(rt_.sun_color, 0.0f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_pipeline_layout_, 0, 1, &cloud_set_, 0, nullptr);
     auto barrier = [&]() {

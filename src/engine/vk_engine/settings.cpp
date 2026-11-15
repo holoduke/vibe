@@ -274,6 +274,11 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("cloud_coverage", s.rt_.cloud_coverage);
     f("cloud_density", s.rt_.cloud_density);
     f("cloud_speed", s.rt_.cloud_speed);
+    f("cloud_scale", s.rt_.cloud_scale);
+    f("cloud_base_m", s.rt_.cloud_base_m);
+    f("cloud_tower_m", s.rt_.cloud_tower_m);
+    f("cloud_softness", s.rt_.cloud_softness);
+    f("cloud_erosion", s.rt_.cloud_erosion);
     f("day_night_enabled", s.rt_.day_night_enabled);
     f("time_of_day", s.rt_.time_of_day);
     f("day_length_minutes", s.rt_.day_length_minutes);

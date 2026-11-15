@@ -117,6 +117,17 @@ was produced that way.
 - `assets/` — models, textures, sounds.
 - `docs/` — design notes and screenshots.
 
+## Credits
+
+Parts of this project are ports of other people's open-source work (MIT licensed):
+
+- **Volumetric clouds**: the cloud model (shape / detail / weather noise, vertical shaping,
+  marching and lighting terms) is ported from
+  [leoawen/volumetric_cloud_atmosphere_scattering](https://github.com/leoawen/volumetric_cloud_atmosphere_scattering)
+  (Copyright (c) 2025 leoawen), rescaled from a planet to a landscape.
+- **Procedural trees**: the growth algorithm is a C++ port of
+  [dgreenheck/ez-tree](https://github.com/dgreenheck/ez-tree) (Copyright (c) 2024 Daniel Greenheck).
+
 ## Keywords
 
 Vulkan game engine, C++ Vulkan renderer, real-time ray tracing, ray query, deferred rendering,
