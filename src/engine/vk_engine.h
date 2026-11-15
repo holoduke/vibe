@@ -1199,6 +1199,8 @@ private:
     float env_lightning_ = 0.0f;      // current flash brightness
     float env_wind_scale_ = 1.0f;
     float env_cloud_k_ = 1.0f, env_cloud_direct_ = 1.0f;   // cloud light: sky level, direct factor
+    float env_cloud_shadow_k_ = 0.72f;                     // cloud-shadow contrast on the ground
+    glm::vec3 lightning_pos_{0.0f};                        // ground point of the current bolt
     float lightning_timer_ = 6.0f, lightning_t_ = -1.0f, lightning_seed_ = 0.0f;
     uint32_t rain_voice_[2]{};
     void  apply_environment(float dt);

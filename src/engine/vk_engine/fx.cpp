@@ -939,6 +939,39 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
                        glm::vec3(0.26f * fade * fade * in_k, 1.0f, s.seed + 50.0f));
     }
 
+    // Lightning: a jagged channel from the cloud base to the ground with a
+    // couple of dying branches, visible for the flash's quarter second.
+    // Midpoint-style random walk seeded per strike (same shape every frame).
+    if (env_lightning_ > 0.02f && lightning_t_ >= 0.0f) {
+        uint32_t ls = uint32_t(lightning_seed_ * 4.0e9f) | 1u;
+        auto lr = [&ls]() { ls ^= ls << 13; ls ^= ls >> 17; ls ^= ls << 5; return float(ls & 0xFFFFFF) / 8388608.0f - 1.0f; };
+        const glm::vec3 base = lightning_pos_;
+        const float top = 1500.0f;
+        const float inten = std::min(env_lightning_, 1.4f) * 7.0f;
+        const glm::vec3 tint(0.72f, 0.82f, 1.0f);
+        auto channel = [&](glm::vec3 a, glm::vec3 b, int segs, float wdt, float jit, float k) {
+            std::vector<glm::vec3> p; std::vector<float> w, al;
+            glm::vec3 off(0.0f);
+            for (int i = 0; i <= segs; ++i) {
+                const float t = float(i) / float(segs);
+                if (i > 0 && i < segs) off += glm::vec3(lr(), 0.25f * lr(), lr()) * jit;
+                if (i == segs) off = glm::vec3(0.0f);
+                const glm::vec3 q = glm::mix(a, b, t) + off * (1.0f - t * 0.6f);
+                p.push_back(q); w.push_back(min_w(q, wdt, 2.2f)); al.push_back(inten * k);
+            }
+            glow.strip(p, w, al, tint);
+            return p;
+        };
+        const glm::vec3 cloud = base + glm::vec3(lr() * 220.0f, top, lr() * 220.0f);
+        const auto main_p = channel(cloud, base, 26, 2.2f, 26.0f, 1.0f);
+        for (int b = 0; b < 3; ++b) {
+            const size_t at = size_t(4 + b * 6) % main_p.size();
+            const glm::vec3 from = main_p[at];
+            const glm::vec3 to = from + glm::vec3(lr() * 260.0f, -(180.0f + 160.0f * std::abs(lr())), lr() * 260.0f);
+            channel(from, to, 9, 1.2f, 20.0f, 0.45f);
+        }
+    }
+
     // Rain: streaks in a box that travels with the camera. Stateless - each
     // streak's position is a hash, advanced by time along the fall velocity
     // and wrapped into the box in WORLD space, so drops keep falling where

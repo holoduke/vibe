@@ -371,6 +371,18 @@ void main() {
         // terrain: snow / wet-ish rock smoother than soil and grass
         ? mix(0.92, 0.48, smoothstep(0.45, 0.75, dot(g0.rgb, vec3(0.333))))
         : clamp(g1.b, 0.05, 1.0);
+    // Rain: wet surfaces are darker (water fills the pores, light is
+    // trapped) and much smoother (a film of water). Mostly on faces the
+    // rain can reach; leaves just get glossier.
+    {
+        float wet = scene.ripple_info.z;
+        if (wet > 0.01) {
+            float up = mix(0.35, 1.0, smoothstep(-0.2, 0.6, N.y));
+            float wk = wet * up;
+            if (!leafy && metallic < 0.5) albedo *= mix(1.0, 0.58, wk);
+            roughness = mix(roughness, min(roughness, 0.16), wk * 0.85);
+        }
+    }
 
     // Pre-shaded materials (5..8 = brush / voxel / water / raymarched
     // terrain) write LIT colour directly into scene_color in the
@@ -1380,7 +1392,7 @@ void main() {
     // No shadow rays below N.L 0.04: fade the (untested) sun to 0 there
     // instead of letting up to 4 % leak into shadowed terminator areas.
     float term_fade = (ndl_raw > 0.04) ? 1.0 : smoothstep(0.0, 0.04, ndl_raw);
-    vec3 sun_rad = scene.sun_color.rgb * scene.sun_color.a * ndl * term_fade * (1.0 - shadow);
+    vec3 sun_rad = scene.sun_color.rgb * scene.sun_color.a * ndl * term_fade * (1.0 - shadow) * cloud_shadow(world_pos);
     vec3 sun_term;
     {
         vec3  H   = normalize(L + Vv);

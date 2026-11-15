@@ -80,9 +80,33 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   rm_red_sand;      // rgb, w = patch scale
     vec4   rm_rock;          // rgb, w = ground saturation
     vec4   craters[24];      // xyz centre, w bowl radius
-    vec4   crater_info;      // x = count
+    vec4   crater_info;      // x = count, y = cloud cover 0..1, z = cloud shadow contrast
     vec4   ripples[16];      // splash rings: xy = world xz, z = age (s), w = amplitude (m)
     vec4   ripple_info;      // x = count, y = rain 0..1, z = ground wetness 0..1
 } scene;
+
+// Cloud shadows on the ground: the cloud field is far above the scene, so
+// its shadow is a 2D pattern projected down the sun direction - drifting
+// value-noise FBM thresholded by the cloud cover (crater_info.y), with the
+// contrast in crater_info.z (0 under a uniform overcast). Multiply the
+// direct sun light by it.
+float cs_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float cs_noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(cs_hash(i), cs_hash(i + vec2(1.0, 0.0)), f.x),
+               mix(cs_hash(i + vec2(0.0, 1.0)), cs_hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float cloud_shadow(vec3 wp) {
+    float k = scene.crater_info.z;
+    if (k <= 0.001) return 1.0;
+    vec3 L = scene.sun_direction.xyz;
+    vec2 p = wp.xz + L.xz / max(L.y, 0.2) * (1800.0 - wp.y);
+    p = p * 0.0021 + scene.water_params.w * vec2(0.0090, 0.0033);
+    float n = cs_noise(p) * 0.55 + cs_noise(p * 2.13 + 11.7) * 0.30 + cs_noise(p * 4.7 + 3.1) * 0.15;
+    float cov = scene.crater_info.y;
+    float c = smoothstep(1.0 - cov - 0.12, 1.0 - cov + 0.12, n);
+    return 1.0 - k * c;
+}
 
 #endif

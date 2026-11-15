@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace qlike {
 
@@ -62,7 +63,7 @@ void VulkanEngine::apply_environment(float dt) {
     if (env_applied_) { env_swap_base(); env_applied_ = false; }
     if (!want) {
         env_night_ = -1.0f; env_rain_ = 0.0f; env_wet_ = std::max(0.0f, env_wet_ - dt / 60.0f);
-        env_lightning_ = 0.0f; env_cloud_k_ = 1.0f; env_cloud_direct_ = 1.0f;
+        env_lightning_ = 0.0f; env_cloud_k_ = 1.0f; env_cloud_direct_ = 1.0f; env_cloud_shadow_k_ = 0.72f;
         tick_rain_audio(0.0f);
         return;
     }
@@ -165,14 +166,23 @@ void VulkanEngine::apply_environment(float dt) {
     }
 
     // ---------------- lightning ----------------
-    if (storm > 0.05f) {
+    // QLIKE_TEST_LIGHTNING=1: a strike every ~0.7 s, 500 m straight ahead (captures).
+    static const bool test_lightning = std::getenv("QLIKE_TEST_LIGHTNING") != nullptr;
+    if (test_lightning) lightning_timer_ = std::min(lightning_timer_, 0.7f);
+    if (storm > 0.05f || test_lightning) {
         lightning_timer_ -= dt;
         if (lightning_timer_ <= 0.0f) {
             lightning_timer_ = frand_range(rng, 4.0f, 14.0f) / (0.35f + storm);
             lightning_t_ = 0.0f;
             lightning_seed_ = frand(rng);
+            const float a = frand(rng) * 6.2831853f, dist = frand_range(rng, 250.0f, 1400.0f);
+            lightning_pos_ = player_.eye_position() + glm::vec3(std::cos(a), 0.0f, std::sin(a)) * dist;
+            if (test_lightning) {
+                glm::vec3 fw = player_.forward(); fw.y = 0.0f;
+                lightning_pos_ = player_.eye_position() + glm::normalize(fw + glm::vec3(1e-4f)) * 500.0f;
+            }
+            lightning_pos_.y = std::max(sample_terrain_height(lightning_pos_.x, lightning_pos_.z), rt_.water_level);
             if (audio_) {
-                const float a = frand(rng) * 6.2831853f, dist = frand_range(rng, 250.0f, 1400.0f);
                 const glm::vec3 p = player_.eye_position() + glm::vec3(std::cos(a), 0.4f, std::sin(a)) * 60.0f;
                 const int clip = int(ClipID::ExplFar1) + int(frand(rng) * 4.99f);
                 audio_->play_effect(ClipID(clip), p, glm::clamp(1.3f - dist / 1600.0f, 0.35f, 1.1f),
@@ -196,7 +206,7 @@ void VulkanEngine::apply_environment(float dt) {
     // ---------------- write the driven settings ----------------
     // Clouds hide the sun: direct light drops to a tenth under full overcast
     // and loses its colour; the sky dome's light turns grey and dimmer.
-    const float cloud_sun = glm::mix(1.0f, 0.22f, overcast);
+    const float cloud_sun = glm::mix(1.0f, 0.22f, overcast * overcast);
     const float direct = std::max(sun_k * cloud_sun, 0.003f);
     const float lum = glm::dot(light_col, glm::vec3(0.2126f, 0.7152f, 0.0722f));
     rt_.sun_pitch_deg = pitch;
@@ -209,6 +219,8 @@ void VulkanEngine::apply_environment(float dt) {
     const float sky_dim = glm::mix(1.0f, 0.62f, overcast) * (1.0f + 5.0f * env_lightning_);
     // The cloud pass takes its light level directly (not times the sun intensity).
     env_cloud_k_ = sky_k * sky_dim;
+    // Under a closed deck the light is uniformly dim: no shadow pattern.
+    env_cloud_shadow_k_ = 0.72f * (1.0f - overcast);
     env_cloud_direct_ = cloud_direct * glm::mix(1.0f, 0.45f, overcast);
 
     rt_.atmosphere_intensity = base.atmosphere_intensity * sky_k * sky_dim / direct;

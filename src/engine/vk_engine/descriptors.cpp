@@ -745,7 +745,10 @@ void VulkanEngine::update_scene_ubo() {
     data.rm_ground_green = glm::vec4(rt_.rm_ground_green, glm::clamp(rt_.rm_red_sand_amount, 0.0f, 1.0f));
     data.rm_red_sand     = glm::vec4(rt_.rm_red_sand, glm::clamp(rt_.rm_red_sand_scale, 0.2f, 5.0f));
     for (int i = 0; i < 24; ++i) data.craters[i] = i < int(craters_.size()) ? craters_[size_t(i)] : glm::vec4(0.0f);
-    data.crater_info = glm::vec4(float(craters_.size()), 0.0f, 0.0f, 0.0f);
+    // y / z: cloud cover and cloud-shadow contrast (scene_ubo.glsl cloud_shadow).
+    data.crater_info = glm::vec4(float(craters_.size()),
+                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_coverage * 0.80f, 0.0f, 1.0f) : 0.0f,
+                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? env_cloud_shadow_k_ : 0.0f, 0.0f);
     for (size_t i = 0; i < 16; ++i)
         data.ripples[i] = i < water_ripples_.size()
             ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);

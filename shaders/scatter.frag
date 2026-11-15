@@ -213,7 +213,7 @@ void main() {
     float ndl_raw = dot(N, L);
     float wrap = ndl_raw * 0.5 + 0.5;
     float ndl = wrap * wrap;
-    float lit_sun = ndl * (1.0 - vSunShadow * 0.7);
+    float lit_sun = ndl * (1.0 - vSunShadow * 0.7) * cloud_shadow(vWorldPos);
     float sky_up  = N.y * 0.5 + 0.5;
     vec3  amb = mix(scene.ambient.rgb, scene.sky_color.rgb * 0.45, sky_up) *
                 scene.rt_params.z;

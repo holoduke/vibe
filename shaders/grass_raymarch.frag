@@ -728,6 +728,7 @@ void main() {
     float n_dot_l_wrap = max(0.0, (ndl_b + 0.35) / 1.35);
     float blade_back   = clamp(-ndl_b, 0.0, 1.0);
 
+    sun_lit *= cloud_shadow(p);
     vec3 sun_term = scene.sun_color.rgb * scene.sun_color.a *
                     (n_dot_l_wrap * sun_lit) +
                     scene.sun_color.rgb * scene.sun_color.a * vec3(1.25, 1.40, 0.45) *

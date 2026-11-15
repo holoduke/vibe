@@ -2392,6 +2392,14 @@ void main() {
         vec3 sky_refl = mix(cMid, cZenith, skyT);
         sky_refl = mix(sky_refl, cHaze, hb * 0.65);
         sky_refl = mix(sky_refl, scene.sky_color.rgb, 0.22);
+        // Physical sky on: mirror the REAL sky (time of day, dusk, night,
+        // overcast grey) instead of the fixed daylight gradient.
+        if (scene.atmo_params.x > 0.5) {
+            vec3 rs = normalize(vec3(refl.x, max(refl.y, 0.03), refl.z));
+            sky_refl = phys_sky(rs);
+            float cov_w = scene.crater_info.y;
+            sky_refl = mix(sky_refl, vec3(dot(sky_refl, vec3(0.2126, 0.7152, 0.0722))) * 1.05, cov_w * cov_w);
+        }
         // pow(x, 60) ≈ pow(x, 64) = 6 squarings; visually identical
         // for a sun-halo lobe at this exponent. Reuses sh2/sh4 below for
         // the broad-glow term (was redundantly recomputing sg2 = sh1*sh1
@@ -2884,6 +2892,9 @@ void main() {
         }
         // Reflection goes over the tinted water; foam is matte, so it
         // suppresses most (not all - it is wet) of the mirror.
+        // The water body's own colour is light scattered back out of it:
+        // it follows the light level (dark at night, dull under overcast).
+        baseTint *= pow(clamp(scene.sun_color.a * 0.4, 0.0, 1.0), 0.6);
         vec3 col_w = mix(baseTint, reflCol, fres_eff * (1.0 - 0.7 * foam_cover));
         col_w += scene.sun_color.rgb * scene.sun_color.a * spec *
                   0.8 * water_lit;
@@ -3792,7 +3803,8 @@ void main() {
     }
 
     vec3 lin = vec3(0.0);
-    lin += dif * sha * scene.sun_color.rgb * scene.sun_color.a;
+    float cl_sh = cloud_shadow(pos);
+    lin += dif * sha * cl_sh * scene.sun_color.rgb * scene.sun_color.a;
     // Ambient + Fresnel rim term darkened by RTAO. ao_punch pow-curves
     // the AO so > 1 makes mid-AO drop fast (corners punch dark) while
     // 1.0 keeps the original linear behaviour. Driven by the
@@ -3838,6 +3850,39 @@ void main() {
             lin += vec3(1.0, 0.62, 0.28) * (lI * ndl * fall);
     }
     vec3 col = mate * lin + gi_indirect;
+    // Rain: a wet sheen on the ground and standing water in the flats.
+    // A puddle is a small mirror: flat normal (plus rain rings), darker
+    // bed, Fresnel reflection of the sky and a sun glint.
+    {
+        float wet = scene.ripple_info.z;
+        float pd = distance(pos, ro);
+        if (wet > 0.01 && pd < 400.0) {
+            float flatn = smoothstep(0.90, 0.985, nor.y);
+            float pn = noise2(pos.xz * 0.33) * 0.65 + noise2(pos.xz * 1.21 + 7.0) * 0.35;
+            float thr = 0.70 - 0.30 * wet;
+            float puddle = flatn * smoothstep(thr, thr + 0.07, pn) * smoothstep(0.25, 0.7, wet);
+            vec3 pn_n = normalize(mix(nor, vec3(0.0, 1.0, 0.0), max(puddle, 0.5 * wet)));
+            if (puddle > 0.01 && pd < 60.0) {
+                vec3 rw = water_ripples(pos.xz);
+                pn_n = normalize(vec3(pn_n.x - rw.x * puddle, pn_n.y, pn_n.z - rw.y * puddle));
+            }
+            vec3 rr = reflect(rd, pn_n);
+            rr.y = max(rr.y, 0.03);
+            float cv = clamp(dot(-rd, pn_n), 0.0, 1.0);
+            float om = 1.0 - cv; float om2 = om * om;
+            float Fw = 0.02 + 0.98 * om2 * om2 * om;
+            vec3 skyr = sample_sky_atmosphere(normalize(rr));
+            float cov = scene.crater_info.y;
+            skyr = mix(skyr, vec3(dot(skyr, vec3(0.2126, 0.7152, 0.0722))), cov);
+            float film = max(puddle, 0.11 * wet * smoothstep(0.5, 0.95, nor.y));
+            col *= mix(1.0, 0.55, puddle);
+            col += skyr * Fw * film * ao_shaped;
+            float sg = max(dot(normalize(rr), sunDir), 0.0);
+            float sg2 = sg * sg; float sg8 = sg2 * sg2 * sg2 * sg2;
+            float sg64 = sg8 * sg8 * sg8 * sg8 * sg8 * sg8 * sg8 * sg8;
+            col += scene.sun_color.rgb * scene.sun_color.a * sg64 * sg64 * sha * cl_sh * film * 1.5;
+        }
+    }
 
     // Final-colour AO multiplier — dampens the WHOLE pixel (sun term
     // included) by the shaped AO, making corner darkening visibly
