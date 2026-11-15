@@ -731,7 +731,14 @@ PhysicsWorld::RayHit PhysicsWorld::raycast(glm::vec3 origin, glm::vec3 direction
     JPH::RRayCast ray(JPH::RVec3(origin.x, origin.y, origin.z),
                       JPH::Vec3(direction.x, direction.y, direction.z) * max_distance);
     JPH::RayCastResult res;
-    bool hit = impl_->system.GetNarrowPhaseQuery().CastRay(ray, res);
+    // Rays see the world, not the shots flying through it: without this a
+    // bolt's impact point (re-cast along its aim line) landed on the NEXT
+    // bolt still in flight on the same line - sparks and scorch marks in
+    // mid-air in front of the target when firing fast.
+    struct WorldOnly final : JPH::ObjectLayerFilter {
+        bool ShouldCollide(JPH::ObjectLayer l) const override { return l != Layers::BULLET && l != Layers::SPARK; }
+    } world_only;
+    bool hit = impl_->system.GetNarrowPhaseQuery().CastRay(ray, res, JPH::BroadPhaseLayerFilter(), world_only);
     if (!hit) return out;
 
     out.hit = true;
