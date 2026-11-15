@@ -3923,7 +3923,11 @@ void main() {
                 }
             }
 #endif
-            lin += vec3(1.0, 0.62, 0.28) * (lI * ndl * fall * blade_vis);
+            float lamp_pv = 1.0;
+#ifndef QLIKE_WATER
+            LAMP_PLANT_VIS(u_clutter_shadow, pos + nor * 0.03, li, lamp_pv)
+#endif
+            lin += vec3(1.0, 0.62, 0.28) * (lI * ndl * fall * blade_vis * lamp_pv);
         }
     }
     vec3 col = mate * lin + gi_indirect;

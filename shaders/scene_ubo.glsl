@@ -89,6 +89,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   flash_dir;        // xyz beam direction, w cos(outer cone angle)
     vec4   flash_col;        // rgb colour x intensity, w cos(inner cone angle)
     mat4   flash_vp;         // flashlight shadow map (small plants): world -> clip, [3][3] = 0 when off
+    vec4   lamp_info;        // x = bit mask: lantern i has a small-plant shadow map
 } scene;
 
 // Light from muzzle flashes and tracer rounds: each is a sphere of light
@@ -186,6 +187,34 @@ vec3 flashlight_beam(vec3 ro, vec3 rd, float t_max, float jitter) {
                     for (int fx_ = -1; fx_ <= 1; ++fx_)                                       \
                         fo_ += (textureLod(TEX, vec3(fuv_ + vec2(fx_, fy_) * fts_, 2.0), 0.0).r < fn_.z - fb_) ? 1.0 : 0.0; \
                 OUT = 1.0 - fo_ / 9.0;                                                        \
+            }                                                                                 \
+        }                                                                                     \
+    }
+
+// Small-plant shadows for road lantern I: each lantern has a quarter of an
+// atlas layer (layers 3 and 4 of the small-object shadow array) holding the
+// distance to the nearest plant in every direction below and around it
+// (an equidistant fisheye about straight down; clutter_shadow.vert writes
+// it with the same mapping). Returns visibility 0..1.
+#define LAMP_PLANT_VIS(TEX, P, I, OUT)                                                        \
+    {                                                                                         \
+        OUT = 1.0;                                                                            \
+        if (((int(scene.lamp_info.x + 0.5) >> (I)) & 1) != 0) {                               \
+            vec3 ld_ = (P) - scene.lamp_lights[I].xyz;                                        \
+            float ll_ = length(ld_);                                                          \
+            float lt_ = acos(clamp(-ld_.y / max(ll_, 1e-4), -1.0, 1.0));                      \
+            if (lt_ < 1.70 && ll_ < 13.8) {                                                   \
+                vec2 lxy_ = normalize(ld_.xz + vec2(1e-6)) * (lt_ / 1.75) * 0.96;             \
+                vec2 lq_ = vec2(float((I) & 1), float(((I) >> 1) & 1));                       \
+                vec2 luv_ = (lxy_ * 0.5 + 0.5 + lq_) * 0.5;                                   \
+                float llay_ = 3.0 + float((I) >> 2);                                          \
+                vec2 lts_ = 1.0 / vec2(textureSize(TEX, 0).xy);                               \
+                float lz_ = ll_ / 14.0 - 0.005;                                               \
+                float lo_ = 0.0;                                                              \
+                for (int ly_ = -1; ly_ <= 1; ++ly_)                                           \
+                    for (int lx_ = -1; lx_ <= 1; ++lx_)                                       \
+                        lo_ += (textureLod(TEX, vec3(luv_ + vec2(lx_, ly_) * lts_, llay_), 0.0).r < lz_) ? 1.0 : 0.0; \
+                OUT = 1.0 - lo_ / 9.0;                                                        \
             }                                                                                 \
         }                                                                                     \
     }

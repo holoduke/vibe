@@ -1133,6 +1133,12 @@ private:
     bool  flash_init_ = false;
     float flash_yaw_ = 0.0f, flash_pitch_ = 0.0f;   // eased aim
     float flash_phase_ = 0.0f;                       // step cycle
+    // Lantern small-plant shadow maps (atlas quarters in layers 3 / 4 of the
+    // small-object shadow array): one lantern is re-rendered per frame.
+    VkImageView clutter_shadow_lamp_view_[2]{};
+    uint32_t lamp_map_valid_ = 0;      // bit i: lantern i's map has been rendered
+    int      lamp_map_slot_ = -1;      // lantern to render this frame (-1 = none)
+    int      lamp_map_next_ = 0;
     glm::mat4 flash_vp_{0.0f};                       // shadow map matrix (zero = no map this frame)
     VkImageView clutter_shadow_flash_view_ = VK_NULL_HANDLE;   // layer 2 of the small-object shadow array
     glm::vec3 flash_off_{0.0f};                      // lamp position relative to the eye

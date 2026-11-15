@@ -385,6 +385,7 @@ struct SceneUBO {
     glm::vec4  flash_dir;
     glm::vec4  flash_col;
     glm::mat4  flash_vp;     // flashlight shadow map of the small plants (zero = off)
+    glm::vec4  lamp_info;    // x = bit mask of lanterns with a small-plant shadow map
 };
 
 // ---- KHR ray tracing entry points ----

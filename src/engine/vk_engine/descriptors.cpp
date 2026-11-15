@@ -378,8 +378,30 @@ void VulkanEngine::update_scene_ubo() {
                 if (d < 220.0f) order.push_back({ d, i });
             }
             std::sort(order.begin(), order.end());
-            for (size_t k = 0; k < order.size() && k < 8; ++k)
-                data.lamp_lights[k] = glm::vec4(lamp_lights_[order[k].second], 5.0f * night);
+            lamp_map_slot_ = -1;
+            if (lamp_lights_.size() <= 8) {
+                // Few enough lanterns: fixed slots (slot = lantern), so each keeps
+                // its own shadow-map quarter. One map is refreshed per frame, the
+                // lanterns near the camera in turn.
+                for (const auto& o : order)
+                    data.lamp_lights[o.second] = glm::vec4(lamp_lights_[o.second], 5.0f * night);
+                for (size_t k = 0; k < lamp_lights_.size(); ++k) {
+                    const int i = (lamp_map_next_ + int(k)) % int(lamp_lights_.size());
+                    if (glm::distance(eye, lamp_lights_[size_t(i)]) < 70.0f) {
+                        lamp_map_slot_ = i;
+                        lamp_map_next_ = i + 1;
+                        lamp_map_valid_ |= 1u << i;
+                        break;
+                    }
+                }
+                static const bool kNoLampMap = std::getenv("QLIKE_NO_LAMP_SHADOWMAP") != nullptr;   // A/B test hook
+                data.lamp_info = glm::vec4(kNoLampMap ? 0.0f : float(lamp_map_valid_), 0.0f, 0.0f, 0.0f);
+            } else {
+                for (size_t k = 0; k < order.size() && k < 8; ++k)
+                    data.lamp_lights[k] = glm::vec4(lamp_lights_[order[k].second], 5.0f * night);
+            }
+        } else {
+            lamp_map_slot_ = -1;
         }
     }
     float pitch = glm::radians(rt_.sun_pitch_deg);

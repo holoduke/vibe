@@ -11,6 +11,7 @@ layout(push_constant) uniform PC {
     mat4 light_vp;
     vec4 cam;        // .xyz camera, .w radius
     vec4 p;          // .x wind time, .y plant (sway) flag, .z colour-pass draw distance, .w raymarched-terrain lift
+    vec4 lamp;       // .w > 0: point-light map for a lantern at .xyz with range .w (fisheye, see scene_ubo.glsl)
 } pc;
 void main() {
     // Leaf blades (part 3) pack sway base + along-leaf coordinate in uv.y.
@@ -48,6 +49,15 @@ void main() {
         float w = sin(t * 2.1 + ph) * 0.7 + sin(t * 4.7 + ph * 1.9) * 0.3 + 0.25;
         world.xz += wd * (w * 0.06 * s * plant_sway * plant_sway);
         world.y  -= abs(w) * 0.015 * s * plant_sway;
+    }
+    if (pc.lamp.w > 0.0) {
+        // Equidistant fisheye about straight down, depth = distance / range.
+        vec3 d = world - pc.lamp.xyz;
+        float dist = length(d);
+        float theta = acos(clamp(-d.y / max(dist, 1e-4), -1.0, 1.0));
+        vec2 xy = normalize(d.xz + vec2(1e-6)) * (theta / 1.75) * 0.96;
+        gl_Position = vec4(xy, clamp(dist / pc.lamp.w, 0.0, 1.0), 1.0);
+        return;
     }
     gl_Position = pc.light_vp * vec4(world, 1.0);
 }

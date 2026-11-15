@@ -1555,7 +1555,10 @@ void main() {
             vec3 Fl = f_schlick(F0, clamp(dot(Vv, Hl), 0.0, 1.0));
             vec3 sl = d_ggx(clamp(dot(N, Hl), 0.0, 1.0), a_r) *
                       v_smith_ggx_correlated(NoV, pndl, a_r) * Fl * ms_comp * kPI;
-            point_term += (diff_albedo * (1.0 - Fl) + sl) * vec3(1.0, 0.62, 0.28) * (li * pndl * fall);
+            float lamp_pv;
+            LAMP_PLANT_VIS(u_clutter_shadow, world_pos + N * 0.03, i, lamp_pv)
+            if (foliage) lamp_pv = mix(1.0, lamp_pv, 0.35);   // plants: gentle self-shadow
+            point_term += (diff_albedo * (1.0 - Fl) + sl) * vec3(1.0, 0.62, 0.28) * (li * pndl * fall * lamp_pv);
         }
     }
     // Hand flashlight: a spot light with a shadow ray, diffuse + specular.

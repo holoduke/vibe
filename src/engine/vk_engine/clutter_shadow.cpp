@@ -41,7 +41,8 @@ void VulkanEngine::init_clutter_shadow() {
     ici.imageType = VK_IMAGE_TYPE_2D;
     ici.format = VK_FORMAT_D32_SFLOAT;
     ici.extent = { kClutterDim, kClutterDim, 1 };
-    ici.mipLevels = 1; ici.arrayLayers = 3;   // + 2 = flashlight view (small plants)
+    ici.mipLevels = 1; ici.arrayLayers = 5;   // + 3, 4 = lantern atlas (4 lanterns each)
+    //   // + 2 = flashlight view (small plants)
     //   // 0 = 64 m, 1 = 16 m near cascade
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -61,8 +62,12 @@ void VulkanEngine::init_clutter_shadow() {
     vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_near_view_), "clutter near view");
     vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 2, 1 };
     vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_flash_view_), "clutter flash view");
+    for (uint32_t k = 0; k < 2; ++k) {
+        vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 3 + k, 1 };
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_lamp_view_[k]), "clutter lamp view");
+    }
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 3 };
+    vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 5 };
     vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_array_view_), "clutter array view");
     {
         VkSamplerCreateInfo si{};
@@ -79,7 +84,7 @@ void VulkanEngine::init_clutter_shadow() {
                                         VK_IMAGE_ASPECT_DEPTH_BIT);
     });
 
-    VkPushConstantRange pc{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4) + 2 * sizeof(glm::vec4) };
+    VkPushConstantRange pc{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4) + 3 * sizeof(glm::vec4) };
     VkPipelineLayoutCreateInfo plci{};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
@@ -127,6 +132,7 @@ void VulkanEngine::destroy_clutter_shadow() {
     if (clutter_shadow_near_view_) vkDestroyImageView(device_, clutter_shadow_near_view_, nullptr);
     if (clutter_shadow_flash_view_) vkDestroyImageView(device_, clutter_shadow_flash_view_, nullptr);
     clutter_shadow_flash_view_ = VK_NULL_HANDLE;
+    for (auto& v : clutter_shadow_lamp_view_) { if (v) vkDestroyImageView(device_, v, nullptr); v = VK_NULL_HANDLE; }
     if (clutter_shadow_array_view_) vkDestroyImageView(device_, clutter_shadow_array_view_, nullptr);
     clutter_shadow_near_view_ = clutter_shadow_array_view_ = VK_NULL_HANDLE;
     if (clutter_shadow_sampler_) vkDestroySampler(device_, clutter_shadow_sampler_, nullptr);
@@ -175,33 +181,45 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
     near_scale[0][0] = near_scale[1][1] = kClutterNearScale;
     // Layer 2: the same plants seen from the flashlight (perspective), for
     // their shadows in its beam.
-    const int n_layers = flash_vp_[3][3] != 0.0f || flash_vp_[2][3] != 0.0f ? 3 : 2;
-    for (int layer = 0; layer < n_layers; ++layer) {
-        const float half = layer == 0 ? kClutterHalf : layer == 1 ? kClutterHalf / kClutterNearScale : 26.0f;
+    // Pass 3: one road lantern's fisheye map into its atlas quarter.
+    const bool flash_pass = flash_vp_[3][3] != 0.0f || flash_vp_[2][3] != 0.0f;
+    const bool lamp_pass = lamp_map_slot_ >= 0 && size_t(lamp_map_slot_) < lamp_lights_.size() && lamp_map_slot_ < 8;
+    const glm::vec3 lamp_pos = lamp_pass ? lamp_lights_[size_t(lamp_map_slot_)] : glm::vec3(0.0f);
+    const uint32_t kQ = kClutterDim / 2;
+    const glm::vec3 view_cam = cam;
+    for (int layer = 0; layer < 4; ++layer) {
+        if ((layer == 2 && !flash_pass) || (layer == 3 && !lamp_pass)) continue;
+        const glm::vec3 cam = layer == 3 ? lamp_pos : view_cam;      // centre of this pass
+        const float half = layer == 0 ? kClutterHalf : layer == 1 ? kClutterHalf / kClutterNearScale
+                         : layer == 2 ? 26.0f : 10.3f;
         const glm::mat4 cvp = layer == 0 ? clutter_shadow_vp_ : layer == 1 ? near_scale * clutter_shadow_vp_ : flash_vp_;
         VkRenderingAttachmentInfo da{};
         da.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        da.imageView = layer == 0 ? clutter_shadow_view_ : layer == 1 ? clutter_shadow_near_view_ : clutter_shadow_flash_view_;
+        da.imageView = layer == 0 ? clutter_shadow_view_ : layer == 1 ? clutter_shadow_near_view_
+                     : layer == 2 ? clutter_shadow_flash_view_ : clutter_shadow_lamp_view_[lamp_map_slot_ >> 2];
         da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         da.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         da.clearValue.depthStencil = { 1.0f, 0 };
         VkRenderingInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        ri.renderArea = { { 0, 0 }, { kClutterDim, kClutterDim } };
+        const int32_t qx0 = layer == 3 ? int32_t((lamp_map_slot_ & 1) * kQ) : 0, qy0 = layer == 3 ? int32_t(((lamp_map_slot_ >> 1) & 1) * kQ) : 0;
+        const uint32_t qdim = layer == 3 ? kQ : kClutterDim;
+        ri.renderArea = { { qx0, qy0 }, { qdim, qdim } };   // (the clear covers only this area)
         ri.layerCount = 1;
         ri.pDepthAttachment = &da;
         vkCmdBeginRendering(cmd, &ri);
-        VkViewport vp{ 0.0f, 0.0f, float(kClutterDim), float(kClutterDim), 0.0f, 1.0f };
-        VkRect2D sc{ { 0, 0 }, { kClutterDim, kClutterDim } };
+        VkViewport vp{ float(qx0), float(qy0), float(qdim), float(qdim), 0.0f, 1.0f };
+        VkRect2D sc{ { qx0, qy0 }, { qdim, qdim } };
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clutter_shadow_pipeline_);
         // p: .x wind time, .y plant (sway) flag, .z colour-pass draw distance -
         // the same fade / sway as scatter.vert so shadows match what is drawn.
-        struct { glm::mat4 vp; glm::vec4 cam; glm::vec4 p; } pc{ cvp, glm::vec4(cam, half * 1.42f),
+        struct { glm::mat4 vp; glm::vec4 cam; glm::vec4 p; glm::vec4 lamp; } pc{ cvp, glm::vec4(cam, half * 1.42f),
             glm::vec4(anim_time_, 0.0f,
-                      std::max(60.0f, rt_.grass_distance * 1.6f), 0.0f) };
+                      std::max(60.0f, rt_.grass_distance * 1.6f), 0.0f),
+            layer == 3 ? glm::vec4(lamp_pos, 14.0f) : glm::vec4(0.0f) };
         vkCmdPushConstants(cmd, clutter_shadow_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
         VkDeviceSize offs[2] = { 0, 0 };
         // Only cells overlapping this cascade's box around the camera (XZ).
