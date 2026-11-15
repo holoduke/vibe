@@ -522,6 +522,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("aircraft_bombs", s.game_.aircraft_bombs);
     f("aa_enabled", s.game_.aa_enabled);
     f("weapons_enabled", s.game_.weapons_enabled);
+    f("player_body", s.game_.player_body);
     f("player_pos_x", s.player_.position.x);
     f("player_pos_y", s.player_.position.y);
     f("player_pos_z", s.player_.position.z);

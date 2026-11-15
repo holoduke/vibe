@@ -148,7 +148,7 @@ layout(set = 0, binding = 25, std430) readonly buffer VoxShapeDir {
 const uint kVoxEmpty = 0xFFFFFFFFu;
 
 // Bound texture arrays (must match kTextureCount on the C++ side).
-const int kTextureCount = 19;     // +1 for kTexProcGrass (slot 12)
+const int kTextureCount = 20;     // +1 for kTexProcGrass (slot 12)
 // Procedurally-baked terrain material slots (see bake_terrain_materials
 // in world.cpp). Must match kTexRock/.. in vk_engine.h.
 const int kMatRock  = 7;
@@ -3111,6 +3111,9 @@ void main() {
                 vec3 nt = textureGrad(u_normal[ni], muv, du1, du2).xyz * 2.0 - 1.0;
                 N = normalize(Tm * (im * nt.x) - Bm * (im * nt.y) + N * nt.z);
             }
+        } else if (use_albedo && int(vTexParams.y - 0.5) == -8) {
+            // Skinned character: its own UVs into its texture atlas.
+            albedo = texture(u_albedo[clamp(albedo_idx_raw, 0, kTextureCount - 1)], vUv).rgb * vColor;
         } else if (use_albedo) {
             int  albedo_idx = clamp(albedo_idx_raw, 0, kTextureCount - 1);
             vec3 tex_albedo = triplanar_sample(u_albedo[albedo_idx],

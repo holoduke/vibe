@@ -238,6 +238,7 @@ void VulkanEngine::draw_flashlight_model(VkCommandBuffer cmd, const glm::mat4& v
     box(glm::vec3(-0.0142f, 0.0f, 0.0535f), glm::vec3(0.0012f, 0.0040f, 0.0016f), steel, -2.0f);
     box(glm::vec3(-0.0152f, 0.0f, -0.0040f), glm::vec3(0.0010f, 0.0032f, 0.0020f), steel, -2.0f);
 
+    if (body_drawn_) return;          // the soldier's own hand holds it (player_body.cpp)
     // ---- The hand that holds it: a gloved right fist around the grip
     // (palm on the right, fingers wrapped under and round to the left,
     // thumb along the top), and the forearm in a jacket sleeve running

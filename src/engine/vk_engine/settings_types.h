@@ -832,6 +832,7 @@ struct GameSettings {
         bool  aircraft_enabled = true;    // enemy jets fly sorties over the map
         bool  aircraft_bombs   = true;    // ... and drop bombs (off: fly-overs only)
         bool  aa_enabled       = true;    // anti-aircraft guns and missile launchers fire
+        bool  player_body      = true;    // you see your own body, arms and legs
         bool  weapons_enabled  = true;    // the player can shoot / call airstrikes
 
         bool operator==(const GameSettings&) const = default;

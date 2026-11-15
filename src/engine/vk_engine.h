@@ -702,9 +702,9 @@ private:
     // terrain PBR materials (incl. proc grass, roof, road), 15 the leaf
     // atlas, 16 bark, 17 lamp timber, 18 the small-plant atlas.
     static constexpr int kFileTextureCount   = 7;
-    static constexpr int kTerrainMatCount    = 12;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
+    static constexpr int kTerrainMatCount    = 13;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
     static constexpr int kTextureCount       = kFileTextureCount +
-                                               kTerrainMatCount;   // 19
+                                               kTerrainMatCount;   // 20
     // Albedo/normal-array indices of the baked terrain materials.
     static constexpr int kTexRock  = kFileTextureCount + 0;  // 7
     static constexpr int kTexGrass = kFileTextureCount + 1;  // 8 (stylized PNG)
@@ -728,6 +728,7 @@ private:
     static constexpr int kTexBark = kFileTextureCount + 9;  // 16
     static constexpr int kTexTimber = kFileTextureCount + 10;  // 17: weathered timber (lamp posts)
     static constexpr int kTexPlant  = kFileTextureCount + 11;  // 18: small-plant atlas (leaf | petal)
+    static constexpr int kTexSoldier = kFileTextureCount + 12;  // 19: the player character's texture atlas
     struct TextureSlot {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation alloc = nullptr;
@@ -1150,6 +1151,36 @@ private:
     int   flash_level_ = 1;          // brightness 0..3 (left click cycles; after the brightest back to the lowest)
     void init_flashlight_meshes();
     void destroy_flashlight_meshes();
+
+    // ---- The player's own body (player_body.cpp): a skinned soldier,
+    // posed with IK every frame and skinned on the CPU. ----
+    struct BodyBone { std::string name; int parent = -1; glm::vec3 head{0.0f}, tail{0.0f}; };
+    struct BodyVert { glm::vec3 pos, nrm; glm::vec2 uv; uint8_t bone[4]; float weight[4]; };
+    std::vector<BodyBone> body_bones_;
+    std::vector<BodyVert> body_verts_;
+    std::vector<Vertex>   body_skinned_;
+    std::vector<glm::mat3> body_R_, body_local_, body_skin_R_;
+    std::vector<glm::vec3> body_P_, body_skin_T_;
+    std::vector<uint8_t>   body_set_;
+    Mesh          body_mesh_{};                       // index buffer (+ rest pose)
+    VkBuffer      body_vbuf_[kFrameOverlap]{};
+    VmaAllocation body_valloc_[kFrameOverlap]{};
+    void*         body_vmapped_[kFrameOverlap]{};
+    uint32_t      body_index_count_ = 0;
+    std::vector<uint32_t> body_dbg_idx_;
+    float         body_scale_ = 1.0f;
+    glm::mat4     body_model_{1.0f};
+    glm::vec3     body_root_off_{0.0f};
+    float         body_phase_ = 0.0f, body_move_ = 0.0f, body_air_ = 0.0f, body_recoil_ = 0.0f;
+    glm::vec2     body_dir_{0.0f, -1.0f};
+    bool          body_drawn_ = false;
+    void init_player_body();
+    void destroy_player_body();
+    int  body_bone(const char* name) const;
+    void body_fk();
+    void body_ik(int a, int b, int c, glm::vec3 target, glm::vec3 pole);
+    void update_player_body(float dt);
+    void draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp);
 
     bool prev_weapon_key_[2]{};
     bool airstrike_click_ = false;

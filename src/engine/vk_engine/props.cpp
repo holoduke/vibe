@@ -28,6 +28,7 @@ namespace qlike {
 
 void VulkanEngine::init_viewmodel() {
     init_flashlight_meshes();
+    init_player_body();
     // Procedural placeholder gun: a barrel (cylinder) + body (box) + grip
     // (box). Camera-space coords: +X right, +Y up, -Z forward.
     auto rotX = [](float deg) {
@@ -137,6 +138,7 @@ void VulkanEngine::init_viewmodel() {
 
 void VulkanEngine::destroy_viewmodel() {
     destroy_flashlight_meshes();
+    destroy_player_body();
     for (auto& vm : viewmodel_gltf_) destroy_mesh(allocator_, vm.mesh);
     viewmodel_gltf_.clear();
     viewmodel_proc_parts_.clear();
@@ -1029,6 +1031,8 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp,
     glm::mat4 recoil_offset = glm::translate(glm::mat4(1.0f),
                                              glm::vec3(0.0f, 0.0f, kick));
     glm::mat4 view_inv_recoil = view_inv * recoil_offset;
+    body_recoil_ = kick;
+    draw_player_body(cmd, vp);
 
     if (flashlight_on_) {              // the flashlight replaces the weapon in the hand
         draw_flashlight_model(cmd, vp);

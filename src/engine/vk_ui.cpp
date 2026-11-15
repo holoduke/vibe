@@ -500,6 +500,8 @@ void VulkanEngine::build_menu_ui() {
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Off: the jets only fly over.");
         ImGui::Checkbox("Anti-aircraft fire", &game_.aa_enabled);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The gun vehicles and missile launchers engage aircraft. Off: they stay parked and hold fire.");
+        ImGui::Checkbox("Visible body", &game_.player_body);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("You see your own body: arms holding what you carry, chest and legs when you look down.");
         ImGui::Checkbox("Player weapons", &game_.weapons_enabled);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Left mouse fires the laser rifle / marks airstrikes. Off: no shooting.");
         if (ImGui::Button("Peaceful (all off)")) game_.aircraft_enabled = game_.aircraft_bombs = game_.aa_enabled = game_.weapons_enabled = false;

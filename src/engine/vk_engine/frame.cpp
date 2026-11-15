@@ -327,6 +327,7 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     prof_begin_frame(frame.command_buffer, gpu_query_slot);
     current_frame_view_ = compute_frame_view();
     if (flashlight_on_) flash_pos_ = current_frame_view_.eye_pos + flash_off_;   // ride on the interpolated camera
+    update_player_body(last_frame_dt_);
     // Scene UBO + per-pass UBOs: staged after this frame's camera so
     // camera_pos / jitter are current, then copied in one batch before any
     // pass reads them (frames in flight - see frame_upload.cpp).

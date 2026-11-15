@@ -40,12 +40,19 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 macro = TargetService.get_default_macro_info_dict()
 macro.update({"gender": 1.0, "age": 0.52, "muscle": 0.78, "weight": 0.52, "proportions": 0.62, "height": 0.62})
 macro["race"] = {"asian": 0.0, "caucasian": 1.0, "african": 0.0}
-basemesh = HumanService.create_human(mask_helpers=True, detailed_helpers=False, extra_vertex_groups=True,
+basemesh = HumanService.create_human(mask_helpers=True, detailed_helpers=True, extra_vertex_groups=True,
                                      feet_on_ground=True, scale=0.1, macro_detail_dict=macro)
 log("basemesh", basemesh.name, "verts", len(basemesh.data.vertices))
 
-# ---- skeleton (Mixamo-compatible: full fingers, widely supported for retargeting) ----
-rig = HumanService.add_builtin_rig(basemesh, "mixamo", import_weights=True)
+# ---- skeleton: the game-engine rig (53 bones, full fingers). It is fitted to
+# the body; MPFB's "mixamo" rig comes in a T-pose that does not line up with
+# the arms of the base mesh. ----
+# The body shape lives in shape keys; bake it into the mesh first, or the
+# rig is fitted to the default body (wrong joint positions, not on the ground).
+TargetService.bake_targets(basemesh)
+rig = HumanService.add_builtin_rig(basemesh, "game_engine", import_weights=True)
+for _n in ("pelvis", "foot_l", "hand_l", "head"):
+    log("joint", _n, tuple(round(c, 3) for c in rig.data.bones[_n].head_local))
 log("rig", rig.name if rig else None, "bones", len(rig.data.bones) if rig else 0)
 
 # ---- skin ----
@@ -215,7 +222,7 @@ def bone_named(*keys):
 
 
 head_bone = bone_named("head")
-spine_bone = bone_named("spine2") if any("spine2" in b.lower() for b in bones) else bone_named("spine")
+spine_bone = "spine_02" if "spine_02" in bones else (bone_named("spine2") if any("spine2" in b.lower() for b in bones) else bone_named("spine"))
 head_pos = rig.matrix_world @ rig.data.bones[head_bone].head_local
 head_top = rig.matrix_world @ rig.data.bones[head_bone].tail_local
 lo, hi = world_bbox(basemesh)
@@ -238,7 +245,7 @@ vest = shell_from(suit, "Human.vest",
                   0.014, mat_web)
 
 # Gloves: the hands of the body, as a thin black shell.
-wrist = rig.matrix_world @ rig.data.bones[bone_named("lefthand")].head_local
+wrist = rig.matrix_world @ rig.data.bones[("hand_l" if "hand_l" in bones else bone_named("lefthand"))].head_local
 hand_x = abs(wrist.x) - 0.012
 log("wrist", tuple(round(c, 3) for c in wrist))
 gloves = shell_from(basemesh, "Human.gloves",
