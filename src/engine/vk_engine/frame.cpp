@@ -1141,6 +1141,12 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
                                                  1.0f);
         } else {
             pc_data.brush_indicator = glm::vec4(0.0f);
+            // Underwater view: the slot carries the eye depth below the
+            // surface, the animation clock and the turbidity (w = -1).
+            const glm::vec3 ueye = current_frame_view_.eye_pos;
+            if (rt_.water_enabled && ueye.y < rt_.water_level && water_at(ueye.x, ueye.z))
+                pc_data.brush_indicator = glm::vec4(rt_.water_level - ueye.y, anim_time_,
+                                                     rt_.underwater_turbidity, -1.0f);
         }
         pc_data.inv_view_proj = last_inv_view_proj_;   // cached
         // tone.x: tonemap mode, +8 = colour is DLSS output whose alpha

@@ -203,7 +203,14 @@ void VulkanEngine::spawn_explosion(glm::vec3 pos, float size, bool ground) {
         glm::vec3 d(std::cos(a) * std::cos(el), std::sin(el), std::sin(a) * std::cos(el));
         spawn_hit_particles(pos + glm::vec3(0.0f, 1.0f, 0.0f), glm::normalize(d), -d);
     }
-    if (ground) spawn_impact_decal(pos + glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0, -1, 0));
+    // Over open water: a column of spray and a heavy ring wave instead of
+    // a scorch mark.
+    const bool on_water = ground && water_at(pos.x, pos.z) && pos.y < rt_.water_level + 3.0f;
+    if (on_water) {
+        spawn_water_splash(pos, glm::clamp(9.0f * size, 2.0f, 16.0f));
+        if (!explosions_.empty()) explosions_.back().water = true;
+    }
+    if (ground && !on_water) spawn_impact_decal(pos + glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0, -1, 0));
     // Big ground blasts (bombs, crashes, falling wreckage) shred the forest.
     if (ground && size >= 0.7f) blast_vegetation(pos, 7.5f * size);
     // Craters cost a ~12 ms hitch each (height textures, physics, GPU
@@ -897,6 +904,41 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         }
     }
 
+    // Water splashes: droplets as short motion-blurred streaks (kind 4),
+    // mist puffs as soft billboards (kind 5; tint = alpha, brightness, seed).
+    static RibbonBuilder spray, mist; spray.v.clear(); mist.v.clear(); spray.eye = mist.eye = eye;
+    for (const auto& d : water_drops_) {
+        if (d.t < 0.0f) continue;
+        const float sp = glm::length(d.vel);
+        const glm::vec3 dir = sp > 1e-3f ? d.vel / sp : glm::vec3(0.0f, -1.0f, 0.0f);
+        const float len = std::max(d.size * 2.2f, sp * 0.016f);        // ~1/60 s shutter
+        const float w = min_w(d.pos, d.size, 0.75f);
+        // A droplet thinner than a pixel is drawn a pixel wide but fainter.
+        float a = glm::clamp(d.size / w, 0.12f, 1.0f);
+        a *= glm::clamp((d.life - d.t) * 2.0f, 0.0f, 1.0f) * std::min(1.0f, d.t * 30.0f + 0.3f);
+        spray.strip({ d.pos - dir * len, d.pos }, { w * 0.6f, w }, { a * 0.35f, a }, glm::vec3(1.0f));
+    }
+    for (const auto& s : water_splashes_) {
+        const float vs = std::sqrt(s.scale), t = s.t;
+        const float life = 1.2f + 0.9f * vs;
+        const float fade = glm::clamp(1.0f - t / life, 0.0f, 1.0f);
+        const float in_k = glm::smoothstep(0.0f, 0.05f, t);
+        // Column: puffs stacked along the jet, rising fast, then sagging.
+        for (int k = 0; k < 5; ++k) {
+            const float fk = float(k);
+            float h = vs * (0.22f + 0.30f * fk) * (1.0f - std::exp(-t * 6.0f / vs)) - 0.9f * t * t;
+            h = std::max(h, 0.04f * vs);
+            const float r = vs * (0.11f + 0.035f * fk) + 0.30f * vs * t;
+            const float a = 0.30f * fade * fade * in_k * (1.0f - 0.12f * fk);
+            mist.billboard(s.pos + glm::vec3(0.0f, h, 0.0f), r, cam_right, cam_up,
+                           glm::vec3(a, 1.0f, s.seed + fk * 7.3f));
+        }
+        // Crown wall: a low, wide ring of spray right at the surface.
+        const float rc = vs * (0.22f + 0.9f * (1.0f - std::exp(-t * 3.0f)));
+        mist.billboard(s.pos + glm::vec3(0.0f, 0.10f * vs, 0.0f), rc, cam_right, cam_up * 0.45f,
+                       glm::vec3(0.26f * fade * fade * in_k, 1.0f, s.seed + 50.0f));
+    }
+
     // ---- Volumes (fireball / smoke / dust), sorted far to near ----
     struct Vol { glm::vec3 c; float r, squash, age, kind, seed, dens, heat, fade, scroll, dist; };
     static std::vector<Vol> vols;
@@ -952,7 +994,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
                 vols.push_back(v);
             }
         }
-        if (e.ground && t < 6.0f) {    // ground dust ring
+        if (e.ground && !e.water && t < 6.0f) {    // ground dust ring
             Vol v{};
             v.r = s * (4.0f + 22.0f * (1.0f - std::exp(-t * 2.0f)));
             v.c = e.pos + glm::vec3(0.0f, 0.6f * s, 0.0f);           // hugs the ground
@@ -967,7 +1009,8 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     std::sort(vols.begin(), vols.end(), [](const Vol& a, const Vol& b) { return a.dist > b.dist; });
 
     const size_t n_smoke = smoke.v.size(), n_glow = glow.v.size(), n_flash = flash.v.size();
-    if (vols.empty() && decals_.empty() && n_smoke + n_glow + n_flash + cloth.v.size() == 0) return;
+    if (vols.empty() && decals_.empty() &&
+        n_smoke + n_glow + n_flash + cloth.v.size() + spray.v.size() + mist.v.size() == 0) return;
 
     // Upload ribbon vertices.
     const uint32_t slot = static_cast<uint32_t>(frame_number_ & 1);
@@ -984,6 +1027,8 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     auto r_glow  = put(glow.v);
     auto r_flash = put(flash.v);
     auto r_cloth = put(cloth.v);
+    auto r_mist  = put(mist.v);
+    auto r_spray = put(spray.v);
     vmaFlushAllocation(allocator_, fx_valloc_[slot], 0, total * sizeof(Vertex));
 
     // ---- Pass ----
@@ -1104,6 +1149,8 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_ribbon_pipeline_);
         }
         draw(r_smoke, 0.0f, 1.0f);
+        draw(r_mist,  5.0f, 1.0f);
+        draw(r_spray, 4.0f, 1.0f);
         draw(r_glow,  1.0f, 1.0f);
         draw(r_flash, 2.0f, 1.0f);
     }

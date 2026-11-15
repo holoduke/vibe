@@ -188,6 +188,7 @@ void VulkanEngine::update_projectiles(float dt) {
         bool drop = it->ttl <= 0.0f;
         bool was_impact = false;
         bool was_voxel_hit = false;
+        bool was_water_hit = false;
         glm::vec3 hit_pos(0.0f);
 
         if (!drop) {
@@ -433,6 +434,21 @@ void VulkanEngine::update_projectiles(float dt) {
                         }
                     }
                 }
+                // Water surface: the bullet's path this tick crosses the
+                // water plane over open water -> splash, and the bullet is
+                // spent (a rifle round tumbles to a stop within a metre).
+                if (!drop && rt_.water_enabled) {
+                    const float wl = rt_.water_level;
+                    const glm::vec3 a0 = std::isnan(it->prev_pos.x) ? it->spawn_origin : it->prev_pos;
+                    if (a0.y > wl && bp.y <= wl) {
+                        const float k = (a0.y - wl) / std::max(a0.y - bp.y, 1e-5f);
+                        const glm::vec3 wp = a0 + (bp - a0) * k;
+                        if (water_at(wp.x, wp.z)) {
+                            drop = true; was_impact = true; was_water_hit = true;
+                            hit_pos = wp;
+                        }
+                    }
+                }
                 // Impact detection (terrain / castle / crates). Skipped when
                 // a spacejet or voxel hit already claimed the bullet. After
                 // Jolt's step the bullet's velocity tells us what happened:
@@ -465,6 +481,15 @@ void VulkanEngine::update_projectiles(float dt) {
                                                          500.0f);
                         hit_pos = aim_hit.hit ? aim_hit.position
                                               : glm::vec3(m[3]);
+                        // Hit the bed of a shallow: the bullet went through
+                        // the surface first (Jolt resolved the ground contact
+                        // within the same tick) - splash where it entered.
+                        if (rt_.water_enabled && hit_pos.y < rt_.water_level &&
+                            it->spawn_origin.y > rt_.water_level && it->initial_dir.y < -1e-4f) {
+                            const float tw = (rt_.water_level - it->spawn_origin.y) / it->initial_dir.y;
+                            const glm::vec3 wp = it->spawn_origin + it->initial_dir * tw;
+                            if (water_at(wp.x, wp.z)) { hit_pos = wp; was_water_hit = true; }
+                        }
                     }
                 }
                 // Latch this frame's position so next tick's swept tests
@@ -529,12 +554,16 @@ void VulkanEngine::update_projectiles(float dt) {
                 // the decal BEFORE spawning sparks so the ray doesn't
                 // hit the freshly-spawned spark spheres either.
                 physics_->remove_body(saved_body);
+                if (was_water_hit) {
+                    spawn_water_splash(hit_pos, 1.0f);
+                } else {
                 if (!was_voxel_hit) {
                     spawn_impact_decal(hit_pos, saved_dir);
                 }
                 spawn_hit_particles(hit_pos, reflect, saved_dir);
                 if (audio_) {
                     audio_->play_at(ClipID::Impact, hit_pos, 0.8f, 0.10f, 0.08f);
+                }
                 }
             } else {
                 physics_->remove_body(it->body_id);

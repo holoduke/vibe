@@ -745,6 +745,10 @@ void VulkanEngine::update_scene_ubo() {
     data.rm_red_sand     = glm::vec4(rt_.rm_red_sand, glm::clamp(rt_.rm_red_sand_scale, 0.2f, 5.0f));
     for (int i = 0; i < 24; ++i) data.craters[i] = i < int(craters_.size()) ? craters_[size_t(i)] : glm::vec4(0.0f);
     data.crater_info = glm::vec4(float(craters_.size()), 0.0f, 0.0f, 0.0f);
+    for (size_t i = 0; i < 16; ++i)
+        data.ripples[i] = i < water_ripples_.size()
+            ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);
+    data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), 0.0f, 0.0f, 0.0f);
     data.rm_rock         = glm::vec4(rt_.rm_rock_color, glm::clamp(rt_.rm_ground_saturation, 0.0f, 2.0f));
     {
         const float deg2rad = 3.14159265358979f / 180.0f;

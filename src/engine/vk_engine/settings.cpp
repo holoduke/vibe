@@ -397,6 +397,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("water_shadows_enabled", s.rt_.water_shadows_enabled);
     f("water_transparency", s.rt_.water_transparency);
     f("water_clarity_depth", s.rt_.water_clarity_depth);
+    f("underwater_turbidity", s.rt_.underwater_turbidity);
     f("water_shore_softness", s.rt_.water_shore_softness);
     f("water_foam_opacity", s.rt_.water_foam_opacity);
     f("water_color_shallow", s.rt_.water_color_shallow);

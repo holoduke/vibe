@@ -2047,6 +2047,41 @@ vec3 waterNormal(vec2 worldXZ, float t, float strength, float scale) {
     return normalize(vec3(-dx * strength, 1.0, -dz * strength));
 }
 
+// Splash rings (water_fx.cpp): each impact starts a wave PACKET - a few
+// crests travelling outward behind a front, spreading and fading - like
+// the capillary-gravity rings a stone makes. Returns the summed surface
+// slope (xy, added to the wave normal) and a foam amount (z) for the
+// churned patch at the impact point.
+vec3 water_ripples(vec2 p) {
+    int n = int(scene.ripple_info.x + 0.5);
+    vec2 g = vec2(0.0);
+    float foam = 0.0;
+    for (int i = 0; i < n; ++i) {
+        vec4 r = scene.ripples[i];
+        float s = clamp(r.w * 28.5, 1.0, 6.0);          // size class: bullet 1 .. bomb 6
+        float age = r.z;
+        float c = 1.15 * sqrt(s);                       // front speed (m/s)
+        float front = c * age + 0.12 * s;
+        vec2 d = p - r.xy;
+        float d2 = dot(d, d);
+        float reach = front + 0.5 * s;
+        if (d2 > reach * reach) continue;
+        float dist = sqrt(d2);
+        float life = 2.5 + 1.5 * s;
+        float fade = clamp(1.0 - age / life, 0.0, 1.0);
+        float k = 11.0 / s;                             // wavelength ~0.57 m x size
+        float back = max(front - dist, 0.0);
+        float wid = s * (0.55 + 0.45 * age);            // packet lengthens as it travels
+        float packet = smoothstep(front + 0.35 * s, front - 0.10 * s, dist) * exp(-back * back / (wid * wid));
+        float att = r.w * fade * sqrt(fade) / (1.0 + 0.30 * dist / s);
+        g += d / max(dist, 1e-3) * (att * packet * k * cos(k * (dist - c * age)));
+        foam += smoothstep(0.015, 0.035, r.w) *                // droplet rings carry no foam
+                (1.0 - smoothstep(0.06 * s, 0.26 * s + 0.10 * s * age, dist)) *
+                clamp(1.0 - age / (0.6 + 0.35 * s), 0.0, 1.0);
+    }
+    return vec3(g, clamp(foam, 0.0, 1.0));
+}
+
 void main() {
 #ifndef QLIKE_WATER
     // Ray reconstruction: vWNear / vWFar were computed in the vert
@@ -2261,7 +2296,42 @@ void main() {
         } else {
             wnor = waterNormal(wpos.xz, wave_t, wave_str, wave_scale);
         }
+        // Splash rings bend the surface normal.
+        vec3 rip_w = water_ripples(wpos.xz);
+        wnor = normalize(vec3(wnor.x - rip_w.x, wnor.y, wnor.z - rip_w.y));
         vec3 sunDirW = scene.sun_direction.xyz;
+        // Camera below the surface: the water is seen from underneath.
+        // Inside Snell's window (within ~48.6 deg of straight up) the sky
+        // is refracted in, squeezed into a bright disc; outside it the
+        // surface is a mirror of the depths (total internal reflection).
+        // The waves (exaggerated: a small tilt moves the window edge a
+        // lot) make the edge dance.
+        bool cam_under = ro.y < water_y;
+        vec3 under_col = vec3(0.0);
+        if (cam_under) {
+            vec3 nd = normalize(vec3(-wnor.x * 2.5, -wnor.y, -wnor.z * 2.5));
+            vec3 rf = refract(rd, nd, 1.333);
+            float sun_up = clamp(sunDirW.y, 0.0, 1.0);
+            // The mirror shows the water column below: the same veil colour
+            // compose.frag fades everything into under water.
+            vec3 deep = vec3(0.07, 0.36, 0.44) *
+                        (scene.sun_color.rgb * scene.sun_color.a * 0.22 * clamp(sun_up * 1.4, 0.0, 1.0) +
+                         scene.sky_color.rgb * 0.30);
+            if (dot(rf, rf) < 1e-6) {
+                under_col = deep;
+            } else {
+                float ct = clamp(rf.y, 0.0, 1.0);
+                float om = 1.0 - ct;
+                float om2 = om * om;
+                float F = 0.02 + 0.98 * om2 * om2 * om;
+                vec3 sky_u = sample_sky_atmosphere(rf);
+                float sdu = max(dot(rf, sunDirW), 0.0);
+                float sd16 = pow(sdu, 16.0);
+                sky_u += scene.sun_color.rgb * scene.sun_color.a *
+                         (pow(sd16, 48.0) * 25.0 + sd16 * sd16 * 0.5);
+                under_col = mix(sky_u, deep, F);
+            }
+        }
 
         // Schlick fresnel — F0 = 0.02 for water. Looking grazing-on
         // means full reflection; looking straight down в‰€ 2 % reflection.
@@ -2823,6 +2893,27 @@ void main() {
 #endif /* QLIKE_WATER */
         }
 
+        // Churned, aerated patch where something just hit the water.
+        if (rip_w.z > 0.001) {
+            vec2 fq = wpos.xz * 7.0;
+            float fnz = noise2(fq) * 0.6 + noise2(fq * 2.3 + 3.1) * 0.4;
+            float rf_amt = rip_w.z * smoothstep(0.25, 0.75, fnz + rip_w.z * 0.5);
+#ifdef QLIKE_WATER
+            foam_amt = max(foam_amt, rf_amt * 0.8);
+#endif /* QLIKE_WATER */
+            col_w = mix(col_w, vec3(0.95, 0.97, 1.0) * (0.35 + 0.65 * water_lit), rf_amt * 0.6);
+        }
+        // Ring crests read mostly through what they reflect: the face
+        // tilted away from the eye mirrors the bright sky, the face tilted
+        // toward it shows the darker water below. At steep view angles the
+        // Fresnel term alone hardly moves, so add that contrast directly.
+        {
+            vec2 vdir = rd.xz / max(length(rd.xz), 1e-3);
+            float tilt = dot(rip_w.xy, vdir);
+            col_w += (sky_refl * 0.45 + 0.02) * clamp(tilt * 1.2, -0.22, 1.0) * (1.0 - 0.5 * foam_cover);
+            col_w = max(col_w, vec3(0.0));
+        }
+
         // Apply the same volumetric fog as terrain (reuse the
         // existing block by jumping to a tail). To keep the diff
         // tight we re-do the fog inline here using the same code path.
@@ -2862,6 +2953,7 @@ void main() {
             col_w = mix(col_w, scene.distance_fog_color.rgb, fa);
         }
 #ifndef QLIKE_WATER
+        if (cam_under) col_w = under_col;      // seen from below (compose adds the water fog)
         outColor = vec4(col_w, 1.0);
         outGBuffer0 = vec4(clamp(col_w, vec3(0.0), vec3(1.0)), 8.0 / 255.0);
         outGBuffer1 = vec4(0.5, 0.5, 0.7, 0.0);

@@ -1146,6 +1146,7 @@ private:
         float     size  = 1.0f;     // 1 = bomb-sized (fireball ~14 m)
         float     seed  = 0.0f;
         bool      ground = true;    // ground burst: dust ring + scorch
+        bool      water  = false;   // burst on open water: spray instead of dust
         glm::vec3 drift{0.0f};      // integrated wind drift of the smoke
     };
     std::vector<Explosion> explosions_;
@@ -1168,6 +1169,22 @@ private:
     void init_flags();
     void tick_flags(float dt);
     float     cam_shake_ = 0.0f;    // decaying shake amplitude
+    // Water FX (water_fx.cpp): splashes (droplets + mist), ring waves fed
+    // to the water shader, swimming state.
+    struct WaterRipple { glm::vec2 xz; float age; float amp; };
+    struct WaterDrop   { glm::vec3 pos, vel; float t, life, size; };
+    struct WaterSplash { glm::vec3 pos; float t, scale, seed; };
+    std::vector<WaterRipple> water_ripples_;
+    std::vector<WaterDrop>   water_drops_;
+    std::vector<WaterSplash> water_splashes_;
+    bool  water_at(float x, float z) const;
+    void  add_water_ripple(float x, float z, float amp);
+    void  spawn_water_splash(glm::vec3 pos, float scale);
+    void  tick_water_fx(float dt);
+    bool  player_swimming_ = false;
+    float swim_ripple_acc_ = 0.0f;
+    float swim_stroke_t_ = 0.0f;       // swim bob phase
+    float player_water_prev_sub_ = 0.0f;
     void spawn_explosion(glm::vec3 pos, float size, bool ground);
     void tick_fx(float dt);
     // FX pass (after deferred lighting, before TAA): premultiplied-alpha

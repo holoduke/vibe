@@ -577,6 +577,10 @@ struct RtSettings {
         // (deep stays opaque), large = clear far down. Fed to water.frag
         // via the water-plane draw's pc.color.y (no UBO-layout change).
         float     water_clarity_depth   = 2.5f;
+        // Underwater view (camera below the surface): how murky the water
+        // is. 1 = clear lake (red gone in ~4 m, ~25 m visibility), higher
+        // = murkier.
+        float     underwater_turbidity  = 1.0f;
         // Shoreline softness: metres of water DEPTH over which the
         // water fades in from the land edge. Larger = a longer, softer
         // wet-sand → water transition (and hides the heightmap-vs-

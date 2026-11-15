@@ -48,10 +48,74 @@ void update_player(Player& p, const PlayerInput& in,
     // hitbox to avoid the "uncrouch into a low ceiling" trap.
     {
         static const bool test_crawl = std::getenv("QLIKE_TEST_CRAWL") != nullptr;   // capture hook
-        float target = (in.crawl || test_crawl) ? 1.0f : 0.0f;
+        float target = ((in.crawl && !in.swim) || test_crawl) ? 1.0f : 0.0f;
         float k = std::min(1.0f, 8.0f * dt);
         p.crouch_factor += (target - p.crouch_factor) * k;
         p.crouch_factor = std::clamp(p.crouch_factor, 0.0f, 1.0f);
+    }
+
+    if (in.swim) {
+        // ---- Swimming ----
+        // Wish direction in 3D: forward follows the view (look down and
+        // swim forward = dive), strafe stays horizontal, Space rises,
+        // Ctrl sinks.
+        const glm::vec3 f3 = p.forward();
+        const glm::vec3 r3(std::cos(p.yaw), 0.0f, std::sin(p.yaw));
+        glm::vec3 wish3(0.0f);
+        if (in.fwd)   wish3 += f3;
+        if (in.back)  wish3 -= f3;
+        if (in.right) wish3 += r3;
+        if (in.left)  wish3 -= r3;
+        if (in.jump)  wish3.y += 1.0f;
+        if (in.crawl) wish3.y -= 1.0f;
+        const float wl2 = glm::dot(wish3, wish3);
+        const float eye_y = p.position.y + Player::kEyeOffsetStand;
+        const float head_out = eye_y - in.water_y;            // > 0: eyes above the surface
+        // Water drag (quadratic-ish feel: strong at speed, gentle when slow).
+        {
+            const float sp = glm::length(p.velocity);
+            const float k = 1.6f + 0.35f * sp;
+            p.velocity *= 1.0f / (1.0f + k * dt);
+        }
+        if (wl2 > 1e-6f) {
+            const glm::vec3 wd = wish3 / std::sqrt(wl2);
+            const float speed = in.sprint ? 5.2f : 3.4f;           // m/s (a strong crawl is ~2)
+            p.velocity = physics::accelerate(p.velocity, wd, speed, 7.0f, dt);
+        }
+        // Buoyancy. The body floats with the eyes ~12 cm above the
+        // surface: near the surface a damped spring holds that level
+        // (unless the player is actively diving); deeper down the body
+        // is almost neutral with a slow rise; anything lifted out of the
+        // water falls back under gravity.
+        const bool diving = in.crawl || (wl2 > 1e-6f && wish3.y < -0.25f * std::sqrt(wl2));
+        const float float_eye = 0.12f;
+        if (head_out > float_eye) {
+            const float out = std::min(1.0f, (head_out - float_eye) / 0.55f);
+            p.velocity.y -= in.gravity * out * dt;
+        } else if (!diving) {
+            const float below = float_eye - head_out;              // metres under the floating level
+            if (below < 0.7f) {
+                p.velocity.y += (below * 14.0f - p.velocity.y * 3.0f) * dt;
+            } else {
+                p.velocity.y += 1.7f * dt;                         // slow natural rise
+            }
+        }
+        // Water jump: Space at the surface kicks the body up far enough
+        // to clear a bank or a pier edge.
+        const bool jp = in.jump && !p.jump_edge;
+        if (jp && head_out > -0.15f) p.velocity.y = std::max(p.velocity.y, 5.2f);
+        p.jump_edge = in.jump;
+        p.air_jumps_left = Player::kAirJumps;
+
+        auto mv = collision::slide_move(p.shape(), p.position, p.velocity,
+                                        world_aabbs, dt, 4, static_count);
+        p.position = mv.position;
+        p.velocity = mv.velocity;
+        p.on_ground = false;
+        p.step_smooth_offset += mv.step_amount;
+        p.step_smooth_offset *= std::max(0.0f, 1.0f - 10.0f * dt);
+        p.step_smooth_offset = std::clamp(p.step_smooth_offset, -0.6f, 0.6f);
+        return;
     }
 
     // Build wish direction from input + horizontal axes (no pitch).
@@ -75,6 +139,8 @@ void update_player(Player& p, const PlayerInput& in,
         float speed_mult = 1.0f;
         if      (in.sprint) speed_mult = 1.5f;
         else if (in.crawl)  speed_mult = 0.4f;
+        // Wading: water around the legs / waist slows the walk.
+        speed_mult *= 1.0f - 0.55f * std::clamp(in.wade, 0.0f, 1.0f);
         wishspeed = kPlayerMove.max_walk_speed * speed_mult;
     }
 

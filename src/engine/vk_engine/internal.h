@@ -371,6 +371,10 @@ struct SceneUBO {
     // Bomb craters (mud material): xyz centre, w bowl radius; crater_info.x = count.
     glm::vec4  craters[24];
     glm::vec4  crater_info;
+    // Splash ring waves on the water (water_fx.cpp): xy = world xz,
+    // z = age (s), w = amplitude (m); ripple_info.x = count.
+    glm::vec4  ripples[16];
+    glm::vec4  ripple_info;
 };
 
 // ---- KHR ray tracing entry points ----

@@ -76,6 +76,27 @@ void main() {
         vec3  corec = (vTint.g < 0.1) ? vec3(1.0, 0.35, 0.25) : vec3(1.0, 0.95, 1.0);
         vec3  c = vTint * (halo * 1.4) + corec * core * 3.2;
         outColor = vec4(c * vUv.x * inten, 0.0);
+    } else if (kind == 4) {
+        // Water droplet streak: a bright bead (droplets act as tiny lenses:
+        // they show the sky and a sun glint), soft across, tapering back.
+        float a = vUv.x * exp(-vUv.y * vUv.y * 3.5);
+        vec3 sun = scene.sun_color.rgb * scene.sun_color.a;
+        vec3 lit = sun * 0.30 + scene.sky_color.rgb * 0.55 + 0.02;
+        a = clamp(a * inten, 0.0, 1.0) * 0.8;
+        outColor = vec4(lit * a, a);
+    } else if (kind == 5) {
+        // Spray mist puff (uv in [-1,1]^2): soft ball eroded by noise so the
+        // edge is ragged; forward-scattering white, lit by sun + sky.
+        float r2 = dot(vUv, vUv);
+        if (r2 > 1.0) discard;
+        vec3  q = vWorld * 2.6 + vec3(vTint.z, -time * 1.3, vTint.z * 0.37);
+        float n = vnoise(q) * 0.6 + vnoise(q * 2.9) * 0.4;
+        float a = vTint.x * exp(-r2 * 2.4) * smoothstep(0.15, 0.7, n + 0.55 * (1.0 - r2));
+        a *= 1.0 - smoothstep(0.7, 1.0, r2);
+        vec3 sun = scene.sun_color.rgb * scene.sun_color.a;
+        vec3 lit = vec3(0.95, 0.97, 1.0) * (sun * 0.20 + scene.sky_color.rgb * 0.42 + 0.02) * vTint.y;
+        a = clamp(a * inten, 0.0, 1.0);
+        outColor = vec4(lit * a, a);
     } else if (kind == 3) {
         // Cloth flag: flat normal from screen derivatives, two-sided
         // Lambert + sun shining THROUGH the cloth when back-lit (thin

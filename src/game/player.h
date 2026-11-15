@@ -23,6 +23,14 @@ struct PlayerInput {
     // RtSettings::gravity each tick so the menu slider can drive fall rate
     // without rebuilding the constexpr MoveParams.
     float gravity = 25.0f;
+    // Water. `swim`: the body is deep enough in open water to float -
+    // movement follows the view direction (Space up, Ctrl down), with
+    // water drag and buoyancy instead of ground friction / gravity.
+    // `water_y` is the surface height. `wade` (0..1) slows walking
+    // through shallows.
+    bool  swim = false;
+    float water_y = 0.0f;
+    float wade = 0.0f;
 };
 
 struct Player {

@@ -105,6 +105,7 @@ void VulkanEngine::init() {
     // laser_gun_#3 as recorded: a 12-round burst (80 ms apart) plus its echo.
     audio_->load_clip(ClipID::AaBurst, "assets/sounds/aa_burst.wav");
     audio_->load_clip(ClipID::SamLaunch, "assets/sounds/sam_launch.wav");
+    audio_->load_clip(ClipID::Splash, "assets/sounds/water_splash.wav");
     // Full jet flyby recordings; tick_jet_audio() times their peak to each
     // jet's predicted closest approach.
     audio_->load_clip(ClipID::JetFlyby1, "assets/sounds/jet_flyby_1.mp3");
@@ -541,7 +542,9 @@ void VulkanEngine::run(const RunOptions& opts) {
         {
             static const bool test_fire = std::getenv("QLIKE_TEST_FIRE") != nullptr;
             static int test_fire_n = 0;
-            if (test_fire && (++test_fire_n % 8) == 0) {
+            // QLIKE_TEST_FIRE=<n > 1>: one single shot at frame n instead.
+            static const int test_fire_at = test_fire ? std::atoi(std::getenv("QLIKE_TEST_FIRE")) : 0;
+            if (test_fire && (test_fire_at > 1 ? (++test_fire_n == test_fire_at) : ((++test_fire_n % 8) == 0))) {
                 in.fire = true;
                 in.fire_held = true;
             }
@@ -810,6 +813,39 @@ void VulkanEngine::run(const RunOptions& opts) {
                 pin.sprint = in.sprint;
                 pin.crawl = in.crawl;
                 pin.gravity = game_.gravity;
+                // Water: how much of the 1.8 m body is under the surface.
+                // Swimming starts once the water reaches the chest (the
+                // feet no longer carry the body) and ends when it drops
+                // back to the waist; in between the player wades.
+                {
+                    const float wl = rt_.water_level;
+                    const float feet0 = player_.position.y - 0.9f;
+                    const bool open_w = !fly_mode_ && water_at(player_.position.x, player_.position.z);
+                    const float sub = open_w ? glm::clamp((wl - feet0) / 1.8f, 0.0f, 1.0f) : 0.0f;
+                    const bool was_swim = player_swimming_;
+                    player_swimming_ = open_w && sub > (was_swim ? 0.52f : 0.64f);
+                    pin.swim = player_swimming_;
+                    pin.water_y = wl;
+                    pin.wade = player_swimming_ ? 0.0f : glm::smoothstep(0.08f, 0.6f, sub);
+                    // Entering the water: a splash sized by how hard we hit it.
+                    const float prev_feet = prev_player_position_.y - 0.9f;
+                    (void)prev_feet;
+                    if (open_w && player_water_prev_sub_ <= 0.0f && sub > 0.0f && player_.velocity.y < -2.5f)
+                        spawn_water_splash(glm::vec3(player_.position.x, wl, player_.position.z),
+                                           glm::clamp(1.2f + 0.25f * -player_.velocity.y, 1.5f, 5.0f));
+                    player_water_prev_sub_ = sub;
+                    // Moving through the surface leaves rings behind.
+                    const float hsp = std::sqrt(player_.velocity.x * player_.velocity.x +
+                                                player_.velocity.z * player_.velocity.z);
+                    if (sub > 0.03f && sub < 0.97f) {
+                        swim_ripple_acc_ += kFixedDt * (0.6f + hsp);
+                        if (swim_ripple_acc_ > 1.6f) {
+                            swim_ripple_acc_ = 0.0f;
+                            add_water_ripple(player_.position.x, player_.position.z,
+                                             hsp > 0.5f ? 0.022f : 0.012f);
+                        }
+                    }
+                }
                 pin.mouse_dx = 0.0f;  // mouse already applied above
                 pin.mouse_dy = 0.0f;
                 glm::vec3 pre_vel = player_.velocity;
@@ -888,7 +924,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                         player_.position.y = h0 + kHalfHeight;
                         if (player_.velocity.y < 0.0f) player_.velocity.y = 0.0f;
                         if (walkable) player_.on_ground = true;
-                    } else if (walkable && was_on_ground &&
+                    } else if (walkable && was_on_ground && !player_swimming_ &&
                                !player_.on_ground &&
                                player_.velocity.y <= 0.5f &&
                                (feet - h0) < kStepDown) {
@@ -918,7 +954,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                 // each tick while walking over uneven terrain → it doubled as
                 // an unwanted footstep sound. Removed; only jump remains.
                 if (audio_ && state_ == State::Playing) {
-                    if (was_on_ground && !player_.on_ground && pin.jump) {
+                    if (was_on_ground && !player_.on_ground && pin.jump && !player_swimming_) {
                         audio_->play_local(ClipID::Jump, 0.7f, 0.06f, 0.10f);
                     }
                 }
@@ -1103,6 +1139,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         if (audio_) audio_->set_paused(state_ != State::Playing);
         tick_spacejet(sim_dt);
         tick_fx(sim_dt);
+        tick_water_fx(sim_dt);
         tick_aa(sim_dt);
         maybe_autosave_settings(frame_dt);
         hz_ms[1] = hz_mark(hz_t);

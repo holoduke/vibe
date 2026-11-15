@@ -637,6 +637,24 @@ vec4 fog_at(vec2 uvp, float dm) {
     return (s < 0.0) ? mix(vec4(0.0, 0.0, 0.0, 1.0), fs, clamp(s + 1.0, 0.0, 1.0)) : fs;
 }
 
+// Underwater caustic pattern (tileable iterated sin/cos network, after
+// Dave Hoskins' "Tileable Water Caustic"): thin bright lines, ~0..1.
+float uw_caustic(vec2 uv, float t) {
+    const float TAU = 6.28318530718;
+    vec2 p = mod(uv * TAU, TAU) - 250.0;
+    vec2 i = p;
+    float c = 1.0;
+    const float inten = 0.005;
+    for (int n = 0; n < 4; ++n) {
+        float tt = t * (1.0 - (3.5 / float(n + 1)));
+        i = p + vec2(cos(tt - i.x) + sin(tt + i.y), sin(tt - i.y) + cos(tt + i.x));
+        c += 1.0 / length(vec2(p.x / (sin(i.x + tt) / inten), p.y / (cos(i.y + tt) / inten)));
+    }
+    c /= 4.0;
+    c = 1.17 - pow(c, 1.4);
+    return clamp(pow(abs(c), 8.0), 0.0, 1.5);
+}
+
 #ifdef SKY_FILL
 // Sky fill (render resolution, before DLSS). Blend state: colour +=
 // src * dst.alpha (dst.alpha = this pixel's sky coverage x FX transmittance,
@@ -669,6 +687,18 @@ void main() {
     // the proper HR UV instead — this also upscales the LR data to
     // fill the full window.
     vec2 sample_uv = gl_FragCoord.xy * pc.viewport.zw;
+    // Camera under water (brush_indicator.w = -1: x = eye depth below the
+    // surface (m), y = time, z = turbidity). The image swims a little:
+    // slow refraction wobble, stronger toward the screen edge.
+    bool uw = pc.brush_indicator.w < -0.5;
+    if (uw) {
+        float ut = pc.brush_indicator.y;
+        vec2 q = sample_uv * vec2(pc.viewport.w / pc.viewport.z, 1.0);
+        vec2 wob = vec2(sin(q.y * 9.0 + ut * 1.7) + 0.5 * sin(q.y * 23.0 - ut * 2.3),
+                        cos(q.x * 8.0 + ut * 1.3) + 0.5 * cos(q.x * 19.0 + ut * 2.1));
+        vec2 cq = sample_uv - 0.5;
+        sample_uv = clamp(sample_uv + wob * (0.0016 + 0.006 * dot(cq, cq)), vec2(0.002), vec2(0.998));
+    }
     // FSR1 EASU upscale for the colour history — edge-adaptive 12-tap
     // reconstruction that's much sharper than bilinear or Catmull-Rom
     // at non-100 % render scale, with no ringing halos.
@@ -814,7 +844,7 @@ void main() {
     // the object's own depth (the sky radiance already contains it).
     vec2 uvp = gl_FragCoord.xy * pc.viewport.zw;
     float obj_dist = (obj_w > 0.0) ? eye_dist(uvp, obj_depth) : 0.0;
-    if (pc.atmo.x > 0.5 && obj_w > 0.0) {
+    if (!uw && pc.atmo.x > 0.5 && obj_w > 0.0) {
         vec4 ap = atmo_aerial(uvp, obj_dist * 0.001);
         hdr_obj = hdr_obj * ap.a + ap.rgb * atmo_sun_illum() * obj_w;
     }
@@ -822,7 +852,7 @@ void main() {
     // Froxel volumetric fog (sun shafts / ground fog), after the aerial
     // perspective (fog is the nearer medium): object part to its depth,
     // sky part over the full fog range.
-    if (pc.tone.y > 0.0) {
+    if (!uw && pc.tone.y > 0.0) {
         if (obj_w > 0.0) {
             vec4 fo = fog_at(uvp, min(obj_dist, pc.tone.y));
             hdr_obj = hdr_obj * fo.a + fo.rgb * obj_w;
@@ -833,6 +863,59 @@ void main() {
         }
     }
     hdr = hdr_obj + hdr_sky;
+
+    // ---- Underwater ----
+    // Water absorbs red within a few metres and green / blue more slowly,
+    // and scatters the daylight coming down from the surface back at the
+    // eye: everything fades into a blue-green veil with distance. On top:
+    // caustics (the wave-focused sun pattern) on lit surfaces and soft
+    // light shafts in the water itself.
+    if (uw) {
+        float cam_d = max(pc.brush_indicator.x, 0.0);
+        float ut    = pc.brush_indicator.y;
+        float turb  = max(pc.brush_indicator.z, 0.05);
+        vec4  eh    = pc.inv_view_proj * vec4(uvp * 2.0 - 1.0, 0.0, 1.0);
+        vec3  eye   = eh.xyz / eh.w;
+        vec3  dir   = view_ray(uvp);
+        float dist  = (depth < 0.99999) ? eye_dist(sample_uv, depth) : 600.0;
+        float water_y = eye.y + cam_d;
+        float t_surf = (dir.y > 1e-3) ? cam_d / dir.y : 1e9;      // where the ray leaves the water
+        float dw = min(dist, t_surf);
+        vec3  sun = normalize(pc.sun_dir.xyz);
+        float sun_up = clamp(sun.y * 1.4, 0.0, 1.0);
+        vec3  sunc = pc.sun_color.rgb * pc.sun_color.a;
+        vec3  sig = vec3(0.30, 0.095, 0.060) * turb;              // extinction per metre
+        vec2  sun_slope = sun.xz / max(sun.y, 0.25);
+        if (depth < 0.99999 && dist < t_surf) {
+            vec3  P  = eye + dir * dist;
+            float pd = max(water_y - P.y, 0.0);                    // depth of the surface point
+            float c  = uw_caustic((P.xz + sun_slope * pd) * 0.42, ut * 0.9 + 23.0);
+            float ck = sun_up * exp(-pd * 0.16) * exp(-dist * 0.05) * smoothstep(0.0, 0.25, pd);
+            hdr *= 1.0 + (c * 2.4 - 0.30) * ck;
+            hdr *= exp(-sig * pd * 0.5);                           // daylight filtered on the way down
+        }
+        // Veil: daylight scattered in the water column, dimmer the deeper
+        // the eye is.
+        vec3 amb = sunc * 0.22 * sun_up + pc.sky_color.rgb * 0.30;
+        vec3 veil = vec3(0.07, 0.36, 0.44) * amb * exp(-sig * cam_d * 0.45);
+        // Light shafts: the caustic pattern extruded down the sun direction.
+        if (sun_up > 0.02) {
+            float smax = min(dw, 22.0);
+            float acc = 0.0;
+            float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+            for (int k = 0; k < 8; ++k) {
+                float sk = smax * (float(k) + jit) / 8.0;
+                vec3  q  = eye + dir * sk;
+                float qd = max(water_y - q.y, 0.0);
+                acc += uw_caustic((q.xz + sun_slope * qd) * 0.11, ut * 0.45 + 7.0) * exp(-qd * 0.10) * exp(-sk * 0.07);
+            }
+            veil *= 1.0 + acc * (1.0 / 8.0) * 3.0 * sun_up * clamp(smax / 6.0, 0.0, 1.0);
+        }
+        vec3 T = exp(-sig * dw);
+        hdr = hdr * T + veil * (1.0 - T);
+        vec2 vq = uvp - 0.5;
+        hdr *= 1.0 - 0.9 * dot(vq, vq);                            // mask-like vignette
+    }
 
     // Screen-space sun shafts (crepuscular rays). 24 fixed taps along
     // the line from this pixel toward the sun's screen position; each

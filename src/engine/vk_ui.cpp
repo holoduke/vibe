@@ -1090,6 +1090,7 @@ void VulkanEngine::build_menu_ui() {
             "1 = full clarity (up to the clarity depth below).");
         ImGui::SliderFloat("Clarity depth (m)",
                            &rt_.water_clarity_depth, 0.2f, 20.0f, "%.1f");
+        ImGui::SliderFloat("Underwater murkiness", &rt_.underwater_turbidity, 0.2f, 4.0f, "%.2f");
         ImGui::TextDisabled("%s",
             "How deep you can see, INDEPENDENT of strength.\n"
             "Small (~1 m) = only very shallow water is clear, deep\n"
