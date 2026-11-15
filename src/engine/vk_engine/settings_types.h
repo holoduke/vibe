@@ -105,7 +105,8 @@ struct RtSettings {
         float weather_change_minutes = 4.0f; // average real minutes between weather changes
         float weather_manual = -1.0f;        // < 0 = random; 0..1 = forced (0 clear .. 1 thunderstorm)
         float moon_brightness = 1.0f;        // 0 = moonless nights (starlight only) .. 1 = full moon
-        bool  moon_phases = false;           // the moon waxes and wanes over 8 nights
+        float moon_phase = 0.5f;             // 0 new .. 0.25 first quarter .. 0.5 full .. 0.75 last quarter
+        bool  moon_phases = false;           // the phase advances (8-day cycle) while the clock runs
         float star_brightness = 1.0f;        // 0 = no stars .. 2
         // Volumetric clouds (physical sky only).
         int   clouds_enabled = 1;

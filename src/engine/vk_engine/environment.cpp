@@ -127,11 +127,6 @@ void VulkanEngine::apply_environment(float dt) {
         if (rt_.day_length_minutes > 0.01f)
             rt_.time_of_day += dt * 24.0f / (rt_.day_length_minutes * 60.0f);
         rt_.time_of_day = std::fmod(std::fmod(rt_.time_of_day, 24.0f) + 24.0f, 24.0f);
-        // A new day at noon (so one whole night keeps one phase).
-        if (env_prev_tod_ >= 0.0f && env_prev_tod_ < 12.0f && rt_.time_of_day >= 12.0f) ++env_day_index_;
-        env_prev_tod_ = rt_.time_of_day;
-        env_moon_ = glm::clamp(rt_.moon_brightness, 0.0f, 1.0f) *
-                    (rt_.moon_phases ? 0.5f - 0.5f * std::cos(6.2831853f * float(env_day_index_ % 8) / 8.0f) : 1.0f);
         const float H = (rt_.time_of_day - 12.0f) / 24.0f * 6.2831853f;
         const float lat = glm::radians(47.0f), dec = glm::radians(16.0f);
         const float up    = std::sin(lat) * std::sin(dec) + std::cos(lat) * std::cos(dec) * std::cos(H);
@@ -139,6 +134,28 @@ void VulkanEngine::apply_environment(float dt) {
         const float north = std::cos(lat) * std::sin(dec) - std::sin(lat) * std::cos(dec) * std::cos(H);
         const float e = glm::degrees(std::asin(glm::clamp(up, -1.0f, 1.0f)));       // sun elevation
         const float az = glm::degrees(std::atan2(east, -north));                     // 0 = due south at noon
+        // The moon: a body of its own. Its phase (0 new .. 0.5 full .. 1 new)
+        // is how far it trails the sun around the sky, so a full moon rises at
+        // sunset and a new moon is up by day only; the lit fraction follows
+        // from the same angle. The phase is a setting like the time of day,
+        // and (optionally) advances through a cycle of 8 days.
+        if (rt_.moon_phases && rt_.day_length_minutes > 0.01f)
+            rt_.moon_phase += dt / (rt_.day_length_minutes * 60.0f) / 8.0f;
+        rt_.moon_phase = rt_.moon_phase - std::floor(rt_.moon_phase);
+        const float mph = 6.2831853f * rt_.moon_phase;
+        const float Hm = H - mph;
+        const float decm = dec * std::cos(mph);
+        const float upm    = std::sin(lat) * std::sin(decm) + std::cos(lat) * std::cos(decm) * std::cos(Hm);
+        const float eastm  = -std::cos(decm) * std::sin(Hm);
+        const float northm = std::cos(lat) * std::sin(decm) - std::sin(lat) * std::cos(decm) * std::cos(Hm);
+        const float em  = glm::degrees(std::asin(glm::clamp(upm, -1.0f, 1.0f)));   // moon elevation
+        const float azm = glm::degrees(std::atan2(eastm, -northm));
+        const float illum = 0.5f - 0.5f * std::cos(mph);                           // lit fraction of the disc
+        // Moonlight reaching the sky: a half moon gives about a tenth of a
+        // full one; nothing while it is below the horizon.
+        const float moon_sky = glm::clamp(rt_.moon_brightness, 0.0f, 1.0f) * std::pow(illum, 1.8f) *
+                               glm::smoothstep(-1.0f, 10.0f, em);
+        env_moon_ = moon_sky;
         if (e > 0.6f) {
             // Day and twilight: the real sun, also below the horizon - the
             // atmosphere LUT then renders dusk on its own. Direct light dies
@@ -152,21 +169,35 @@ void VulkanEngine::apply_environment(float dt) {
             cloud_direct = glm::smoothstep(-6.0f, 1.0f, e);     // cloud tops stay lit after sunset
             env_night_ = 1.0f - glm::smoothstep(0.6f, 5.0f, e);
         } else {
-            // Night: the moon, opposite the sun, takes over as the light.
-            // Blue hour first (the sky-view LUT turns a dull red once the sun is
-            // well below the horizon, where a real dusk sky is deep blue), then
-            // full moonlight.
-            const float n = glm::mix(2.6f, 1.0f, glm::smoothstep(0.6f, -9.0f, e));
-            // Kept high: a low moon would redden like a setting sun.
-            pitch = std::max(-e, 26.0f);
-            yaw = base.sun_yaw_deg + az + 180.0f;
-            // Moonless: the directional light all but disappears and the sky
-            // keeps a faint airglow / starlight level.
-            sun_k = 0.045f * n * glm::mix(0.035f, 1.0f, env_moon_);
-            sky_k = 0.045f * n * glm::mix(0.32f, 1.0f, env_moon_);
-            // The fill light on the land follows the moon too (fading in as
-            // dusk ends): without it a moonless night looked like a moonlit one.
-            amb_k = glm::mix(1.0f, glm::mix(0.22f, 1.0f, env_moon_), glm::smoothstep(0.6f, -9.0f, e));
+            // Night. What lights the land, as outdoors: the last twilight glow,
+            // then the moon if it is up (by its phase), and starlight. Clouds
+            // take most of it away: an overcast, moonless night is near black.
+            const float twi = glm::smoothstep(-9.0f, 0.6f, e);            // twilight left (1 at sunset)
+            const float cloud_tr = glm::mix(1.0f, 0.10f, overcast);        // what a cloud deck lets through
+            const float moon_gnd = moon_sky * cloud_tr;
+            const float star_gnd = 0.10f * glm::clamp(rt_.star_brightness, 0.0f, 1.5f) *
+                                   (1.0f - overcast) * (1.0f - overcast);
+            // The directional light: the moon, or - while it is the stronger -
+            // the glow where the sun went down. (Kept above 14 degrees: a lower
+            // light would redden the sky like a sunset.)
+            const float glow = 0.8f * twi;
+            if (moon_sky > 0.02f && moon_sky >= 0.5f * glow) {
+                pitch = std::max(em, 14.0f);
+                yaw = base.sun_yaw_deg + azm;
+                sun_k = 0.045f * moon_sky * (1.0f + 1.6f * twi);
+            } else {
+                pitch = 16.0f;
+                yaw = base.sun_yaw_deg + az;
+                sun_k = 0.045f * glow;
+            }
+            sun_k *= glm::mix(1.0f, 0.45f, overcast);                      // on top of the day-time cloud dimming
+            // Sky dome and clouds: twilight, moonlit haze, airglow; a cloud deck
+            // seen from below at night is almost black.
+            sky_k = 0.045f * (1.0f + 1.6f * twi) * glm::mix(0.32f, 1.0f, moon_sky) *
+                    glm::mix(1.0f, 0.05f, overcast * (1.0f - twi));
+            // Fill light on the land (1 = a clear full-moon night).
+            const float night_amb = std::max(0.90f * moon_gnd + star_gnd, 0.003f);
+            amb_k = glm::mix(night_amb, 1.0f, twi);
             light_col = glm::vec3(0.60f, 0.73f, 1.0f);
             golden = false;
             env_night_ = 1.0f;
@@ -218,7 +249,7 @@ void VulkanEngine::apply_environment(float dt) {
     // Clouds hide the sun: direct light drops to a tenth under full overcast
     // and loses its colour; the sky dome's light turns grey and dimmer.
     const float cloud_sun = glm::mix(1.0f, 0.22f, overcast * overcast);
-    const float direct = std::max(sun_k * cloud_sun, 0.003f);
+    const float direct = std::max(sun_k * cloud_sun, 0.0003f);
     const float lum = glm::dot(light_col, glm::vec3(0.2126f, 0.7152f, 0.0722f));
     rt_.sun_pitch_deg = pitch;
     rt_.sun_yaw_deg = yaw;
@@ -237,6 +268,7 @@ void VulkanEngine::apply_environment(float dt) {
     rt_.atmosphere_intensity = base.atmosphere_intensity * sky_k * sky_dim / direct;
     const float sky_lum = glm::dot(base.sky_color, glm::vec3(0.2126f, 0.7152f, 0.0722f));
     rt_.sky_color = glm::mix(base.sky_color, glm::vec3(0.92f, 0.96f, 1.04f) * sky_lum, overcast * 0.85f) * amb_k;
+    env_amb_k_ = amb_k;
     rt_.cloud_coverage = glm::mix(std::min(base.cloud_coverage, 0.30f), 0.97f, glm::smoothstep(0.0f, 0.72f, w));
     if (!rt_.weather_enabled) rt_.cloud_coverage = base.cloud_coverage;
     rt_.cloud_density = base.cloud_density * glm::mix(1.0f, 2.4f, overcast);

@@ -607,12 +607,25 @@ void VulkanEngine::build_menu_ui() {
                 ImGui::SetTooltip("Real minutes one full 24 h day takes. 24 = one game hour per minute.\n"
                                   "Smaller is faster. 0 stops the clock at the time set above.");
         }
+        ImGui::SeparatorText("Moon and stars");
+        {
+            const float p = rt_.moon_phase;
+            const char* nm = p < 0.03f || p > 0.97f ? "new moon" : p < 0.22f ? "waxing crescent" : p < 0.28f ? "first quarter"
+                           : p < 0.47f ? "waxing gibbous" : p < 0.53f ? "full moon" : p < 0.72f ? "waning gibbous"
+                           : p < 0.78f ? "last quarter" : "waning crescent";
+            char fmt[48];
+            snprintf(fmt, sizeof(fmt), "%%.2f  %s", nm);
+            ImGui::SliderFloat("Moon phase", &rt_.moon_phase, 0.0f, 1.0f, fmt);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Like the time of day, but for the moon. 0 = new moon (dark nights), 0.5 = full moon. "
+                                  "The phase also sets when it is up: a full moon rises at sunset, a half moon is up for half the night.");
+        }
+        ImGui::Checkbox("Moon phase advances", &rt_.moon_phases);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("One full cycle every 8 days while the clock runs.");
         ImGui::SliderFloat("Moon brightness", &rt_.moon_brightness, 0.0f, 1.0f, rt_.moon_brightness <= 0.0f ? "no moon" : "%.2f");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = moonless nights: only starlight, very dark. 1 = full moon.");
-        ImGui::Checkbox("Moon phases", &rt_.moon_phases);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The moon waxes and wanes over 8 nights (new moon = a dark night).");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Overall strength of the moonlight. 0 = never any moon.");
         ImGui::SliderFloat("Stars", &rt_.star_brightness, 0.0f, 2.0f, "%.2f");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Star brightness. Clouds hide them; a bright moon dims the faint ones.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Star brightness (they also light the land a little on clear nights). Clouds hide them; a bright moon dims the faint ones.");
         ImGui::Checkbox("Weather", &rt_.weather_enabled);
         if (rt_.weather_enabled) {
             ImGui::SliderFloat("Bad weather chance", &rt_.weather_bad_chance, 0.0f, 1.0f, "%.2f");

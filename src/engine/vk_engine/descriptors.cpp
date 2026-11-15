@@ -412,7 +412,7 @@ void VulkanEngine::update_scene_ubo() {
     data.sun_color     = glm::vec4(sun_rgb, rt_.sun_intensity);
     last_sun_rgb_ = sun_rgb;   // volumetric fog uses the same (golden-hour) light
     last_sky_rgb_ = sky_rgb;
-    data.ambient       = glm::vec4(rt_.ground_ambient, rt_.terrain_ao_punch);
+    data.ambient       = glm::vec4(rt_.ground_ambient * env_amb_k_, rt_.terrain_ao_punch);   // darkens with the night fill light
     data.sky_color     = glm::vec4(sky_rgb, 1.0f);
     // DLSS Ray Reconstruction resolves the noise itself, so with it active
     // the ray-traced terms are traced at a low sample count: brute-force
@@ -736,7 +736,8 @@ void VulkanEngine::update_scene_ubo() {
     data.terrain_shore_params = glm::vec4(std::max(0.05f, rt_.terrain_shore_distance),
                                            0.0f, 0.0f, 0.0f);
     // Distance fog — strength=0 disables in-shader.
-    data.distance_fog_color = glm::vec4(rt_.distance_fog_color,
+    // (The haze is lit by the sky: at night it darkens with the fill light.)
+    data.distance_fog_color = glm::vec4(rt_.distance_fog_color * env_amb_k_,
                                          std::max(0.0f, std::min(1.0f, rt_.distance_fog_strength)));
     data.distance_fog_params = glm::vec4(std::max(0.0f, rt_.distance_fog_density),
                                           std::max(0.0f, rt_.distance_fog_start),
