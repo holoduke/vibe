@@ -1207,17 +1207,44 @@ void main() {
         float vig = 1.0 - 0.60 * g_vig * smoothstep(0.6, 1.4, r);
         mapped *= vig;
     }
-    // Film grain: animated, strongest in the midtones, none in pure black / white.
-    if (g_grain > 0.0) {
-        vec2 gp = gl_FragCoord.xy + vec2(g_frame * 37.0, g_frame * 91.0);
-        float n = fract(sin(dot(gp, vec2(12.9898, 78.233))) * 43758.5453) +
-                  fract(sin(dot(gp, vec2(39.3468, 11.135))) * 24634.6345) - 1.0;     // triangular, -1..1
-        float Yg = dot(mapped, vec3(0.2126, 0.7152, 0.0722));
-        mapped = max(mapped + n * g_grain * 0.045 * (0.25 + 4.0 * Yg * (1.0 - Yg) * 0.75), vec3(0.0));
-    }
 
-    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
-                                             vec2(0.06711056, 0.00583715))));
+    // Output dither. Triangular distribution (the sum of two uniform
+    // randoms, +-1 LSB): unlike a +-0.5 LSB uniform dither it leaves no
+    // stripes of alternately noisy and clean pixels along the quantisation
+    // steps of a dark gradient. Independent per colour channel (no coloured
+    // bands), white rather than interleaved-gradient noise (that one has a
+    // visible diagonal weave in near-black areas), and re-seeded every
+    // frame so the eye averages it away.
+    vec3 dith;
+    {
+        uvec2 dp = uvec2(gl_FragCoord.xy);
+        uint ds = dp.x * 1973u + dp.y * 9277u + uint(fract(pc.sky_color.w) * 131072.0) * 26699u;
+        vec3 a, b;
+        ds = ds * 747796405u + 2891336453u; ds = ((ds >> ((ds >> 28u) + 4u)) ^ ds) * 277803737u; a.x = float((ds >> 22u) ^ ds) / 4294967295.0;
+        ds = ds * 747796405u + 2891336453u; ds = ((ds >> ((ds >> 28u) + 4u)) ^ ds) * 277803737u; b.x = float((ds >> 22u) ^ ds) / 4294967295.0;
+        ds = ds * 747796405u + 2891336453u; ds = ((ds >> ((ds >> 28u) + 4u)) ^ ds) * 277803737u; a.y = float((ds >> 22u) ^ ds) / 4294967295.0;
+        ds = ds * 747796405u + 2891336453u; ds = ((ds >> ((ds >> 28u) + 4u)) ^ ds) * 277803737u; b.y = float((ds >> 22u) ^ ds) / 4294967295.0;
+        ds = ds * 747796405u + 2891336453u; ds = ((ds >> ((ds >> 28u) + 4u)) ^ ds) * 277803737u; a.z = float((ds >> 22u) ^ ds) / 4294967295.0;
+        ds = ds * 747796405u + 2891336453u; ds = ((ds >> ((ds >> 28u) + 4u)) ^ ds) * 277803737u; b.z = float((ds >> 22u) ^ ds) / 4294967295.0;
+        dith = a + b - 1.0;                       // -1 .. 1, triangular
+        // Film grain: one more triangular random (same for the three channels).
+        // Its size is set in PERCEPTUAL terms and converted to linear with the
+        // slope of the display curve at this brightness: strongest in the
+        // midtones, fading to nothing in black and white. (It used to be a
+        // fixed linear amount with a floor, which the display encoding blew
+        // up in the shadows: black areas came out as coarse noise several
+        // steps tall.)
+        if (g_grain > 0.0) {
+            float ga, gb;
+            ds = ds * 747796405u + 2891336453u; ds = ((ds >> ((ds >> 28u) + 4u)) ^ ds) * 277803737u; ga = float((ds >> 22u) ^ ds) / 4294967295.0;
+            ds = ds * 747796405u + 2891336453u; ds = ((ds >> ((ds >> 28u) + 4u)) ^ ds) * 277803737u; gb = float((ds >> 22u) ^ ds) / 4294967295.0;
+            float Yg = clamp(dot(mapped, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+            float e = pow(Yg, 0.4545);                                   // perceptual brightness
+            float shape = 4.0 * e * (1.0 - e) * 0.85 + 0.15 * smoothstep(0.0, 0.12, e) * (1.0 - smoothstep(0.9, 1.0, e));
+            float slope = 2.2 * pow(max(Yg, 1e-5), 0.5455);              // d(linear) / d(perceptual)
+            mapped = max(mapped + (ga + gb - 1.0) * g_grain * 0.035 * shape * slope, vec3(0.0));
+        }
+    }
     if (pc.tone.z > 0.0) {
         // HDR10 output. `mapped` is the SDR display-linear image (same
         // look as SDR); expand only its highlights toward the display
@@ -1237,13 +1264,12 @@ void main() {
         vec3 Lp = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(0.1593017578125));
         vec3 pq = pow((0.8359375 + 18.8515625 * Lp) / (1.0 + 18.6875 * Lp),
                       vec3(78.84375));
-        outColor = vec4(pq + (ign - 0.5) / 1023.0, 1.0);
+        outColor = vec4(pq + dith / 1023.0, 1.0);
         return;
     }
-    // 8-bit output: +-0.5 LSB interleaved-gradient-noise dither after
-    // encoding so sky / fog gradients don't band.
+    // 8-bit output: dithered after encoding so dark gradients don't band.
     vec3 enc = to_srgb(mapped);
-    enc += (ign - 0.5) / 255.0;
+    enc += dith / 255.0;
     outColor = vec4(enc, 1.0);
 }
 #endif  // SKY_FILL
