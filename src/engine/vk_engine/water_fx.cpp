@@ -33,15 +33,36 @@ bool VulkanEngine::water_at(float x, float z) const {
 
 void VulkanEngine::add_water_ripple(float x, float z, float amp) {
     WaterRipple r{ glm::vec2(x, z), 0.0f, amp };
-    if (water_ripples_.size() < kMaxRipples) { water_ripples_.push_back(r); return; }
-    // Full: replace the one that matters least (most faded for its size).
-    size_t best = 0; float best_k = -1.0f;
+    // How visible a ring still is: its amplitude times the fade the water
+    // shader applies (fade^1.5 over its life).
+    auto strength = [](const WaterRipple& w) {
+        const float s = glm::clamp(w.amp * 28.5f, 1.0f, 6.0f);
+        const float fade = glm::clamp(1.0f - w.age / (2.5f + 1.5f * s), 0.0f, 1.0f);
+        return w.amp * fade * std::sqrt(fade);
+    };
+    // Small rings (falling droplets, wading) share a few slots between
+    // themselves. A splash throws dozens of droplets; without this cap
+    // their rings filled the list within a second and pushed out the big
+    // ring of the impact itself, which then vanished mid-spread.
+    constexpr float kSmallAmp = 0.015f;
+    constexpr size_t kMaxSmall = 6;
+    const bool is_small = amp < kSmallAmp;
+    size_t n_small = 0, weakest = SIZE_MAX, weakest_small = SIZE_MAX;
+    float weakest_k = 1.0e9f, weakest_small_k = 1.0e9f;
     for (size_t i = 0; i < water_ripples_.size(); ++i) {
-        const float s = glm::clamp(water_ripples_[i].amp * 28.5f, 1.0f, 6.0f);
-        const float k = water_ripples_[i].age / (2.5f + 1.5f * s);
-        if (k > best_k) { best_k = k; best = i; }
+        const float k = strength(water_ripples_[i]);
+        if (k < weakest_k) { weakest_k = k; weakest = i; }
+        if (water_ripples_[i].amp < kSmallAmp) {
+            ++n_small;
+            if (k < weakest_small_k) { weakest_small_k = k; weakest_small = i; }
+        }
     }
-    water_ripples_[best] = r;
+    if (is_small && n_small >= kMaxSmall) { water_ripples_[weakest_small] = r; return; }
+    if (water_ripples_.size() < kMaxRipples) { water_ripples_.push_back(r); return; }
+    // Full: the new ring replaces the faintest one - never a stronger one.
+    // and only one that has nearly faded, so a visible ring is not cut off
+    // (under sustained fire some impacts then get a splash but no ring).
+    if (weakest_k < 0.35f * amp) water_ripples_[weakest] = r;
 }
 
 // scale 1 = rifle bullet (jet ~1.3 m), ~3 = a body dropping in, 8+ = bomb.
