@@ -335,7 +335,8 @@ void VulkanEngine::tick_flashlight(float dt) {
     // Position bob (m) and aim bob (rad): a sideways sway once per two steps,
     // a vertical dip every step, plus a slow idle drift.
     const float bob_x = 0.014f * s1 * flash_move_ + 0.0020f * std::sin(t * 0.9f);
-    const float bob_y = -0.010f * std::abs(s1) * flash_move_ + 0.0025f * std::sin(t * 1.3f + 1.0f);
+    // (a smooth dip per step: |sin| has a kink at every footfall, which read as a jerk)
+    const float bob_y = -0.009f * (0.5f - 0.5f * std::cos(2.0f * flash_phase_)) * flash_move_ + 0.0025f * std::sin(t * 1.3f + 1.0f);
     const float aim_yaw   = 0.016f * s1 * flash_move_ + 0.0030f * std::sin(t * 0.7f + 2.0f);
     const float aim_pitch = 0.011f * s2 * flash_move_ + 0.0030f * std::sin(t * 1.1f);
     const float roll      = 0.035f * s1 * flash_move_;
@@ -359,14 +360,23 @@ void VulkanEngine::tick_flashlight(float dt) {
     flash_right_ = r2;
     flash_up_ = u2;
     // Held low on the right, a forearm's length ahead.
-    flash_pos_ = player_.eye_position() + cr * (0.118f + bob_x) + cu * (-0.118f + bob_y) + cf * 0.275f;
+    // Stored relative to the eye: the camera position is interpolated between
+    // physics ticks, and the lamp must ride on THAT position (anchored to the
+    // raw tick position it shook against the view while walking). The frame
+    // re-anchors it once the camera is known (begin_frame_commands).
+    flash_off_ = cr * (0.118f + bob_x) + cu * (-0.118f + bob_y) + cf * 0.275f;
+    flash_pos_ = player_.eye_position() + flash_off_;
     // Test hook: QLIKE_TEST_FLASHVIEW=<deg> holds the lamp in front of the eye, turned by that angle (model inspection).
     static const char* kView = std::getenv("QLIKE_TEST_FLASHVIEW");
     if (kView) {
         basis(player_.yaw + glm::radians(float(std::atof(kView))), player_.pitch - 0.25f, f, r, u);
         flash_fwd_ = f; flash_right_ = r; flash_up_ = u;
-        flash_pos_ = player_.eye_position() + cf * 0.24f - cu * 0.01f;
+        flash_off_ = cf * 0.24f - cu * 0.01f;
+        flash_pos_ = player_.eye_position() + flash_off_;
     }
+    // Test hook: QLIKE_TEST_FLASHSIDE=<m> moves the lamp that far to the right (shadow check).
+    static const char* kSide = std::getenv("QLIKE_TEST_FLASHSIDE");
+    if (kSide) { flash_off_ += cr * float(std::atof(kSide)); flash_pos_ = player_.eye_position() + flash_off_; }
 }
 
 }  // namespace qlike

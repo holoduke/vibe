@@ -41,7 +41,8 @@ void VulkanEngine::init_clutter_shadow() {
     ici.imageType = VK_IMAGE_TYPE_2D;
     ici.format = VK_FORMAT_D32_SFLOAT;
     ici.extent = { kClutterDim, kClutterDim, 1 };
-    ici.mipLevels = 1; ici.arrayLayers = 2;   // 0 = 64 m, 1 = 16 m near cascade
+    ici.mipLevels = 1; ici.arrayLayers = 3;   // + 2 = flashlight view (small plants)
+    //   // 0 = 64 m, 1 = 16 m near cascade
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
     ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -58,8 +59,10 @@ void VulkanEngine::init_clutter_shadow() {
     vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_view_), "clutter shadow view");
     vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 1, 1 };
     vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_near_view_), "clutter near view");
+    vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 2, 1 };
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_flash_view_), "clutter flash view");
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 2 };
+    vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 3 };
     vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_array_view_), "clutter array view");
     {
         VkSamplerCreateInfo si{};
@@ -122,6 +125,8 @@ void VulkanEngine::destroy_clutter_shadow() {
     if (clutter_shadow_vert_) vkDestroyShaderModule(device_, clutter_shadow_vert_, nullptr);
     if (clutter_shadow_view_) vkDestroyImageView(device_, clutter_shadow_view_, nullptr);
     if (clutter_shadow_near_view_) vkDestroyImageView(device_, clutter_shadow_near_view_, nullptr);
+    if (clutter_shadow_flash_view_) vkDestroyImageView(device_, clutter_shadow_flash_view_, nullptr);
+    clutter_shadow_flash_view_ = VK_NULL_HANDLE;
     if (clutter_shadow_array_view_) vkDestroyImageView(device_, clutter_shadow_array_view_, nullptr);
     clutter_shadow_near_view_ = clutter_shadow_array_view_ = VK_NULL_HANDLE;
     if (clutter_shadow_sampler_) vkDestroySampler(device_, clutter_shadow_sampler_, nullptr);
@@ -168,12 +173,15 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
     // finer 16 m near cascade (layer 1, same centre: VP scaled in x/y).
     glm::mat4 near_scale(1.0f);
     near_scale[0][0] = near_scale[1][1] = kClutterNearScale;
-    for (int layer = 0; layer < 2; ++layer) {
-        const float half = layer == 0 ? kClutterHalf : kClutterHalf / kClutterNearScale;
-        const glm::mat4 cvp = layer == 0 ? clutter_shadow_vp_ : near_scale * clutter_shadow_vp_;
+    // Layer 2: the same plants seen from the flashlight (perspective), for
+    // their shadows in its beam.
+    const int n_layers = flash_vp_[3][3] != 0.0f || flash_vp_[2][3] != 0.0f ? 3 : 2;
+    for (int layer = 0; layer < n_layers; ++layer) {
+        const float half = layer == 0 ? kClutterHalf : layer == 1 ? kClutterHalf / kClutterNearScale : 26.0f;
+        const glm::mat4 cvp = layer == 0 ? clutter_shadow_vp_ : layer == 1 ? near_scale * clutter_shadow_vp_ : flash_vp_;
         VkRenderingAttachmentInfo da{};
         da.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        da.imageView = layer == 0 ? clutter_shadow_view_ : clutter_shadow_near_view_;
+        da.imageView = layer == 0 ? clutter_shadow_view_ : layer == 1 ? clutter_shadow_near_view_ : clutter_shadow_flash_view_;
         da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         da.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;

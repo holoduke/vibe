@@ -384,6 +384,7 @@ struct SceneUBO {
     glm::vec4  flash_pos;
     glm::vec4  flash_dir;
     glm::vec4  flash_col;
+    glm::mat4  flash_vp;     // flashlight shadow map of the small plants (zero = off)
 };
 
 // ---- KHR ray tracing entry points ----

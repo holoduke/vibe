@@ -42,7 +42,8 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 7200 (fx_lights[8] + fx_light_col[8], gun flash / tracer glow).
 //     → 7296 (lamp_lights[2] -> [8]: every lantern near the eye is a light).
 //     → 7344 (flash_pos / flash_dir / flash_col, the hand flashlight).
-static_assert(sizeof(SceneUBO) == 7344, "scene ubo layout");
+//     → 7408 (flash_vp, the flashlight's small-plant shadow map).
+static_assert(sizeof(SceneUBO) == 7408, "scene ubo layout");
 
 RtFuncs g_rt;
 

@@ -765,6 +765,15 @@ void VulkanEngine::update_scene_ubo() {
             ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);
     data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_rain_, env_wet_, 0.0f);
     // Hand flashlight.
+    flash_vp_ = glm::mat4(0.0f);
+    static const bool kNoFlashMap = std::getenv("QLIKE_NO_FLASH_SHADOWMAP") != nullptr;   // A/B test hook
+    if (flashlight_on_ && clutter_shadow_flash_view_ && scatter_.plant_buffer && !kNoFlashMap) {
+        const glm::vec3 lens = flash_pos_ + flash_fwd_ * 0.118f;
+        glm::mat4 proj = glm::perspective(glm::radians(46.0f), 1.0f, 0.15f, 60.0f);
+        proj[1][1] *= -1.0f;
+        flash_vp_ = proj * glm::lookAt(lens, lens + flash_fwd_, flash_up_);
+    }
+    data.flash_vp = flash_vp_;
     if (flashlight_on_) {
         // Four brightness levels: low, medium, high, turbo (more light and more reach).
         const float kPower[4] = { 7.0f, 16.0f, 32.0f, 60.0f };

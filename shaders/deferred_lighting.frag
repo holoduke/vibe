@@ -1569,7 +1569,11 @@ void main() {
             vec3 Ff = f_schlick(F0, clamp(dot(Vv, Hf), 0.0, 1.0));
             vec3 sf = d_ggx(clamp(dot(N, Hf), 0.0, 1.0), a_r) *
                       v_smith_ggx_correlated(NoV, fl_ndl, a_r) * Ff * ms_comp * kPI;
-            point_term += (diff_albedo * (1.0 - Ff) + sf) * fl * fl_ndl;
+            float plant_vis;
+            FLASH_PLANT_VIS(u_clutter_shadow, world_pos + N * 0.03, plant_vis)
+            // (plants themselves: only a gentle self-shadow, they are thin)
+            if (foliage) plant_vis = mix(1.0, plant_vis, 0.35);
+            point_term += (diff_albedo * (1.0 - Ff) + sf) * fl * (fl_ndl * plant_vis);
         }
     }
     point_term += diff_albedo * fx_lights_diffuse(world_pos, N);   // tracers (no shadows)

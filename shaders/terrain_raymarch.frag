@@ -3851,7 +3851,13 @@ void main() {
                 grassEligibility(pos.xz, pos.y) > 0.02)
                 blade_vis = mix(1.0, grass_blade_shadow(pos, fl_dir), scene.grass_rm_params2.z * 0.6 + 0.4);
 #endif
-            lin += fl * (fl_ndl * blade_vis);
+            float plant_vis;
+#ifndef QLIKE_WATER
+            FLASH_PLANT_VIS(u_clutter_shadow, pos + nor * 0.03, plant_vis)
+#else
+            plant_vis = 1.0;
+#endif
+            lin += fl * (fl_ndl * blade_vis * plant_vis);
         }
     }
     lin += fx_lights_diffuse(pos, nor);   // tracers (no shadows)

@@ -88,6 +88,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   flash_pos;        // hand flashlight: xyz lens position, w range (m; 0 = off)
     vec4   flash_dir;        // xyz beam direction, w cos(outer cone angle)
     vec4   flash_col;        // rgb colour x intensity, w cos(inner cone angle)
+    mat4   flash_vp;         // flashlight shadow map (small plants): world -> clip, [3][3] = 0 when off
 } scene;
 
 // Light from muzzle flashes and tracer rounds: each is a sphere of light
@@ -165,6 +166,29 @@ vec3 flashlight_beam(vec3 ro, vec3 rd, float t_max, float jitter) {
     }
     return sum * 0.20;
 }
+
+// Small plants (flowers, ferns, grass tufts, pebbles) are not in the ray-
+// traced scene; a depth map rendered from the lamp (layer 2 of the small-
+// object shadow array) gives their shadows in the flashlight beam.
+// Returns visibility 0..1 (3x3 taps).
+#define FLASH_PLANT_VIS(TEX, P, OUT)                                                          \
+    {                                                                                         \
+        OUT = 1.0;                                                                            \
+        vec4 fc_ = scene.flash_vp * vec4(P, 1.0);                                             \
+        if (fc_.w > 0.2) {                                                                    \
+            vec3 fn_ = fc_.xyz / fc_.w;                                                       \
+            vec2 fuv_ = fn_.xy * 0.5 + 0.5;                                                   \
+            if (all(greaterThan(fuv_, vec2(0.002))) && all(lessThan(fuv_, vec2(0.998)))) {    \
+                vec2 fts_ = 1.0 / vec2(textureSize(TEX, 0).xy);                               \
+                float fb_ = 0.006 / (fc_.w * fc_.w) + 0.00002;   /* ~4 cm of depth */         \
+                float fo_ = 0.0;                                                              \
+                for (int fy_ = -1; fy_ <= 1; ++fy_)                                           \
+                    for (int fx_ = -1; fx_ <= 1; ++fx_)                                       \
+                        fo_ += (textureLod(TEX, vec3(fuv_ + vec2(fx_, fy_) * fts_, 2.0), 0.0).r < fn_.z - fb_) ? 1.0 : 0.0; \
+                OUT = 1.0 - fo_ / 9.0;                                                        \
+            }                                                                                 \
+        }                                                                                     \
+    }
 
 // Road lanterns without a shadow ray (for shaders that cannot trace one,
 // e.g. the raymarched lawn): warm light, gone at 13 m.
