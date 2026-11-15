@@ -766,9 +766,13 @@ void VulkanEngine::update_scene_ubo() {
     data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_rain_, env_wet_, 0.0f);
     // Hand flashlight.
     if (flashlight_on_) {
-        data.flash_pos = glm::vec4(flash_pos_ + flash_fwd_ * 0.118f, 48.0f);
+        // Four brightness levels: low, medium, high, turbo (more light and more reach).
+        const float kPower[4] = { 7.0f, 16.0f, 32.0f, 60.0f };
+        const float kReach[4] = { 30.0f, 42.0f, 56.0f, 75.0f };
+        const int lv = std::clamp(flash_level_, 0, 3);
+        data.flash_pos = glm::vec4(flash_pos_ + flash_fwd_ * 0.118f, kReach[lv]);
         data.flash_dir = glm::vec4(flash_fwd_, std::cos(glm::radians(21.0f)));
-        data.flash_col = glm::vec4(glm::vec3(1.0f, 0.95f, 0.84f) * 22.0f, std::cos(glm::radians(9.0f)));
+        data.flash_col = glm::vec4(glm::vec3(1.0f, 0.95f, 0.84f) * kPower[lv], std::cos(glm::radians(9.0f)));
     } else {
         data.flash_pos = data.flash_dir = data.flash_col = glm::vec4(0.0f);
     }

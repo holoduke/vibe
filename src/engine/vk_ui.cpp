@@ -325,16 +325,23 @@ void VulkanEngine::build_hud_ui() {
                      col = IM_COL32(170, 170, 170, 220); break;
             }
         } else {
-            snprintf(msg, sizeof(msg), flashlight_on_ ? "[F] FLASHLIGHT     [1] laser     [2] airstrike"
+            // Flashlight line: brightness level as filled / empty dots.
+            static const char* const kFlashHud[4] = {
+                "[F] FLASHLIGHT  *...  (click: brighter)     [1] laser     [2] airstrike",
+                "[F] FLASHLIGHT  **..  (click: brighter)     [1] laser     [2] airstrike",
+                "[F] FLASHLIGHT  ***.  (click: brighter)     [1] laser     [2] airstrike",
+                "[F] FLASHLIGHT  ****  (click: back to low)     [1] laser     [2] airstrike" };
+            const char* flash_hud = kFlashHud[std::clamp(flash_level_, 0, 3)];
+            snprintf(msg, sizeof(msg), "%s", flashlight_on_ ? flash_hud
                                                       : "[1] LASER     [2] airstrike     [F] flashlight");
             if (rt_.day_night_enabled || rt_.weather_enabled) {
                 const int hh = int(rt_.time_of_day) % 24, mm = int((rt_.time_of_day - std::floor(rt_.time_of_day)) * 60.0f);
                 if (rt_.day_night_enabled && rt_.weather_enabled)
-                    snprintf(msg, sizeof(msg), "%s     %02d:%02d  %s", flashlight_on_ ? "[F] FLASHLIGHT     [1] laser     [2] airstrike" : "[1] LASER     [2] airstrike     [F] flashlight", hh, mm, weather_name());
+                    snprintf(msg, sizeof(msg), "%s     %02d:%02d  %s", flashlight_on_ ? flash_hud : "[1] LASER     [2] airstrike     [F] flashlight", hh, mm, weather_name());
                 else if (rt_.day_night_enabled)
-                    snprintf(msg, sizeof(msg), "%s     %02d:%02d", flashlight_on_ ? "[F] FLASHLIGHT     [1] laser     [2] airstrike" : "[1] LASER     [2] airstrike     [F] flashlight", hh, mm);
+                    snprintf(msg, sizeof(msg), "%s     %02d:%02d", flashlight_on_ ? flash_hud : "[1] LASER     [2] airstrike     [F] flashlight", hh, mm);
                 else
-                    snprintf(msg, sizeof(msg), "%s     %s", flashlight_on_ ? "[F] FLASHLIGHT     [1] laser     [2] airstrike" : "[1] LASER     [2] airstrike     [F] flashlight", weather_name());
+                    snprintf(msg, sizeof(msg), "%s     %s", flashlight_on_ ? flash_hud : "[1] LASER     [2] airstrike     [F] flashlight", weather_name());
             }
             if (airstrike_.phase == 1) { snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike: aircraft inbound"); col = IM_COL32(255, 180, 40, 230); }
             if (airstrike_.phase == 2) { snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike: BOMB AWAY"); col = IM_COL32(255, 70, 40, 245); }

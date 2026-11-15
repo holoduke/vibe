@@ -796,7 +796,14 @@ void VulkanEngine::run(const RunOptions& opts) {
                     }
                     terrain_stroke_active_ = false;
                 }
-            } else if (!game_.weapons_enabled || flashlight_on_) {
+            } else if (flashlight_on_) {
+                // Left click: next brightness (4 levels, wrapping to the lowest).
+                if (in.fire) {
+                    flash_level_ = (flash_level_ + 1) % 4;
+                    if (audio_) audio_->play_local(ClipID::Jump, 0.22f, 0.02f, 1.7f + 0.15f * float(flash_level_));
+                }
+                airstrike_click_ = false;
+            } else if (!game_.weapons_enabled) {
                 airstrike_click_ = false;            // game setting: player weapons off
             } else if (weapon_ == 1) {
                 // Airstrike tablet: a click marks the ground under the crosshair.

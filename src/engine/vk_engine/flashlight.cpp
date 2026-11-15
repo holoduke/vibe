@@ -101,12 +101,9 @@ void lathe(std::vector<Vertex>& v, std::vector<uint32_t>& ix, const std::vector<
             for (int j = 0; j < segs; ++j) {
                 const uint32_t i0 = base + uint32_t(i * (segs + 1) + j), i1 = i0 + 1;
                 const uint32_t i2 = i0 + uint32_t(segs + 1), i3 = i2 + 1;
-                // Winding as the engine's other meshes: clockwise seen from the side
-                // the normal points to (front faces after the viewport flip).
-                const glm::vec3 g = glm::cross(v[i1].position - v[i0].position, v[i2].position - v[i0].position);
-                const glm::vec3 nref = v[i0].normal + v[i3].normal;
-                if (glm::dot(g, nref) >= 0.0f) ix.insert(ix.end(), { i0, i2, i1, i1, i2, i3 });
-                else                            ix.insert(ix.end(), { i0, i1, i2, i1, i3, i2 });
+                // Both windings: the shell is thin and seen from every side (a
+                // single winding left parts of it culled - see-through holes).
+                ix.insert(ix.end(), { i0, i2, i1, i1, i2, i3, i0, i1, i2, i1, i3, i2 });
             }
     }
 }
@@ -159,6 +156,25 @@ void VulkanEngine::init_flashlight_meshes() {
     build(flash_mesh_[3], { { -0.0914f, 0.0030f }, { -0.0914f, 0.0000f } }, LatheOpts{});
     // 4: front glass, a disc just inside the bezel.
     build(flash_mesh_[4], { { -0.1160f, 0.0160f }, { -0.1160f, 0.0000f } }, LatheOpts{});
+    // 6: unit sphere (finger joints, palm, wrist).
+    {
+        std::vector<ProfPt> pr;
+        for (int i = 0; i <= 14; ++i) {
+            const float a = 3.14159265f * float(i) / 14.0f;
+            pr.push_back({ std::cos(a), std::sin(a) });
+        }
+        LatheOpts o; o.segs = 28;
+        build(flash_mesh_[6], pr, o);
+    }
+    // 7: forearm in a jacket sleeve: from the elbow end (+z, open, off screen)
+    // down to the cuff at the wrist (z = 0).
+    {
+        LatheOpts o; o.segs = 40;
+        build(flash_mesh_[7], {
+            { 0.340f, 0.052f }, { 0.240f, 0.050f }, { 0.120f, 0.043f }, { 0.050f, 0.037f }, { 0.022f, 0.0345f },
+            { 0.020f, 0.0365f }, { 0.004f, 0.0365f }, { 0.000f, 0.0345f }, { 0.000f, 0.0270f },
+        }, o);
+    }
     // 5: tail switch boot, a rubber dome.
     build(flash_mesh_[5], {
         { 0.0760f, 0.0098f }, { 0.0790f, 0.0094f }, { 0.0812f, 0.0080f }, { 0.0826f, 0.0054f }, { 0.0832f, 0.0000f },
@@ -217,9 +233,65 @@ void VulkanEngine::draw_flashlight_model(VkCommandBuffer cmd, const glm::mat4& v
         part(cube_mesh_, glm::translate(I, c) * glm::scale(I, half * 2.0f), col, mat, none, false);
     };
     const glm::vec4 steel(0.60f, 0.61f, 0.63f, 1.0f);
-    box(glm::vec3(0.0f, 0.0146f, 0.0250f), glm::vec3(0.0032f, 0.0005f, 0.0300f), steel, -2.0f);
-    box(glm::vec3(0.0f, 0.0142f, 0.0535f), glm::vec3(0.0040f, 0.0012f, 0.0016f), steel, -2.0f);
-    box(glm::vec3(0.0f, 0.0152f, -0.0040f), glm::vec3(0.0032f, 0.0010f, 0.0020f), steel, -2.0f);
+    // (on the left side, clear of the thumb)
+    box(glm::vec3(-0.0146f, 0.0f, 0.0250f), glm::vec3(0.0005f, 0.0032f, 0.0300f), steel, -2.0f);
+    box(glm::vec3(-0.0142f, 0.0f, 0.0535f), glm::vec3(0.0012f, 0.0040f, 0.0016f), steel, -2.0f);
+    box(glm::vec3(-0.0152f, 0.0f, -0.0040f), glm::vec3(0.0010f, 0.0032f, 0.0020f), steel, -2.0f);
+
+    // ---- The hand that holds it: a gloved right fist around the grip
+    // (palm on the right, fingers wrapped under and round to the left,
+    // thumb along the top), and the forearm in a jacket sleeve running
+    // back, down and out of the picture. Joints are spheres, bones are
+    // cylinders. ----
+    const glm::vec4 glove(0.030f, 0.031f, 0.034f, 1.0f), sleeve(0.085f, 0.105f, 0.075f, 1.0f);
+    auto ball = [&](glm::vec3 c, glm::vec3 radii, glm::vec4 col) {
+        part(flash_mesh_[6], glm::translate(I, c) * glm::scale(I, radii), col, -1.0f, none, false);
+    };
+    // Matrix whose Y axis runs from a to b (cylinder_mesh_: radius 1, half height 1 along Y).
+    auto bone = [&](glm::vec3 a, glm::vec3 b, float r, glm::vec4 col) {
+        const glm::vec3 d = b - a;
+        const float len = glm::length(d);
+        if (len < 1e-5f) return;
+        const glm::vec3 y = d / len;
+        const glm::vec3 x = glm::normalize(glm::cross(y, std::abs(y.z) < 0.9f ? glm::vec3(0, 0, 1) : glm::vec3(1, 0, 0)));
+        const glm::vec3 z = glm::cross(x, y);
+        const glm::mat4 R(glm::vec4(x, 0.0f), glm::vec4(y, 0.0f), glm::vec4(z, 0.0f), glm::vec4((a + b) * 0.5f, 1.0f));
+        part(cylinder_mesh_, R * glm::scale(I, glm::vec3(r, len * 0.5f, r)), col, -1.0f, none, false);
+    };
+    const float kGrip = 0.0126f + 0.0058f;                 // torch radius + half a finger
+    auto ring = [&](float deg, float zc) {
+        const float a = glm::radians(deg);
+        return glm::vec3(std::cos(a) * kGrip, std::sin(a) * kGrip, zc);
+    };
+    // Four fingers: knuckle on the right, wrapped under the torch, tips on the left.
+    for (int k = 0; k < 4; ++k) {
+        const float zc = 0.0040f + 0.0118f * float(k);
+        const float fr = (k == 3) ? 0.0050f : 0.0057f;      // the little finger is thinner
+        const float curl = (k == 3) ? -188.0f : -202.0f;
+        const glm::vec3 j0 = ring(24.0f, zc), j1 = ring(-52.0f, zc), j2 = ring(-128.0f, zc), j3 = ring(curl, zc);
+        bone(j0, j1, fr, glove); bone(j1, j2, fr * 0.96f, glove); bone(j2, j3, fr * 0.90f, glove);
+        ball(j0, glm::vec3(fr * 1.05f), glove); ball(j1, glm::vec3(fr * 1.0f), glove);
+        ball(j2, glm::vec3(fr * 0.96f), glove); ball(j3, glm::vec3(fr * 0.90f), glove);
+    }
+    // Thumb along the top, pointing forward.
+    {
+        const glm::vec3 t0(0.0175f, 0.0100f, 0.0400f), t1(0.0085f, 0.0188f, 0.0190f), t2(0.0015f, 0.0196f, -0.0010f);
+        bone(t0, t1, 0.0068f, glove); bone(t1, t2, 0.0061f, glove);
+        ball(t0, glm::vec3(0.0078f), glove); ball(t1, glm::vec3(0.0067f), glove); ball(t2, glm::vec3(0.0060f), glove);
+    }
+    // Palm / back of the hand, heel of the hand, wrist.
+    ball(glm::vec3(0.0225f, -0.0030f, 0.0235f), glm::vec3(0.0150f, 0.0245f, 0.0270f), glove);
+    ball(glm::vec3(0.0260f, -0.0120f, 0.0440f), glm::vec3(0.0200f, 0.0230f, 0.0220f), glove);
+    const glm::vec3 wrist(0.0330f, -0.0200f, 0.0640f);
+    ball(wrist, glm::vec3(0.0265f, 0.0255f, 0.0265f), glove);
+    // Forearm: its local +Z runs from the cuff at the wrist toward the elbow.
+    {
+        const glm::vec3 az = glm::normalize(glm::vec3(0.40f, -0.62f, 1.0f));
+        const glm::vec3 ax = glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), az));
+        const glm::vec3 ay = glm::cross(az, ax);
+        const glm::mat4 A(glm::vec4(ax, 0.0f), glm::vec4(ay, 0.0f), glm::vec4(az, 0.0f), glm::vec4(wrist + az * 0.010f, 1.0f));
+        part(flash_mesh_[7], A, sleeve, -1.0f, none, false);
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -277,7 +349,8 @@ void VulkanEngine::tick_flashlight(float dt) {
     glm::vec3 cf, cr, cu;                                   // where the head looks
     basis(player_.yaw, player_.pitch, cf, cr, cu);
     glm::vec3 f, r, u;                                      // where the lamp points
-    basis(flash_yaw_ + aim_yaw, flash_pitch_ + aim_pitch, f, r, u);
+    // (held on the right, so it is toed in a touch toward what the eye looks at)
+    basis(flash_yaw_ + aim_yaw - 0.014f, flash_pitch_ + aim_pitch + 0.006f, f, r, u);
     // Roll about the beam axis.
     const float cr_ = std::cos(roll), sr_ = std::sin(roll);
     const glm::vec3 r2 = r * cr_ + u * sr_, u2 = u * cr_ - r * sr_;
@@ -286,7 +359,7 @@ void VulkanEngine::tick_flashlight(float dt) {
     flash_right_ = r2;
     flash_up_ = u2;
     // Held low on the right, a forearm's length ahead.
-    flash_pos_ = player_.eye_position() + cr * (0.115f + bob_x) + cu * (-0.105f + bob_y) + cf * 0.30f;
+    flash_pos_ = player_.eye_position() + cr * (0.118f + bob_x) + cu * (-0.118f + bob_y) + cf * 0.275f;
     // Test hook: QLIKE_TEST_FLASHVIEW=<deg> holds the lamp in front of the eye, turned by that angle (model inspection).
     static const char* kView = std::getenv("QLIKE_TEST_FLASHVIEW");
     if (kView) {

@@ -1137,7 +1137,8 @@ private:
     glm::vec3 flash_pos_{0.0f}, flash_fwd_{0.0f, 0.0f, -1.0f}, flash_right_{1.0f, 0.0f, 0.0f}, flash_up_{0.0f, 1.0f, 0.0f};
     void tick_flashlight(float dt);
     void draw_flashlight_model(VkCommandBuffer cmd, const glm::mat4& vp);
-    Mesh flash_mesh_[6]{};           // body, bezel, reflector, emitter, glass, switch
+    Mesh flash_mesh_[9]{};           // body, bezel, reflector, emitter, glass, switch, sphere, forearm, (spare)
+    int   flash_level_ = 1;          // brightness 0..3 (left click cycles; after the brightest back to the lowest)
     void init_flashlight_meshes();
     void destroy_flashlight_meshes();
 
