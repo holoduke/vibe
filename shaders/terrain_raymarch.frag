@@ -2504,7 +2504,7 @@ void main() {
                 // pow(x, 8) → 3 squarings.
                 float rf1 = max(dot(refl, sunDirW), 0.0);
                 float rf2 = rf1 * rf1; float rf4 = rf2 * rf2; float rf8 = rf4 * rf4;
-                vec3  r_fog = mix(vec3(0.55, 0.55, 0.58),
+                vec3  r_fog = scene.crater_info.w * mix(vec3(0.55, 0.55, 0.58),
                                   vec3(1.0, 0.7, 0.3),
                                   0.3 * rf8);
                 r_col = r_col * r_ext + r_fog * (1.0 - r_ext);
@@ -2597,7 +2597,7 @@ void main() {
                 float rfL2 = rfL1 * rfL1;
                 float rfL4 = rfL2 * rfL2;
                 float rfL8 = rfL4 * rfL4;
-                vec3 r_fog = mix(vec3(0.55, 0.55, 0.58),
+                vec3 r_fog = scene.crater_info.w * mix(vec3(0.55, 0.55, 0.58),
                                   vec3(1.0, 0.7, 0.3),
                                   0.3 * rfL8);
                 r_col = r_col * r_ext + r_fog * (1.0 - r_ext);
@@ -2963,7 +2963,7 @@ void main() {
         float sd2 = sundotW * sundotW;
         float sd4 = sd2 * sd2;
         float sd8 = sd4 * sd4;
-        vec3 fogColW = mix(vec3(0.55, 0.55, 0.58),
+        vec3 fogColW = scene.crater_info.w * mix(vec3(0.55, 0.55, 0.58),
                            vec3(1.0, 0.7, 0.3),
                            0.3 * sd8);
         col_w = col_w * ext_w + fogColW * (1.0 - ext_w);
@@ -3991,7 +3991,7 @@ void main() {
     float sn2 = sundot * sundot;
     float sn4 = sn2 * sn2;
     float sn8 = sn4 * sn4;
-    vec3 fogCol = mix(vec3(0.55, 0.55, 0.58),
+    vec3 fogCol = scene.crater_info.w * mix(vec3(0.55, 0.55, 0.58),
                       vec3(1.0, 0.7, 0.3),
                       0.3 * sn8);
     col = col * extinction + fogCol * (1.0 - extinction);
@@ -4032,7 +4032,7 @@ void main() {
         float fog_y_top   = scene.fog_band.y;
         float fog_noise   = clamp(scene.fog_band.z, 0.0, 1.0);
 
-        vec3 fogTint   = vec3(0.78, 0.83, 0.90);
+        vec3 fogTint   = vec3(0.78, 0.83, 0.90) * scene.crater_info.w;   // unlit fog is dark at night
         vec3 sunGlow   = scene.sun_color.rgb * scene.sun_color.a;
 
         // Henyey-Greenstein phase: forward-peaked when looking near

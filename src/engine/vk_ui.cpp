@@ -635,7 +635,17 @@ void VulkanEngine::build_menu_ui() {
             ImGui::SliderFloat("fog thickness", &fog_density, 0.0f, 0.05f, "%.4f");
             ImGui::SliderFloat("fog thins out with height", &rt_.fog_height_falloff, 0.0f, 0.2f, "%.3f");
             ImGui::SliderFloat("fog reach (m)", &rt_.fog_max_dist, 50.0f, 1000.0f, "%.0f");
+            ImGui::SeparatorText("Valley fog (on the terrain)");
+            ImGui::SliderFloat("valley fog strength", &rt_.terrain_raymarch_fog_strength, 0.0f, 2.0f, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = off, 1 = normal, 2 = thick fog lying in the valleys.");
+            ImGui::SliderFloat("valley fog from height (m)", &rt_.terrain_raymarch_fog_y_start, -20.0f, 60.0f, "%.1f");
+            ImGui::SliderFloat("valley fog up to height (m)", &rt_.terrain_raymarch_fog_y_top, -20.0f, 80.0f, "%.1f");
+            ImGui::SliderFloat("valley fog wisps", &rt_.terrain_raymarch_fog_noise, 0.0f, 1.0f, "%.2f");
+            ImGui::Checkbox("light shafts in the valley fog", &rt_.terrain_raymarch_fog_godrays);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("About 20% slower fog.");
             ImGui::SeparatorText("Distance haze");
+            ImGui::SliderFloat("haze on the terrain", &rt_.terrain_fog_strength, 0.0f, 1.5f);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("How strongly far hills and mountains fade into the haze.");
             ImGui::ColorEdit3("haze colour", &rt_.distance_fog_color.x);
             ImGui::SliderFloat("haze strength", &rt_.distance_fog_strength, 0.0f, 1.0f, "%.2f");
             ImGui::SliderFloat("haze density", &rt_.distance_fog_density, 0.0f, 0.05f, "%.4f");
@@ -1113,27 +1123,16 @@ void VulkanEngine::build_menu_ui() {
         }
         ImGui::SliderFloat("Raymarch sharpen", &rt_.terrain_raymarch_sharpen,
                            0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Volumetric fog strength",
-                           &rt_.terrain_raymarch_fog_strength, 0.0f, 2.0f, "%.2f");
-        ImGui::SliderFloat("Fog Y start (m)",
-                           &rt_.terrain_raymarch_fog_y_start, -20.0f, 60.0f, "%.1f");
-        ImGui::SliderFloat("Fog Y top (m)",
-                           &rt_.terrain_raymarch_fog_y_top, -20.0f, 80.0f, "%.1f");
-        ImGui::SliderFloat("Fog noise (wisps)",
-                           &rt_.terrain_raymarch_fog_noise, 0.0f, 1.0f, "%.2f");
         ImGui::Checkbox("Relaxation cone-stepping (Phase 6)",
                          &rt_.terrain_raymarch_relaxation);
-        ImGui::Checkbox("Fog god-rays (Phase 7)",
-                         &rt_.terrain_raymarch_fog_godrays);
         // TextDisabled is printf-style; passing "%s" + a string is the
         // safe way to display literal `%` characters (e.g. "50%").
         ImGui::TextDisabled("%s",
             "Lower steps / fewer octaves / higher step factor = faster.\n"
             "50% render scale = 4x fewer FBM evaluations.\n"
             "Sharpen recovers detail lost to bilinear upscaling.\n"
-            "Fog 0 = off, 1 = baseline, 2 = thick valley fog.\n"
             "Relaxation: faster march at the risk of skipping spikes.\n"
-            "God-rays: 4 short rays per fog step, ~20% slower fog.");
+            "(Fog and haze settings are on the Weather tab.)");
         } else {
         ImGui::SeparatorText("Quadtree CLOD terrain");
         ImGui::SliderFloat("Detail range (m)",
@@ -1343,7 +1342,6 @@ void VulkanEngine::build_menu_ui() {
                            0.0f, 1.0f, "%.2f");
 
         ImGui::SeparatorText("Shading");
-        ImGui::SliderFloat("atmospheric fog",  &rt_.terrain_fog_strength,    0.0f, 1.5f);
         ImGui::SliderFloat("light wrap",       &rt_.terrain_wrap_strength,   0.0f, 1.0f);
         ImGui::SliderFloat("detail brightness",&rt_.terrain_detail_strength, 0.0f, 3.0f);
         ImGui::SliderFloat("shadow softness x",&rt_.terrain_shadow_softness_scale, 0.05f, 1.5f);

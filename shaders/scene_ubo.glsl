@@ -80,7 +80,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   rm_red_sand;      // rgb, w = patch scale
     vec4   rm_rock;          // rgb, w = ground saturation
     vec4   craters[24];      // xyz centre, w bowl radius
-    vec4   crater_info;      // x = count, y = cloud cover 0..1, z = cloud shadow contrast
+    vec4   crater_info;      // x = count, y = cloud cover 0..1, z = cloud shadow contrast, w = haze light level (1 by day)
     vec4   ripples[16];      // splash rings: xy = world xz, z = age (s), w = amplitude (m)
     vec4   ripple_info;      // x = count, y = rain 0..1, z = ground wetness 0..1, w = fx light count
     vec4   fx_lights[8];     // short-lived glow lights (gun flashes, tracers): xyz pos, w radius (m)

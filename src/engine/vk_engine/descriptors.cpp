@@ -756,7 +756,10 @@ void VulkanEngine::update_scene_ubo() {
     // y / z: cloud cover and cloud-shadow contrast (scene_ubo.glsl cloud_shadow).
     data.crater_info = glm::vec4(float(craters_.size()),
                                  (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_coverage * 0.80f, 0.0f, 1.0f) : 0.0f,
-                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? env_cloud_shadow_k_ : 0.0f, 0.0f);
+                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? env_cloud_shadow_k_ : 0.0f,
+                                 // .w: light level of the haze / fog colours (1 by day, the
+                                 // night fill-light factor after dark)
+                                 env_amb_k_);
     for (size_t i = 0; i < 16; ++i)
         data.ripples[i] = i < water_ripples_.size()
             ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);
