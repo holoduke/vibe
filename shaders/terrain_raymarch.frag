@@ -1106,7 +1106,7 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
         // march steps on far rays. mix 0.0015 → 0.005 over [150, 600] m.
         float hit_eps = mix(0.0015, 0.0025, smoothstep(150.0, 600.0, t)) * t;
 #ifndef QLIKE_WATER
-        if (!coarse && abs(h) < hit_eps) break;   // only real-surface steps may hit
+        if (!coarse && abs(h) < hit_eps) return t;   // only real-surface steps may hit (was: break + a full re-evaluation below)
 #else /* QLIKE_WATER */
         if (abs(h) < hit_eps) break;
 #endif /* QLIKE_WATER */
@@ -1318,8 +1318,26 @@ float calcShadow(vec3 pos, vec3 sunDir) {
     // the same number, so collapse to one.
     float min_step = mix(0.5, 4.0, smoothstep(100.0, 500.0, recv_dist));
     float t   = max(0.5, min_step);
-    for (int i = 0; i < kSteps; ++i) {
+    // Open air: while the baked heightmap proves the ray is far enough
+    // above the ground that this step cannot lower `res` (k * h / t >= 1
+    // even with the bake's 2 m margin), one texture fetch replaces the full
+    // FBM - the result is identical, the step merely a little shorter.
+    // Those steps are free: only FBM steps count against `kSteps` (so the
+    // march reaches at least as far as before).
+    float maxH_sh = terrainMaxHeight();
+    int fbm_steps = 0;
+    for (int i = 0; i < 96; ++i) {
         vec3 p = pos + t * sunDir;
+        if (p.y > maxH_sh) break;                         // above every summit: nothing left to hit
+        if (all(lessThan(abs(p.xz), vec2(kHeightmapSide * 0.5 - 2.0)))) {
+            float hb = p.y - meshHeight(p.xz) - 2.0;
+            if (hb > 0.5 && k * hb >= t) {
+                t += clamp(hb, min_step, 100.0);
+                if (t > 800.0) break;
+                continue;
+            }
+        }
+        if (++fbm_steps > kSteps) break;
         // Coarse FBM (same user octaves, no sculpt-delta tap).
         // Local-Lipschitz overstep doesn't help here — the shadow
         // march already uses full `h` per step (no global kStep
@@ -1382,14 +1400,16 @@ float gs_map(vec3 p, float gy) {
     lp.xz = mod(lp.xz + 0.5 * kPeriod, kPeriod) - 0.5 * kPeriod;
     float bh = clamp(scene.grass_rm_params.x, 0.05, 3.0) * 0.36;
     float d = 1e3;
+    // Eligibility once, at the centre cell (as grass_raymarch.frag does):
+    // the mask is 2 m per texel, the 3x3 block spans 0.5 m.
+    {
+        vec2 mg = textureLod(u_grass_mask, (cellId * kPeriod / 2048.0) + vec2(0.5), 0.0).rg;
+        float sm = scene.grass_rm_params2.x;
+        if (mg.r * (1.0 - smoothstep(sm * 0.7, sm * 1.2, mg.g * 2.0)) < 0.10) return 1e3;
+    }
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             vec2 nId = cellId + vec2(float(dx), float(dy));
-            vec2 muv = (nId * kPeriod / 2048.0) + vec2(0.5);
-            vec2 mg = textureLod(u_grass_mask, muv, 0.0).rg;
-            float sm = scene.grass_rm_params2.x;
-            float elig = mg.r * (1.0 - smoothstep(sm * 0.7, sm * 1.2, mg.g * 2.0));
-            if (elig < 0.10) continue;
             vec4 r = gs_hash42(nId);
             if (r.x > scene.grass_rm_params.w) continue;
             vec3 np = lp - vec3(float(dx), 0.0, float(dy)) * kPeriod;
@@ -3843,6 +3863,9 @@ void main() {
             // exp falloff.
             float profile = smoothstep(fog_y_start, fog_y_start + 1.0, p.y) *
                             (1.0 - smoothstep(fog_y_top, fog_y_top + 4.0, p.y));
+            // Outside the fog layer the density is exactly 0: the step adds no
+            // scatter and no extinction - skip its wisp fetch and god-ray taps.
+            if (profile <= 0.0) { t_v += dt; continue; }
             // 3-octave wisp pattern, pre-baked into the 256² R8 fog
             // wisp texture (binding 14). One textureLod replaces the
             // 3 noise2 calls the inline FBM used to do (~12 hashes

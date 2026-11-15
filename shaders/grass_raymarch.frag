@@ -303,18 +303,36 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     // so 2 m of margin is always clear. This is the same skip the terrain
     // pass uses; without it every step from the camera to the ground paid
     // for the full FBM (the bulk of this pass).
+    float terrainY;
+#if QLIKE_GRASS_BAKED_HEIGHT == 1
+    {
+        // One fetch of the baked height serves the air skip AND the ground
+        // (it used to be fetched twice per near-ground step).
+        float hmesh = terrainH_mesh(p.xz);
+        float hm = p.y - hmesh;
+        if (pc.emissive.x < 0.5 && hm > 3.0) return 0.5 * (hm - 2.0);
+        terrainY = hmesh + ((hm > 1.6) ? ((pc.emissive.x > 0.5) ? 0.0 : 0.30 * (1.0 - smoothstep(10.0, 26.0, ray_t)))
+                                       : grass_ground_relief(p.xz, ray_t, hmesh));
+    }
+#else
     if (pc.emissive.x < 0.5) {
         float hm = p.y - terrainH_mesh(p.xz);
         if (hm > 3.0) return 0.5 * (hm - 2.0);
     }
-    float terrainY = sampleHeight_lod_ray(p.xz, ray_t, p.y);
+    terrainY = sampleHeight_lod_ray(p.xz, ray_t, p.y);
+#endif
     float distToTerrain = 0.5 * (p.y - terrainY);
 
-    // Coarse guard: if we're far above terrain, skip the per-cell SDF
-    // evaluation (blades top out at ~0.4 m + sway at the default height
-    // slider; guard leaves headroom for slider values up to ~2).
-    const float kGuard = 1.0;
-    if (distToTerrain > kGuard) return distToTerrain - (kGuard - 0.6);
+    // Above the tallest possible blade: no cell work at all (mask fetch,
+    // hashes, rotations - 4 to 9 cells per step). The guard follows the
+    // actual blade height (1.75 x the scaled base height covers every
+    // blade); it used to be a fixed 2 m, sized for the slider's maximum -
+    // an eye at 1.7 m was inside it for its whole ray.
+    {
+        float blade_top = 1.75 * clamp(pc.grass_params.w, 0.05, 3.0) * 0.36;
+        float above = p.y - terrainY;
+        if (above > blade_top + 0.3) return 0.5 * (above - blade_top);
+    }
 
     vec2 cellId;
     const float kPeriod = 0.17;        // ~35 blades per m²

@@ -501,7 +501,14 @@ void main() {
         int hits = 0;
         float pp_phi = rand(seed_stable + uvec3(0u, 99u, 0u)) * 6.28318530718;
         float pp_c = cos(pp_phi), pp_s = sin(pp_phi);
-        for (int i = 0; i < 4; ++i) {
+        // Under DLSS Ray Reconstruction (rt_flags.x bit 1) the seed changes
+        // every frame and RR averages over time: 2 blocker rays per frame
+        // estimate the same mean distance as 4 - and a single one when the
+        // softness is so low that the penumbra is sub-pixel anyway (the
+        // distance then only sets the shadow ray's length).
+        int n_block = 4;
+        if ((scene.rt_flags.x & 2) != 0) n_block = base_softness < 0.004 ? 1 : 2;
+        for (int i = 0; i < n_block; ++i) {
             float r1 = rand(seed_stable + uvec3(uint(i), 91u, 13u));
             float r = sqrt(r1) * kBlockerCone;
             vec2 v = kVogel[i & 31];
@@ -745,6 +752,9 @@ void main() {
     if (ao_mode > 0 && scene.rt_flags.z > 0 && ao_w > 0.01) {
         // 2-tap "fast" AO as default; full mode could expand to 4-8 taps.
         int n_taps = (ao_mode == 1) ? 2 : 4;
+        // Ray Reconstruction: per-frame taps are averaged over time - 2
+        // give the same mean as 4.
+        if ((scene.rt_flags.x & 2) != 0) n_taps = min(n_taps, 2);
         float ao_radius = max(0.05, scene.rt_params.y);
         float hits = 0.0;
         vec3 t_u = abs(N.y) < 0.999 ? normalize(cross(vec3(0,1,0), N))
