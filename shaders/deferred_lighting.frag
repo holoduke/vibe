@@ -1394,8 +1394,11 @@ void main() {
     // No shadow rays below N.L 0.04: fade the (untested) sun to 0 there
     // instead of letting up to 4 % leak into shadowed terminator areas.
     float term_fade = (ndl_raw > 0.04) ? 1.0 : smoothstep(0.0, 0.04, ndl_raw);
-    vec3 sun_rad = scene.sun_color.rgb * scene.sun_color.a * ndl * term_fade * (1.0 - shadow) * cloud_shadow(world_pos) *
-                   sun_horizon_lit(u_sun_horizon, world_pos);
+    // Sun hidden behind a far mountain (sun_horizon.glsl) and cloud shadow:
+    // one factor for EVERY direct-sun term below (Lambert, specular, and the
+    // leaf wrap / transmission lobes).
+    float sun_gate = cloud_shadow(world_pos) * sun_horizon_lit(u_sun_horizon, world_pos);
+    vec3 sun_rad = scene.sun_color.rgb * scene.sun_color.a * ndl * term_fade * (1.0 - shadow) * sun_gate;
     vec3 sun_term;
     {
         vec3  H   = normalize(L + Vv);
@@ -1417,7 +1420,7 @@ void main() {
     //    surface is edge-on to the light. The shadow ray stands in for
     //    the thickness: more canopy between leaf and sun -> less glow.
     if (leafy) {
-        vec3  sunE  = scene.sun_color.rgb * scene.sun_color.a;
+        vec3  sunE  = scene.sun_color.rgb * scene.sun_color.a * sun_gate;
         float lit   = 1.0 - shadow;
         float nw    = max(0.0, (ndl_raw + kLeafWrap) / (1.0 + kLeafWrap));
         const float kSw = 0.30;

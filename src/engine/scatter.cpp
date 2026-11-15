@@ -502,8 +502,11 @@ void build_grass_tuft(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
         const float a = 6.2831853f * rnd();
         const float outer = std::sqrt(rnd());
         const float r = 0.14f * outer;
-        const glm::vec3 base(std::cos(a) * r, -0.03f, std::sin(a) * r);
-        const float len = 0.45f + 0.45f * rnd() - 0.12f * outer;
+        // Roots well below the ground line, the outer ones deepest: on a
+        // slope the downhill side of the clump would otherwise hang in the air.
+        const float root = 0.05f + 1.1f * r;
+        const glm::vec3 base(std::cos(a) * r, -root, std::sin(a) * r);
+        const float len = root + 0.45f + 0.45f * rnd() - 0.12f * outer;
         const glm::vec3 lean(std::cos(a) + (rnd() - 0.5f) * 0.9f, 0.0f, std::sin(a) + (rnd() - 0.5f) * 0.9f);
         grass_blade(v, ix, base, lean, len, 0.0080f + 0.0050f * rnd(), 0.25f + 0.95f * outer * rnd(),
                     (rnd() - 0.5f) * 1.8f);
