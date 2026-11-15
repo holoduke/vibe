@@ -174,15 +174,23 @@ void VulkanEngine::apply_environment(float dt) {
             // take most of it away: an overcast, moonless night is near black.
             const float twi = glm::smoothstep(-9.0f, 0.6f, e);            // twilight left (1 at sunset)
             const float cloud_tr = glm::mix(1.0f, 0.10f, overcast);        // what a cloud deck lets through
-            const float moon_gnd = moon_sky * cloud_tr;
+            // A moon hidden behind the mountains (as seen from where the player
+            // stands) lights the sky above them but hardly the land: the far-
+            // mountain shadow map, which follows the light direction, says so.
+            // Eased over a second so the fill light does not pop.
+            const bool moon_is_light = moon_sky > 0.02f && moon_sky >= 0.5f * 0.8f * twi;
+            const float vis_now = moon_is_light ? sun_horizon_visibility(player_.eye_position()) : 1.0f;
+            env_moon_vis_ += (vis_now - env_moon_vis_) * glm::clamp(dt * 1.5f, 0.0f, 1.0f);
+            const float moon_gnd = moon_sky * cloud_tr * glm::mix(0.10f, 1.0f, env_moon_vis_);
+            { static int dbg = 0; if (std::getenv("QLIKE_TEST_MOONLOG") && (++dbg % 120) == 0) log::infof("[moon] elev %.1f deg, in sky %.2f, is light %d, visible from player %.2f (now %.2f)", em, moon_sky, moon_is_light ? 1 : 0, env_moon_vis_, vis_now); }
             const float star_gnd = 0.10f * glm::clamp(rt_.star_brightness, 0.0f, 1.5f) *
                                    (1.0f - overcast) * (1.0f - overcast);
-            // The directional light: the moon, or - while it is the stronger -
-            // the glow where the sun went down. (Kept above 14 degrees: a lower
-            // light would redden the sky like a sunset.)
+            // The directional light: the moon at its real height (so mountains
+            // can hide it), or - while it is the stronger - the glow where the
+            // sun went down.
             const float glow = 0.8f * twi;
             if (moon_sky > 0.02f && moon_sky >= 0.5f * glow) {
-                pitch = std::max(em, 14.0f);
+                pitch = std::max(em, 3.0f);
                 yaw = base.sun_yaw_deg + azm;
                 sun_k = 0.045f * moon_sky * (1.0f + 1.6f * twi);
             } else {
@@ -193,7 +201,11 @@ void VulkanEngine::apply_environment(float dt) {
             sun_k *= glm::mix(1.0f, 0.45f, overcast);                      // on top of the day-time cloud dimming
             // Sky dome and clouds: twilight, moonlit haze, airglow; a cloud deck
             // seen from below at night is almost black.
-            sky_k = 0.045f * (1.0f + 1.6f * twi) * glm::mix(0.32f, 1.0f, moon_sky) *
+            // No constant floor: with no moon and no stars the sky - and with it
+            // the haze in front of far mountains and every sky reflection - goes
+            // dark instead of glowing at a third of full-moon level.
+            const float night_sky = glm::clamp(moon_sky + 0.10f * glm::clamp(rt_.star_brightness, 0.0f, 1.5f) + 0.012f, 0.0f, 1.0f);
+            sky_k = 0.045f * glm::mix(night_sky, 2.6f * glm::mix(0.5f, 1.0f, moon_sky), twi) *
                     glm::mix(1.0f, 0.05f, overcast * (1.0f - twi));
             // Fill light on the land (1 = a clear full-moon night).
             const float night_amb = std::max(0.90f * moon_gnd + star_gnd, 0.003f);

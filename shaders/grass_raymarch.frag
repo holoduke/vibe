@@ -776,7 +776,10 @@ void main() {
     // Fresnel-edge rim using the (per-blade-jittered) terrain normal.
     // pow(x, 3) → x*x*x (no exp/log).
     float fr_in = clamp(1.0 + dot(N, rd), 0.0, 1.0);
-    vec3 fres = vec3(0.18, 0.18, 0.10) * ao *
+    // (Scaled by the light actually available: this rim and the distance fade
+    // colour below were constants, so grass kept glowing on a black night.)
+    float light_lvl = clamp(dot(sky_term + sun_term, vec3(0.3333)) / 0.22, 0.0, 1.0);
+    vec3 fres = vec3(0.18, 0.18, 0.10) * ao * light_lvl *
                 (fr_in * fr_in * fr_in);
     col += fres;
 
@@ -796,7 +799,7 @@ void main() {
                             scene.grass_color_ground_far.rgb,
                             ground_t);
     float fade = smoothstep(kMaxDist * 0.55, kMaxDist, t);
-    col = mix(col, fade_target, fade);
+    col = mix(col, fade_target * light_lvl, fade);
 
     // Distance-driven opacity. Close-up blades are fully opaque
     // (alpha = 1). Past pc.color.w (the soft-distance setting) the

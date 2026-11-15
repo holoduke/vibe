@@ -1222,6 +1222,7 @@ private:
     float env_rain_ = 0.0f;           // rain intensity 0..1
     float env_wet_ = 0.0f;            // ground wetness 0..1
     float env_amb_k_ = 1.0f;          // night fill-light factor (1 by day and on a clear full-moon night)
+    float env_moon_vis_ = 1.0f;       // moon not hidden by terrain from the player (eased 0..1)
     float env_moon_ = 1.0f;           // moonlight in the sky right now, 0..1 (phase, height, setting)
     float env_night_ = -1.0f;         // lantern factor 0..1 (< 0: clock off)
     float env_lightning_ = 0.0f;      // current flash brightness
