@@ -607,6 +607,12 @@ void VulkanEngine::build_menu_ui() {
                 ImGui::SetTooltip("Real minutes one full 24 h day takes. 24 = one game hour per minute.\n"
                                   "Smaller is faster. 0 stops the clock at the time set above.");
         }
+        ImGui::SliderFloat("Moon brightness", &rt_.moon_brightness, 0.0f, 1.0f, rt_.moon_brightness <= 0.0f ? "no moon" : "%.2f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = moonless nights: only starlight, very dark. 1 = full moon.");
+        ImGui::Checkbox("Moon phases", &rt_.moon_phases);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The moon waxes and wanes over 8 nights (new moon = a dark night).");
+        ImGui::SliderFloat("Stars", &rt_.star_brightness, 0.0f, 2.0f, "%.2f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Star brightness. Clouds hide them; a bright moon dims the faint ones.");
         ImGui::Checkbox("Weather", &rt_.weather_enabled);
         if (rt_.weather_enabled) {
             ImGui::SliderFloat("Bad weather chance", &rt_.weather_bad_chance, 0.0f, 1.0f, "%.2f");

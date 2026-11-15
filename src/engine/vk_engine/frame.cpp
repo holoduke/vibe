@@ -1101,7 +1101,9 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
                                       rt_.sun_intensity * rt_.sun_glare_strength);
         // Sky colour deferred wrote into clear sky pixels (w = 1 when the
         // deferred pass ran); compose subtracts it before adding the sky.
-        pc_data.sky_color = glm::vec4(last_sky_rgb_, deferred_lighting_active_ ? 1.0f : 0.0f);
+        // .w: 1 = deferred active, + the twinkle clock (64 s cycle) in the fraction (x 0.49)
+        pc_data.sky_color = glm::vec4(last_sky_rgb_, (deferred_lighting_active_ ? 1.0f : 0.0f) +
+                                          0.49f * glm::fract(anim_time_ / 64.0f));
         pc_data.flare_params = glm::vec4(rt_.lens_flare_strength * sun_eye_vis,
                                           rt_.lens_flare_threshold,
                                           rt_.lens_flare_dispersal,
@@ -1109,7 +1111,9 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         pc_data.flare_params2 = glm::vec4(static_cast<float>(rt_.lens_flare_ghosts),
                                            rt_.lens_flare_aberration,
                                            rt_.lens_flare_enabled ? 1.0f : 0.0f,
-                                           skybox_.hdr ? 1.0f : 0.0f);   // .w: sky is HDR
+                                           // .w: 1 = sky is HDR, + star strength in the fraction (x 0.45)
+                                           (skybox_.hdr ? 1.0f : 0.0f) +
+                                           glm::clamp(rt_.star_brightness * glm::mix(1.0f, 0.6f, env_moon_) * 0.45f, 0.0f, 0.99f));
         // Project the sun direction (treated as a directional light at infinity
         // — w = 0 in homogeneous coords) to NDC to find its screen-space UV.
         // The lens-flare shader uses this to gate ghost contributions to the
@@ -1162,7 +1166,9 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
                                  (rt_.fog_volumetric && fog_pipeline_) ? std::max(20.0f, rt_.fog_max_dist) : 0.0f,
                                  hdr_active_ ? std::max(80.0f, rt_.hdr_paper_nits) : 0.0f,
                                  std::max(rt_.hdr_peak_nits, rt_.hdr_paper_nits));
-        pc_data.atmo = glm::vec4((rt_.sky_mode == 1 && atmo_pipeline_) ? 1.0f : 0.0f,
+        // .x: 1 = physical sky, + 0.4 x cloud cover (stars thin out under cloud)
+        pc_data.atmo = glm::vec4(((rt_.sky_mode == 1 && atmo_pipeline_) ? 1.0f : 0.0f) +
+                                     0.4f * (rt_.clouds_enabled ? glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f) : 0.0f),
                                  std::max(0.0f, rt_.atmosphere_intensity),
                                  6360.0f + std::max(current_frame_view_.eye_pos.y, 1.0f) * 0.001f,
                                  std::max(0.5f, rt_.aerial_max_km));

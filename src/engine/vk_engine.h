@@ -1221,6 +1221,9 @@ private:
     bool  weather_init_ = false;
     float env_rain_ = 0.0f;           // rain intensity 0..1
     float env_wet_ = 0.0f;            // ground wetness 0..1
+    float env_moon_ = 1.0f;           // tonight's moon 0..1 (setting x phase)
+    int   env_day_index_ = 4;         // night counter for the moon phase (4 = full)
+    float env_prev_tod_ = -1.0f;
     float env_night_ = -1.0f;         // lantern factor 0..1 (< 0: clock off)
     float env_lightning_ = 0.0f;      // current flash brightness
     float env_wind_scale_ = 1.0f;

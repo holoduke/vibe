@@ -91,26 +91,57 @@ vec3 atmo_sky(vec3 dir) {
         L += ts * disc * 60.0;
     }
     vec3 sky = L * atmo_sun_illum();
-    // Stars: wherever (and whenever) the sky itself is dark. Points on a
-    // direction grid, a few hundred visible, brightness and tint varied;
-    // extinction dims them toward the horizon.
-    float sky_l = dot(sky, vec3(0.2126, 0.7152, 0.0722));
-    float night_k = 1.0 - smoothstep(0.004, 0.05, sky_l);
-    if (night_k > 0.0 && dir.y > 0.0) {
-        vec3 q = dir * 210.0;
-        vec3 id = floor(q);
-        vec3 h = fract(sin(vec3(dot(id, vec3(127.1, 311.7, 74.7)), dot(id, vec3(269.5, 183.3, 246.1)),
-                                dot(id, vec3(113.5, 271.9, 124.6)))) * 43758.5453);
-        if (h.x > 0.972) {
-            vec3 c = id + 0.25 + 0.5 * h;
-            float d2 = dot(q - c, q - c);
-            float mag = (h.x - 0.972) / 0.028;
-            float pt = exp(-d2 * 26.0) * (0.15 + 2.2 * mag * mag * mag);
-            vec3 tint = mix(vec3(1.0, 0.82, 0.62), vec3(0.72, 0.84, 1.0), h.y);
-            sky += tint * pt * night_k * 0.09 * smoothstep(0.0, 0.25, dir.y);
-        }
-    }
     return sky;
+}
+
+// ---- Stars ----------------------------------------------------------
+// Drawn in the final (output-resolution) pass, never through the upscaler:
+// a star is about one screen pixel wide whatever the resolution. Each star
+// lives in a cell of an octahedral map of the upper hemisphere (three
+// layers: a thousand bright ones, some fifteen thousand medium, tens of
+// thousands faint - denser along the Milky Way band); its disc is a
+// Gaussian of the ANGLE to the star, with the pixel's angular size as the
+// radius, so it stays a crisp point and keeps its brightness when the
+// resolution changes. Twinkle grows toward the horizon.
+vec3 st_hash3(vec2 p) {
+    return fract(sin(vec3(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)), dot(p, vec2(419.2, 371.9)))) * 43758.5453);
+}
+vec3 st_oct_dir(vec2 e) { return normalize(vec3(e.x, 1.0 - abs(e.x) - abs(e.y), e.y)); }
+// px = angular size of a pixel (rad), t = clock (s), cover = cloud cover 0..1.
+vec3 star_field(vec3 dir, float px, float t, float cover) {
+    if (dir.y < -0.01) return vec3(0.0);
+    vec3 ad = abs(dir);
+    vec2 e = dir.xz / (ad.x + ad.y + ad.z);
+    const vec3 pole = vec3(0.4170, 0.5097, -0.7526);            // normal of the Milky Way plane
+    float off = dot(dir, pole);
+    float band = exp(-off * off * 14.0);
+    vec3 sum = vec3(0.0);
+    for (int L = 0; L < 3; ++L) {
+        float N = (L == 0) ? 48.0 : (L == 1 ? 150.0 : 420.0);
+        vec2 id = floor(e * N);
+        vec3 h = st_hash3(id + float(L) * 71.0);
+        float dens = (L == 0) ? 0.25 : (L == 1 ? 0.35 : 0.16 + 0.50 * band);
+        if (h.x > dens) continue;
+        vec3 h2 = st_hash3(id * 1.37 + 17.0 + float(L) * 3.0);
+        vec3 sd = st_oct_dir((id + 0.2 + 0.6 * h.yz) / N);
+        float d = length(dir - sd);
+        float m = h2.x;
+        float flux = (L == 0) ? mix(0.55, 3.2, m * m * m) : (L == 1 ? mix(0.10, 0.60, m * m) : mix(0.015, 0.13, m * m));
+        // Thin cloud / haze swallows the faint ones first.
+        flux = max(flux - cover * cover * 0.22, 0.0);
+        if (flux <= 0.0) continue;
+        float r = px * ((L == 0) ? 0.95 : 0.78);
+        float core = exp(-d * d / (r * r));
+        float glow = (L == 0) ? 0.06 * m * exp(-d / (px * 3.0)) : 0.0;
+        float low = 1.0 - clamp(dir.y * 2.5, 0.0, 1.0);
+        float tw = 1.0 + (0.10 + 0.45 * low) * sin(t * (4.0 + 9.0 * h2.y) + h2.z * 40.0);
+        vec3 tint = mix(vec3(1.0, 0.76, 0.58), vec3(0.68, 0.81, 1.0), h2.y);
+        sum += mix(vec3(1.0), tint, 0.7) * (flux * tw * (core + glow));
+    }
+    // The band's unresolved glow.
+    sum += vec3(0.50, 0.58, 0.78) * (band * band * 0.0035);
+    // Extinction: dimmer near the horizon, but visible right down to it.
+    return sum * mix(0.40, 1.0, smoothstep(0.0, 0.35, dir.y)) * smoothstep(-0.01, 0.015, dir.y);
 }
 // Aerial perspective at world distance d_km: rgb in-scatter (unit sun),
 // a = transmittance. Slices are quadratic in distance (atmosphere.comp).
@@ -372,7 +403,7 @@ vec3 sample_sky(vec3 dir) {
     vec3 sky = texture(u_skybox, uv).rgb;
     // Per-image flag (was a per-pixel >1.5 test: HDR sky regions below 1.5
     // took the LDR lift / halo / 40x disc path -> contour lines, double sun).
-    bool is_hdr = pc.flare_params2.w > 0.5;
+    bool is_hdr = pc.flare_params2.w >= 1.0;   // (the fraction carries the star strength)
 
     if (!is_hdr) {
         // LDR lift so the sky doesn't look flat once ACES squashes the scene.
@@ -867,6 +898,26 @@ void main() {
     if (!uw && pc.atmo.x > 0.5 && obj_w > 0.0) {
         vec4 ap = atmo_aerial(uvp, obj_dist * 0.001);
         hdr_obj = hdr_obj * ap.a + ap.rgb * atmo_sun_illum() * obj_w;
+    }
+
+    // Stars, at output resolution, on the sky share of the pixel: only where
+    // the sky itself is dark (night, not the twilight glow), hidden by the
+    // clouds in front of them and thinned by the overall cloud cover.
+    if (!uw && pc.atmo.x > 0.5 && edge_w > 0.0) {
+        float star_k = fract(pc.flare_params2.w) / 0.45;
+        if (star_k > 0.002) {
+            vec3 sdir = view_ray(uvp);
+            float sky_l = dot(atmo_sky(sdir), vec3(0.2126, 0.7152, 0.0722));
+            float night_k = 1.0 - smoothstep(0.004, 0.05, sky_l);
+            if (night_k > 0.0) {
+                float cla = textureLod(u_clouds, sample_uv, 0.0).a;
+                float px = length(view_ray(uvp + vec2(pc.viewport.z, 0.0)) - sdir);
+                float cover = clamp((pc.atmo.x - 1.0) / 0.4, 0.0, 1.0);
+                float tclock = fract(pc.sky_color.w) / 0.49 * 64.0;
+                vec3 st = star_field(sdir, px, tclock, cover);
+                hdr_sky += st * (0.11 * star_k * night_k * edge_w * (1.0 - cla) * (1.0 - cla));
+            }
+        }
     }
 
     // Froxel volumetric fog (sun shafts / ground fog), after the aerial
