@@ -1041,6 +1041,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         rewrite_compose_for_fsr3();
         // DLSS: output (re)creation + compose rebind, never mid-recording.
         ensure_dlss_bindings();
+        ensure_cloud_target();
 
         // Heightmap-shadow texture is sampled by cube.frag's mesh-terrain
         // branch and grass.vert (raster grass). When raymarch terrain is on
@@ -1268,6 +1269,11 @@ void VulkanEngine::shutdown() {
     guarded("destroy_fsr2",   [&]{ destroy_fsr2(); });
     guarded("destroy_dlss",   [&]{ destroy_dlss(); });   // while the allocator still exists
     guarded("dlssg_hudless",  [&]{ dlssg_destroy_hudless(); });
+    guarded("retired_buffers", [&]{
+        for (auto& c : pending_craters_) { retire_buffer(c.stage, c.stage_alloc); retire_buffer(c.mask_stage, c.mask_alloc); }
+        pending_craters_.clear();
+        collect_retired_buffers(true);
+    });
     guarded("destroy_rr_guides", [&]{ destroy_rr_guides(); });
     // Destroy SwapChain proxy first — it holds Vulkan resources tied
     // to the FG context's pacing state.

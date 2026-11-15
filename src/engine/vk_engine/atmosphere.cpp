@@ -370,7 +370,62 @@ void VulkanEngine::dispatch_clouds(VkCommandBuffer cmd) {
         run(1.0f, kDetailN / 8, kDetailN / 8, kDetailN);
         cloud_noise_ready_ = true;
     }
-    run(2.0f, (kCloudW + 7) / 8, (kCloudH + 7) / 8, 1);
+    run(2.0f, (cloud_w_ + 7) / 8, (cloud_h_ + 7) / 8, 1);
+}
+
+// The cloud layer was a fixed 1920x1080 - 1.76x the pixels of a 1720x685
+// internal frame it is sampled into 1:1 (sky fill runs at render
+// resolution, before DLSS). Size it to the render extent instead; larger
+// render extents are scaled down to the old pixel budget.
+void VulkanEngine::ensure_cloud_target() {
+    if (!cloud_pipeline_ || !cloud_img_.image) return;
+    uint32_t w = std::max(16u, render_extent_.width), h = std::max(16u, render_extent_.height);
+    const double budget = double(kCloudW) * double(kCloudH);
+    if (double(w) * double(h) > budget) {
+        const double k = std::sqrt(budget / (double(w) * double(h)));
+        w = std::max(16u, uint32_t(double(w) * k));
+        h = std::max(16u, uint32_t(double(h) * k));
+    }
+    if (w == cloud_w_ && h == cloud_h_) return;
+    wait_gpu_frames_idle();
+    if (cloud_img_.view) vkDestroyImageView(device_, cloud_img_.view, nullptr);
+    if (cloud_img_.image) vmaDestroyImage(allocator_, cloud_img_.image, cloud_img_.alloc);
+    cloud_img_ = {};
+    VkImageCreateInfo ici{};
+    ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    ici.extent = { w, h, 1 };
+    ici.mipLevels = 1; ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    vk_check(vmaCreateImage(allocator_, &ici, &aci, &cloud_img_.image, &cloud_img_.alloc, nullptr), "cloud layer");
+    VkImageViewCreateInfo vci{};
+    vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vci.image = cloud_img_.image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = ici.format;
+    vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &cloud_img_.view), "cloud layer view");
+    vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
+        vkinit::transition_image(cb, cloud_img_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+        VkClearColorValue z{};
+        VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        vkCmdClearColorImage(cb, cloud_img_.image, VK_IMAGE_LAYOUT_GENERAL, &z, 1, &r);
+    });
+    VkDescriptorImageInfo ii{ VK_NULL_HANDLE, cloud_img_.view, VK_IMAGE_LAYOUT_GENERAL };
+    VkWriteDescriptorSet wr{};
+    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet = cloud_set_; wr.dstBinding = 5; wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    wr.pImageInfo = &ii;
+    vkUpdateDescriptorSets(device_, 1, &wr, 0, nullptr);
+    cloud_w_ = w; cloud_h_ = h;
+    rewrite_compose_image_bindings();     // compose / sky fill sample it (binding 8)
+    log::infof("[clouds] layer %ux%u (render extent %ux%u)", w, h, render_extent_.width, render_extent_.height);
 }
 
 void VulkanEngine::destroy_atmosphere() {

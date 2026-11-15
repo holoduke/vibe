@@ -235,6 +235,10 @@ private:
     void init_clouds();
     void destroy_clouds();
     void dispatch_clouds(VkCommandBuffer cmd);
+    // Cloud layer target = internal render resolution (capped at the old
+    // fixed 1920x1080 pixel count). Called before command recording.
+    void ensure_cloud_target();
+    uint32_t cloud_w_ = 1920, cloud_h_ = 1080;
     void init_fog();
     void destroy_fog();
     void dispatch_fog(VkCommandBuffer cmd);
@@ -1095,6 +1099,26 @@ private:
     // Craters, newest last (make_crater): xyz centre, w bowl radius. The
     // terrain shader turns them to churned mud + ejecta (scene UBO).
     static constexpr int kMaxCraters = 24;
+    // GPU half of a crater, recorded into the NEXT frame's command buffer
+    // (flush_pending_craters, after the frame-start barrier): the copies and
+    // the BLAS refit are then ordered after the previous frame on the queue,
+    // so no CPU-side GPU drain is needed (it was 20 of a crater's 21 ms).
+    struct PendingCrater {
+        VkBuffer stage = VK_NULL_HANDLE; VmaAllocation stage_alloc = nullptr;
+        int x0 = 0, z0 = 0, rw = 0, rh = 0;                 // height-texture rect
+        int vx0 = 0, vz0 = 0, vw = 0, vh = 0, W = 0;        // terrain-vertex rect (+ grid width)
+        VkDeviceSize tex_bytes = 0;
+        VkBuffer mask_stage = VK_NULL_HANDLE; VmaAllocation mask_alloc = nullptr;
+        int mx0 = 0, mz0 = 0, mw = 0, mh = 0;               // grass-mask rect
+    };
+    std::vector<PendingCrater> pending_craters_;
+    void flush_pending_craters(VkCommandBuffer cmd);
+    // Buffers still referenced by in-flight frames: destroyed once every
+    // frame slot has cycled (frame_upload.cpp).
+    struct RetiredBuffer { VkBuffer buf; VmaAllocation alloc; uint64_t frame; };
+    std::vector<RetiredBuffer> retired_buffers_;
+    void retire_buffer(VkBuffer b, VmaAllocation a) { if (b) retired_buffers_.push_back({ b, a, frame_number_ }); }
+    void collect_retired_buffers(bool all);
     std::vector<glm::vec4> craters_;
     // ---- Weapons: 0 = laser gun, 1 = airstrike tablet (keys 1 / 2) ----
     int  weapon_ = 0;
@@ -1534,6 +1558,7 @@ private:
     std::vector<VegBlas> veg_blas_;
     std::vector<uint32_t> veg_rt_list_;
     int  veg_rt_cell_x_ = 0, veg_rt_cell_z_ = 0;
+    float veg_rt_pick_x_ = 0.0f, veg_rt_pick_z_ = 0.0f;   // camera position of the last RT vegetation pick
     bool veg_rt_valid_ = false;
     // Cached TLAS records for veg_rt_list_ (rebuild_tlas): rebuilt only when
     // the list, the material base slot or the texture toggle changes.

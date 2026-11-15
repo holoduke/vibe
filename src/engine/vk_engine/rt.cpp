@@ -899,20 +899,24 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
         sig = mix64(sig, hash_f(w[3].y));
         sig = mix64(sig, hash_f(w[3].z));
     }
-    // Nearby vegetation / rocks enter the TLAS: re-pick when the camera
-    // moves to another 12 m cell (the set changes, the rest is static).
+    // Nearby vegetation / rocks enter the TLAS: re-pick when the camera has
+    // moved 12 m from where the set was last picked (the set changes, the
+    // rest is static). Distance, not grid cells: walking back and forth
+    // across a cell border re-picked (34k-instance scan + full TLAS build)
+    // on every crossing.
     {
         glm::vec3 eye = player_.eye_position();
-        int cx = int(std::floor(eye.x / 12.0f)), cz = int(std::floor(eye.z / 12.0f));
-        if (cx != veg_rt_cell_x_ || cz != veg_rt_cell_z_ || !veg_rt_valid_) {
-            veg_rt_cell_x_ = cx; veg_rt_cell_z_ = cz; veg_rt_valid_ = true;
+        const float mdx = eye.x - veg_rt_pick_x_, mdz = eye.z - veg_rt_pick_z_;
+        if (mdx * mdx + mdz * mdz > 12.0f * 12.0f || !veg_rt_valid_) {
+            veg_rt_pick_x_ = eye.x; veg_rt_pick_z_ = eye.z; veg_rt_valid_ = true;
+            ++veg_rt_cell_x_;   // now a re-pick counter (feeds the signature below)
             collect_veg_rt_instances(eye, 7000, veg_rt_list_);
             // Different instance set at the same count: a refit (UPDATE) would
             // stretch the old BVH over unrelated trees -> 50-170 ms ray
             // traversal spikes in deferred lighting. Force a full build.
             prev_tlas_n_ = UINT32_MAX;
         }
-        sig = mix64(sig, uint64_t(uint32_t(cx)) * 73856093ull ^ uint64_t(uint32_t(cz)) * 19349663ull);
+        sig = mix64(sig, uint64_t(uint32_t(veg_rt_cell_x_)) * 73856093ull);
     }
     for (const auto& v : aa_) { sig = mix64(sig, hash_f(v.turret_yaw)); sig = mix64(sig, hash_f(v.gun_pitch)); sig = mix64(sig, uint64_t(v.rails) + 1u); }
     for (const auto& d : doors_) sig = mix64(sig, hash_f(d.angle));   // swinging doors move BLAS instances

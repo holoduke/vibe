@@ -119,6 +119,10 @@ void VulkanEngine::flush_frame_uploads(VkCommandBuffer cmd) {
     di.memoryBarrierCount = 1;
     di.pMemoryBarriers = &pre;
     vkCmdPipelineBarrier2(cmd, &di);
+    // Craters made since the last frame (GPU half) + buffers no in-flight
+    // frame can still reference.
+    collect_retired_buffers(false);
+    flush_pending_craters(cmd);
     if (r.copies.empty()) return;
     vmaFlushAllocation(allocator_, r.alloc[slot], 0, r.used);
 

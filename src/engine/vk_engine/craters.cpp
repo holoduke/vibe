@@ -39,10 +39,18 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     const float h0 = sample_terrain_height(pos.x, pos.z);
     if (h0 < rt_.water_level + 0.4f) return;                              // water / shoreline
     const auto t0 = std::chrono::steady_clock::now();
-    // Frames in flight: the previous frame may still read the heightmap
-    // images, terrain vertices / BLAS and the clutter instances this edits
-    // in place. A crater is a one-off event - drain the GPU first.
-    vkDeviceWaitIdle(device_);
+    // No GPU drain: the texture / vertex copies and the BLAS refit are
+    // recorded into the next frame's command buffer (flush_pending_craters).
+    // The CPU-side state (heights, physics, plants) changes right away.
+    auto lap = [&, last = std::chrono::steady_clock::now()]() mutable {
+        const auto n = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(n - last).count();
+        last = n;
+        return ms;
+    };
+    double tp[6] = {};
+    tp[0] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();   // GPU drain
+    lap();
 
     auto& R = spacejet_rng_state_;
     const float Rc   = 2.4f + 2.4f * size;          // bowl radius (m): bomb ~4.8, crash ~7.9
@@ -85,6 +93,7 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     update_clod_pyramid_region(terrain_clod_pyramid_, td.heights.data(), td.dim, td.cell, 16.0f,
                                x0, x1, z0, z1);
 
+    tp[1] = lap();   // heights + culling pyramid
     // ---- GPU: height textures (sub-rect) + terrain vertices + BLAS refit ----
     const int rw = x1 - x0 + 1, rh = z1 - z0 + 1;
     // Vertex rect one cell wider: normals of the neighbours change too.
@@ -131,60 +140,19 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
         }
     vmaFlushAllocation(allocator_, stage_alloc, 0, VK_WHOLE_SIZE);
 
-    VkBuffer scratch = VK_NULL_HANDLE; VmaAllocation scratch_alloc = nullptr;
-    vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
-        auto copy_tex = [&](VkImage img, VkDeviceSize off) {
-            if (!img) return;
-            vkinit::transition_image(cb, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            VkBufferImageCopy r{};
-            r.bufferOffset = off;
-            r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            r.imageSubresource.layerCount = 1;
-            r.imageOffset = { x0, z0, 0 };
-            r.imageExtent = { uint32_t(rw), uint32_t(rh), 1 };
-            vkCmdCopyBufferToImage(cb, stage, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
-            vkinit::transition_image(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        };
-        copy_tex(terrain_height_full_image_, 0);
-        copy_tex(terrain_height_image_, tex_bytes);
-        if (terrain_mesh_.vertex_buffer) {
-            std::vector<VkBufferCopy> rows(static_cast<size_t>(vh));
-            for (int z = 0; z < vh; ++z)
-                rows[size_t(z)] = { tex_bytes * 2 + VkDeviceSize(z) * vw * sizeof(Vertex),
-                                    (VkDeviceSize(vz0 + z) * W + vx0) * sizeof(Vertex),
-                                    VkDeviceSize(vw) * sizeof(Vertex) };
-            vkCmdCopyBuffer(cb, stage, terrain_mesh_.vertex_buffer, uint32_t(rows.size()), rows.data());
-            VkMemoryBarrier2 mb{};
-            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-            mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            mb.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
-            mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-            VkDependencyInfo di{};
-            di.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            di.memoryBarrierCount = 1; di.pMemoryBarriers = &mb;
-            vkCmdPipelineBarrier2(cb, &di);
-            record_terrain_blas_refit(cb, &scratch, &scratch_alloc);
-            mb.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-            mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-            mb.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-            vkCmdPipelineBarrier2(cb, &di);
-        }
-    });
-    if (scratch) vmaDestroyBuffer(allocator_, scratch, scratch_alloc);
-    vmaDestroyBuffer(allocator_, stage, stage_alloc);
-    // The TLAS caches the terrain BLAS bounds at build time (a crater can
-    // dig below them): force a full rebuild next frame.
-    prev_dyn_signature_ = 0;
-    prev_tlas_n_ = UINT32_MAX;
-
+    {
+        PendingCrater pcr{};
+        pcr.stage = stage; pcr.stage_alloc = stage_alloc;
+        pcr.x0 = x0; pcr.z0 = z0; pcr.rw = rw; pcr.rh = rh;
+        pcr.vx0 = vx0; pcr.vz0 = vz0; pcr.vw = vw; pcr.vh = vh; pcr.W = W;
+        pcr.tex_bytes = tex_bytes;
+        pending_craters_.push_back(pcr);
+    }
+    tp[2] = lap();   // staging + GPU copies + BLAS refit (blocking submit)
     // ---- Physics: heightfield region in place ----
     if (physics_) physics_->update_heightfield_region(td.heights.data(), W, x0, z0, x1, z1);
 
+    tp[3] = lap();   // physics heightfield
     // ---- Flowers / rocks: gone in the bowl, re-seated on slope and rim ----
     auto reseat = [&](std::vector<ScatterInstance>& cpu, void* mapped,
                       const std::vector<float>& dy) {
@@ -206,6 +174,7 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     reseat(scatter_.inst_cpu, scatter_.inst_mapped, scatter_.inst_dy);
     reseat(scatter_.plant_cpu, scatter_.plant_mapped, scatter_.plant_dy);
 
+    tp[4] = lap();   // plant / stone reseat
     // Mud: remember the crater for the terrain shader (newest kMaxCraters).
     craters_.push_back(glm::vec4(pos.x, h0, pos.z, Rc));
     if (int(craters_.size()) > kMaxCraters) craters_.erase(craters_.begin());
@@ -225,12 +194,112 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
                 uint8_t& m = grass_mask_data_[(size_t(mz) * size_t(dim) + size_t(mx)) * 2];
                 m = uint8_t(float(m) * keep);
             }
-        reupload_grass_mask();
+        // Upload just this rect with the crater's other GPU work.
+        const int mx0 = std::max(0, int(cxm - rr) - 1), mx1 = std::min(dim - 1, int(cxm + rr) + 1);
+        const int mz0 = std::max(0, int(czm - rr) - 1), mz1 = std::min(dim - 1, int(czm + rr) + 1);
+        const int mw = mx1 - mx0 + 1, mh = mz1 - mz0 + 1;
+        if (mw > 0 && mh > 0 && grass_mask_.image && !pending_craters_.empty()) {
+            VkBufferCreateInfo mbci{};
+            mbci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            mbci.size = VkDeviceSize(mw) * mh * 2;
+            mbci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            VmaAllocationCreateInfo maci{};
+            maci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            maci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            VmaAllocationInfo mai{};
+            PendingCrater& pcr = pending_craters_.back();
+            if (vmaCreateBuffer(allocator_, &mbci, &maci, &pcr.mask_stage, &pcr.mask_alloc, &mai) == VK_SUCCESS) {
+                auto* dst = static_cast<uint8_t*>(mai.pMappedData);
+                for (int z = 0; z < mh; ++z)
+                    std::memcpy(dst + size_t(z) * size_t(mw) * 2,
+                                &grass_mask_data_[(size_t(mz0 + z) * size_t(dim) + size_t(mx0)) * 2], size_t(mw) * 2);
+                vmaFlushAllocation(allocator_, pcr.mask_alloc, 0, VK_WHOLE_SIZE);
+                pcr.mx0 = mx0; pcr.mz0 = mz0; pcr.mw = mw; pcr.mh = mh;
+            }
+        }
     }
 
-    log::infof("[crater] r %.1f m depth %.1f m at (%.0f, %.0f, %.0f): %dx%d cells, %.2f ms",
+    tp[5] = lap();   // grass mask
+    log::infof("[crater] r %.1f m depth %.1f m at (%.0f, %.0f, %.0f): %dx%d cells, %.2f ms "
+               "(drain %.2f, heights %.2f, gpu copies %.2f, physics %.2f, reseat %.2f, grass mask %.2f)",
                Rc, D, pos.x, pos.y, pos.z, rw, rh,
-               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(),
+               tp[0], tp[1], tp[2], tp[3], tp[4], tp[5]);
 }
 
 } // namespace qlike
+
+namespace qlike {
+// Records the GPU half of every crater made since the last frame: height
+// texture sub-rects, terrain vertex rows + BLAS refit, grass-mask sub-rect.
+// Runs right after the frame-start barrier, i.e. ordered after everything
+// the previous frame did with these resources.
+void VulkanEngine::flush_pending_craters(VkCommandBuffer cb) {
+    if (pending_craters_.empty()) return;
+    for (PendingCrater& c : pending_craters_) {
+        auto copy_tex = [&](VkImage img, VkBuffer src, VkDeviceSize off, int ox, int oz, int w, int h) {
+            if (!img || !src) return;
+            vkinit::transition_image(cb, img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkBufferImageCopy r{};
+            r.bufferOffset = off;
+            r.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            r.imageSubresource.layerCount = 1;
+            r.imageOffset = { ox, oz, 0 };
+            r.imageExtent = { uint32_t(w), uint32_t(h), 1 };
+            vkCmdCopyBufferToImage(cb, src, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+            vkinit::transition_image(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        };
+        copy_tex(terrain_height_full_image_, c.stage, 0, c.x0, c.z0, c.rw, c.rh);
+        copy_tex(terrain_height_image_, c.stage, c.tex_bytes, c.x0, c.z0, c.rw, c.rh);
+        if (c.mask_stage) copy_tex(grass_mask_.image, c.mask_stage, 0, c.mx0, c.mz0, c.mw, c.mh);
+        if (terrain_mesh_.vertex_buffer) {
+            std::vector<VkBufferCopy> rows(static_cast<size_t>(c.vh));
+            for (int z = 0; z < c.vh; ++z)
+                rows[size_t(z)] = { c.tex_bytes * 2 + VkDeviceSize(z) * c.vw * sizeof(Vertex),
+                                    (VkDeviceSize(c.vz0 + z) * c.W + c.vx0) * sizeof(Vertex),
+                                    VkDeviceSize(c.vw) * sizeof(Vertex) };
+            vkCmdCopyBuffer(cb, c.stage, terrain_mesh_.vertex_buffer, uint32_t(rows.size()), rows.data());
+            VkMemoryBarrier2 mb{};
+            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            mb.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+            mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+            VkDependencyInfo di{};
+            di.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            di.memoryBarrierCount = 1; di.pMemoryBarriers = &mb;
+            vkCmdPipelineBarrier2(cb, &di);
+            VkBuffer scratch = VK_NULL_HANDLE; VmaAllocation scratch_alloc = nullptr;
+            record_terrain_blas_refit(cb, &scratch, &scratch_alloc);
+            retire_buffer(scratch, scratch_alloc);
+            mb.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+            mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+            mb.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+            vkCmdPipelineBarrier2(cb, &di);
+        }
+        retire_buffer(c.stage, c.stage_alloc);
+        retire_buffer(c.mask_stage, c.mask_alloc);
+    }
+    pending_craters_.clear();
+    // The TLAS caches the terrain BLAS bounds at build time (a crater can
+    // dig below them): force a full rebuild next frame.
+    prev_dyn_signature_ = 0;
+    prev_tlas_n_ = UINT32_MAX;
+}
+
+void VulkanEngine::collect_retired_buffers(bool all) {
+    for (size_t i = 0; i < retired_buffers_.size();) {
+        if (all || retired_buffers_[i].frame + uint64_t(kFrameOverlap) + 2 <= frame_number_) {
+            vmaDestroyBuffer(allocator_, retired_buffers_[i].buf, retired_buffers_[i].alloc);
+            retired_buffers_[i] = retired_buffers_.back();
+            retired_buffers_.pop_back();
+        } else {
+            ++i;
+        }
+    }
+}
+}  // namespace qlike
