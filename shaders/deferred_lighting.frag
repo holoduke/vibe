@@ -1537,7 +1537,25 @@ void main() {
             point_term += (diff_albedo * (1.0 - Fl) + sl) * vec3(1.0, 0.62, 0.28) * (li * pndl * fall);
         }
     }
-    point_term += diff_albedo * fx_lights_diffuse(world_pos, N);   // gun flashes, tracers
+    point_term += diff_albedo * fx_lights_diffuse(world_pos, N);   // tracers (no shadows)
+    // Laser bolts and gun flashes: the same sphere lights, with a shadow ray.
+    {
+        int fxn = int(scene.ripple_info.w + 0.5);
+        for (int i = 0; i < fxn; ++i) {
+            if (scene.fx_light_col[i].a < 0.5) continue;
+            vec3 to = scene.fx_lights[i].xyz - world_pos;
+            float r = scene.fx_lights[i].w;
+            float d2 = dot(to, to);
+            if (d2 >= r * r) continue;
+            float d = sqrt(d2);
+            vec3 ld = to / max(d, 1e-3);
+            float w = max(0.3 + 0.7 * dot(N, ld), 0.0);
+            if (w <= 0.0) continue;
+            float fall = 1.0 - d / r; fall *= fall;
+            if (any_hit_m(wp_safe + N * 0.06, ld, max(d - 0.3, 0.05), 0x01u)) continue;
+            point_term += diff_albedo * scene.fx_light_col[i].rgb * (fall * w);
+        }
+    }
     vec3 lit = sun_term + ambient_term + spec_ambient + sky_fill + point_term +
                diff_albedo * gi_indirect;
 

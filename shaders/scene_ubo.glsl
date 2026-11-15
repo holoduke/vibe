@@ -84,12 +84,13 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   ripples[16];      // splash rings: xy = world xz, z = age (s), w = amplitude (m)
     vec4   ripple_info;      // x = count, y = rain 0..1, z = ground wetness 0..1, w = fx light count
     vec4   fx_lights[8];     // short-lived glow lights (gun flashes, tracers): xyz pos, w radius (m)
-    vec4   fx_light_col[8];  // rgb = colour x intensity
+    vec4   fx_light_col[8];  // rgb = colour x intensity, a = 1: casts shadows (traced by the shader)
 } scene;
 
 // Light from muzzle flashes and tracer rounds: each is a sphere of light
-// that fades to nothing at its radius. No shadow rays - they live for a
-// frame or two and there can be eight at once. A little wrap so surfaces
+// that fades to nothing at its radius. This sums the ones WITHOUT shadows
+// (fx_light_col.a = 0); the shadow-casting ones (laser bolts, gun flashes)
+// are added by each shader with its own shadow ray. A little wrap so surfaces
 // turned partly away (and foliage) still catch the glow.
 // Road lanterns without a shadow ray (for shaders that cannot trace one,
 // e.g. the raymarched lawn): warm light, gone at 13 m.
@@ -111,6 +112,7 @@ vec3 fx_lights_diffuse(vec3 p, vec3 n) {
     int cnt = int(scene.ripple_info.w + 0.5);
     vec3 sum = vec3(0.0);
     for (int i = 0; i < cnt; ++i) {
+        if (scene.fx_light_col[i].a > 0.5) continue;
         vec3 to = scene.fx_lights[i].xyz - p;
         float r = scene.fx_lights[i].w;
         float d2 = dot(to, to);

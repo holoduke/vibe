@@ -739,7 +739,29 @@ void main() {
     // shaded ground beside it (terrain uses 0.75 * hemisphere), so grass in
     // a tree or hill shadow went near black. A little ground bounce too.
     vec3 sky_term = scene.sky_color.rgb * 0.46 + scene.sun_color.rgb * scene.sun_color.a * 0.02;
-    sky_term += fx_lights_diffuse(p, vec3(0.0, 1.0, 0.0));   // gun flashes, tracers
+    sky_term += fx_lights_diffuse(p, vec3(0.0, 1.0, 0.0));   // tracers (no shadows)
+    // Laser bolts and gun flashes on the lawn, with a shadow ray each.
+    {
+        int fxn = int(scene.ripple_info.w + 0.5);
+        for (int i = 0; i < fxn; ++i) {
+            if (scene.fx_light_col[i].a < 0.5) continue;
+            vec3 fto = scene.fx_lights[i].xyz - p;
+            float fr = scene.fx_lights[i].w;
+            float fd2 = dot(fto, fto);
+            if (fd2 >= fr * fr) continue;
+            float fd = sqrt(fd2);
+            vec3 fdir = fto / max(fd, 1e-3);
+            float ffall = 1.0 - fd / fr; ffall *= ffall;
+            if (fd > 0.7) {
+                rayQueryEXT frq;
+                rayQueryInitializeEXT(frq, topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                                      0x01u, p + vec3(0.0, 0.04, 0.0), 0.3, fdir, fd - 0.3);
+                RQ_PROCEED_LEAVES(frq)
+                if (rayQueryGetIntersectionTypeEXT(frq, true) != gl_RayQueryCommittedIntersectionNoneEXT) continue;
+            }
+            sky_term += scene.fx_light_col[i].rgb * (ffall * (0.5 + 0.5 * abs(dot(Nb, fdir))));
+        }
+    }
     // Road lanterns on the lawn, with a shadow ray each: bushes, trees, posts
     // and walls keep the lantern light off the grass behind them.
     for (int li = 0; li < 8; ++li) {

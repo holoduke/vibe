@@ -766,37 +766,37 @@ void VulkanEngine::update_scene_ubo() {
     // to the camera; rounds already high above the ground light nothing
     // and are skipped.
     {
-        struct Cand { glm::vec3 pos; float radius; glm::vec3 col; float score; };
+        struct Cand { glm::vec3 pos; float radius; glm::vec3 col; float score; float shadow; };
         static std::vector<Cand> cands;
         cands.clear();
         const glm::vec3 eye = player_.eye_position();
-        auto add = [&](glm::vec3 p, float radius, glm::vec3 col, float inten) {
+        auto add = [&](glm::vec3 p, float radius, glm::vec3 col, float inten, bool shadow) {
             const float d = glm::distance(p, eye);
             if (d > 900.0f) return;
-            cands.push_back({ p, radius, col * inten, inten * radius / (d + 25.0f) });
+            cands.push_back({ p, radius, col * inten, inten * radius / (d + 25.0f), shadow ? 1.0f : 0.0f });
         };
         for (const auto& v : aa_) {
             if (v.flash_t <= 0.0f || v.kind == 1) continue;
             glm::mat4 m[4];
             aa_part_models(v, false, m);
             const glm::vec3 mz = glm::vec3(m[2] * glm::vec4(aa_muzzle_[v.flash_barrel], 1.0f));
-            add(mz, 26.0f, glm::vec3(1.0f, 0.62f, 0.30f), 7.0f * glm::clamp(v.flash_t / 0.05f, 0.0f, 1.0f));
+            add(mz, 26.0f, glm::vec3(1.0f, 0.62f, 0.30f), 7.0f * glm::clamp(v.flash_t / 0.05f, 0.0f, 1.0f), true);
         }
         for (const auto& r : aa_rounds_) {
             const float radius = 18.0f;
             const float gh = std::max(sample_terrain_height(r.pos.x, r.pos.z), rt_.water_level);
             if (r.pos.y - gh > radius + 12.0f) continue;      // +12: tree crowns, towers
-            add(r.pos, radius, glm::vec3(1.0f, 0.22f, 0.10f), 2.6f);
+            add(r.pos, radius, glm::vec3(1.0f, 0.22f, 0.10f), 2.6f, false);   // 720 m/s: gone in a frame
         }
         // The player's laser bolts light what they fly past.
         for (const auto& p : projectiles_)
-            add(p.trail_prev, 12.0f, glm::vec3(1.0f, 0.28f, 0.80f), 3.2f);
+            add(p.trail_prev, 12.0f, glm::vec3(1.0f, 0.28f, 0.80f), 3.2f, true);
         const size_t n = std::min<size_t>(8, cands.size());
         std::partial_sort(cands.begin(), cands.begin() + static_cast<std::ptrdiff_t>(n), cands.end(),
                           [](const Cand& a, const Cand& b) { return a.score > b.score; });
         for (size_t i = 0; i < 8; ++i) {
             data.fx_lights[i]    = i < n ? glm::vec4(cands[i].pos, cands[i].radius) : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-            data.fx_light_col[i] = i < n ? glm::vec4(cands[i].col, 0.0f) : glm::vec4(0.0f);
+            data.fx_light_col[i] = i < n ? glm::vec4(cands[i].col, cands[i].shadow) : glm::vec4(0.0f);
         }
         data.ripple_info.w = float(n);
     }

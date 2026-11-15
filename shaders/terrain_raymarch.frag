@@ -3837,7 +3837,32 @@ void main() {
                 lin += scene.muzzle_color.rgb * (scene.muzzle_pos.w * att * ndl);
         }
     }
-    lin += fx_lights_diffuse(pos, nor);   // gun flashes, tracers
+    lin += fx_lights_diffuse(pos, nor);   // tracers (no shadows)
+    // Laser bolts and gun flashes: shadowed by objects, bushes and trees, and
+    // near the camera by the lawn's own blades.
+    {
+        int fxn = int(scene.ripple_info.w + 0.5);
+        for (int i = 0; i < fxn; ++i) {
+            if (scene.fx_light_col[i].a < 0.5) continue;
+            vec3 to = scene.fx_lights[i].xyz - pos;
+            float r = scene.fx_lights[i].w;
+            float d2 = dot(to, to);
+            if (d2 >= r * r) continue;
+            float d = sqrt(d2);
+            vec3 ld = to / max(d, 1e-3);
+            float w = max(0.3 + 0.7 * dot(nor, ld), 0.0);
+            if (w <= 0.0) continue;
+            float fall = 1.0 - d / r; fall *= fall;
+            if (any_hit_no_terrain(pos + nor * 0.08, ld, max(d - 0.3, 0.05))) continue;
+            float blade_vis = 1.0;
+#ifndef QLIKE_WATER
+            if (scene.grass_rm_params2.y > 0.5 && distance(pos, scene.camera_pos.xyz) < 20.0 &&
+                grassEligibility(pos.xz, pos.y) > 0.02)
+                blade_vis = mix(1.0, grass_blade_shadow(pos, ld), scene.grass_rm_params2.z * 0.6 + 0.4);
+#endif
+            lin += scene.fx_light_col[i].rgb * (fall * w * blade_vis);
+        }
+    }
     // Road lanterns (dusk / night): warm pools on the road and verge, with
     // a soft shadow (ray toward a random point of the lantern glass).
     {
