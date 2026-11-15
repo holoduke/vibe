@@ -3129,6 +3129,13 @@ void main() {
         }
     }
 
+    // Tree bark: real bark reflects little light (albedo about 0.15 - 0.25);
+    // the texture alone left trunks pale, glowing in the shade under their
+    // own crown next to the dark forest floor. Deeper in the furrows.
+    if (g_veg_solid && int(vUv.y + 0.5) == 0) {
+        float lum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+        albedo *= mix(0.42, 0.66, smoothstep(0.08, 0.40, lum));
+    }
     // GPU-veg rocks: snow caps on up-facing surfaces in the rock/snow band.
     if (is_mesh_draw && pc.grass_params.x > 0.5 && use_albedo) {
         float sn = smoothstep(scene.terrain_h_high.x + 10.0, scene.terrain_h_high.z, vWorldPos.y) *

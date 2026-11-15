@@ -377,6 +377,7 @@ void main() {
     float relief_vis = (material_id == 3) ? g1.b : 1.0;
     bool  leafy     = g1.a > 0.83;                          // leaves / needles
     bool  foliage   = leafy || (g1.a > 0.17 && g1.a < 0.5);  // + bark / rocks of the vegetation
+    bool  bark      = foliage && !leafy;                    // trunks, branches, rocks: solid
     float metallic  = (g1.a > 0.5 && g1.a < 0.83) ? 1.0 : 0.0;
     float roughness = (material_id == 3)
         // terrain: snow / wet-ish rock smoother than soil and grass
@@ -517,6 +518,11 @@ void main() {
         // toward the sun, so it can't hit its own (static) RT copy.
         vec3 origin = foliage ? wp_safe + L * (0.75 + cam_dist * 0.006) + N * 0.15
                               : wp_safe + N * bias;
+        // Trunks and rocks are solid and barely sway: start at the surface,
+        // so twigs, neighbours and the crown right above shade them. (Only
+        // near the camera: further out the drawn LOD and the traced shape
+        // of a trunk differ by more than this offset.)
+        if (bark && cam_dist < 60.0) origin = wp_safe + N * (0.05 + cam_dist * 0.004) + L * 0.04;
         float base_softness = scene.rt_params.x;
         float kBlockerCone = base_softness * 4.0;
         float kBlockerTMax = clamp(cam_dist * 4.0, 30.0, 200.0);
@@ -791,7 +797,7 @@ void main() {
         // Terrain: lift the origin over the BLAS-vs-raster height gap.
         float lift = (material_id == 3) ? mix(0.02, 0.25, clamp(cam_dist / 45.0, 0.0, 1.0))
                                         : 0.01;
-        vec3 origin = wp_safe + N * (foliage ? 0.35 : lift);
+        vec3 origin = wp_safe + N * (bark && cam_dist < 60.0 ? 0.07 + cam_dist * 0.004 : foliage ? 0.35 : lift);
         // Azimuths stratified around the circle with ONE random rotation
         // per pixel (was independent random phi per tap: 4 taps could all
         // land on one side, the main source of salt-and-pepper AO).
@@ -890,7 +896,7 @@ void main() {
         vec3 N_up  = abs(N.y) < 0.999 ? vec3(0,1,0) : vec3(1,0,0);
         vec3 N_tan = normalize(cross(N_up, N));
         vec3 N_bit = cross(N, N_tan);
-        vec3 ro    = wp_safe + N * (foliage ? 0.4 : 0.01);
+        vec3 ro    = wp_safe + N * (bark && cam_dist < 60.0 ? 0.08 + cam_dist * 0.005 : foliage ? 0.4 : 0.01);
         float gi_radius = max(8.0, scene.rt_params2.y);
         int sky_hits = 0;
         // Frame-cycled seed offset: the temporal accumulator below needs
