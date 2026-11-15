@@ -740,7 +740,24 @@ void main() {
     // a tree or hill shadow went near black. A little ground bounce too.
     vec3 sky_term = scene.sky_color.rgb * 0.46 + scene.sun_color.rgb * scene.sun_color.a * 0.02;
     sky_term += fx_lights_diffuse(p, vec3(0.0, 1.0, 0.0));   // gun flashes, tracers
-    sky_term += lamp_lights_unshadowed(p, vec3(0.0, 1.0, 0.0));   // road lanterns
+    // Road lanterns on the lawn, with a shadow ray each: bushes, trees, posts
+    // and walls keep the lantern light off the grass behind them.
+    for (int li = 0; li < 8; ++li) {
+        float lI = scene.lamp_lights[li].w;
+        if (lI < 1e-3) continue;
+        vec3 lto = scene.lamp_lights[li].xyz - p;
+        float ld_len = length(lto);
+        if (ld_len >= 13.0) continue;
+        vec3 ldir = lto / max(ld_len, 1e-3);
+        float lfall = 1.0 - ld_len / 13.0; lfall *= lfall;
+        rayQueryEXT lrq;
+        rayQueryInitializeEXT(lrq, topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                              0x01u, p + vec3(0.0, 0.04, 0.0), 0.3, ldir, max(ld_len - 0.45, 0.31));
+        RQ_PROCEED_LEAVES(lrq)
+        if (rayQueryGetIntersectionTypeEXT(lrq, true) != gl_RayQueryCommittedIntersectionNoneEXT) continue;
+        // Blades stand upright: light from the side catches them fully.
+        sky_term += vec3(1.0, 0.62, 0.28) * (lI * lfall * (0.5 + 0.5 * abs(dot(Nb, ldir))));
+    }
     // Side-lit blade shading: sun-side brighter, away-side darker.
     // Uses RAW dot(N, L) so the sign carries direction (n_dot_l above
     // was max'd to 0 for Lambert, which would always tint upward).

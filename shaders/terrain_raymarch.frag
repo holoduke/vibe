@@ -3858,8 +3858,24 @@ void main() {
                                       dot(lseed, vec2(73.1560, 52.235)) + float(li) * 9.3)) * 43758.5453) - 0.5;
             vec3 tj = lpos + jit * 0.34 - pos;
             float dj = length(tj);
-            if (!any_hit_no_terrain(pos + nor * 0.08, tj / max(dj, 1e-3), max(dj - 0.45, 0.05)))
-                lin += vec3(1.0, 0.62, 0.28) * (lI * ndl * fall);
+            if (any_hit_no_terrain(pos + nor * 0.08, tj / max(dj, 1e-3), max(dj - 0.45, 0.05))) continue;
+            // The lawn's own blades shade the ground from the lantern (the same
+            // blade field the sun uses): exact near the camera, an averaged
+            // darkening further out.
+            float blade_vis = 1.0;
+#ifndef QLIKE_WATER
+            if (scene.grass_rm_params2.y > 0.5) {
+                float gp = grassEligibility(pos.xz, pos.y);
+                if (gp > 0.02) {
+                    float gstr = scene.grass_rm_params2.z;
+                    float near_w = 1.0 - smoothstep(13.0, 26.0, distance(pos, scene.camera_pos.xyz));
+                    blade_vis = 1.0 - 0.45 * gstr * gp * scene.grass_rm_params.w;
+                    if (near_w > 0.01)
+                        blade_vis = mix(blade_vis, mix(1.0, grass_blade_shadow(pos, ld), gstr * 0.6 + 0.4), near_w);
+                }
+            }
+#endif
+            lin += vec3(1.0, 0.62, 0.28) * (lI * ndl * fall * blade_vis);
         }
     }
     vec3 col = mate * lin + gi_indirect;
