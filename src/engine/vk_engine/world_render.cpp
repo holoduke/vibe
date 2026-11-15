@@ -571,8 +571,10 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         //   y = lod_near_m  — ray-t at which FBM LOD ramp starts
         //   z = lod_far_m   — ray-t at which FBM LOD ramp ends
         //   w = lod_min_oct — minimum octave count at far end
+        // (x negative = this is the full-resolution pass: the shader may
+        // clip its march against the depth pre-pass copy.)
         pc.emissive = glm::vec4(
-            std::clamp(rt_.terrain_raymarch_step_factor, 0.15f, 0.8f),
+            -std::clamp(rt_.terrain_raymarch_step_factor, 0.15f, 0.8f),
             std::max(1.0f, rt_.terrain_raymarch_lod_near_m),
             std::max(rt_.terrain_raymarch_lod_near_m + 1.0f,
                      rt_.terrain_raymarch_lod_far_m),

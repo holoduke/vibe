@@ -91,6 +91,9 @@ layout(set = 0, binding = 17) uniform sampler2D u_terrain_height_full;
 // "is there grass here", and avoids the per-step 9-cell noised() storm
 // in the grass map() loop.
 layout(set = 0, binding = 13) uniform sampler2D u_grass_mask;
+// Depth pre-pass copy (objects, vegetation, rocks, castle): pixels they
+// cover never need the terrain marched behind them.
+layout(set = 0, binding = 27) uniform sampler2D u_prepass_depth;
 // Fog wisp pattern (R8 256², REPEAT). One textureLod() replaces the
 // 3-octave noise2() weighted sum the fog density + godray probe
 // loops used to compute per-tap. UV maps q→texture as `q / 16.0` so
@@ -1000,7 +1003,7 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
     // noise (then washes out under TAA). Free; no extra texture taps.
     float jitter = ignBase(gl_FragCoord.xy);
     int kSteps = int(pc.tex_params.x);
-    float kStep = pc.emissive.x;
+    float kStep = abs(pc.emissive.x);   // sign = full-resolution pass flag (see main)
     bool relax = pc.grass_params.y > 0.5;
     // Tiny initial offset; max half-cell so the surface hit shifts
     // sub-pixel only.
@@ -2099,8 +2102,25 @@ void main() {
     // mesh owns the ground); terrain-hit pixels are discarded below so
     // the rasterised mesh shows through.
 #ifndef QLIKE_WATER
+    // Stop at the nearest pre-pass surface (full-resolution pass only: the
+    // depth copy matches this target pixel for pixel). The depth test
+    // already rejected the terrain behind trees / rocks / the castle - but
+    // only after the whole march and the shading had been paid for. Not
+    // when the water plane is nearer than the object (things standing in
+    // the water are seen through it).
+    float t_stop = t_water_plane;
+    bool  obj_stop = false;
+    if (pc.emissive.x < 0.0 && !water_only) {
+        float zpre = texelFetch(u_prepass_depth, ivec2(gl_FragCoord.xy), 0).r;
+        if (zpre < 0.99999) {
+            vec4 Pp = mix(vWNear, vWFar, zpre);
+            float t_obj = distance(Pp.xyz / Pp.w, ro) * 1.02 + 0.3;
+            if (t_water_plane < 0.0 || t_obj < t_water_plane) { t_stop = t_obj; obj_stop = true; }
+        }
+    }
     float t = water_only ? raymarchMesh(ro, rd, t_water_plane)
-                         : raymarch(ro, rd, t_water_plane);
+                         : raymarch(ro, rd, t_stop);
+    if (obj_stop && t < 0.0) discard;      // an object owns this pixel
 
     // Resolve water vs terrain ordering for the rest of the shader.
     float t_water = -1.0;
