@@ -325,6 +325,8 @@ float rmRand(uvec3 seed) {
 #include "scene_ubo.glsl"
 
 #include "atmosphere.glsl"
+#include "sun_horizon.glsl"
+layout(set = 0, binding = 31) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
 // Atmosphere sky-view LUT (atmosphere.comp; GENERAL layout).
 layout(set = 0, binding = 30) uniform sampler2D u_skyview;
 
@@ -3545,7 +3547,7 @@ void main() {
     }
     float shadow = max(dyn_shadow, self_shadow);
 
-    float sha = (1.0 - shadow) * rm_road_vis;
+    float sha = (1.0 - shadow) * rm_road_vis * sun_horizon_lit(u_sun_horizon, pos);
 
     // RT ambient occlusion against castle / boxes / dyn-props
     // (mask 0x02 — terrain BLAS skipped). Mirrors cube.frag's RTAO

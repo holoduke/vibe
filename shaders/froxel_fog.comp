@@ -21,6 +21,8 @@ layout(set = 0, binding = 4) uniform accelerationStructureEXT topLevelAS;
 layout(set = 0, binding = 5) uniform sampler2D u_leaf_atlas;   // leaf-card cut-outs (light shafts through canopies)
 #define LEAF_ATLAS u_leaf_atlas
 #include "leaf_rt.glsl"
+#include "sun_horizon.glsl"
+layout(set = 0, binding = 6) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
 
 layout(push_constant) uniform PC {
     mat4 inv_vp;
@@ -73,6 +75,7 @@ void inject(ivec3 c) {
         RQ_PROCEED_LEAVES(rq)
         vis = (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
     }
+    vis *= sun_horizon_lit(u_sun_horizon, p);   // the ray above only reaches 600 m
     float ph = hg(dot(rd, sun), pc.params.z);
     vec3 S = dens * (pc.sun_col.rgb * vis * ph + pc.amb.rgb * (1.0 / (4.0 * kPI)) * 4.0);
     imageStore(o_inject, c, vec4(S, dens));

@@ -90,8 +90,8 @@ void VulkanEngine::init_atmosphere() {
         vk_check(vkCreateSampler(device_, &si, nullptr, &atmo_sampler_), "atmo sampler");
     }
     {
-        VkDescriptorSetLayoutBinding b[6]{};
-        for (int i = 0; i < 6; ++i) {
+        VkDescriptorSetLayoutBinding b[7]{};
+        for (int i = 0; i < 7; ++i) {
             b[i].binding = uint32_t(i);
             b[i].descriptorType = (i < 2) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
                                           : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -100,7 +100,7 @@ void VulkanEngine::init_atmosphere() {
         }
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        lci.bindingCount = 6; lci.pBindings = b;
+        lci.bindingCount = 7; lci.pBindings = b;
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &atmo_set_layout_), "atmo set layout");
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 },
@@ -540,11 +540,12 @@ void VulkanEngine::init_fog() {
         vkCmdClearColorImage(cb, fog_integ_.image, VK_IMAGE_LAYOUT_GENERAL, &clr, 1, &r);
         vkCmdPipelineBarrier2(cb, &di);
     });
-    const VkDescriptorType types[6] = {
+    const VkDescriptorType types[7] = {
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };   // 5: leaf atlas (card cut-outs)
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     // 5: leaf atlas (card cut-outs)
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };   // 6: whole-map terrain sun shadow
     {
         VkDescriptorSetLayoutBinding b[6]{};
         for (int i = 0; i < 6; ++i) {
@@ -559,7 +560,7 @@ void VulkanEngine::init_fog() {
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &fog_set_layout_), "fog set layout");
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 },
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 },
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 },
             { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 },
         };
         VkDescriptorPoolCreateInfo pci{};
@@ -586,6 +587,15 @@ void VulkanEngine::init_fog() {
             w[i].pImageInfo = &ii[i];
         }
         vkUpdateDescriptorSets(device_, 4, w, 0, nullptr);
+        if (sun_horizon_view_) {
+            VkDescriptorImageInfo hz{ sun_horizon_sampler_, sun_horizon_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            VkWriteDescriptorSet wh{};
+            wh.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wh.dstSet = fog_set_; wh.dstBinding = 6; wh.descriptorCount = 1;
+            wh.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wh.pImageInfo = &hz;
+            vkUpdateDescriptorSets(device_, 1, &wh, 0, nullptr);
+        }
     }
     {
         VkPushConstantRange pc{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(FogPC) };
@@ -646,8 +656,14 @@ void VulkanEngine::dispatch_fog(VkCommandBuffer cmd) {
         wl.dstSet = fog_set_; wl.dstBinding = 5; wl.descriptorCount = 1;
         wl.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         wl.pImageInfo = &leaf_ii;
-        const VkWriteDescriptorSet ws[2] = { w, wl };
-        vkUpdateDescriptorSets(device_, 2, ws, 0, nullptr);
+        // Far-mountain sun shadow (binding 6): created after the fog set, so it
+        // is bound here too.
+        VkDescriptorImageInfo hz_ii{ sun_horizon_sampler_, sun_horizon_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet wh = wl;
+        wh.dstBinding = 6;
+        wh.pImageInfo = &hz_ii;
+        const VkWriteDescriptorSet ws[3] = { w, wl, wh };
+        vkUpdateDescriptorSets(device_, 3, ws, 0, nullptr);
         fog_tlas_bound_ = tlas_;
     }
     const FrameView& fv = current_frame_view_;

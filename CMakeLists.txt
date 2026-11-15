@@ -296,6 +296,7 @@ add_library(qlike_engine STATIC
     src/engine/vk_engine/craters.cpp
     src/engine/vk_engine/water_fx.cpp
     src/engine/vk_engine/environment.cpp
+    src/engine/vk_engine/sun_horizon.cpp
     src/engine/cpu_prof.cpp
     src/engine/jobs.cpp
     src/engine/vk_engine/dlss.cpp

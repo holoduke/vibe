@@ -24,6 +24,8 @@ layout(location = 0) in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 
 #include "scene_ubo.glsl"
+#include "sun_horizon.glsl"
+layout(set = 0, binding = 20) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
 
 layout(set = 0, binding = 1) uniform accelerationStructureEXT topLevelAS;
 layout(set = 0, binding = 2) uniform sampler2D u_gbuffer0;
@@ -1392,7 +1394,8 @@ void main() {
     // No shadow rays below N.L 0.04: fade the (untested) sun to 0 there
     // instead of letting up to 4 % leak into shadowed terminator areas.
     float term_fade = (ndl_raw > 0.04) ? 1.0 : smoothstep(0.0, 0.04, ndl_raw);
-    vec3 sun_rad = scene.sun_color.rgb * scene.sun_color.a * ndl * term_fade * (1.0 - shadow) * cloud_shadow(world_pos);
+    vec3 sun_rad = scene.sun_color.rgb * scene.sun_color.a * ndl * term_fade * (1.0 - shadow) * cloud_shadow(world_pos) *
+                   sun_horizon_lit(u_sun_horizon, world_pos);
     vec3 sun_term;
     {
         vec3  H   = normalize(L + Vv);

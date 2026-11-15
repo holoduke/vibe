@@ -1166,6 +1166,28 @@ private:
         float     acc = 0.0f;           // fixed-step accumulator
     };
     std::vector<Flag> flags_;
+    // Whole-map terrain sun shadow (sun_horizon.cpp): far mountains block
+    // the low sun. R16G16F, re-baked on the worker pool as the light moves.
+    VkImage       sun_horizon_image_ = VK_NULL_HANDLE;
+    VmaAllocation sun_horizon_alloc_ = nullptr;
+    VkImageView   sun_horizon_view_ = VK_NULL_HANDLE;
+    VkSampler     sun_horizon_sampler_ = VK_NULL_HANDLE;
+    VkBuffer      sun_horizon_stage_[kFrameOverlap]{};
+    VmaAllocation sun_horizon_stage_alloc_[kFrameOverlap]{};
+    void*         sun_horizon_stage_map_[kFrameOverlap]{};
+    std::vector<uint16_t> sun_horizon_bake_;     // worker output (RG half floats)
+    std::vector<float>    sun_horizon_s_bake_;   // worker: shadow-volume height
+    std::vector<float>    sun_horizon_s_;        // live copy for CPU queries
+    jobs::Group   sun_horizon_job_;
+    bool          sun_horizon_baking_ = false, sun_horizon_upload_pending_ = false;
+    int           sun_horizon_age_ = 100000;
+    glm::vec3     sun_horizon_dir_{0.0f}, sun_horizon_bake_dir_{0.0f};
+    void  init_sun_horizon();
+    void  destroy_sun_horizon();
+    void  bake_sun_horizon(glm::vec3 light_dir);
+    void  tick_sun_horizon();
+    void  record_sun_horizon_upload(VkCommandBuffer cmd, uint32_t slot);
+    float sun_horizon_visibility(glm::vec3 p) const;
     jobs::Group flags_jobs_;        // cloth sim running on the workers (joined in render_fx)
     glm::vec3 wind_vel_{6.0f, 0.0f, 2.0f};
     float     wind_t_ = 0.0f;

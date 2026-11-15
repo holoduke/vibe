@@ -337,6 +337,7 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     }
     { CPU_SCOPE("+scene-ubo"); update_scene_ubo(); write_pass_ubos(); }
     flush_frame_uploads(frame.command_buffer);
+    record_sun_horizon_upload(frame.command_buffer, gpu_query_slot);
     record_tlas_publish(frame.command_buffer);   // this frame's TLAS -> tlas_
     // GPU vegetation: cull + LOD-select every instance, fill indirect draws.
     { CPU_SCOPE("+veg-cull"); cull_vegetation(frame.command_buffer); }
@@ -1085,7 +1086,10 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         // .w carries sun_shaft_intensity for compose.frag's screen-space
         // crepuscular-ray accumulation. Free slot — the shader treats
         // sun_dir as a normalized direction (xyz) regardless.
-        pc_data.sun_dir   = glm::vec4(sun, rt_.sun_shaft_intensity);
+        // Sun hidden behind a mountain (as seen from the eye): no screen-space
+        // shafts and no lens flare from it.
+        const float sun_eye_vis = sun_horizon_visibility(current_frame_view_.eye_pos);
+        pc_data.sun_dir   = glm::vec4(sun, rt_.sun_shaft_intensity * sun_eye_vis);
         // .a scaled by sun_glare_strength so the user can dial down
         // every sun-derived compose-pass effect together: procedural
         // disc + halo, lens flare, AND sun shafts (compose.frag reads
@@ -1098,7 +1102,7 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         // Sky colour deferred wrote into clear sky pixels (w = 1 when the
         // deferred pass ran); compose subtracts it before adding the sky.
         pc_data.sky_color = glm::vec4(last_sky_rgb_, deferred_lighting_active_ ? 1.0f : 0.0f);
-        pc_data.flare_params = glm::vec4(rt_.lens_flare_strength,
+        pc_data.flare_params = glm::vec4(rt_.lens_flare_strength * sun_eye_vis,
                                           rt_.lens_flare_threshold,
                                           rt_.lens_flare_dispersal,
                                           rt_.lens_flare_halo_width);

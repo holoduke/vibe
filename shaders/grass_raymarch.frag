@@ -27,6 +27,8 @@ layout(location = 2) out vec4 outGBuffer0;
 layout(location = 3) out vec4 outGBuffer1;
 
 #include "scene_ubo.glsl"
+#include "sun_horizon.glsl"
+layout(set = 0, binding = 31) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
 
 // Heightmap (R32_SFLOAT) — shared with terrain raymarch + cube shaders.
 // kTerrainExtent matches terrain.cpp's world span (2048 m square).
@@ -728,7 +730,7 @@ void main() {
     float n_dot_l_wrap = max(0.0, (ndl_b + 0.35) / 1.35);
     float blade_back   = clamp(-ndl_b, 0.0, 1.0);
 
-    sun_lit *= cloud_shadow(p);
+    sun_lit *= cloud_shadow(p) * sun_horizon_lit(u_sun_horizon, p);
     vec3 sun_term = scene.sun_color.rgb * scene.sun_color.a *
                     (n_dot_l_wrap * sun_lit) +
                     scene.sun_color.rgb * scene.sun_color.a * vec3(1.25, 1.40, 0.45) *

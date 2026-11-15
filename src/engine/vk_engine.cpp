@@ -218,6 +218,7 @@ void VulkanEngine::init() {
     init_pipeline();
     init_voxel();
     init_doors();
+    init_sun_horizon();          // before the deferred / fog sets that bind it
     init_deferred_lighting();
     init_terrain_pipelines();
     init_terrain_raymarch_pipeline();
@@ -1103,6 +1104,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         ensure_cloud_target();
         // Day / night clock + weather drive the sun, sky, clouds, fog and wind.
         { CPU_SCOPE("env"); apply_environment(state_ == State::Playing ? frame_dt : 0.0f); }
+        tick_sun_horizon();      // far-mountain sun shadow follows the light
 
         // Heightmap-shadow texture is sampled by cube.frag's mesh-terrain
         // branch and grass.vert (raster grass). When raymarch terrain is on
@@ -1382,6 +1384,7 @@ void VulkanEngine::shutdown() {
     guarded("destroy_skybox", [&]{ destroy_skybox_resources(); });
     guarded("destroy_grass_mask_texture", [&]{ destroy_grass_mask_texture(); });
     guarded("destroy_terrain_aux_texture", [&]{ destroy_terrain_aux_texture(); });
+    guarded("destroy_sun_horizon", [&]{ destroy_sun_horizon(); });
     guarded("destroy_fog_wisp_texture",   [&]{ destroy_fog_wisp_texture(); });
     guarded("destroy_textures", [&]{ destroy_textures(); });
     guarded("destroy_grass_raymarch_pipeline", [&]{ destroy_grass_raymarch_pipeline(); });
