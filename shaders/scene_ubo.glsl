@@ -74,7 +74,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   grass_rm_params2;
     mat4   clutter_vp;
     vec4   atmo_params;
-    vec4   lamp_lights[2];   // xyz pos, w intensity (0 = off)
+    vec4   lamp_lights[8];   // road lanterns nearest the eye: xyz pos, w intensity (0 = off)
     vec4   rm_ground_dry;    // rgb, w = green amount
     vec4   rm_ground_green;  // rgb, w = red sand amount
     vec4   rm_red_sand;      // rgb, w = patch scale
@@ -91,6 +91,22 @@ layout(set = 0, binding = 0) uniform SceneUBO {
 // that fades to nothing at its radius. No shadow rays - they live for a
 // frame or two and there can be eight at once. A little wrap so surfaces
 // turned partly away (and foliage) still catch the glow.
+// Road lanterns without a shadow ray (for shaders that cannot trace one,
+// e.g. the raymarched lawn): warm light, gone at 13 m.
+vec3 lamp_lights_unshadowed(vec3 p, vec3 n) {
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < 8; ++i) {
+        float li = scene.lamp_lights[i].w;
+        if (li < 1e-3) continue;
+        vec3 to = scene.lamp_lights[i].xyz - p;
+        float d = length(to);
+        if (d >= 13.0) continue;
+        float fall = 1.0 - d / 13.0; fall *= fall;
+        sum += vec3(1.0, 0.62, 0.28) * (li * fall * max(0.25 + 0.75 * dot(n, to / max(d, 1e-3)), 0.0));
+    }
+    return sum;
+}
+
 vec3 fx_lights_diffuse(vec3 p, vec3 n) {
     int cnt = int(scene.ripple_info.w + 0.5);
     vec3 sum = vec3(0.0);

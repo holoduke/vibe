@@ -927,6 +927,22 @@ void main() {
                         hit_light += scene.sun_color.rgb *
                                       scene.sun_color.a * n_dot_sun;
                     }
+                    // Lantern light arriving at the bounce point (with its own
+                    // shadow ray): the lit road and walls under a lantern throw
+                    // warm light back onto what surrounds them.
+                    for (int li_i = 0; li_i < 8; ++li_i) {
+                        float lI = scene.lamp_lights[li_i].w;
+                        if (lI < 1e-3) continue;
+                        vec3 lto = scene.lamp_lights[li_i].xyz - hit_pos;
+                        float ldist = length(lto);
+                        if (ldist >= 13.0) continue;
+                        vec3 ldir = lto / max(ldist, 1e-3);
+                        float lndl = max(dot(hit_n, ldir), 0.0);
+                        if (lndl <= 0.0) continue;
+                        float lfall = 1.0 - ldist / 13.0; lfall *= lfall;
+                        if (!any_hit_m(hit_pos + hit_n * 0.02, ldir, max(ldist - 0.45, 0.05), 0x04u))
+                            hit_light += vec3(1.0, 0.62, 0.28) * (lI * lndl * lfall);
+                    }
                     // Second bounce on every other ray (x2 compensation
                     // x0.5 energy damping = net 1.0): lets a sun-lit
                     // courtyard light a room through the doorway and
@@ -1490,20 +1506,36 @@ void main() {
                       pc.light_col[i].a * pndl * fall;
     }
 
-    // Road lanterns (scene UBO), with a shadow ray: walls and posts block them.
-    for (int i = 0; i < 2; ++i) {
-        float li = scene.lamp_lights[i].w;
-        if (li < 1e-3) continue;
-        vec3 to = scene.lamp_lights[i].xyz - world_pos;
-        float d = length(to);
-        const float kLampR = 13.0;
-        if (d >= kLampR) continue;
-        vec3 ld = to / max(d, 1e-3);
-        float pndl = max(dot(N, ld), 0.0);
-        if (pndl <= 0.0) continue;
-        float fall = 1.0 - d / kLampR; fall *= fall;
-        if (any_hit_m(wp_safe + N * 0.06, ld, max(d - 0.45, 0.05), 0x01u)) continue;
-        point_term += diff_albedo * vec3(1.0, 0.62, 0.28) * (li * pndl * fall);
+    // Road lanterns: small warm area lights. Diffuse + specular, and a
+    // shadow ray toward a random point of the lantern glass each frame -
+    // the temporal filter turns that into a soft-edged shadow that sharpens
+    // toward the object casting it.
+    {
+        vec2 lseed = vec2(float(scene.rt_flags.w & 31)) * vec2(17.13, 9.71);
+        for (int i = 0; i < 8; ++i) {
+            float li = scene.lamp_lights[i].w;
+            if (li < 1e-3) continue;
+            vec3 lpos = scene.lamp_lights[i].xyz;
+            vec3 to = lpos - world_pos;
+            float d = length(to);
+            const float kLampR = 13.0;
+            if (d >= kLampR) continue;
+            vec3 ld = to / max(d, 1e-3);
+            float pndl = max(dot(N, ld), 0.0);
+            if (pndl <= 0.0) continue;
+            float fall = 1.0 - d / kLampR; fall *= fall;
+            vec3 jit = vec3(hash12(gl_FragCoord.xy + lseed + vec2(31.0 + float(i) * 7.0, 5.0)),
+                            hash12(gl_FragCoord.xy + lseed + vec2(57.0 + float(i) * 7.0, 11.0)),
+                            hash12(gl_FragCoord.xy + lseed + vec2(83.0 + float(i) * 7.0, 23.0))) - 0.5;
+            vec3 tj = lpos + jit * 0.34 - world_pos;
+            float dj = length(tj);
+            if (any_hit_m(wp_safe + N * 0.06, tj / max(dj, 1e-3), max(dj - 0.45, 0.05), 0x01u)) continue;
+            vec3 Hl = normalize(ld + Vv);
+            vec3 Fl = f_schlick(F0, clamp(dot(Vv, Hl), 0.0, 1.0));
+            vec3 sl = d_ggx(clamp(dot(N, Hl), 0.0, 1.0), a_r) *
+                      v_smith_ggx_correlated(NoV, pndl, a_r) * Fl * ms_comp * kPI;
+            point_term += (diff_albedo * (1.0 - Fl) + sl) * vec3(1.0, 0.62, 0.28) * (li * pndl * fall);
+        }
     }
     point_term += diff_albedo * fx_lights_diffuse(world_pos, N);   // gun flashes, tracers
     vec3 lit = sun_term + ambient_term + spec_ambient + sky_fill + point_term +

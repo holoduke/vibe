@@ -368,17 +368,18 @@ void VulkanEngine::update_scene_ubo() {
         // Road lanterns (dusk / night only): the two nearest to the eye.
         const float night = env_night_ >= 0.0f ? env_night_
                                                : 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
-        data.lamp_lights[0] = data.lamp_lights[1] = glm::vec4(0.0f);
+        // Up to 8, nearest the eye first.
+        for (auto& l : data.lamp_lights) l = glm::vec4(0.0f);
         if (night > 0.01f && !lamp_lights_.empty()) {
             const glm::vec3 eye = player_.eye_position();
-            float d0 = 1e9f, d1 = 1e9f; int i0 = -1, i1 = -1;
+            std::vector<std::pair<float, size_t>> order;
             for (size_t i = 0; i < lamp_lights_.size(); ++i) {
                 const float d = glm::distance(eye, lamp_lights_[i]);
-                if (d < d0) { d1 = d0; i1 = i0; d0 = d; i0 = int(i); }
-                else if (d < d1) { d1 = d; i1 = int(i); }
+                if (d < 220.0f) order.push_back({ d, i });
             }
-            if (i0 >= 0 && d0 < 140.0f) data.lamp_lights[0] = glm::vec4(lamp_lights_[size_t(i0)], 5.0f * night);
-            if (i1 >= 0 && d1 < 140.0f) data.lamp_lights[1] = glm::vec4(lamp_lights_[size_t(i1)], 5.0f * night);
+            std::sort(order.begin(), order.end());
+            for (size_t k = 0; k < order.size() && k < 8; ++k)
+                data.lamp_lights[k] = glm::vec4(lamp_lights_[order[k].second], 5.0f * night);
         }
     }
     float pitch = glm::radians(rt_.sun_pitch_deg);
@@ -787,6 +788,9 @@ void VulkanEngine::update_scene_ubo() {
             if (r.pos.y - gh > radius + 12.0f) continue;      // +12: tree crowns, towers
             add(r.pos, radius, glm::vec3(1.0f, 0.22f, 0.10f), 2.6f);
         }
+        // The player's laser bolts light what they fly past.
+        for (const auto& p : projectiles_)
+            add(p.trail_prev, 12.0f, glm::vec3(1.0f, 0.28f, 0.80f), 3.2f);
         const size_t n = std::min<size_t>(8, cands.size());
         std::partial_sort(cands.begin(), cands.begin() + static_cast<std::ptrdiff_t>(n), cands.end(),
                           [](const Cand& a, const Cand& b) { return a.score > b.score; });

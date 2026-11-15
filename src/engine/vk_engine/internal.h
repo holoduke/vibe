@@ -361,7 +361,7 @@ struct SceneUBO {
     glm::vec4  atmo_params;
     // Two nearest road lanterns: xyz position, w = intensity (0 by day).
     // Read by deferred_lighting.frag and terrain_raymarch.frag.
-    glm::vec4  lamp_lights[2];
+    glm::vec4  lamp_lights[8];
     // Raymarched terrain palette: dry.rgb + green amount, green.rgb + red
     // sand amount, red sand.rgb + patch scale, rock.rgb + saturation.
     glm::vec4  rm_ground_dry;

@@ -3838,19 +3838,29 @@ void main() {
         }
     }
     lin += fx_lights_diffuse(pos, nor);   // gun flashes, tracers
-    // Road lanterns (dusk / night): warm pools on the road and verge.
-    for (int li = 0; li < 2; ++li) {
-        float lI = scene.lamp_lights[li].w;
-        if (lI < 1e-3) continue;
-        vec3 to = scene.lamp_lights[li].xyz - pos;
-        float d = length(to);
-        if (d >= 13.0) continue;
-        vec3 ld = to / max(d, 1e-3);
-        float ndl = max(dot(nor, ld), 0.0);
-        if (ndl <= 0.0) continue;
-        float fall = 1.0 - d / 13.0; fall *= fall;
-        if (!any_hit_no_terrain(pos + nor * 0.08, ld, max(d - 0.45, 0.05)))
-            lin += vec3(1.0, 0.62, 0.28) * (lI * ndl * fall);
+    // Road lanterns (dusk / night): warm pools on the road and verge, with
+    // a soft shadow (ray toward a random point of the lantern glass).
+    {
+        vec2 lseed = gl_FragCoord.xy + vec2(float(scene.rt_flags.w & 31)) * vec2(17.13, 9.71);
+        for (int li = 0; li < 8; ++li) {
+            float lI = scene.lamp_lights[li].w;
+            if (lI < 1e-3) continue;
+            vec3 lpos = scene.lamp_lights[li].xyz;
+            vec3 to = lpos - pos;
+            float d = length(to);
+            if (d >= 13.0) continue;
+            vec3 ld = to / max(d, 1e-3);
+            float ndl = max(dot(nor, ld), 0.0);
+            if (ndl <= 0.0) continue;
+            float fall = 1.0 - d / 13.0; fall *= fall;
+            vec3 jit = fract(sin(vec3(dot(lseed, vec2(12.9898, 78.233)) + float(li) * 3.1,
+                                      dot(lseed, vec2(39.3468, 11.135)) + float(li) * 5.7,
+                                      dot(lseed, vec2(73.1560, 52.235)) + float(li) * 9.3)) * 43758.5453) - 0.5;
+            vec3 tj = lpos + jit * 0.34 - pos;
+            float dj = length(tj);
+            if (!any_hit_no_terrain(pos + nor * 0.08, tj / max(dj, 1e-3), max(dj - 0.45, 0.05)))
+                lin += vec3(1.0, 0.62, 0.28) * (lI * ndl * fall);
+        }
     }
     vec3 col = mate * lin + gi_indirect;
     // Rain: a wet sheen on the ground and standing water in the flats.
