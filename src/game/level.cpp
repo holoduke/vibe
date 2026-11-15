@@ -79,20 +79,6 @@ void add_lamp(Level& lv, glm::vec3 center, glm::vec3 size, glm::vec3 rgb,
     lv.render_aabbs.push_back(to_render_aabb(b));
 }
 
-void add_lantern(Level& lv, glm::vec3 base) {
-    // Post.
-    add(lv, base + glm::vec3(0.0f, 1.4f, 0.0f),
-        glm::vec3(0.18f, 2.8f, 0.18f), glm::vec3(0.18f, 0.16f, 0.14f));
-    // Cap below the lamp (small dark cube).
-    add(lv, base + glm::vec3(0.0f, 2.95f, 0.0f),
-        glm::vec3(0.40f, 0.10f, 0.40f), glm::vec3(0.10f, 0.09f, 0.08f));
-    // Lamp head: warm emissive.
-    add_lamp(lv, base + glm::vec3(0.0f, 3.30f, 0.0f),
-             glm::vec3(0.55f, 0.55f, 0.55f),
-             glm::vec3(1.00f, 0.78f, 0.40f),
-             glm::vec3(2.5f, 1.8f, 0.7f));
-}
-
 // ---------------------------------------------------------------------
 // Mesh builders for the non-box castle parts. Everything is built in
 // castle-local space (y = 0 at the courtyard floor) and lifted with the
@@ -550,10 +536,12 @@ Level make_arena(float r, float wh) {
         }
 
         // Lanterns: inside the gate, and either side of the keep door.
-        add_lantern(lv, glm::vec3( ent_w * 0.5f + 1.2f, 0.0f, gh_z0 - 1.2f));
-        add_lantern(lv, glm::vec3(-ent_w * 0.5f - 1.2f, 0.0f, gh_z0 - 1.2f));
-        add_lantern(lv, glm::vec3( door_w * 0.5f + 0.8f, 0.0f, kp_cz + kp_s * 0.5f + 0.8f));
-        add_lantern(lv, glm::vec3(-door_w * 0.5f - 0.8f, 0.0f, kp_cz + kp_s * 0.5f + 0.8f));
+        // (the same timber posts with a hanging lantern as along the road,
+        // arms reaching in over the path between them)
+        lv.lamp_spots.push_back({ glm::vec3( ent_w * 0.5f + 1.2f, 0.05f, gh_z0 - 1.2f), glm::vec3(-1.0f, 0.0f, 0.0f) });
+        lv.lamp_spots.push_back({ glm::vec3(-ent_w * 0.5f - 1.2f, 0.05f, gh_z0 - 1.2f), glm::vec3( 1.0f, 0.0f, 0.0f) });
+        lv.lamp_spots.push_back({ glm::vec3( door_w * 0.5f + 0.8f, 0.05f, kp_cz + kp_s * 0.5f + 0.8f), glm::vec3(-1.0f, 0.0f, 0.0f) });
+        lv.lamp_spots.push_back({ glm::vec3(-door_w * 0.5f - 0.8f, 0.05f, kp_cz + kp_s * 0.5f + 0.8f), glm::vec3( 1.0f, 0.0f, 0.0f) });
 
         lv.meshes.push_back(std::move(stone));
         lv.meshes.push_back(std::move(roof));

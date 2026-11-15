@@ -73,6 +73,10 @@ struct Level {
     // 0.04 m along each face normal). MUST NOT be used for physics --
     // inflating the collision box would push the player off the wall.
     std::vector<collision::AABB> render_aabbs;
+    // Where the castle wants lamp posts (castle-local base point, arm
+    // direction); the engine builds them after the castle is placed.
+    struct LampSpot { glm::vec3 base, arm; };
+    std::vector<LampSpot> lamp_spots;
 };
 
 // Built-in starter level: floor + four walls + a few obstacle cubes.

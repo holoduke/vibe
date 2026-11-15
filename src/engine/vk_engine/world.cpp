@@ -328,6 +328,13 @@ void VulkanEngine::init_world() {
             m.bmin.y += hp.plateau_height;
             m.bmax.y += hp.plateau_height;
         }
+        // The castle's own lamp posts (gate and keep door).
+        for (size_t i = 0; i < world_.lamp_spots.size(); ++i) {
+            const auto& ls = world_.lamp_spots[i];
+            const glm::vec3 base = ls.base + glm::vec3(0.0f, hp.plateau_height, 0.0f);
+            lamp_lights_.push_back(game::append_lamp_post(world_, base, ls.arm, 0xCA571Eu + uint32_t(i) * 197u));
+            log::infof("[lamp] castle post at (%.1f, %.1f, %.1f)", base.x, base.y, base.z);
+        }
         // Outpost towers on prominent spots in the foothills toward the
         // mountains (world-space meshes, appended after the castle lift).
         {
