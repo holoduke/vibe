@@ -737,6 +737,7 @@ void main() {
     // shaded ground beside it (terrain uses 0.75 * hemisphere), so grass in
     // a tree or hill shadow went near black. A little ground bounce too.
     vec3 sky_term = scene.sky_color.rgb * 0.46 + scene.sun_color.rgb * scene.sun_color.a * 0.02;
+    sky_term += fx_lights_diffuse(p, vec3(0.0, 1.0, 0.0));   // gun flashes, tracers
     // Side-lit blade shading: sun-side brighter, away-side darker.
     // Uses RAW dot(N, L) so the sign carries direction (n_dot_l above
     // was max'd to 0 for Lambert, which would always tint upward).

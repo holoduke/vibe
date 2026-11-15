@@ -375,6 +375,10 @@ struct SceneUBO {
     // z = age (s), w = amplitude (m); ripple_info.x = count.
     glm::vec4  ripples[16];
     glm::vec4  ripple_info;
+    // Short-lived glow lights (AA muzzle flashes + tracer rounds), picked
+    // per frame in update_scene_ubo; count in ripple_info.w.
+    glm::vec4  fx_lights[8];
+    glm::vec4  fx_light_col[8];
 };
 
 // ---- KHR ray tracing entry points ----

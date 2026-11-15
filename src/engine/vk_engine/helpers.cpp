@@ -39,7 +39,8 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 6272 (raymarched terrain palette, 4 x vec4).
 //     → 6672 (craters[24] + crater_info).
 //     → 6944 (ripples[16] + ripple_info, water splash rings).
-static_assert(sizeof(SceneUBO) == 6944, "scene ubo layout");
+//     → 7200 (fx_lights[8] + fx_light_col[8], gun flash / tracer glow).
+static_assert(sizeof(SceneUBO) == 7200, "scene ubo layout");
 
 RtFuncs g_rt;
 

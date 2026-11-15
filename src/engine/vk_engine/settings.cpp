@@ -549,7 +549,7 @@ void VulkanEngine::save_settings() const {
     static const bool test_run = [this] {
         for (const char* e : { "QLIKE_TEST_HOLD", "QLIKE_TEST_PAN", "QLIKE_TEST_SHOOTDOWN",
                                "QLIKE_TEST_BOOM", "QLIKE_TEST_BLAST", "QLIKE_TEST_FIRE", "QLIKE_TEST_CHUTE", "QLIKE_TEST_SAM",
-                               "QLIKE_TEST_CRAWL", "QLIKE_TEST_FLARE", "QLIKE_TEST_STRIKE", "QLIKE_TEST_ROCKS" })
+                               "QLIKE_TEST_CRAWL", "QLIKE_TEST_FLARE", "QLIKE_TEST_STRIKE", "QLIKE_TEST_ROCKS", "QLIKE_TEST_AAFIRE" })
             if (std::getenv(e)) return true;
         return opts_.max_frames > 0 || !opts_.screenshot_path.empty() ||
                opts_.autodemo_seconds > 0.0f || opts_.scene != 0;

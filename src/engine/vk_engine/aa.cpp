@@ -254,7 +254,10 @@ void VulkanEngine::tick_aa(float dt) {
         // for the odd rounds (so 5 rounds = the recording's last 5 shots +
         // its natural tail) and replayed whole for every further 12.
         v.cooldown -= dt;
-        const bool on_target = tgt && std::abs(dy) < 0.035f && std::abs(dp) < 0.035f;
+        // Test hook: QLIKE_TEST_AAFIRE=1 keeps every gun firing, target or not.
+        static const bool kTestAaFire = std::getenv("QLIKE_TEST_AAFIRE") != nullptr;
+        if (kTestAaFire) v.cooldown = 0.0f;
+        const bool on_target = kTestAaFire || (tgt && std::abs(dy) < 0.035f && std::abs(dp) < 0.035f);
         const float interval = 0.080f;     // 12.5 rds/s (alternating barrels)
         const int   kClipRounds = 12;
         const glm::vec3 snd_pos = glm::vec3(v.pos) + glm::vec3(0.0f, 2.0f, 0.0f);

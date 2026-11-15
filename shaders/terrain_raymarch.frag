@@ -3835,6 +3835,7 @@ void main() {
                 lin += scene.muzzle_color.rgb * (scene.muzzle_pos.w * att * ndl);
         }
     }
+    lin += fx_lights_diffuse(pos, nor);   // gun flashes, tracers
     // Road lanterns (dusk / night): warm pools on the road and verge.
     for (int li = 0; li < 2; ++li) {
         float lI = scene.lamp_lights[li].w;

@@ -1499,6 +1499,7 @@ void main() {
         if (any_hit_m(wp_safe + N * 0.06, ld, max(d - 0.45, 0.05), 0x01u)) continue;
         point_term += diff_albedo * vec3(1.0, 0.62, 0.28) * (li * pndl * fall);
     }
+    point_term += diff_albedo * fx_lights_diffuse(world_pos, N);   // gun flashes, tracers
     vec3 lit = sun_term + ambient_term + spec_ambient + sky_fill + point_term +
                diff_albedo * gi_indirect;
 

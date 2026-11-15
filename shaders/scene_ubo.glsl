@@ -82,8 +82,30 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   craters[24];      // xyz centre, w bowl radius
     vec4   crater_info;      // x = count, y = cloud cover 0..1, z = cloud shadow contrast
     vec4   ripples[16];      // splash rings: xy = world xz, z = age (s), w = amplitude (m)
-    vec4   ripple_info;      // x = count, y = rain 0..1, z = ground wetness 0..1
+    vec4   ripple_info;      // x = count, y = rain 0..1, z = ground wetness 0..1, w = fx light count
+    vec4   fx_lights[8];     // short-lived glow lights (gun flashes, tracers): xyz pos, w radius (m)
+    vec4   fx_light_col[8];  // rgb = colour x intensity
 } scene;
+
+// Light from muzzle flashes and tracer rounds: each is a sphere of light
+// that fades to nothing at its radius. No shadow rays - they live for a
+// frame or two and there can be eight at once. A little wrap so surfaces
+// turned partly away (and foliage) still catch the glow.
+vec3 fx_lights_diffuse(vec3 p, vec3 n) {
+    int cnt = int(scene.ripple_info.w + 0.5);
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < cnt; ++i) {
+        vec3 to = scene.fx_lights[i].xyz - p;
+        float r = scene.fx_lights[i].w;
+        float d2 = dot(to, to);
+        if (d2 >= r * r) continue;
+        float d = sqrt(d2);
+        float fall = 1.0 - d / r; fall *= fall;
+        float ndl = dot(n, to / max(d, 1e-3));
+        sum += scene.fx_light_col[i].rgb * (fall * max(0.3 + 0.7 * ndl, 0.0));
+    }
+    return sum;
+}
 
 // Cloud shadows on the ground: the cloud field is far above the scene, so
 // its shadow is a 2D pattern projected down the sun direction - drifting
