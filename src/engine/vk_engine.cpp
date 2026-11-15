@@ -670,13 +670,17 @@ void VulkanEngine::run(const RunOptions& opts) {
         prev_brush_mode_next_ = in.brush_mode_next;
         if (terrain_edit_mode_ && state_ == State::Playing &&
             (bm_prev_edge || bm_next_edge)) {
-            constexpr int kModeCount = 8;   // matches TerrainBrushMode enum
+            constexpr int kModeCount = 9;   // matches TerrainBrushMode enum
             int m = static_cast<int>(terrain_brush_mode_);
-            m = (m + (bm_next_edge ? 1 : kModeCount - 1)) % kModeCount;
+            // The raymarched terrain cannot be sculpted: skip the height tools there.
+            for (int tries = 0; tries < kModeCount; ++tries) {
+                m = (m + (bm_next_edge ? 1 : kModeCount - 1)) % kModeCount;
+                if (!rt_.terrain_raymarch_enabled || m == 4 || m == 5 || m == 8) break;
+            }
             terrain_brush_mode_ = static_cast<TerrainBrushMode>(m);
             static const char* kModeNames[kModeCount] = {
                 "Raise", "Lower", "Smooth", "Flatten",
-                "GrassAdd", "GrassRemove", "Erode", "ErodeSmooth"
+                "GrassAdd", "GrassRemove", "Erode", "ErodeSmooth", "Zones"
             };
             log::infof("[terrain] brush mode -> %s (%s)",
                        kModeNames[m], bm_next_edge ? "R" : "Q");
@@ -716,7 +720,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             // Raymarch terrain reads FBM directly in the shader — sculpting
             // the heightmap has no visual effect and only triggers wasted
             // chunk rebuilds / BLAS rebuilds / texture uploads.
-            if (terrain_edit_mode_ && !rt_.terrain_raymarch_enabled) {
+            if (terrain_edit_mode_) {
                 // ---- Phase 4 sculpt path ----
                 // Raycast from the eye along the camera forward against
                 // the heightfield (Jolt's static body) — works because
@@ -733,8 +737,13 @@ void VulkanEngine::run(const RunOptions& opts) {
                         terrain_brush_has_hit_ = false;
                     }
                 }
+                // Height tools only work on the mesh terrain; grass and zone
+                // painting work on both renderers.
+                const bool zone_tool = terrain_brush_mode_ == TerrainBrushMode::ZonePaint;
+                const bool tool_ok = zone_tool || brush_mode_is_grass(terrain_brush_mode_) ||
+                                     !rt_.terrain_raymarch_enabled;
                 bool sculpt_active = (in.fire_held || in.alt_fire_held) &&
-                                      terrain_brush_has_hit_;
+                                      terrain_brush_has_hit_ && tool_ok;
                 if (sculpt_active) {
                     // Right-click swaps mode to its inverse for the
                     // duration of the stroke: Raise↔Lower for the
@@ -752,7 +761,10 @@ void VulkanEngine::run(const RunOptions& opts) {
                             terrain_brush_mode_ = TerrainBrushMode::ErodeSmooth;
                         }
                     }
-                    apply_terrain_brush(frame_dt);
+                    if (zone_tool)      // right button erases (back to automatic)
+                        paint_veg_zone((in.alt_fire_held && !in.fire_held) ? uint8_t(0) : uint8_t(veg_zone_brush_));
+                    else
+                        apply_terrain_brush(frame_dt);
                     terrain_brush_mode_ = prev_mode;
                     // CLOD raster reads the heightmap texture, so the
                     // stroke shows up via the terrain_height_dirty_
@@ -764,7 +776,9 @@ void VulkanEngine::run(const RunOptions& opts) {
                     // strokes have no dirty bits to consume — the
                     // mask reupload already happened the frame the
                     // stroke modified the CPU mirror.
-                    if (!brush_mode_is_grass(terrain_brush_mode_)) {
+                    if (zone_tool) {
+                        if (veg_auto_replant_ && veg_zones_dirty_) veg_replant_request_ = true;
+                    } else if (!brush_mode_is_grass(terrain_brush_mode_)) {
                         refresh_terrain_blas();
                         refresh_terrain_collision();
                         // Re-bake the curvature/sky-vis aux for the new
@@ -1030,6 +1044,31 @@ void VulkanEngine::run(const RunOptions& opts) {
         // Voxel destruction: debounced heavy work (collapse + collision
         // rebuild) once per frame, off the per-bullet impact path.
         process_voxel_updates(frame_dt);
+        // Test hooks: QLIKE_TEST_ZONE=<zone> paints a 70 m disc of that zone
+        // 90 m ahead of the camera on frame 5; QLIKE_TEST_EDIT=1 opens edit
+        // mode with the zone tool (for UI captures).
+        {
+            static const char* kTestZone = std::getenv("QLIKE_TEST_ZONE");
+            static const bool kTestEdit = std::getenv("QLIKE_TEST_EDIT") != nullptr;
+            if (frame_number_ == 5 && (kTestZone || kTestEdit)) {
+                const glm::vec3 fw(std::sin(player_.yaw), 0.0f, -std::cos(player_.yaw));
+                terrain_brush_world_pos_ = player_.position + fw * 90.0f;
+                terrain_brush_world_pos_.y = sample_terrain_height(terrain_brush_world_pos_.x, terrain_brush_world_pos_.z);
+                terrain_brush_has_hit_ = true;
+                if (kTestZone) {
+                    const float keep = terrain_brush_radius_;
+                    terrain_brush_radius_ = 70.0f;
+                    paint_veg_zone(uint8_t(std::clamp(std::atoi(kTestZone), 0, 6)));
+                    terrain_brush_radius_ = keep;
+                    veg_replant_request_ = true;
+                }
+                if (kTestEdit) { terrain_edit_mode_ = true; terrain_brush_mode_ = TerrainBrushMode::ZonePaint; }
+            }
+        }
+        if (veg_replant_request_) {
+            veg_replant_request_ = false;
+            replant_vegetation();
+        }
 
         // Castle gate animation — proximity trigger + lerp toward target
         // angles. Runs once per frame (the lerp is dt-relative so it's

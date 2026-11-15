@@ -1893,8 +1893,23 @@ private:
     enum class TerrainBrushMode {
         Raise, Lower, Smooth, Flatten,
         GrassAdd, GrassRemove,
-        Erode, ErodeSmooth
+        Erode, ErodeSmooth,
+        ZonePaint            // vegetation zones (veg_zones.cpp); no height change
     };
+    // Vegetation zones + edit-mode panel (veg_zones.cpp).
+    std::vector<uint8_t> veg_zones_;          // 1024 x 1024, VegZone per 2 m cell
+    int   veg_zone_brush_ = 1;                // zone the brush paints
+    bool  veg_zones_dirty_ = false;           // painted since the last replant
+    bool  veg_zones_unsaved_ = false;
+    bool  veg_auto_replant_ = true;
+    bool  veg_replant_request_ = false;
+    bool  edit_cursor_free_ = false;          // Tab: mouse works the edit panel
+    void  load_veg_zones();
+    bool  save_veg_zones();
+    void  paint_veg_zone(uint8_t zone);
+    void  replant_vegetation();
+    void  build_edit_ui();
+    struct WorldPropParams veg_place_params() const;
     static bool brush_mode_is_grass(TerrainBrushMode m) {
         return m == TerrainBrushMode::GrassAdd ||
                m == TerrainBrushMode::GrassRemove;

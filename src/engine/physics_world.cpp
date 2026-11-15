@@ -388,6 +388,13 @@ void PhysicsWorld::add_static_box_compounds(const StaticBox* boxes, size_t count
     log::infof("[jolt] %zu static boxes merged into %zu compound bodies", count, ids.size());
 }
 
+void PhysicsWorld::clear_static_box_compounds() {
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    for (auto& kv : impl_->box_cells)
+        if (!kv.second.body.IsInvalid()) { bi.RemoveBody(kv.second.body); bi.DestroyBody(kv.second.body); }
+    impl_->box_cells.clear();
+}
+
 size_t PhysicsWorld::remove_compound_boxes_at(const glm::vec2* xz, size_t n, float tol) {
     if (n == 0 || impl_->box_cells.empty()) return 0;
     JPH::BodyInterface& bi = impl_->system.GetBodyInterface();

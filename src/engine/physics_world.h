@@ -34,6 +34,8 @@ public:
     struct StaticBox { glm::vec3 center; glm::vec3 half_extents; };
     void add_static_boxes(const StaticBox* boxes, size_t count);
     void add_static_box_compounds(const StaticBox* boxes, size_t count, float cell = 128.0f);
+    // Removes every compound added above (the forest is being re-planted).
+    void clear_static_box_compounds();
     // Remove the compound boxes whose centre lies within `tol` (XZ) of any
     // given point and rebuild the affected cells. Returns boxes removed.
     size_t remove_compound_boxes_at(const glm::vec2* xz, size_t n, float tol);

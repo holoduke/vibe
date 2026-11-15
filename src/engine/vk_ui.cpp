@@ -304,19 +304,7 @@ void VulkanEngine::build_hud_ui() {
     // key) and was in edit mode without realizing; left-click then
     // sculpted terrain instead of firing. With this banner the state
     // is always obvious.
-    if (terrain_edit_mode_) {
-        ImGuiIO& io_eb = ImGui::GetIO();
-        ImDrawList* dl_eb = ImGui::GetForegroundDrawList();
-        const char* msg = "EDIT MODE  —  press E to exit";
-        ImVec2 sz = ImGui::CalcTextSize(msg);
-        float pad_x = 12.0f, pad_y = 6.0f;
-        ImVec2 c(io_eb.DisplaySize.x * 0.5f, 24.0f);
-        ImVec2 a(c.x - sz.x * 0.5f - pad_x, c.y - sz.y * 0.5f - pad_y);
-        ImVec2 b(c.x + sz.x * 0.5f + pad_x, c.y + sz.y * 0.5f + pad_y);
-        dl_eb->AddRectFilled(a, b, IM_COL32(230, 110, 30, 220), 4.0f);
-        dl_eb->AddText(ImVec2(c.x - sz.x * 0.5f, c.y - sz.y * 0.5f),
-                       IM_COL32(255, 255, 255, 255), msg);
-    }
+    build_edit_ui();     // tool panel + zone overlay (veg_zones.cpp)
 
     // Weapon line (bottom centre): which weapon, and the airstrike state.
     {
@@ -1385,6 +1373,8 @@ void VulkanEngine::build_menu_ui() {
             ImGui::SeparatorText("Foliage density (restart to apply)");
             ImGui::SliderFloat("forest density", &rt_.forest_density, 0.0f, 2.0f, "%.2f");
             ImGui::SliderFloat("bush density", &rt_.bush_density, 0.0f, 2.0f, "%.2f");
+            if (ImGui::Button("Replant forest now")) veg_replant_request_ = true;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Applies forest / bush density without a restart (takes about a second).");
             ImGui::SliderFloat("flower density", &rt_.flower_density, 0.0f, 2.0f, "%.2f");
             ImGui::SliderFloat("ground plant density", &rt_.ground_density, 0.0f, 3.0f, "%.2f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clover, plantain, dandelions, nettles, foxgloves, thistles and mushrooms. 0 = none, 1 = normal, 3 = lush. Restart to apply.");
@@ -1508,7 +1498,7 @@ void VulkanEngine::build_menu_ui() {
         if (terrain_edit_mode_) {
             const char* modes[] = {"Raise", "Lower", "Smooth", "Flatten",
                                     "Grass +", "Grass −",
-                                    "Erode +", "Erode smooth"};
+                                    "Erode +", "Erode smooth", "Zones"};
             int mode_i = static_cast<int>(terrain_brush_mode_);
             if (ImGui::Combo("brush mode (left-click)", &mode_i, modes,
                               IM_ARRAYSIZE(modes))) {

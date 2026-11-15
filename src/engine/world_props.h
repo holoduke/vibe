@@ -22,7 +22,24 @@ namespace qlike {
 struct Heightmap;
 struct Road;
 
+// Painted vegetation zones (one byte per cell of the zone map).
+enum VegZone : uint8_t {
+    kVegZoneAuto = 0,      // procedural forest (default)
+    kVegZonePine,          // dense pine forest
+    kVegZoneBroadleaf,     // dense broadleaf forest
+    kVegZoneMixed,         // dense forest, both
+    kVegZoneMeadow,        // no trees, the odd bush
+    kVegZoneBushland,      // thickets, no trees
+    kVegZoneBare,          // no trees, no bushes
+    kVegZoneCount
+};
+
 struct WorldPropParams {
+    // Zone map: zone_dim x zone_dim bytes covering zone_side metres centred
+    // on the origin (row = z, column = x). nullptr = everything automatic.
+    const uint8_t* zones = nullptr;
+    int   zone_dim  = 0;
+    float zone_side = 2048.0f;
     float water_level   = 20.9f;
     float grass_band_lo = 17.0f;    // trees start above the beach
     float tree_line     = 72.0f;    // no trees above

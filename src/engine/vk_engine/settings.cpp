@@ -40,8 +40,11 @@ void VulkanEngine::preload_terrain_raymarch_flag() {
             rt_.terrain_raymarch_enabled = (std::atoi(val.c_str()) != 0);
             log::infof("preload: terrain_raymarch_enabled = %d",
                        rt_.terrain_raymarch_enabled ? 1 : 0);
-            return;
         }
+        // The forest is planted inside init_world too: without these the
+        // saved densities never took effect (always planted at 1.0).
+        else if (key == "forest_density") rt_.forest_density = glm::clamp(float(std::atof(val.c_str())), 0.0f, 2.0f);
+        else if (key == "bush_density")   rt_.bush_density   = glm::clamp(float(std::atof(val.c_str())), 0.0f, 2.0f);
     }
 }
 
@@ -549,7 +552,7 @@ void VulkanEngine::save_settings() const {
     static const bool test_run = [this] {
         for (const char* e : { "QLIKE_TEST_HOLD", "QLIKE_TEST_PAN", "QLIKE_TEST_SHOOTDOWN",
                                "QLIKE_TEST_BOOM", "QLIKE_TEST_BLAST", "QLIKE_TEST_FIRE", "QLIKE_TEST_CHUTE", "QLIKE_TEST_SAM",
-                               "QLIKE_TEST_CRAWL", "QLIKE_TEST_FLARE", "QLIKE_TEST_STRIKE", "QLIKE_TEST_ROCKS", "QLIKE_TEST_AAFIRE" })
+                               "QLIKE_TEST_CRAWL", "QLIKE_TEST_FLARE", "QLIKE_TEST_STRIKE", "QLIKE_TEST_ROCKS", "QLIKE_TEST_AAFIRE", "QLIKE_TEST_ZONE", "QLIKE_TEST_EDIT" })
             if (std::getenv(e)) return true;
         return opts_.max_frames > 0 || !opts_.screenshot_path.empty() ||
                opts_.autodemo_seconds > 0.0f || opts_.scene != 0;
