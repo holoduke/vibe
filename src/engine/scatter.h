@@ -46,8 +46,9 @@ struct ScatterSet {
     // one buffer sorted by species. Vertex uv.x = part (0 leaf / stem,
     // 1 petal, 2 flower centre), uv.y = wind sway weight.
     // fern, daisy, poppy, bluebell, cornflower, buttercup, lupin, reed,
-    // clover, plantain, dandelion, nettle, foxglove, thistle, mushrooms
-    static constexpr int kPlantSpecies = 15;
+    // clover, plantain, dandelion, nettle, foxglove, thistle, mushrooms,
+    // grass tuft (a clump of long blades; uv.x = 8 +- 0.4 across the blade)
+    static constexpr int kPlantSpecies = 16;
     Mesh          plant_mesh[kPlantSpecies]{};
     uint32_t      plant_first[kPlantSpecies]{};
     uint32_t      plant_count[kPlantSpecies]{};

@@ -456,6 +456,58 @@ void reed_blade(std::vector<Vertex>& v, std::vector<uint32_t>& ix, glm::vec3 bas
     }
 }
 
+// Grass tuft: a clump of long, thin, arching blades - the meadow grass
+// packs of the EZ-Tree demo scene, as real geometry instead of textured
+// cards (no alpha test, proper shading and shadows). Part 8: uv.x = 8 +-
+// 0.4 across the blade, uv.y = along-blade coordinate (the sway weight).
+void grass_blade(std::vector<Vertex>& v, std::vector<uint32_t>& ix, glm::vec3 base, glm::vec3 lean,
+                 float len, float wid, float arch, float twist) {
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+    const glm::vec3 L = glm::normalize(glm::vec3(lean.x, 0.0f, lean.z) + glm::vec3(1e-4f));
+    const glm::vec3 side = glm::normalize(glm::cross(up, L));
+    const int segs = 4;
+    auto spine = [&](float t) {
+        return base + up * (len * t * (1.0f - 0.30f * arch * t * t)) + L * (len * (0.06f * t + 0.5f * arch * t * t));
+    };
+    const uint32_t b0 = uint32_t(v.size());
+    for (int s = 0; s <= segs; ++s) {
+        const float t = float(s) / float(segs);
+        const glm::vec3 p = spine(t);
+        const glm::vec3 tg = glm::normalize(spine(std::min(t + 0.05f, 1.0f)) - spine(std::max(t - 0.05f, 0.0f)));
+        const float tw = twist * t;
+        const glm::vec3 sd = glm::normalize(side * std::cos(tw) + glm::cross(tg, side) * std::sin(tw));
+        const float w = wid * (1.0f - 0.92f * t * t);              // tapers to a point
+        glm::vec3 nrm = glm::normalize(glm::cross(sd, tg));
+        if (glm::dot(nrm, L) < 0.0f) nrm = -nrm;
+        const glm::vec3 keel = -nrm * (w * 0.30f);                 // folded along the midrib
+        const float pk = t * (0.98f / 32.0f);
+        v.push_back({ p - sd * w + keel, nrm, { 8.0f - 0.4f, pk } });
+        v.push_back({ p,                 nrm, { 8.0f,        pk } });
+        v.push_back({ p + sd * w + keel, nrm, { 8.0f + 0.4f, pk } });
+    }
+    for (int s = 0; s < segs; ++s) {
+        const uint32_t r0 = b0 + uint32_t(s) * 3u, r1 = r0 + 3u;
+        ix.insert(ix.end(), { r0, r0 + 1, r1 + 1, r0, r1 + 1, r1, r0 + 1, r0 + 2, r1 + 2, r0 + 1, r1 + 2, r1 + 1 });
+    }
+}
+
+void build_grass_tuft(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
+    uint32_t seed = 0x6A55u;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return float((seed >> 8) & 0xFFFFu) / 65535.0f; };
+    // 34 blades from a ~0.3 m wide base: upright in the middle, the outer
+    // ones shorter and arching over.
+    for (int i = 0; i < 34; ++i) {
+        const float a = 6.2831853f * rnd();
+        const float outer = std::sqrt(rnd());
+        const float r = 0.14f * outer;
+        const glm::vec3 base(std::cos(a) * r, -0.03f, std::sin(a) * r);
+        const float len = 0.45f + 0.45f * rnd() - 0.12f * outer;
+        const glm::vec3 lean(std::cos(a) + (rnd() - 0.5f) * 0.9f, 0.0f, std::sin(a) + (rnd() - 0.5f) * 0.9f);
+        grass_blade(v, ix, base, lean, len, 0.0080f + 0.0050f * rnd(), 0.25f + 0.95f * outer * rnd(),
+                    (rnd() - 0.5f) * 1.8f);
+    }
+}
+
 void build_reed(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
     uint32_t seed = 0xBEEDu;
     auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return float((seed >> 8) & 0xFFFFu) / 65535.0f; };
@@ -814,6 +866,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
             case 12: build_herb(pv, pi, { 0.95f, 4, 4, 0.24f, 0.060f, false, 0, 0.10f, 6, 0.030f, -1.2f, 1.0f, 14, 0.55f, 22.0f, 105.0f, 0.35f, 17u }); break;
             case 13: build_herb(pv, pi, { 0.62f, 6, 5, 0.17f, 0.030f, false, 2, 0.12f, 30, 0.026f, 2.4f, 0.35f, 0, 0.3f, 137.5f, 62.0f, 0.0f, 19u }); break;
             case 14: build_mushrooms(pv, pi); break;
+            case 15: build_grass_tuft(pv, pi); break;
             case 6: build_herb(pv, pi, { 0.66f, 4, 4, 0.20f, 0.040f, true, 0, 0.10f, 5, 0.030f, 0.45f, 0.95f, 12, 0.48f, 137.5f, 58.0f, 0.0f, 13u }); break;  // lupin: palmate leaves, dense spike
             }
             s.plant_mesh[sp] = create_mesh_from_data(device, alloc, queue, queue_family,
@@ -987,6 +1040,46 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 }
                 si.rot_tint = glm::vec4(u01(rng) * glm::two_pi<float>(), col.x, col.y, col.z);
                 per[sp].push_back(si);
+            }
+            // ---- Grass tufts: clumps of long grass over the open ground, in
+            // soft patches (smooth low-frequency noise, like the EZ-Tree demo's
+            // 'patchiness'), thinning out under the trees. ----
+            {
+                auto vnoise = [&](float x, float z, float seed) {
+                    const float fx = std::floor(x), fz = std::floor(z);
+                    float tx = x - fx, tz = z - fz;
+                    tx = tx * tx * (3.0f - 2.0f * tx); tz = tz * tz * (3.0f - 2.0f * tz);
+                    auto H = [&](float a, float b) { return hash31(glm::vec3(a, seed, b)); };
+                    return glm::mix(glm::mix(H(fx, fz), H(fx + 1.0f, fz), tx),
+                                    glm::mix(H(fx, fz + 1.0f), H(fx + 1.0f, fz + 1.0f), tx), tz);
+                };
+                int tufts = 0;
+                const int ttries = int(1600000.0f * std::min(gd, 2.0f));
+                for (int i = 0; i < ttries && tufts < 120000; ++i) {
+                    const float wx = (u01(rng) * 2.0f - 1.0f) * ext;
+                    const float wz = (u01(rng) * 2.0f - 1.0f) * ext;
+                    if (std::abs(wx) < params.keep_out_xz.x && std::abs(wz) < params.keep_out_xz.y) continue;
+                    if (params.road && wx > params.road->bb_min.x - 4.0f && wx < params.road->bb_max.x + 4.0f &&
+                        wz > params.road->bb_min.y - 4.0f && wz < params.road->bb_max.y + 4.0f &&
+                        params.road->distance(wx, wz) + road_edge_jitter(wx, wz) - params.road->half_width < 0.7f) continue;
+                    const float h = h_at(wx, wz);
+                    if (h < params.water_level + 0.4f || h > params.rock_band_h) continue;
+                    if (n_y_at(wx, wz) < 0.78f) continue;
+                    const float n = vnoise(wx * 0.022f, wz * 0.022f, 41.0f) * 0.65f + vnoise(wx * 0.075f, wz * 0.075f, 43.0f) * 0.35f;
+                    const float open = 1.0f - glm::smoothstep(0.25f, 0.65f, cover_at(wx, wz));
+                    const float dens = (0.06f + 0.94f * glm::smoothstep(0.40f, 0.60f, n)) * (0.15f + 0.85f * open);
+                    if (u01(rng) > dens) continue;
+                    ScatterInstance si{};
+                    si.pos_scale = glm::vec4(wx, h - 0.02f, wz, 0.8f + 0.7f * u01(rng));
+                    // Fresh green to yellow-green; drier, strawier clumps here and there.
+                    glm::vec3 col = glm::mix(glm::vec3(0.085f, 0.20f, 0.045f), glm::vec3(0.20f, 0.30f, 0.07f), u01(rng));
+                    const float dry = glm::smoothstep(0.55f, 0.8f, vnoise(wx * 0.05f, wz * 0.05f, 47.0f)) * u01(rng);
+                    col = glm::mix(col, glm::vec3(0.34f, 0.31f, 0.13f), dry * 0.7f) * (0.85f + 0.3f * u01(rng));
+                    si.rot_tint = glm::vec4(u01(rng) * glm::two_pi<float>(), col.x, col.y, col.z);
+                    per[15].push_back(si);
+                    ++tufts;
+                }
+                log::infof("[scatter] %d grass tufts", tufts);
             }
         }
 

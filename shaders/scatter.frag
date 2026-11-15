@@ -139,6 +139,17 @@ void main() {
             albedo = vColor * clamp(pet / max(pm, vec3(0.05)), vec3(0.5), vec3(1.4));
             albedo *= mix(0.80, 1.0, smoothstep(0.0, 0.35, pt));      // deeper toward the centre
         }
+        if (part == 8) {
+            // Grass tuft blade: the instance tint is the grass colour. Darker
+            // and shaded toward the root (the clump shades itself), a pale
+            // midrib, lighter and a little yellower toward the tip.
+            float u = clamp((vUv.x - 8.0) / 0.4, -1.0, 1.0);
+            float t = clamp(fract(vUv.y * 32.0) / 0.98, 0.0, 1.0);
+            float mid = 1.0 - smoothstep(0.0, 0.35, abs(u));
+            albedo = vColor * mix(0.42, 1.12, smoothstep(0.0, 0.75, t));
+            albedo = mix(albedo, albedo * vec3(1.25, 1.18, 0.80), smoothstep(0.6, 1.0, t) * 0.6);
+            albedo *= 1.0 + 0.18 * mid;
+        }
         if (part == 3) {
             // Leaf blade with real leaf-space coordinates: u across (-1..1),
             // t along (0 base .. 1 tip). Procedural venation - a pale midrib,
@@ -197,7 +208,7 @@ void main() {
         vec2  Lh  = L.xz / max(length(L.xz), 1e-3);
         float side = rl > 1e-4 ? dot(rel / rl, Lh) : 0.0;  // +1 sun side .. -1 shade side
         float k    = smoothstep(0.0, 0.05 * sc, rl);
-        if (part >= 6) k *= 0.25;                         // mushrooms: solid caps keep their own shape
+        if (part == 6 || part == 7) k *= 0.25;                         // mushrooms: solid caps keep their own shape
         float lit_side = mix(0.38, 1.10, smoothstep(-0.8, 0.7, side));
         float h01  = clamp((wpos.y - vInst.y) / (0.45 * sc), 0.0, 1.0);
         // Plant-level normal (the crown trick of the trees): bend the
@@ -228,7 +239,7 @@ void main() {
     // Plants: flagged as leaves so the deferred pass lights them with the
     // foliage scattering model (wrap + transmission).
     // Mushrooms (parts 6 / 7) are solid vegetation: no leaf transmission.
-    outGBuffer1 = vec4(_octa_encode(N), 0.6, plant ? (part >= 6 ? 1.0 / 3.0 : 1.0) : 0.0);
+    outGBuffer1 = vec4(_octa_encode(N), 0.6, plant ? ((part == 6 || part == 7) ? 1.0 / 3.0 : 1.0) : 0.0);
     {
         vec2 current_uv = gl_FragCoord.xy * scene.viewport.zw;
         if (vPrevClip.w > 0.0) {

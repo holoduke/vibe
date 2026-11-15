@@ -45,6 +45,9 @@ void VulkanEngine::preload_terrain_raymarch_flag() {
         // saved densities never took effect (always planted at 1.0).
         else if (key == "forest_density") rt_.forest_density = glm::clamp(float(std::atof(val.c_str())), 0.0f, 2.0f);
         else if (key == "bush_density")   rt_.bush_density   = glm::clamp(float(std::atof(val.c_str())), 0.0f, 2.0f);
+        // Same for the small plants (scattered in init_world as well).
+        else if (key == "flower_density") rt_.flower_density = glm::clamp(float(std::atof(val.c_str())), 0.0f, 2.0f);
+        else if (key == "ground_density") rt_.ground_density = glm::clamp(float(std::atof(val.c_str())), 0.0f, 3.0f);
     }
 }
 

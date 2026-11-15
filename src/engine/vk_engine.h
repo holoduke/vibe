@@ -1698,6 +1698,7 @@ private:
     // (`max_d`: the shader fades plants out by 0.85 x max_d).
     float plant_max_d(int species) const {
         const float d = species == 7 ? rt_.reed_draw_distance
+                      : species == 15 ? std::max(rt_.ground_draw_distance, rt_.flower_draw_distance)   // grass tufts
                       : species >= 8 ? rt_.ground_draw_distance : rt_.flower_draw_distance;
         return std::max(10.0f, d) / 0.85f;
     }
