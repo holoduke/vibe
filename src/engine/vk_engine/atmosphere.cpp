@@ -90,8 +90,8 @@ void VulkanEngine::init_atmosphere() {
         vk_check(vkCreateSampler(device_, &si, nullptr, &atmo_sampler_), "atmo sampler");
     }
     {
-        VkDescriptorSetLayoutBinding b[7]{};
-        for (int i = 0; i < 7; ++i) {
+        VkDescriptorSetLayoutBinding b[6]{};
+        for (int i = 0; i < 6; ++i) {
             b[i].binding = uint32_t(i);
             b[i].descriptorType = (i < 2) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
                                           : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -100,7 +100,7 @@ void VulkanEngine::init_atmosphere() {
         }
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        lci.bindingCount = 7; lci.pBindings = b;
+        lci.bindingCount = 6; lci.pBindings = b;
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &atmo_set_layout_), "atmo set layout");
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 },
@@ -547,8 +547,8 @@ void VulkanEngine::init_fog() {
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     // 5: leaf atlas (card cut-outs)
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };   // 6: whole-map terrain sun shadow
     {
-        VkDescriptorSetLayoutBinding b[6]{};
-        for (int i = 0; i < 6; ++i) {
+        VkDescriptorSetLayoutBinding b[7]{};
+        for (int i = 0; i < 7; ++i) {
             b[i].binding = uint32_t(i);
             b[i].descriptorType = types[i];
             b[i].descriptorCount = 1;
@@ -556,7 +556,7 @@ void VulkanEngine::init_fog() {
         }
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        lci.bindingCount = 6; lci.pBindings = b;
+        lci.bindingCount = 7; lci.pBindings = b;
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &fog_set_layout_), "fog set layout");
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 },
