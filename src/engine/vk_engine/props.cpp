@@ -1167,14 +1167,38 @@ void VulkanEngine::rebuild_tick_aabbs() {
     // Static level + every dynamic box's world-space AABB envelope. With
     // rotated boxes we use the AABB of the rotated cube (over-approximation)
     // — the player's collision is still solid against tilted falling crates.
-    tick_aabbs_.clear();
-    tick_aabbs_.reserve(world_.aabbs.size() + voxel_collision_aabbs_.size() +
-                        dyn_props_.size());
-    for (const auto& a : world_.aabbs) tick_aabbs_.push_back(a);
-    // Voxel-tower solid boxes count as STATIC geometry (auto step-up onto
-    // carved ledges works). Must stay in the static prefix — the caller
-    // passes static_count = world_.aabbs.size() + voxel_collision_aabbs_.size().
-    for (const auto& a : voxel_collision_aabbs_) tick_aabbs_.push_back(a);
+    //
+    // Broadphase: the world has tens of thousands of static colliders (every
+    // tree trunk), and the slide move tests each one several times per tick.
+    // Only the ones in a 24 m column around the player are handed over; the
+    // set is refreshed before the player can reach its edge (8 m of travel),
+    // when a source list changes size, and every 15 ticks regardless (so an
+    // in-place edit of a collider is picked up within a quarter second).
+    {
+        constexpr float kNearRadius = 24.0f, kRefreshDist = 8.0f;
+        const glm::vec2 c(player_.position.x, player_.position.z);
+        const size_t nw = world_.aabbs.size(), nv = voxel_collision_aabbs_.size();
+        const glm::vec2 dc = c - near_static_center_;
+        if (near_static_src_[0] != nw || near_static_src_[1] != nv ||
+            ++near_static_age_ >= 15 || glm::dot(dc, dc) > kRefreshDist * kRefreshDist) {
+            near_static_.clear();
+            auto take = [&](const std::vector<collision::AABB>& src) {
+                for (const auto& a : src)
+                    if (a.max.x >= c.x - kNearRadius && a.min.x <= c.x + kNearRadius &&
+                        a.max.z >= c.y - kNearRadius && a.min.z <= c.y + kNearRadius)
+                        near_static_.push_back(a);
+            };
+            take(world_.aabbs);
+            // Voxel-tower solid boxes count as STATIC geometry (auto step-up
+            // onto carved ledges works): they stay in the static prefix.
+            take(voxel_collision_aabbs_);
+            near_static_center_ = c;
+            near_static_src_[0] = nw; near_static_src_[1] = nv;
+            near_static_age_ = 0;
+        }
+    }
+    tick_aabbs_.assign(near_static_.begin(), near_static_.end());
+    tick_static_count_ = near_static_.size();
     if (!physics_) return;
     if (dyn_tick_aabb_cache_.size() != dyn_props_.size()) {
         dyn_tick_aabb_cache_.resize(dyn_props_.size());

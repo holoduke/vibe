@@ -17,6 +17,7 @@
 
 #include "engine/frustum.h"
 #include "engine/gltf_loader.h"
+#include "engine/cpu_prof.h"
 #include "engine/log.h"
 #include "engine/texture.h"
 #include "engine/window.h"
@@ -90,7 +91,7 @@ void VulkanEngine::draw(uint32_t img_index) {
     // Snapshot every dynamic body's world matrix + AABB ONCE for this frame.
     // rebuild_tlas (below) and render_world (in the rendering pass) both read
     // from this cache, so we avoid repeating O(n) Jolt queries.
-    rebuild_dyn_render_cache();
+    { CPU_SCOPE("dyn-cache"); rebuild_dyn_render_cache(); }
 
     // Two frames in flight: no CPU wait for the previous frame here. Its
     // GPU work may still be running, so everything written below goes to
@@ -106,16 +107,16 @@ void VulkanEngine::draw(uint32_t img_index) {
     hitch_draw_[0] = dz_mark();
 
     // ---------- Compute queue: per-frame TLAS rebuild ----------
-    submit_tlas_build(frame);
+    { CPU_SCOPE("tlas"); submit_tlas_build(frame); }
     hitch_draw_[1] = dz_mark();
 
     // ---------- Graphics command buffer ----------
     const uint32_t gpu_query_slot = frame_number_ % kFrameOverlap;
-    begin_frame_commands(frame, gpu_query_slot);   // camera, uploads, culling, CLOD
-    record_shadow_passes(frame);                   // sun shadow, depth pre-pass, half-rate shadow
-    record_terrain_and_world(frame);               // low-res raymarch terrain + world G-buffer
-    record_lighting_and_upscale(frame);            // deferred, SVGF, TAA, sky fill, DLSS/FSR/TAAU
-    record_compose_and_ui(frame, img_index);       // bloom, compose, ImGui -> swapchain
+    { CPU_SCOPE("rec-begin");   begin_frame_commands(frame, gpu_query_slot); }   // camera, uploads, culling, CLOD
+    { CPU_SCOPE("rec-shadow");  record_shadow_passes(frame); }                   // sun shadow, depth pre-pass, half-rate shadow
+    { CPU_SCOPE("rec-world");   record_terrain_and_world(frame); }               // low-res raymarch terrain + world G-buffer
+    { CPU_SCOPE("rec-light");   record_lighting_and_upscale(frame); }            // deferred, SVGF, TAA, sky fill, DLSS/FSR/TAAU
+    { CPU_SCOPE("rec-compose"); record_compose_and_ui(frame, img_index); }       // bloom, compose, ImGui -> swapchain
 
 
     // Two screenshot triggers: the --screenshot CLI one-shot AND F12 in-game.
@@ -213,8 +214,9 @@ void VulkanEngine::draw(uint32_t img_index) {
     };
 
     sl_marker(2);   // PCL render submit start
+    { CPU_SCOPE("submit");
     vk_check(vkQueueSubmit2(graphics_queue_, 1, &submit, frame.render_fence),
-             "vkQueueSubmit2");
+             "vkQueueSubmit2"); }
     sl_marker(3);   // PCL render submit end
     ++gfx_timeline_value_;
     upload_ring_.in_frame = false;
@@ -236,7 +238,8 @@ void VulkanEngine::draw(uint32_t img_index) {
     // internally paces real + generated frames into the present chain.
     sl_marker(4);   // PCL present start
     anti_lag_mark(true);   // AMD Anti-Lag 2: present stage
-    VkResult pres = queue_present_image(img_index, render_semaphores_[img_index]);
+    VkResult pres;
+    { CPU_SCOPE("present"); pres = queue_present_image(img_index, render_semaphores_[img_index]); }
     sl_marker(5);   // PCL present end
     hitch_draw_[2] = dz_mark();
     if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) {
@@ -332,19 +335,18 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
         wait_gpu_frames_idle();   // rewrites the live (single-buffered) clutter instances
         scatter_set_raymarch_surface(scatter_, rt_.terrain_raymarch_enabled);
     }
-    update_scene_ubo();
-    write_pass_ubos();
+    { CPU_SCOPE("+scene-ubo"); update_scene_ubo(); write_pass_ubos(); }
     flush_frame_uploads(frame.command_buffer);
     record_tlas_publish(frame.command_buffer);   // this frame's TLAS -> tlas_
     // GPU vegetation: cull + LOD-select every instance, fill indirect draws.
-    cull_vegetation(frame.command_buffer);
+    { CPU_SCOPE("+veg-cull"); cull_vegetation(frame.command_buffer); }
 
     // Quadtree CLOD terrain: select nodes + fill this frame's instance
     // ranges (camera list + light list). Must run after
     // compute_frame_view (camera frustum) and update_sun_shadow_light_vp
     // (light frustum), before any pass records terrain draws — depth,
     // colour and shadow all consume the same selection.
-    update_terrain_clod_instances();
+    { CPU_SCOPE("+clod"); update_terrain_clod_instances(); }
 
 }
 
@@ -725,7 +727,7 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
     // staging_color_image_. Skipped when deferred_lighting_active_ is
     // false (default until Phase 4 promotes this to the canonical scene
     // colour writer).
-    render_deferred_lighting(frame.command_buffer);
+    { CPU_SCOPE("+rec-deferred"); render_deferred_lighting(frame.command_buffer); }
     prof_mark(frame.command_buffer, "deferred_lighting");
     dispatch_radiance_cache(frame.command_buffer);
     prof_mark(frame.command_buffer, "rcache");
@@ -767,9 +769,9 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
     prof_mark(frame.command_buffer, "deferred_blit");
     // FX: explosions (volumetric), contrails, laser beams - blended into
     // the lit HDR scene before SVGF/TAA/bloom.
-    render_fx(frame.command_buffer);
+    { CPU_SCOPE("+render-fx"); render_fx(frame.command_buffer); }
     prof_mark(frame.command_buffer, "fx");
-    render_svgf(frame.command_buffer, static_cast<uint32_t>(frame_number_));
+    { CPU_SCOPE("+rec-svgf"); render_svgf(frame.command_buffer, static_cast<uint32_t>(frame_number_)); }
     prof_mark(frame.command_buffer, "svgf");
     // Both history slots end the previous frame in SHADER_READ_ONLY (write slot
     // exited at frame end; read slot wasn't touched). Read slot needs no

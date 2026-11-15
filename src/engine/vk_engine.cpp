@@ -1,4 +1,4 @@
-﻿// VulkanEngine implementation.
+// VulkanEngine implementation.
 //
 // File map (search "// === Section: " to jump):
 //
@@ -38,6 +38,7 @@
 
 #include "engine/frustum.h"
 #include "engine/gltf_loader.h"
+#include "engine/cpu_prof.h"
 #include "engine/log.h"
 #include "engine/texture.h"
 #include "engine/window.h"
@@ -277,6 +278,7 @@ void VulkanEngine::init() {
     init_grass_raymarch_pipeline();
     init_viewmodel();
     init_spacejet();
+    jobs::init();
     init_fx();
     init_flags();
     init_vegetation_pipelines();
@@ -397,7 +399,7 @@ void VulkanEngine::run(const RunOptions& opts) {
     prev_player_position_ = player_.position;
 
     while (!window_->should_close()) {
-        window_->poll_events();
+        { CPU_SCOPE("poll-events"); window_->poll_events(); }
         if (resize_requested_) recreate_swapchain();
 
         // Frame-rate cap (see frame_pacer.h). Skipped in headless mode
@@ -411,8 +413,8 @@ void VulkanEngine::run(const RunOptions& opts) {
                 fg_mult = 2;   // FSR 3 frame generation: one generated frame per rendered one
             pacer.set_period(frame_target * fg_mult);
         }
-        if (!headless) pacer.wait();
-        sl_frame_begin();   // Streamline frame token, Reflex sleep, simulation-start marker
+        if (!headless) { CPU_SCOPE("pacer"); pacer.wait(); }
+        { CPU_SCOPE("reflex"); sl_frame_begin(); }   // Streamline frame token, Reflex sleep, simulation-start marker
         anti_lag_mark(false);   // AMD Anti-Lag 2: input stage
 
         auto now = std::chrono::steady_clock::now();
@@ -873,7 +875,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                     if (player_.position.y < gmin) { player_.position.y = gmin; player_.velocity.y = std::max(player_.velocity.y, 0.0f); }
                     player_.on_ground = false;
                     player_.crouch_factor = 0.0f;
-                    if (physics_) physics_->step(kFixedDt);
+                    if (physics_) { CPU_SCOPE("+physics"); physics_->step(kFixedDt); }
                     update_projectiles(kFixedDt);
                     update_particles(kFixedDt);
                     update_decals(kFixedDt);
@@ -881,10 +883,30 @@ void VulkanEngine::run(const RunOptions& opts) {
                     ++last_physics_ticks_;
                     continue;
                 }
-                rebuild_tick_aabbs();
-                game::update_player(player_, pin, tick_aabbs_, kFixedDt,
-                                     world_.aabbs.size() +
-                                     voxel_collision_aabbs_.size());
+                { CPU_SCOPE("tick-aabbs"); rebuild_tick_aabbs(); }
+                CPU_SCOPE("tick-rest");
+                // QLIKE_TEST_BROADPHASE=1: replay the tick against EVERY static
+                // collider and report any difference from the near-set result.
+                static const bool kCheckBroad = std::getenv("QLIKE_TEST_BROADPHASE") != nullptr;
+                game::Player ref_player = player_;
+                { CPU_SCOPE("+player");
+                game::update_player(player_, pin, tick_aabbs_, kFixedDt, tick_static_count_); }
+                if (kCheckBroad) {
+                    static std::vector<collision::AABB> full;
+                    static uint64_t ticks = 0, bad = 0;
+                    full.assign(world_.aabbs.begin(), world_.aabbs.end());
+                    full.insert(full.end(), voxel_collision_aabbs_.begin(), voxel_collision_aabbs_.end());
+                    const size_t full_static = full.size();
+                    full.insert(full.end(), tick_aabbs_.begin() + static_cast<std::ptrdiff_t>(tick_static_count_), tick_aabbs_.end());
+                    game::update_player(ref_player, pin, full, kFixedDt, full_static);
+                    if (glm::distance(ref_player.position, player_.position) > 1e-4f ||
+                        ref_player.on_ground != player_.on_ground) ++bad;
+                    if (++ticks % 300 == 0)
+                        log::infof("[broadphase-check] %llu ticks, %llu mismatches, near set %zu of %zu colliders",
+                                   static_cast<unsigned long long>(ticks), static_cast<unsigned long long>(bad),
+                                   tick_static_count_, full_static);
+                }
+
                 // Terrain ground clamp. update_player collides only
                 // against AABBs; the heightfield isn't an AABB so the
                 // player would free-fall through it. We:
@@ -959,11 +981,11 @@ void VulkanEngine::run(const RunOptions& opts) {
                         audio_->play_local(ClipID::Jump, 0.7f, 0.06f, 0.10f);
                     }
                 }
-                apply_player_pushes(pre_vel);
-                if (physics_) physics_->step(kFixedDt);
-                update_projectiles(kFixedDt);
-                update_particles(kFixedDt);
-                update_decals(kFixedDt);
+                { CPU_SCOPE("+pushes"); apply_player_pushes(pre_vel); }
+                if (physics_) { CPU_SCOPE("+physics"); physics_->step(kFixedDt); }
+                { CPU_SCOPE("+projectiles"); update_projectiles(kFixedDt); }
+                { CPU_SCOPE("+particles"); update_particles(kFixedDt); }
+                { CPU_SCOPE("+decals"); update_decals(kFixedDt); }
                 physics_accumulator_ -= kFixedDt;
                 ++last_physics_ticks_;
             }
@@ -1080,7 +1102,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         ensure_dlss_bindings();
         ensure_cloud_target();
         // Day / night clock + weather drive the sun, sky, clouds, fog and wind.
-        apply_environment(state_ == State::Playing ? frame_dt : 0.0f);
+        { CPU_SCOPE("env"); apply_environment(state_ == State::Playing ? frame_dt : 0.0f); }
 
         // Heightmap-shadow texture is sampled by cube.frag's mesh-terrain
         // branch and grass.vert (raster grass). When raymarch terrain is on
@@ -1140,15 +1162,16 @@ void VulkanEngine::run(const RunOptions& opts) {
         // ticks still run with dt = 0 so everything stays drawn.
         const float sim_dt = (state_ == State::Playing) ? frame_dt : 0.0f;
         if (audio_) audio_->set_paused(state_ != State::Playing);
-        tick_spacejet(sim_dt);
-        tick_fx(sim_dt);
-        tick_water_fx(sim_dt);
-        tick_aa(sim_dt);
+        { CPU_SCOPE("jets"); tick_spacejet(sim_dt); }
+        { CPU_SCOPE("fx"); tick_fx(sim_dt); }
+        { CPU_SCOPE("water-fx"); tick_water_fx(sim_dt); }
+        { CPU_SCOPE("aa"); tick_aa(sim_dt); }
         maybe_autosave_settings(frame_dt);
         hz_ms[1] = hz_mark(hz_t);
 
         // ImGui frame begins regardless; we just don't fill it when playing.
         if (imgui_initialized_) {
+            CPU_SCOPE("imgui");
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
@@ -1235,6 +1258,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             for (int k = 0; k < 6; ++k) hitch_prev_[k] = hz_ms[k];
 
             ++frame_number_;
+            cpuprof::end_frame();
             anim_time_ = static_cast<float>(std::fmod(glfwGetTime(), 3600.0));
             {
                 static bool first_logged = false;
@@ -1347,6 +1371,7 @@ void VulkanEngine::shutdown() {
     guarded("destroy_castle", [&]{ destroy_castle_meshes(); });
     guarded("destroy_rt",     [&]{ destroy_rt(); });
     guarded("physics_.reset", [&]{ physics_.reset(); });
+    guarded("jobs::shutdown", [&]{ jobs::shutdown(); });
     guarded("destroy_descriptors", [&]{ destroy_descriptors(); });
     guarded("destroy_upload_ring", [&]{ destroy_upload_ring(); });
     guarded("destroy_meshes", [&]{

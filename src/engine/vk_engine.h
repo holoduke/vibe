@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/jobs.h"
+
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
@@ -1164,6 +1166,7 @@ private:
         float     acc = 0.0f;           // fixed-step accumulator
     };
     std::vector<Flag> flags_;
+    jobs::Group flags_jobs_;        // cloth sim running on the workers (joined in render_fx)
     glm::vec3 wind_vel_{6.0f, 0.0f, 2.0f};
     float     wind_t_ = 0.0f;
     void init_flags();
@@ -1321,6 +1324,15 @@ private:
     // Reused buffer of "static brush AABBs + per-tick dynamic-box AABBs" so
     // the player can't walk through Jolt-driven boxes.
     std::vector<collision::AABB> tick_aabbs_;
+    // Broadphase for the player tick: the static colliders (level, tree
+    // trunks, voxel tower) within kNearRadius of near_static_center_.
+    // Refreshed when the player has moved, the source lists changed size,
+    // or every few ticks; tick_aabbs_ = this + the dynamic boxes.
+    std::vector<collision::AABB> near_static_;
+    glm::vec2 near_static_center_{1.0e9f, 1.0e9f};
+    size_t    near_static_src_[2] = { SIZE_MAX, SIZE_MAX };
+    int       near_static_age_ = 0;
+    size_t    tick_static_count_ = 0;   // static prefix length of tick_aabbs_
     // Per-dyn-prop AABB cache. Sleeping bodies reuse their last-computed
     // AABB instead of re-running the 8-corner mat-vec each physics tick.
     // At 100 dyn props × 6 ticks/frame × 8 corners that's ~5k mat-vec

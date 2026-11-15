@@ -21,6 +21,8 @@
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
 #include "engine/audio.h"
+#include "engine/cpu_prof.h"
+#include "engine/jobs.h"
 #include "engine/log.h"
 #include "engine/vk_initializers.h"
 #include "engine/vk_pipelines.h"
@@ -265,6 +267,7 @@ void VulkanEngine::init_flags() {
 
 void VulkanEngine::tick_flags(float dt) {
     if (flags_.empty()) return;
+    jobs::wait(flags_jobs_);   // last frame's sim (normally joined by render_fx)
     // Wind: base direction veers slowly; speed gusts on two time scales.
     wind_t_ += dt;
     float ang = 0.6f + 0.5f * std::sin(wind_t_ * 0.031f) + 0.2f * std::sin(wind_t_ * 0.11f);
@@ -272,16 +275,22 @@ void VulkanEngine::tick_flags(float dt) {
               + 1.5f * std::sin(wind_t_ * 2.9f);
     wind_vel_ = glm::vec3(std::cos(ang), 0.0f, std::sin(ang)) * (std::max(1.0f, spd) * env_wind_scale_);
 
-    const float h = 1.0f / 120.0f;
-    const glm::vec3 g(0.0f, -9.81f, 0.0f);
-    for (auto& f : flags_) {
+    // Each flag is an independent cloth: simulate them on the worker pool
+    // while the main thread carries on with the rest of the frame. Nothing
+    // reads the cloth points until render_fx, which joins the group first.
+    const glm::vec3 wind = wind_vel_;
+    for (auto& fl : flags_) jobs::run(flags_jobs_, [&fl, dt, wind] {
+        CPU_SCOPE("+flags-job");
+        Flag& f = fl;
+        const float h = 1.0f / 120.0f;
+        const glm::vec3 g(0.0f, -9.81f, 0.0f);
         f.acc = std::min(f.acc + dt, 0.1f);
         const int nx = f.nx, ny = f.ny;
         const float rx = f.w / float(nx - 1), ry = f.h / float(ny - 1);
         const float rd = std::sqrt(rx * rx + ry * ry);
         auto idx = [nx](int i, int j) { return size_t(j) * nx + i; };
         glm::vec3 top = f.pole_base + glm::vec3(0.0f, f.pole_h - 0.05f, 0.0f);
-        static std::vector<glm::vec3> force;
+        static thread_local std::vector<glm::vec3> force;
         force.resize(f.p.size());
         while (f.acc >= h) {
             f.acc -= h;
@@ -300,7 +309,7 @@ void VulkanEngine::tick_flags(float dt) {
                         glm::vec3 n = nA / a2;
                         glm::vec3 v = ((f.p[t[0]] - f.pp[t[0]]) + (f.p[t[1]] - f.pp[t[1]]) +
                                        (f.p[t[2]] - f.pp[t[2]])) / (3.0f * h);
-                        glm::vec3 vr = wind_vel_ - v;
+                        glm::vec3 vr = wind - v;
                         float vn = glm::dot(vr, n);
                         glm::vec3 F = n * (vn * std::abs(vn)) * (kAir * a2 * 0.5f / (rx * ry));
                         // light tangential drag so the cloth streams
@@ -344,7 +353,7 @@ void VulkanEngine::tick_flags(float dt) {
                 }
             }
         }
-    }
+    });
 }
 
 glm::vec3 VulkanEngine::bomb_chute_axis(const Bomb& b) const {
@@ -363,7 +372,7 @@ void VulkanEngine::tick_fx(float dt) {
         return;
     }
     dt = std::min(dt, 0.05f);
-    tick_flags(dt);
+    { CPU_SCOPE("+flags"); tick_flags(dt); }
     for (auto& e : explosions_) {
         e.t += dt;
         // Smoke drift is integrated (not wind * age): gusts then only
@@ -512,6 +521,7 @@ void VulkanEngine::init_fx() {
 }
 
 void VulkanEngine::destroy_fx() {
+    jobs::wait(flags_jobs_);
     for (VkPipeline* p : { &fx_ribbon_refl_pipeline_, &fx_ribbon_pipeline_, &fx_volume_pipeline_, &fx_volume_inside_pipeline_,
                            &fx_decal_pipeline_ }) {
         if (*p) vkDestroyPipeline(device_, *p, nullptr);
@@ -833,6 +843,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // Flags: cloth triangles (kind 3, lit two-sided in fx_ribbon.frag).
     // Normal slot carries the design index, uv = cloth uv.
     static RibbonBuilder cloth; cloth.v.clear(); cloth.eye = eye;
+    jobs::wait(flags_jobs_);   // cloth sim started in tick_flags
     for (const auto& f : flags_) {
         for (int j = 0; j + 1 < f.ny; ++j)
             for (int i = 0; i + 1 < f.nx; ++i) {
@@ -982,10 +993,19 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         const glm::vec3 fdir = glm::normalize(fall);
         const int n = int(5200.0f * env_rain_);
         const float tr = static_cast<float>(std::fmod(glfwGetTime(), 600.0));
-        uint32_t hs = 0x9E3779B9u;
-        auto h01 = [&hs]() { hs ^= hs << 13; hs ^= hs >> 17; hs ^= hs << 5; return float(hs & 0xFFFFFF) / 16777216.0f; };
-        spray.v.reserve(spray.v.size() + size_t(n) * 6);
-        for (int i = 0; i < n; ++i) {
+        // Every streak owns six vertices at a fixed offset and its random
+        // numbers depend only on its index, so the workers fill disjoint
+        // ranges of the vertex array directly (no shared state, no insert).
+        const size_t rain_base = spray.v.size();
+        spray.v.resize(rain_base + size_t(n) * 6);
+        Vertex* const rain_out = spray.v.data() + rain_base;
+        jobs::parallel_for(n, 1024, [&](int i_begin, int i_end) {
+        CPU_SCOPE("+rain-job");
+        for (int i = i_begin; i < i_end; ++i) {
+            uint32_t hs = (uint32_t(i) + 1u) * 0x9E3779B9u;
+            hs ^= hs >> 16; hs *= 0x7FEB352Du; hs ^= hs >> 15; hs |= 1u;
+            auto h01 = [&hs]() { hs ^= hs << 13; hs ^= hs >> 17; hs ^= hs << 5; return float(hs & 0xFFFFFF) / 16777216.0f; };
+            Vertex* const o = rain_out + size_t(i) * 6;
             const glm::vec3 b(h01(), h01(), h01());
             const float spd = 0.85f + 0.3f * h01();
             glm::vec3 w = b * box + fall * (tr * spd);
@@ -994,7 +1014,11 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             rel -= box * glm::floor(rel / box + 0.5f);
             const glm::vec3 p = eye + rel;
             const float dist = glm::length(rel);
-            if (dist < 0.6f) continue;
+            if (dist < 0.6f) {   // too close to the lens: zero-area quad
+                const Vertex z{eye, glm::vec3(1.0f), {0.0f, 0.0f}};
+                for (int k = 0; k < 6; ++k) o[k] = z;
+                continue;
+            }
             // Long streaks (a ~1/12 s exposure): thin short ones are averaged
             // away by the temporal upscaler.
             const float len = 0.80f * spd;
@@ -1007,8 +1031,9 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             const glm::vec3 one(1.0f);
             Vertex q0{p0 - side, one, {0.0f, -1.0f}}, q1{p0 + side, one, {0.0f, 1.0f}};
             Vertex q2{p + side, one, {a, 1.0f}},      q3{p - side, one, {a, -1.0f}};
-            spray.v.insert(spray.v.end(), { q0, q1, q2, q0, q2, q3 });
+            o[0] = q0; o[1] = q1; o[2] = q2; o[3] = q0; o[4] = q2; o[5] = q3;
         }
+        });
     }
 
     // ---- Volumes (fireball / smoke / dust), sorted far to near ----
