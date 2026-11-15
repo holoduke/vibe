@@ -50,6 +50,7 @@ layout(set = 0, binding = 3) uniform sampler2D u_albedo[19];
 // 9-call noised() storm in the inner loop of map() — that was the
 // dominant cost in this pass per the latest perf review.
 layout(set = 0, binding = 13) uniform sampler2D u_grass_mask;
+#include "grass_blades.glsl"
 // Depth PRE-PASS copy (binding 27). Bounds the march: nothing behind the
 // nearest opaque surface can be visible, so stop there.
 layout(set = 0, binding = 27) uniform sampler2D u_prepass_depth;
@@ -752,7 +753,10 @@ void main() {
                 RQ_PROCEED_LEAVES(flq)
                 fl_blocked = rayQueryGetIntersectionTypeEXT(flq, true) != gl_RayQueryCommittedIntersectionNoneEXT;
             }
-            if (!fl_blocked) sky_term += fl * (0.5 + 0.5 * abs(dot(Nb, fl_dir)));
+            if (!fl_blocked) {
+                float bv = (t < 14.0) ? mix(1.0, grass_blade_vis(p, terrainY, fl_dir, 0.045), 0.65) : 1.0;
+                sky_term += fl * (bv * (0.5 + 0.5 * abs(dot(Nb, fl_dir))));
+            }
         }
     }
     sky_term += fx_lights_diffuse(p, vec3(0.0, 1.0, 0.0));   // tracers (no shadows)
@@ -775,6 +779,7 @@ void main() {
                 RQ_PROCEED_LEAVES(frq)
                 if (rayQueryGetIntersectionTypeEXT(frq, true) != gl_RayQueryCommittedIntersectionNoneEXT) continue;
             }
+            if (t < 14.0) ffall *= mix(1.0, grass_blade_vis(p, terrainY, fdir, 0.045), 0.65);
             sky_term += scene.fx_light_col[i].rgb * (ffall * (0.5 + 0.5 * abs(dot(Nb, fdir))));
         }
     }
@@ -793,6 +798,8 @@ void main() {
                               0x01u, p + vec3(0.0, 0.04, 0.0), 0.3, ldir, max(ld_len - 0.45, 0.31));
         RQ_PROCEED_LEAVES(lrq)
         if (rayQueryGetIntersectionTypeEXT(lrq, true) != gl_RayQueryCommittedIntersectionNoneEXT) continue;
+        // The blades between this one and the lantern.
+        if (t < 14.0) lfall *= mix(1.0, grass_blade_vis(p, terrainY, ldir, 0.045), 0.65);
         // Blades stand upright: light from the side catches them fully.
         sky_term += vec3(1.0, 0.62, 0.28) * (lI * lfall * (0.5 + 0.5 * abs(dot(Nb, ldir))));
     }

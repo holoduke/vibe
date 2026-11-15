@@ -47,7 +47,7 @@ void VulkanEngine::init_deferred_lighting() {
         // SAD gap on indoor / shadow-side surfaces. Image is in GENERAL
         // layout when cube.frag writes via imageStore — sampler2D reads
         // are allowed from GENERAL.
-        VkDescriptorSetLayoutBinding b[21]{};
+        VkDescriptorSetLayoutBinding b[23]{};
         b[0].binding = 0;
         b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         b[0].descriptorCount = 1;
@@ -108,10 +108,14 @@ void VulkanEngine::init_deferred_lighting() {
         b[19].binding = 19;
         b[20] = b[15];            // whole-map terrain sun shadow (sun_horizon.cpp)
         b[20].binding = 20;
+        b[21] = b[15];            // baked terrain height (lawn blade roots)
+        b[21].binding = 21;
+        b[22] = b[15];            // grass mask
+        b[22].binding = 22;
         VkDescriptorSetLayoutCreateInfo dlci{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
-            .bindingCount = 21, .pBindings = b,
+            .bindingCount = 23, .pBindings = b,
         };
         vk_check(vkCreateDescriptorSetLayout(device_, &dlci, nullptr,
                                               &deferred_lighting_desc_layout_),
@@ -144,7 +148,7 @@ void VulkanEngine::init_deferred_lighting() {
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1 },
             { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 },
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     18 },
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     20 },
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              4 },
             { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             3 },
         };
@@ -282,7 +286,7 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         VkDescriptorImageInfo gif1_ii{ VK_NULL_HANDLE,
                                        deferred_gi_fast_view_[1],
                                        VK_IMAGE_LAYOUT_GENERAL };
-        VkWriteDescriptorSet w[21]{};
+        VkWriteDescriptorSet w[23]{};
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].dstSet = deferred_lighting_desc_set_; w[0].dstBinding = 0;
         w[0].descriptorCount = 1;
@@ -352,6 +356,13 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         w[20] = w[14];
         w[20].dstBinding = 20;
         w[20].pImageInfo = &hz_ii;
+        VkDescriptorImageInfo lh_ii{ terrain_height_full_sampler_ ? terrain_height_full_sampler_ : linear_sampler_,
+                                     terrain_height_full_view_ ? terrain_height_full_view_ : aux_ii.imageView,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo gm_ii{ linear_sampler_, grass_mask_.view ? grass_mask_.view : aux_ii.imageView,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        w[21] = w[14]; w[21].dstBinding = 21; w[21].pImageInfo = &lh_ii;
+        w[22] = w[14]; w[22].dstBinding = 22; w[22].pImageInfo = &gm_ii;
         VkDescriptorBufferInfo rc_bi[3];
         for (int i = 0; i < 3; ++i) {
             rc_bi[i] = { rc_buf_[i], 0, VK_WHOLE_SIZE };
@@ -365,7 +376,7 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         // Only when a bound handle changed (resize, TLAS rebuild, aux re-bake):
         // 19 descriptor writes every frame were pure CPU overhead.
         uint64_t sig = 1469598103934665603ull;
-        for (int i = 0; i < 21; ++i) {
+        for (int i = 0; i < 23; ++i) {
             uint64_t h = w[i].pImageInfo ? uint64_t(reinterpret_cast<uintptr_t>(w[i].pImageInfo->imageView)) ^
                                            (uint64_t(reinterpret_cast<uintptr_t>(w[i].pImageInfo->sampler)) << 1)
                        : w[i].pBufferInfo ? uint64_t(reinterpret_cast<uintptr_t>(w[i].pBufferInfo->buffer))
@@ -374,7 +385,7 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         }
         if (sig != deferred_desc_sig_) {
             wait_gpu_frames_idle();   // the in-flight frame may still use the set
-            vkUpdateDescriptorSets(device_, 21, w, 0, nullptr);
+            vkUpdateDescriptorSets(device_, 23, w, 0, nullptr);
             deferred_desc_sig_ = sig;
         }
     }

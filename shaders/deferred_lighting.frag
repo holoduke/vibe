@@ -26,6 +26,9 @@ layout(location = 0) out vec4 outColor;
 #include "scene_ubo.glsl"
 #include "sun_horizon.glsl"
 layout(set = 0, binding = 20) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
+layout(set = 0, binding = 21) uniform sampler2D u_lawn_height;   // baked terrain height (blade roots)
+layout(set = 0, binding = 22) uniform sampler2D u_grass_mask;    // where the lawn grows
+#include "grass_blades.glsl"
 
 layout(set = 0, binding = 1) uniform accelerationStructureEXT topLevelAS;
 layout(set = 0, binding = 2) uniform sampler2D u_gbuffer0;
@@ -1427,6 +1430,20 @@ void main() {
     // ambient_sky above. Zero it so the addition below stays valid.
     vec3 sky_fill = vec3(0.0);
 
+    // Lawn blades shade whatever stands in them: the foot of a wall, a
+    // rock, a post, a crate. Only for surface points inside the blade layer
+    // and near the camera (further out the blades are sub-pixel).
+    float lawn_gy = 0.0;
+    bool  lawn_rx = false;
+    if (cam_dist > 1.0 && cam_dist < 18.0 && material_id != 3 && scene.grass_rm_params2.y > 0.5) {
+        lawn_gy = textureLod(u_lawn_height, clamp(world_pos.xz / 2048.0 + 0.5, 0.0, 1.0), 0.0).r;
+        float lawn_bh = clamp(scene.grass_rm_params.x, 0.05, 3.0) * 0.36;
+        lawn_rx = world_pos.y < lawn_gy + lawn_bh * 1.05 && world_pos.y > lawn_gy - 0.3;
+    }
+    vec3 lawn_p = world_pos + N * 0.012;
+    if (lawn_rx && ndl > 0.0 && shadow < 0.98)
+        shadow = 1.0 - (1.0 - shadow) * mix(1.0, grass_blade_vis(lawn_p, lawn_gy, L, 0.02), 0.7);
+
     // Sun term.
     // No shadow rays below N.L 0.04: fade the (untested) sun to 0 there
     // instead of letting up to 4 % leak into shadowed terminator areas.
@@ -1558,6 +1575,7 @@ void main() {
             float lamp_pv;
             LAMP_PLANT_VIS(u_clutter_shadow, world_pos + N * 0.03, i, lamp_pv)
             if (foliage) lamp_pv = mix(1.0, lamp_pv, 0.35);   // plants: gentle self-shadow
+            if (lawn_rx) lamp_pv *= mix(1.0, grass_blade_vis(lawn_p, lawn_gy, ld, 0.02), 0.7);
             point_term += (diff_albedo * (1.0 - Fl) + sl) * vec3(1.0, 0.62, 0.28) * (li * pndl * fall * lamp_pv);
         }
     }
@@ -1576,6 +1594,7 @@ void main() {
             FLASH_PLANT_VIS(u_clutter_shadow, world_pos + N * 0.03, plant_vis)
             // (plants themselves: only a gentle self-shadow, they are thin)
             if (foliage) plant_vis = mix(1.0, plant_vis, 0.35);
+            if (lawn_rx) plant_vis *= mix(1.0, grass_blade_vis(lawn_p, lawn_gy, fl_dir, 0.02), 0.7);
             point_term += (diff_albedo * (1.0 - Ff) + sf) * fl * (fl_ndl * plant_vis);
         }
     }
@@ -1595,6 +1614,7 @@ void main() {
             if (w <= 0.0) continue;
             float fall = 1.0 - d / r; fall *= fall;
             if (any_hit_m(wp_safe + N * 0.06, ld, max(d - 0.3, 0.05), 0x01u)) continue;
+            if (lawn_rx) fall *= mix(1.0, grass_blade_vis(lawn_p, lawn_gy, ld, 0.02), 0.7);
             point_term += diff_albedo * scene.fx_light_col[i].rgb * (fall * w);
         }
     }
