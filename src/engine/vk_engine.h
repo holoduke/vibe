@@ -27,6 +27,7 @@
 #include "engine/scatter.h"
 #include "engine/road.h"
 #include "engine/world_props.h"
+#include "engine/veg_paint.h"
 #include "engine/aa_vehicle.h"
 #include "engine/texture.h"   // for BackgroundDecodeHandle
 #include "engine/vk_engine/settings_types.h"  // RtSettings / GameSettings
@@ -1897,20 +1898,27 @@ private:
         Erode, ErodeSmooth,
         ZonePaint            // vegetation zones (veg_zones.cpp); no height change
     };
-    // Vegetation zones + edit-mode panel (veg_zones.cpp).
-    std::vector<uint8_t> veg_zones_;          // 1024 x 1024, VegZone per 2 m cell
-    int   veg_zone_brush_ = 1;                // zone the brush paints
-    bool  veg_zones_dirty_ = false;           // painted since the last replant
-    bool  veg_zones_unsaved_ = false;
+    // Painted vegetation + edit-mode panel (veg_zones.cpp, veg_paint.h).
+    PaintMap paint_;                          // presets + trees / bushes / grass layers
+    int   paint_active_ = 1;                  // preset the brush paints with
+    bool  paint_dirty_veg_ = false;           // trees / bushes stale (painted or preset edited)
+    bool  paint_dirty_grass_ = false;         // grass tufts stale
+    bool  paint_unsaved_ = false;
     bool  veg_auto_replant_ = true;
     bool  veg_replant_request_ = false;
-    bool  edit_cursor_free_ = false;          // Tab: mouse works the edit panel
-    void  load_veg_zones();
-    bool  save_veg_zones();
-    void  paint_veg_zone(uint8_t zone);
+    bool  scatter_rebuild_request_ = false;
+    bool  edit_cursor_free_ = false;          // M: mouse works the edit panel
+    bool  edit_m_prev_ = false;
+    HeightmapParams terrain_hp_{};            // kept for rebuilding the small plants
+    void  load_paint();
+    bool  save_paint();
+    void  paint_veg(bool erase);
+    void  request_paint_apply(bool everything);
     void  replant_vegetation();
+    void  build_scatter_from(const Heightmap& hm);
+    void  rebuild_scatter();
     void  build_edit_ui();
-    struct WorldPropParams veg_place_params() const;
+    WorldPropParams veg_place_params() const;
     static bool brush_mode_is_grass(TerrainBrushMode m) {
         return m == TerrainBrushMode::GrassAdd ||
                m == TerrainBrushMode::GrassRemove;

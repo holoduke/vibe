@@ -152,6 +152,7 @@ void VulkanEngine::init() {
     // by the time init_textures() needs them they're (mostly) already
     // available and only the serial graphics-queue uploads remain.
     start_world_texture_decodes();
+    jobs::init();        // worker pool (world build, frame jobs)
     init_world();
     present_loader_frame("Loading skybox",        0.30f);
     texture_upload_batch_begin();
@@ -279,7 +280,6 @@ void VulkanEngine::init() {
     init_grass_raymarch_pipeline();
     init_viewmodel();
     init_spacejet();
-    jobs::init();
     init_fx();
     init_flags();
     init_vegetation_pipelines();
@@ -469,6 +469,13 @@ void VulkanEngine::run(const RunOptions& opts) {
                    : (ema_fps_ * 0.9f + (1.0f / frame_dt) * 0.1f);
 
         InputFrame in = window_->consume_input();
+        // Typing into a text field (a preset name in the edit panel): the
+        // keys belong to the text, not to movement / E / Q / R.
+        if (imgui_initialized_ && ImGui::GetIO().WantTextInput) {
+            const double mdx = in.mouse_dx, mdy = in.mouse_dy;
+            in = InputFrame{};
+            in.mouse_dx = mdx; in.mouse_dy = mdy;
+        }
         // F12 in-game capture: queue a numbered PPM in the working dir.
         // The render frame below picks it up and writes to disk.
         if (in.screenshot && pending_screenshot_path_.empty()) {
@@ -762,7 +769,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                         }
                     }
                     if (zone_tool)      // right button erases (back to automatic)
-                        paint_veg_zone((in.alt_fire_held && !in.fire_held) ? uint8_t(0) : uint8_t(veg_zone_brush_));
+                        paint_veg(in.alt_fire_held && !in.fire_held);
                     else
                         apply_terrain_brush(frame_dt);
                     terrain_brush_mode_ = prev_mode;
@@ -777,7 +784,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                     // mask reupload already happened the frame the
                     // stroke modified the CPU mirror.
                     if (zone_tool) {
-                        if (veg_auto_replant_ && veg_zones_dirty_) veg_replant_request_ = true;
+                        if (veg_auto_replant_) request_paint_apply(false);
                     } else if (!brush_mode_is_grass(terrain_brush_mode_)) {
                         refresh_terrain_blas();
                         refresh_terrain_collision();
@@ -1058,9 +1065,10 @@ void VulkanEngine::run(const RunOptions& opts) {
                 if (kTestZone) {
                     const float keep = terrain_brush_radius_;
                     terrain_brush_radius_ = 70.0f;
-                    paint_veg_zone(uint8_t(std::clamp(std::atoi(kTestZone), 0, 6)));
+                    paint_active_ = std::clamp(std::atoi(kTestZone), 1, int(paint_.presets.size()) - 1);
+                    paint_veg(false);
                     terrain_brush_radius_ = keep;
-                    veg_replant_request_ = true;
+                    request_paint_apply(false);
                 }
                 if (kTestEdit) { terrain_edit_mode_ = true; terrain_brush_mode_ = TerrainBrushMode::ZonePaint; }
             }
@@ -1068,6 +1076,12 @@ void VulkanEngine::run(const RunOptions& opts) {
         if (veg_replant_request_) {
             veg_replant_request_ = false;
             replant_vegetation();
+            // Ground cover depends on where the tree crowns are.
+            scatter_rebuild_request_ = true;
+        }
+        if (scatter_rebuild_request_) {
+            scatter_rebuild_request_ = false;
+            rebuild_scatter();
         }
 
         // Castle gate animation — proximity trigger + lerp toward target

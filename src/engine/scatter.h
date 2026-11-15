@@ -85,6 +85,9 @@ struct ScatterParams {
     glm::vec2 keep_out_xz = glm::vec2(14.0f, 14.0f);
     // Optional extra keep-out (the castle road). Null = none.
     const struct Road* road = nullptr;
+    // Painted vegetation (veg_paint.h): its grass layer overrides the grass
+    // tufts where painted. Null = automatic everywhere.
+    const struct PaintMap* paint = nullptr;
     // When set, per-instance offsets to the raymarched surface are
     // precomputed (`rm_octaves` FBM octaves, the near-camera detail).
     const HeightmapParams* rm_params = nullptr;

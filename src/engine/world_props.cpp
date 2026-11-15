@@ -1,4 +1,5 @@
 #include "engine/world_props.h"
+#include "engine/veg_paint.h"
 
 #include "engine/road.h"
 #include "engine/terrain.h"
@@ -1213,15 +1214,6 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         return false;
     };
     const float road_clear = road ? road->half_width + road->shoulder : 0.0f;
-    // Painted zone at a point (kVegZoneAuto where nothing is painted).
-    auto zone_at = [&](float x, float z) -> int {
-        if (!P.zones || P.zone_dim <= 0) return kVegZoneAuto;
-        const float cell = P.zone_side / float(P.zone_dim);
-        const int i = int(std::floor((x + 0.5f * P.zone_side) / cell));
-        const int j = int(std::floor((z + 0.5f * P.zone_side) / cell));
-        if (i < 0 || j < 0 || i >= P.zone_dim || j >= P.zone_dim) return kVegZoneAuto;
-        return P.zones[size_t(j) * size_t(P.zone_dim) + size_t(i)];
-    };
     // Forest density 0..1 (1 = closed forest). Large-scale noise with high
     // contrast (thick woods / open meadows / thin edges) plus hand-placed
     // zones: dense forest on the far (north-west) shore of the castle
@@ -1423,7 +1415,13 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
                        r.pos_scale.w, r.rot_arch_phase.w, int(r.rot_arch_phase.y + 0.5f));
         }
     }
+    // Every attempt draws from its own random stream (seeded by the attempt
+    // number): what happens in one place - a painted area, a density change
+    // - then cannot shift the trees everywhere else on the map.
     for (int a = 0; a < P.tree_attempts && int(out.size() - rocks_placed) < P.max_trees; ++a) {
+        uint32_t rs = ((uint32_t(a) + 1u) * 2654435761u) ^ (uint32_t(P.seed) * 40503u);
+        rs ^= rs >> 15; rs *= 0x2C1B3C6Du; rs ^= rs >> 12; rs |= 1u;
+        auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
         float x = (u() * 2.0f - 1.0f) * ext, z = (u() * 2.0f - 1.0f) * ext;
         if (std::sqrt(x * x + z * z) < P.castle_clear) continue;
         if (excluded(x, z) || road_d(x, z) < road_clear + 4.5f) continue;
@@ -1431,17 +1429,15 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         if (h < std::max(P.grass_band_lo, P.water_level + 2.0f) || h > P.tree_line) continue;
         if (!dry(x, z, 2.0f)) continue;
         if (ny_at(x, z) < 0.72f) continue;
-        const int zone = zone_at(x, z);
-        if (zone == kVegZoneMeadow || zone == kVegZoneBushland || zone == kVegZoneBare) continue;
-        const bool painted_forest = zone != kVegZoneAuto;
-        float f = painted_forest ? 1.0f : forest(x, z);
+        const PaintPreset* pt = P.paint ? P.paint->at(kPaintTrees, x, z) : nullptr;
+        float f = forest(x, z);
         float dens = f * f + 0.004f;                  // rare lone trees in meadows
+        if (pt) dens = pt->tree_density;              // painted: the preset decides (0 = none)
         if (u() > dens * P.tree_density) continue;
         bool pine = u() < std::clamp((h - 28.0f) / 30.0f, 0.15f, 0.95f);
-        if (zone == kVegZonePine) pine = true;
-        else if (zone == kVegZoneBroadleaf) pine = false;
-        else if (zone == kVegZoneMixed) pine = u() < 0.5f;
+        if (pt) pine = u() < pt->pine_share;
         float scale = 0.75f + 0.55f * u();
+        if (pt) scale *= std::clamp(pt->tree_size, 0.3f, 2.5f);
         if (!try_mark(x, z, (pine ? 1.6f : 2.4f) * scale)) continue;
         const auto& pool = by_species[pine ? 0 : 1];
         int ai = pool[size_t(u() * float(pool.size())) % pool.size()];
@@ -1457,20 +1453,21 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
     // Bushes (no collision).
     int bushes = 0;
     for (int a = 0; a < P.bush_attempts && bushes < P.max_bushes; ++a) {
+        uint32_t rs = ((uint32_t(a) + 1u) * 2246822519u) ^ (uint32_t(P.seed) * 69069u);
+        rs ^= rs >> 15; rs *= 0x2C1B3C6Du; rs ^= rs >> 12; rs |= 1u;
+        auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
         float x = (u() * 2.0f - 1.0f) * ext, z = (u() * 2.0f - 1.0f) * ext;
         if (std::sqrt(x * x + z * z) < P.castle_clear - 6.0f) continue;
         if (excluded(x, z) || road_d(x, z) < road_clear + 1.5f) continue;
         float h = h_at(x, z);
         if (h < P.water_level + 1.0f || h > P.tree_line + 8.0f) continue;
         if (ny_at(x, z) < 0.75f) continue;
-        const int zone = zone_at(x, z);
-        if (zone == kVegZoneBare) continue;
-        float f = (zone == kVegZonePine || zone == kVegZoneBroadleaf || zone == kVegZoneMixed) ? 1.0f : forest(x, z);
+        const PaintPreset* pb = P.paint ? P.paint->at(kPaintBushes, x, z) : nullptr;
+        float f = forest(x, z);
         if (!dry(x, z, 1.2f)) continue;
         // Undergrowth inside forests + thickets along the edges.
         float dens = std::clamp(f * 0.45f + (1.0f - std::abs(f - 0.4f) * 3.0f) * 0.5f, 0.0f, 1.0f) * 0.7f + 0.01f;
-        if (zone == kVegZoneMeadow) dens = 0.02f;
-        else if (zone == kVegZoneBushland) dens = 0.95f;
+        if (pb) dens = pb->bush_density;              // painted: the preset decides (0 = none)
         if (u() > dens * P.bush_density) continue;
         float scale = 0.6f + 0.9f * u();
         const auto& pool = by_species[2];

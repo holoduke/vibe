@@ -54,7 +54,7 @@ VkBuffer make_buffer(VmaAllocator a, VkDeviceSize size, VkBufferUsageFlags usage
 }  // namespace
 
 void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
-    load_veg_zones();                               // painted zones steer the placement
+    load_paint();                                   // painted presets steer the placement
     const WorldPropParams wp = veg_place_params();
     const auto tv0 = std::chrono::steady_clock::now();
     veg_arch_ = build_veg_archetypes(0xF0E57);

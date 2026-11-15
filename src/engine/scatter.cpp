@@ -1,4 +1,6 @@
 #include "engine/scatter.h"
+#include "engine/veg_paint.h"
+#include "engine/jobs.h"
 #include "engine/road.h"
 #include "engine/terrain.h"
 #include "engine/log.h"
@@ -1055,9 +1057,27 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 };
                 int tufts = 0;
                 const int ttries = int(1600000.0f * std::min(gd, 2.0f));
+                // One tuft: fresh green to yellow-green, `dry` pulls it to straw.
+                auto add_tuft = [&](float wx, float wz, float h, float size, float dry, float r0, float r1, float r2) {
+                    ScatterInstance si{};
+                    si.pos_scale = glm::vec4(wx, h - 0.02f, wz, size);
+                    glm::vec3 col = glm::mix(glm::vec3(0.085f, 0.20f, 0.045f), glm::vec3(0.20f, 0.30f, 0.07f), r0);
+                    col = glm::mix(col, glm::vec3(0.34f, 0.31f, 0.13f), glm::clamp(dry, 0.0f, 1.0f) * 0.8f) * (0.85f + 0.3f * r1);
+                    si.rot_tint = glm::vec4(r2 * glm::two_pi<float>(), col.x, col.y, col.z);
+                    per[15].push_back(si);
+                };
+                // Own random stream per attempt / per cell (not the shared rng):
+                // painting grass somewhere must not move anything else.
+                uint32_t trs = 1u;
+                auto tu = [&trs]() { trs ^= trs << 13; trs ^= trs >> 17; trs ^= trs << 5; return float(trs >> 8) / 16777216.0f; };
+                auto tseed = [&trs](uint32_t k, uint32_t salt) {
+                    trs = ((k + 1u) * 2654435761u) ^ salt; trs ^= trs >> 15; trs *= 0x2C1B3C6Du; trs ^= trs >> 12; trs |= 1u;
+                };
                 for (int i = 0; i < ttries && tufts < 120000; ++i) {
-                    const float wx = (u01(rng) * 2.0f - 1.0f) * ext;
-                    const float wz = (u01(rng) * 2.0f - 1.0f) * ext;
+                    tseed(uint32_t(i), 0x7F4A7C15u);
+                    const float wx = (tu() * 2.0f - 1.0f) * ext;
+                    const float wz = (tu() * 2.0f - 1.0f) * ext;
+                    if (params.paint && params.paint->at(kPaintGrass, wx, wz)) continue;   // painted: second pass
                     if (std::abs(wx) < params.keep_out_xz.x && std::abs(wz) < params.keep_out_xz.y) continue;
                     if (params.road && wx > params.road->bb_min.x - 4.0f && wx < params.road->bb_max.x + 4.0f &&
                         wz > params.road->bb_min.y - 4.0f && wz < params.road->bb_max.y + 4.0f &&
@@ -1068,18 +1088,46 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                     const float n = vnoise(wx * 0.022f, wz * 0.022f, 41.0f) * 0.65f + vnoise(wx * 0.075f, wz * 0.075f, 43.0f) * 0.35f;
                     const float open = 1.0f - glm::smoothstep(0.25f, 0.65f, cover_at(wx, wz));
                     const float dens = (0.06f + 0.94f * glm::smoothstep(0.40f, 0.60f, n)) * (0.15f + 0.85f * open);
-                    if (u01(rng) > dens) continue;
-                    ScatterInstance si{};
-                    si.pos_scale = glm::vec4(wx, h - 0.02f, wz, 0.8f + 0.7f * u01(rng));
-                    // Fresh green to yellow-green; drier, strawier clumps here and there.
-                    glm::vec3 col = glm::mix(glm::vec3(0.085f, 0.20f, 0.045f), glm::vec3(0.20f, 0.30f, 0.07f), u01(rng));
-                    const float dry = glm::smoothstep(0.55f, 0.8f, vnoise(wx * 0.05f, wz * 0.05f, 47.0f)) * u01(rng);
-                    col = glm::mix(col, glm::vec3(0.34f, 0.31f, 0.13f), dry * 0.7f) * (0.85f + 0.3f * u01(rng));
-                    si.rot_tint = glm::vec4(u01(rng) * glm::two_pi<float>(), col.x, col.y, col.z);
-                    per[15].push_back(si);
+                    if (tu() > dens) continue;
+                    const float size = 0.8f + 0.7f * tu();
+                    // Drier, strawier clumps here and there.
+                    const float dry = glm::smoothstep(0.55f, 0.8f, vnoise(wx * 0.05f, wz * 0.05f, 47.0f)) * tu() * 0.9f;
+                    add_tuft(wx, wz, h, size, dry, tu(), tu(), tu());
                     ++tufts;
                 }
-                log::infof("[scatter] %d grass tufts", tufts);
+                // Painted grass: every painted cell gets its preset's density,
+                // anywhere on the map (not only near the castle).
+                int painted = 0;
+                if (params.paint && !params.paint->layer[kPaintGrass].empty()) {
+                    const auto& lay = params.paint->layer[kPaintGrass];
+                    const float cell = PaintMap::cell();
+                    for (int j = 0; j < kPaintDim && painted < 260000; ++j)
+                        for (int i = 0; i < kPaintDim; ++i) {
+                            const uint8_t id = lay[size_t(j) * kPaintDim + size_t(i)];
+                            if (id == 0 || id >= params.paint->presets.size()) continue;
+                            const PaintPreset& pp = params.paint->presets[id];
+                            if (pp.grass_density <= 0.0f) continue;
+                            tseed(uint32_t(j * kPaintDim + i), 0x51ED270Bu);
+                            const float want = pp.grass_density * 2.4f;          // tufts per 2 m cell
+                            int n = int(want);
+                            if (tu() < want - float(n)) ++n;
+                            for (int k = 0; k < n; ++k) {
+                                const float wx = (float(i) + tu()) * cell - 0.5f * kPaintSide;
+                                const float wz = (float(j) + tu()) * cell - 0.5f * kPaintSide;
+                                const float size = (0.8f + 0.7f * tu()) * glm::clamp(pp.grass_height, 0.3f, 3.0f);
+                                const float r0 = tu(), r1 = tu(), r2 = tu();
+                                if (params.road && wx > params.road->bb_min.x - 4.0f && wx < params.road->bb_max.x + 4.0f &&
+                                    wz > params.road->bb_min.y - 4.0f && wz < params.road->bb_max.y + 4.0f &&
+                                    params.road->distance(wx, wz) - params.road->half_width < 0.5f) continue;
+                                const float h = h_at(wx, wz);
+                                if (h < params.water_level + 0.15f) continue;
+                                if (n_y_at(wx, wz) < 0.55f) continue;
+                                add_tuft(wx, wz, h, size, pp.grass_dry * (0.75f + 0.25f * r0), r0, r1, r2);
+                                ++painted;
+                            }
+                        }
+                }
+                log::infof("[scatter] %d grass tufts (+%d painted)", tufts, painted);
             }
         }
 
@@ -1088,8 +1136,11 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
         // vertex shaders read back with floor(rot / 2 pi) and fade with
         // distance exactly like the relief itself (10 - 26 m). Without it the
         // relief (~0.17 m on average) swallowed clover and plantain close by.
+        // (Per-instance and independent: spread over the worker pool.)
         for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp)
-            for (ScatterInstance& si : per[sp]) {
+            jobs::parallel_for(int(per[sp].size()), 2048, [&, sp](int i_begin, int i_end) {
+            for (int ii = i_begin; ii < i_end; ++ii) {
+                ScatterInstance& si = per[sp][size_t(ii)];
                 const float x = si.pos_scale.x, z = si.pos_scale.z;
                 float d = raymarch_ground_relief(x, z, h_at(x, z), params.water_level);
                 if (params.road && x > params.road->bb_min.x - 2.0f && x < params.road->bb_max.x + 2.0f &&
@@ -1099,6 +1150,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 const float q = std::clamp(std::floor(d / 0.004f + 0.5f), 0.0f, 120.0f);
                 si.rot_tint.x = std::fmod(si.rot_tint.x, glm::two_pi<float>()) + glm::two_pi<float>() * q;
             }
+            });
 
         std::vector<ScatterInstance> all;
         for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp) {
@@ -1109,9 +1161,11 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
         }
         if (params.rm_params) {
             s.plant_dy.resize(all.size());
-            for (size_t i = 0; i < all.size(); ++i)
-                s.plant_dy[i] = raymarch_fine_correction(hm, *params.rm_params, all[i].pos_scale.x,
-                                                         all[i].pos_scale.z, params.rm_octaves);
+            jobs::parallel_for(int(all.size()), 2048, [&](int i_begin, int i_end) {
+                for (int i = i_begin; i < i_end; ++i)
+                    s.plant_dy[size_t(i)] = raymarch_fine_correction(hm, *params.rm_params, all[size_t(i)].pos_scale.x,
+                                                                     all[size_t(i)].pos_scale.z, params.rm_octaves);
+            });
         }
         if (!all.empty()) {
             VkBufferCreateInfo pb{};
@@ -1161,9 +1215,11 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
     s.inst_cpu = inst;
     if (params.rm_params) {
         s.inst_dy.resize(inst.size());
-        for (size_t i = 0; i < inst.size(); ++i)
-            s.inst_dy[i] = raymarch_fine_correction(hm, *params.rm_params, inst[i].pos_scale.x,
-                                                    inst[i].pos_scale.z, params.rm_octaves);
+        jobs::parallel_for(int(inst.size()), 2048, [&](int i_begin, int i_end) {
+            for (int i = i_begin; i < i_end; ++i)
+                s.inst_dy[size_t(i)] = raymarch_fine_correction(hm, *params.rm_params, inst[size_t(i)].pos_scale.x,
+                                                                inst[size_t(i)].pos_scale.z, params.rm_octaves);
+        });
     }
     s.instance_count = uint32_t(inst.size());
     log::infof("[scatter] %u clutter instances placed (rock mesh %u tris)",
