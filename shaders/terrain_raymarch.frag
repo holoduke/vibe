@@ -3837,6 +3837,23 @@ void main() {
                 lin += scene.muzzle_color.rgb * (scene.muzzle_pos.w * att * ndl);
         }
     }
+    // Hand flashlight on the ground: shadowed by objects, bushes and trees,
+    // and near the camera by the lawn's own blades.
+    {
+        vec3 fl_dir; float fl_dist;
+        vec3 fl = flashlight_at(pos, fl_dir, fl_dist);
+        float fl_ndl = max(dot(nor, fl_dir), 0.0);
+        if (fl_ndl > 0.0 && (fl.r + fl.g + fl.b) > 1e-4 &&
+            !any_hit_no_terrain(pos + nor * 0.08, fl_dir, max(fl_dist - 0.05, 0.05))) {
+            float blade_vis = 1.0;
+#ifndef QLIKE_WATER
+            if (scene.grass_rm_params2.y > 0.5 && distance(pos, scene.camera_pos.xyz) < 20.0 &&
+                grassEligibility(pos.xz, pos.y) > 0.02)
+                blade_vis = mix(1.0, grass_blade_shadow(pos, fl_dir), scene.grass_rm_params2.z * 0.6 + 0.4);
+#endif
+            lin += fl * (fl_ndl * blade_vis);
+        }
+    }
     lin += fx_lights_diffuse(pos, nor);   // tracers (no shadows)
     // Laser bolts and gun flashes: shadowed by objects, bushes and trees, and
     // near the camera by the lawn's own blades.

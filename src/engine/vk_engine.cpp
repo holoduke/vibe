@@ -628,8 +628,8 @@ void VulkanEngine::run(const RunOptions& opts) {
         if (state_ != State::Playing) fly_mode_ = false;
         // Weapon select: 1 = laser gun, 2 = airstrike tablet.
         if (state_ == State::Playing) {
-            if (in.weapon1 && !prev_weapon_key_[0]) weapon_ = 0;
-            if (in.weapon2 && !prev_weapon_key_[1]) weapon_ = 1;
+            if (in.weapon1 && !prev_weapon_key_[0]) { weapon_ = 0; flashlight_on_ = false; }
+            if (in.weapon2 && !prev_weapon_key_[1]) { weapon_ = 1; flashlight_on_ = false; }
         }
         prev_weapon_key_[0] = in.weapon1; prev_weapon_key_[1] = in.weapon2;
         if (in.fly_key && !prev_fly_key_ && state_ == State::Playing) {
@@ -796,7 +796,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                     }
                     terrain_stroke_active_ = false;
                 }
-            } else if (!game_.weapons_enabled) {
+            } else if (!game_.weapons_enabled || flashlight_on_) {
                 airstrike_click_ = false;            // game setting: player weapons off
             } else if (weapon_ == 1) {
                 // Airstrike tablet: a click marks the ground under the crosshair.
@@ -1053,6 +1053,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         // Voxel destruction: debounced heavy work (collapse + collision
         // rebuild) once per frame, off the per-bullet impact path.
         process_voxel_updates(frame_dt);
+        tick_flashlight(frame_dt);       // F key, sway, beam direction
         // Test hooks: QLIKE_TEST_ZONE=<zone> paints a 70 m disc of that zone
         // 90 m ahead of the camera on frame 5; QLIKE_TEST_EDIT=1 opens edit
         // mode with the zone tool (for UI captures).

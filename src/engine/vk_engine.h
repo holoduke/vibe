@@ -1125,6 +1125,22 @@ private:
     std::vector<glm::vec4> craters_;
     // ---- Weapons: 0 = laser gun, 1 = airstrike tablet (keys 1 / 2) ----
     int  weapon_ = 0;
+    // Hand flashlight (F): replaces the weapon in the hand. The lamp lags a
+    // little behind the view and bobs with the steps; the beam is a ray-
+    // traced spot light (flashlight.cpp).
+    bool  flashlight_on_ = false;
+    bool  flash_key_prev_ = false;
+    bool  flash_init_ = false;
+    float flash_yaw_ = 0.0f, flash_pitch_ = 0.0f;   // eased aim
+    float flash_phase_ = 0.0f;                       // step cycle
+    float flash_move_ = 0.0f;                        // eased 0..1 walking amount
+    glm::vec3 flash_pos_{0.0f}, flash_fwd_{0.0f, 0.0f, -1.0f}, flash_right_{1.0f, 0.0f, 0.0f}, flash_up_{0.0f, 1.0f, 0.0f};
+    void tick_flashlight(float dt);
+    void draw_flashlight_model(VkCommandBuffer cmd, const glm::mat4& vp);
+    Mesh flash_mesh_[6]{};           // body, bezel, reflector, emitter, glass, switch
+    void init_flashlight_meshes();
+    void destroy_flashlight_meshes();
+
     bool prev_weapon_key_[2]{};
     bool airstrike_click_ = false;
     struct Airstrike {

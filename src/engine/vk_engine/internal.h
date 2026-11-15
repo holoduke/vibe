@@ -379,6 +379,11 @@ struct SceneUBO {
     // per frame in update_scene_ubo; count in ripple_info.w.
     glm::vec4  fx_lights[8];
     glm::vec4  fx_light_col[8];
+    // Hand flashlight (flashlight.cpp): lens position + range, beam
+    // direction + cos(outer), colour + cos(inner).
+    glm::vec4  flash_pos;
+    glm::vec4  flash_dir;
+    glm::vec4  flash_col;
 };
 
 // ---- KHR ray tracing entry points ----

@@ -504,6 +504,7 @@ struct FogPC {
     glm::vec4 sun_col;  // rgb (engine E * pi), w ground reference height (m)
     glm::vec4 amb;      // rgb ambient, w frame
     glm::vec4 params;   // density, height falloff, anisotropy, max distance
+    glm::vec4 flash_pos, flash_dir, flash_col;   // hand flashlight (as in the scene UBO)
 };
 }  // namespace
 
@@ -681,6 +682,9 @@ void VulkanEngine::dispatch_fog(VkCommandBuffer cmd) {
     pc.amb = glm::vec4(last_sky_rgb_ * rt_.ambient_strength * 0.8f, float(frame_number_ % 64));
     pc.params = glm::vec4(std::max(0.0f, rt_.fog_density), std::max(0.0f, rt_.fog_height_falloff),
                           glm::clamp(rt_.fog_anisotropy, -0.9f, 0.95f), std::max(20.0f, rt_.fog_max_dist));
+    // (The flashlight beam is NOT injected here: at froxel resolution it was
+    // a foggy ball in front of the lens. It is integrated per pixel instead,
+    // see flashlight_beam in scene_ubo.glsl. flash_* stay zero = off.)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, fog_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, fog_pipeline_layout_, 0, 1, &fog_set_, 0, nullptr);
     auto barrier = [&]() {

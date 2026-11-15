@@ -31,6 +31,9 @@ layout(push_constant) uniform PC {
     vec4 sun_col;   // rgb sun radiance scale (engine E * pi), w ground ref height (m)
     vec4 amb;       // rgb ambient sky radiance, w frame jitter
     vec4 params;    // x density (1/m), y height falloff (1/m), z anisotropy g, w max distance (m)
+    vec4 flash_pos; // hand flashlight: xyz lens, w range (0 = off)
+    vec4 flash_dir; // xyz beam direction, w cos(outer)
+    vec4 flash_col; // rgb colour x intensity, w cos(inner)
 } pc;
 
 const ivec3 kDim = ivec3(160, 90, 64);

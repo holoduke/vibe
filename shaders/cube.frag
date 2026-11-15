@@ -779,6 +779,10 @@ float pom_shade(int hix, vec2 uv, vec3 Lt, float hs, vec2 gdx, vec2 gdy) {
 // Returns (roughness, metallic).
 vec2 surface_rough_metal(int tex_idx, bool foliage, bool mesh_draw) {
     if (foliage) return vec2(0.55, 0.0);
+    // Hand-held props (flashlight.cpp) pick a metal by a negative index.
+    if (tex_idx == -2) return vec2(0.30, 1.0);               // brushed steel
+    if (tex_idx == -3) return vec2(0.46, 1.0);               // anodised aluminium
+    if (tex_idx == -4) return vec2(0.10, 1.0);               // chrome
     if (mesh_draw && tex_idx < 0) return vec2(0.62, 0.0);    // painted vehicles / jets
     switch (tex_idx) {
         case 0:  return vec2(0.88, 0.0);   // Ground054

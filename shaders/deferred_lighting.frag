@@ -350,6 +350,12 @@ void main() {
         vec3 sc = texture(u_scene_color, uv).rgb;
         if (all(lessThan(abs(sc - vec3(0.55, 0.72, 0.95)), vec3(0.004))))
             sc = scene.sky_color.rgb;
+        {   // flashlight beam against the sky
+            vec4 wfar = pc.inv_vp * vec4(ndc, 1.0, 1.0);
+            vec3 rd_sky = normalize(wfar.xyz / wfar.w - scene.camera_pos.xyz);
+            sc += flashlight_beam(scene.camera_pos.xyz, rd_sky, 1.0e6,
+                                  hash12(gl_FragCoord.xy + vec2(float(scene.rt_flags.w & 63) * 7.31, 3.7)));
+        }
         outColor = vec4(sc, 1.0);
         return;
     }
@@ -410,7 +416,12 @@ void main() {
         dot(g0.rgb, vec3(1.0)) < 1e-4) {
         // alpha 0 = geometry: carries exact sky COVERAGE through DLSS
         // (sky pixels keep 1, FX multiply it down to transmittance).
-        outColor = vec4(texture(u_scene_color, uv).rgb, 0.0);
+        // (pre-lit terrain / emissive: only the flashlight beam in front of it is added)
+        vec3 pre_to = world_pos - scene.camera_pos.xyz;
+        float pre_d = length(pre_to);
+        vec3 pre_beam = flashlight_beam(scene.camera_pos.xyz, pre_to / max(pre_d, 1e-3), pre_d,
+                                        hash12(gl_FragCoord.xy + vec2(float(scene.rt_flags.w & 63) * 7.31, 3.7)));
+        outColor = vec4(texture(u_scene_color, uv).rgb + pre_beam, 0.0);
         return;
     }
 
@@ -926,6 +937,16 @@ void main() {
                         !any_hit_m(hit_pos + hit_n * 0.01, L, 200.0, 0x04u)) {
                         hit_light += scene.sun_color.rgb *
                                       scene.sun_color.a * n_dot_sun;
+                    }
+                    // The flashlight spot bounces too: what the beam lights
+                    // throws light back onto its surroundings.
+                    {
+                        vec3 gfl_dir; float gfl_dist;
+                        vec3 gfl = flashlight_at(hit_pos, gfl_dir, gfl_dist);
+                        float gfl_ndl = max(dot(hit_n, gfl_dir), 0.0);
+                        if (gfl_ndl > 0.0 && (gfl.r + gfl.g + gfl.b) > 1e-4 &&
+                            !any_hit_m(hit_pos + hit_n * 0.02, gfl_dir, max(gfl_dist - 0.05, 0.05), 0x04u))
+                            hit_light += gfl * gfl_ndl;
                     }
                     // Lantern light arriving at the bounce point (with its own
                     // shadow ray): the lit road and walls under a lantern throw
@@ -1537,6 +1558,20 @@ void main() {
             point_term += (diff_albedo * (1.0 - Fl) + sl) * vec3(1.0, 0.62, 0.28) * (li * pndl * fall);
         }
     }
+    // Hand flashlight: a spot light with a shadow ray, diffuse + specular.
+    {
+        vec3 fl_dir; float fl_dist;
+        vec3 fl = flashlight_at(world_pos, fl_dir, fl_dist);
+        float fl_ndl = max(dot(N, fl_dir), 0.0);
+        if (fl_ndl > 0.0 && (fl.r + fl.g + fl.b) > 1e-4 &&
+            !any_hit_m(wp_safe + N * 0.06, fl_dir, max(fl_dist - 0.05, 0.05), 0x01u)) {
+            vec3 Hf = normalize(fl_dir + Vv);
+            vec3 Ff = f_schlick(F0, clamp(dot(Vv, Hf), 0.0, 1.0));
+            vec3 sf = d_ggx(clamp(dot(N, Hf), 0.0, 1.0), a_r) *
+                      v_smith_ggx_correlated(NoV, fl_ndl, a_r) * Ff * ms_comp * kPI;
+            point_term += (diff_albedo * (1.0 - Ff) + sf) * fl * fl_ndl;
+        }
+    }
     point_term += diff_albedo * fx_lights_diffuse(world_pos, N);   // tracers (no shadows)
     // Laser bolts and gun flashes: the same sphere lights, with a shadow ray.
     {
@@ -1652,6 +1687,12 @@ void main() {
         if (fog_t > 1e-4) lit = mix(lit, fog_rgb, fog_t);
     }
 
+    {   // flashlight beam in the air in front of this surface
+        vec3 fb_to = world_pos - scene.camera_pos.xyz;
+        float fb_d = length(fb_to);
+        lit += flashlight_beam(scene.camera_pos.xyz, fb_to / max(fb_d, 1e-3), fb_d,
+                               hash12(gl_FragCoord.xy + vec2(float(scene.rt_flags.w & 63) * 7.31, 3.7)));
+    }
     outColor = vec4(lit, 0.0);   // alpha 0 = geometry (sky coverage, see above)
 }
 

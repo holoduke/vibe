@@ -85,6 +85,9 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   ripple_info;      // x = count, y = rain 0..1, z = ground wetness 0..1, w = fx light count
     vec4   fx_lights[8];     // short-lived glow lights (gun flashes, tracers): xyz pos, w radius (m)
     vec4   fx_light_col[8];  // rgb = colour x intensity, a = 1: casts shadows (traced by the shader)
+    vec4   flash_pos;        // hand flashlight: xyz lens position, w range (m; 0 = off)
+    vec4   flash_dir;        // xyz beam direction, w cos(outer cone angle)
+    vec4   flash_col;        // rgb colour x intensity, w cos(inner cone angle)
 } scene;
 
 // Light from muzzle flashes and tracer rounds: each is a sphere of light
@@ -92,6 +95,77 @@ layout(set = 0, binding = 0) uniform SceneUBO {
 // (fx_light_col.a = 0); the shadow-casting ones (laser bolts, gun flashes)
 // are added by each shader with its own shadow ray. A little wrap so surfaces
 // turned partly away (and foliage) still catch the glow.
+// Beam pattern of a reflector torch, by the cosine of the angle off the
+// axis: a tight hotspot, a wider corona around it, a dim spill out to the
+// edge of the cone, and the faint rings a smooth reflector throws.
+float flashlight_pattern(float c) {
+    float c_out = scene.flash_dir.w;
+    if (c <= c_out) return 0.0;
+    // 0 on the axis .. 1 at the edge of the cone (tangent of the angle).
+    float x = (sqrt(max(1.0 - c * c, 0.0)) / max(c, 1e-3)) / (sqrt(max(1.0 - c_out * c_out, 0.0)) / c_out);
+    float edge = 1.0 - smoothstep(0.86, 1.0, x);
+    float spill = 0.16;
+    float corona = 0.85 * exp(-x * x * 9.0);
+    float hot = 2.6 * exp(-x * x * 55.0);
+    float rings = 1.0 + 0.05 * cos(x * 46.0) * (1.0 - x) + 0.03 * cos(x * 17.0);
+    return (spill + corona + hot) * rings * edge;
+}
+
+// Hand flashlight: light arriving at p from the beam, before N.L and the
+// shadow ray (each shader traces its own). A cone with a soft edge and a
+// brighter centre spot, falling off with distance and gone at its range.
+// Returns the direction to the lamp and the distance for the shadow ray.
+vec3 flashlight_at(vec3 p, out vec3 to_lamp, out float dist) {
+    to_lamp = vec3(0.0, 1.0, 0.0); dist = 0.0;
+    float range = scene.flash_pos.w;
+    if (range <= 0.0) return vec3(0.0);
+    vec3 to = scene.flash_pos.xyz - p;
+    dist = length(to);
+    if (dist >= range) return vec3(0.0);
+    to_lamp = to / max(dist, 1e-3);
+    float pat = flashlight_pattern(dot(-to_lamp, scene.flash_dir.xyz));
+    if (pat <= 0.0) return vec3(0.0);
+    float win = 1.0 - dist / range; win *= win;
+    return scene.flash_col.rgb * (pat * win / (1.0 + 0.02 * dist * dist));
+}
+
+// The flashlight beam in the air: light scattered toward the eye by the
+// dust and moisture inside the cone, integrated along the view ray up to
+// the surface at t_max. Samples are packed toward the lamp (where the cone
+// is narrow) and jittered per pixel and frame; the temporal filter turns
+// that into a smooth volume. Scattering fades in over the first half
+// metre, so there is no glowing ball at the lens.
+vec3 flashlight_beam(vec3 ro, vec3 rd, float t_max, float jitter) {
+    float range = scene.flash_pos.w;
+    if (range <= 0.0) return vec3(0.0);
+    // Rays pointing well away from the beam never enter it.
+    if (dot(rd, scene.flash_dir.xyz) < scene.flash_dir.w - 0.45) return vec3(0.0);
+    float t_end = min(t_max, range);
+    const int N = 24;
+    vec3 sum = vec3(0.0);
+    float prev = 0.0;
+    for (int i = 0; i < N; ++i) {
+        float f = (float(i) + jitter) / float(N);
+        float t = t_end * f * f;
+        float dt = t - prev;
+        prev = t;
+        vec3 to = ro + rd * t - scene.flash_pos.xyz;
+        float d = length(to);
+        if (d >= range) break;
+        vec3 ld = to / max(d, 1e-3);
+        float pat = flashlight_pattern(dot(ld, scene.flash_dir.xyz));
+        if (pat <= 0.0) continue;
+        float win = 1.0 - d / range; win *= win;
+        // Inverse-square, bounded near the lamp, and no scattering right at the lens.
+        float att = win / (0.8 + d * d) * smoothstep(0.10, 0.55, d);
+        // Back-scatter toward the eye, a little stronger looking along the beam.
+        float mu = dot(ld, -rd);
+        float phase = 0.055 + 0.030 * mu * mu;
+        sum += scene.flash_col.rgb * (pat * att * phase * dt);
+    }
+    return sum * 0.20;
+}
+
 // Road lanterns without a shadow ray (for shaders that cannot trace one,
 // e.g. the raymarched lawn): warm light, gone at 13 m.
 vec3 lamp_lights_unshadowed(vec3 p, vec3 n) {

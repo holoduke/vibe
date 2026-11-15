@@ -739,6 +739,22 @@ void main() {
     // shaded ground beside it (terrain uses 0.75 * hemisphere), so grass in
     // a tree or hill shadow went near black. A little ground bounce too.
     vec3 sky_term = scene.sky_color.rgb * 0.46 + scene.sun_color.rgb * scene.sun_color.a * 0.02;
+    // Hand flashlight on the lawn, with a shadow ray.
+    {
+        vec3 fl_dir; float fl_dist;
+        vec3 fl = flashlight_at(p, fl_dir, fl_dist);
+        if ((fl.r + fl.g + fl.b) > 1e-4) {
+            bool fl_blocked = false;
+            if (fl_dist > 0.5) {
+                rayQueryEXT flq;
+                rayQueryInitializeEXT(flq, topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                                      0x01u, p + vec3(0.0, 0.04, 0.0), 0.3, fl_dir, fl_dist - 0.1);
+                RQ_PROCEED_LEAVES(flq)
+                fl_blocked = rayQueryGetIntersectionTypeEXT(flq, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+            }
+            if (!fl_blocked) sky_term += fl * (0.5 + 0.5 * abs(dot(Nb, fl_dir)));
+        }
+    }
     sky_term += fx_lights_diffuse(p, vec3(0.0, 1.0, 0.0));   // tracers (no shadows)
     // Laser bolts and gun flashes on the lawn, with a shadow ray each.
     {

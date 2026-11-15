@@ -764,6 +764,14 @@ void VulkanEngine::update_scene_ubo() {
         data.ripples[i] = i < water_ripples_.size()
             ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);
     data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_rain_, env_wet_, 0.0f);
+    // Hand flashlight.
+    if (flashlight_on_) {
+        data.flash_pos = glm::vec4(flash_pos_ + flash_fwd_ * 0.118f, 48.0f);
+        data.flash_dir = glm::vec4(flash_fwd_, std::cos(glm::radians(21.0f)));
+        data.flash_col = glm::vec4(glm::vec3(1.0f, 0.95f, 0.84f) * 22.0f, std::cos(glm::radians(9.0f)));
+    } else {
+        data.flash_pos = data.flash_dir = data.flash_col = glm::vec4(0.0f);
+    }
     // Glow lights: anti-aircraft muzzle flashes and the tracer rounds
     // themselves light what they pass. Up to 8, the ones that matter most
     // to the camera; rounds already high above the ground light nothing
