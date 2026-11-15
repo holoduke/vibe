@@ -1059,6 +1059,8 @@ void VulkanEngine::run(const RunOptions& opts) {
         {
             static const char* kTestZone = std::getenv("QLIKE_TEST_ZONE");
             static const bool kTestEdit = std::getenv("QLIKE_TEST_EDIT") != nullptr;
+            static const bool kTestMenu = std::getenv("QLIKE_TEST_MENU") != nullptr;
+            if (kTestMenu && frame_number_ == 5) state_ = State::Paused;
             if (frame_number_ == 5 && (kTestZone || kTestEdit)) {
                 const glm::vec3 fw(std::sin(player_.yaw), 0.0f, -std::cos(player_.yaw));
                 terrain_brush_world_pos_ = player_.position + fw * 90.0f;

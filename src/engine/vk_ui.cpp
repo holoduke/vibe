@@ -512,6 +512,141 @@ void VulkanEngine::build_menu_ui() {
         ImGui::EndTabItem();
     }
 
+    // ----- Weather tab: time, weather, moon, sun, sky, clouds, fog ---------
+    // Test hook: QLIKE_TEST_MENU=weather opens the pause menu on this tab (captures).
+    static int test_weather_tab = [] { const char* e = std::getenv("QLIKE_TEST_MENU"); return (e && e[0] == 'w') ? 3 : 0; }();
+    const ImGuiTabItemFlags weather_flags = test_weather_tab > 0 ? ImGuiTabItemFlags_SetSelected : 0;
+    if (test_weather_tab > 0) --test_weather_tab;
+    if (ImGui::BeginTabItem("Weather", nullptr, weather_flags)) {
+        // While the clock / weather drive the world, rt_ holds the driven
+        // values and env_base_ the user's own: the sliders edit the latter.
+        const bool driven = env_applied_;
+        float&     sun_intensity = driven ? env_base_.sun_intensity : rt_.sun_intensity;
+        glm::vec3& sun_color     = driven ? env_base_.sun_color : rt_.sun_color;
+        glm::vec3& sky_color     = driven ? env_base_.sky_color : rt_.sky_color;
+        float&     atmo_int      = driven ? env_base_.atmosphere_intensity : rt_.atmosphere_intensity;
+        float&     cloud_cov     = driven ? env_base_.cloud_coverage : rt_.cloud_coverage;
+        float&     cloud_dens    = driven ? env_base_.cloud_density : rt_.cloud_density;
+        float&     cloud_speed   = driven ? env_base_.cloud_speed : rt_.cloud_speed;
+        float&     fog_density   = driven ? env_base_.fog_density : rt_.fog_density;
+        float&     sun_yaw       = driven ? env_base_.sun_yaw_deg : rt_.sun_yaw_deg;
+        bool&      golden        = driven ? env_base_.auto_golden_hour : rt_.auto_golden_hour;
+
+        if (ImGui::CollapsingHeader("Time of day", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("Day / night cycle", &rt_.day_night_enabled);
+            if (rt_.day_night_enabled) {
+                ImGui::SliderFloat("Time of day (h)", &rt_.time_of_day, 0.0f, 24.0f, "%.2f");
+                ImGui::SliderFloat("Clock speed: minutes per day", &rt_.day_length_minutes, 0.0f, 120.0f, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Real minutes one full 24 h day takes. 24 = one game hour per minute.\n"
+                                      "Smaller is faster. 0 stops the clock at the time set above.");
+                const float presets[5] = { 5.5f, 9.0f, 13.0f, 18.7f, 23.5f };
+                const char* names[5] = { "Dawn", "Morning", "Noon", "Dusk", "Night" };
+                for (int i = 0; i < 5; ++i) {
+                    if (i) ImGui::SameLine();
+                    if (ImGui::Button(names[i])) rt_.time_of_day = presets[i];
+                }
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Weather", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("Weather changes", &rt_.weather_enabled);
+            if (rt_.weather_enabled) {
+                ImGui::SliderFloat("Bad weather chance", &rt_.weather_bad_chance, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How often a weather change picks rain or a storm.\n0 = always fair, 1 = always bad.");
+                ImGui::SliderFloat("Weather change every (min)", &rt_.weather_change_minutes, 0.3f, 30.0f, "%.1f");
+                bool forced = rt_.weather_manual >= 0.0f;
+                if (ImGui::Checkbox("Force weather", &forced)) rt_.weather_manual = forced ? weather_state_ : -1.0f;
+                if (forced) ImGui::SliderFloat("0 clear .. 1 thunderstorm", &rt_.weather_manual, 0.0f, 1.0f, "%.2f");
+                const float wp[5] = { 0.05f, 0.30f, 0.50f, 0.75f, 0.95f };
+                const char* wn[5] = { "Clear", "Fair", "Overcast", "Rain", "Storm" };
+                for (int i = 0; i < 5; ++i) {
+                    if (i) ImGui::SameLine();
+                    if (ImGui::Button(wn[i])) rt_.weather_manual = wp[i];
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Random")) rt_.weather_manual = -1.0f;
+                ImGui::Text("Now: %s (%.2f)", weather_name(), weather_state_);
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Moon and stars", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const float p = rt_.moon_phase;
+            const char* nm = p < 0.03f || p > 0.97f ? "new moon" : p < 0.22f ? "waxing crescent" : p < 0.28f ? "first quarter"
+                           : p < 0.47f ? "waxing gibbous" : p < 0.53f ? "full moon" : p < 0.72f ? "waning gibbous"
+                           : p < 0.78f ? "last quarter" : "waning crescent";
+            char fmt[48];
+            snprintf(fmt, sizeof(fmt), "%%.2f  %s", nm);
+            ImGui::SliderFloat("Moon phase", &rt_.moon_phase, 0.0f, 1.0f, fmt);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Like the time of day, but for the moon. 0 = new moon (dark nights), 0.5 = full moon.\n"
+                                  "The phase also sets when it is up: a full moon rises at sunset,\na half moon is up for half the night.");
+            ImGui::Checkbox("Moon phase advances", &rt_.moon_phases);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("One full cycle every 8 days while the clock runs.");
+            ImGui::SliderFloat("Moon brightness", &rt_.moon_brightness, 0.0f, 1.0f, rt_.moon_brightness <= 0.0f ? "no moon" : "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Overall strength of the moonlight. 0 = never any moon.");
+            ImGui::SliderFloat("Stars", &rt_.star_brightness, 0.0f, 2.0f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Star brightness (they also light the land a little on clear nights).\n"
+                                  "Clouds hide them; a bright moon dims the faint ones.");
+        }
+
+        if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (driven) ImGui::TextDisabled("Your own values. The clock and the weather dim and tint them through the day.");
+            ImGui::SliderFloat("sun intensity", &sun_intensity, 0.0f, 8.0f);
+            ImGui::ColorEdit3("sun colour", &sun_color.x);
+            ImGui::Checkbox("Golden-hour tint (warm sun + sky when low)", &golden);
+            ImGui::SliderFloat("sun glare / flare strength", &rt_.sun_glare_strength, 0.0f, 2.0f);
+            ImGui::SliderFloat("sun shafts (god rays)", &rt_.sun_shaft_intensity, 0.0f, 2.0f);
+            if (rt_.day_night_enabled) {
+                ImGui::SliderFloat("sun path compass (deg)", &sun_yaw, -180.0f, 180.0f);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turns the whole sun / moon path around the map (where east is).");
+                ImGui::TextDisabled("Sun height follows the clock.");
+            } else {
+                ImGui::SliderFloat("sun height (deg)", &rt_.sun_pitch_deg, 5.0f, 89.0f);
+                ImGui::SliderFloat("sun direction (deg)", &rt_.sun_yaw_deg, -180.0f, 180.0f);
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Sky and ambient colours", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::ColorEdit3("sky colour (fill light)", &sky_color.x);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Colour of the light the sky throws on everything that is not in direct sun.");
+            ImGui::ColorEdit3("ground ambient", &rt_.ground_ambient.x);
+            ImGui::SliderFloat("ambient strength", &rt_.ambient_strength, 0.0f, 3.0f);
+            ImGui::SliderFloat("sky brightness", &atmo_int, 0.0f, 12.0f, "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Brightness of the sky dome itself.");
+            ImGui::SliderFloat("distance haze reach (km)", &rt_.aerial_max_km, 0.5f, 32.0f, "%.1f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far the blue distance haze of the atmosphere is computed.");
+        }
+
+        if (ImGui::CollapsingHeader("Clouds")) {
+            bool clouds = rt_.clouds_enabled != 0;
+            if (ImGui::Checkbox("Clouds", &clouds)) rt_.clouds_enabled = clouds ? 1 : 0;
+            if (rt_.weather_enabled) ImGui::TextDisabled("With weather on these are the fair-weather values; bad weather adds cloud.");
+            ImGui::SliderFloat("cloud cover", &cloud_cov, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("cloud thickness", &cloud_dens, 0.1f, 3.0f, "%.2f");
+            ImGui::SliderFloat("cloud wind (m/s)", &cloud_speed, 0.0f, 40.0f, "%.1f");
+        }
+
+        if (ImGui::CollapsingHeader("Fog and haze")) {
+            bool vf = rt_.fog_volumetric != 0;
+            if (ImGui::Checkbox("Ground fog with light shafts", &vf)) rt_.fog_volumetric = vf ? 1 : 0;
+            ImGui::SliderFloat("fog thickness", &fog_density, 0.0f, 0.05f, "%.4f");
+            ImGui::SliderFloat("fog thins out with height", &rt_.fog_height_falloff, 0.0f, 0.2f, "%.3f");
+            ImGui::SliderFloat("fog reach (m)", &rt_.fog_max_dist, 50.0f, 1000.0f, "%.0f");
+            ImGui::SeparatorText("Distance haze");
+            ImGui::ColorEdit3("haze colour", &rt_.distance_fog_color.x);
+            ImGui::SliderFloat("haze strength", &rt_.distance_fog_strength, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("haze density", &rt_.distance_fog_density, 0.0f, 0.05f, "%.4f");
+            ImGui::SliderFloat("haze starts at (m)", &rt_.distance_fog_start, 0.0f, 500.0f, "%.0f");
+            ImGui::SliderFloat("haze height top (m)", &rt_.distance_fog_height, 0.0f, 400.0f, "%.0f");
+            ImGui::SliderFloat("haze max", &rt_.distance_fog_max, 0.0f, 1.0f, "%.2f");
+            ImGui::TextDisabled("strength 0 disables it. height top 0 = the same at every height.");
+        }
+        ImGui::EndTabItem();
+    }
+
     // ----- Graphics tab ----------------------------------------------------
     if (ImGui::BeginTabItem("Graphics")) {
         if (ImGui::CollapsingHeader("Resolution & Quality", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -598,69 +733,11 @@ void VulkanEngine::build_menu_ui() {
             ImGui::SeparatorText("Materials");
         ImGui::Checkbox("textures enabled", &rt_.textures_enabled);
 
-        ImGui::SeparatorText("Time of day & weather");
-        ImGui::Checkbox("Day / night cycle", &rt_.day_night_enabled);
-        if (rt_.day_night_enabled) {
-            ImGui::SliderFloat("Time of day (h)", &rt_.time_of_day, 0.0f, 24.0f, "%.2f");
-            ImGui::SliderFloat("Clock speed: minutes per day", &rt_.day_length_minutes, 0.0f, 120.0f, "%.1f");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Real minutes one full 24 h day takes. 24 = one game hour per minute.\n"
-                                  "Smaller is faster. 0 stops the clock at the time set above.");
-        }
-        ImGui::SeparatorText("Moon and stars");
-        {
-            const float p = rt_.moon_phase;
-            const char* nm = p < 0.03f || p > 0.97f ? "new moon" : p < 0.22f ? "waxing crescent" : p < 0.28f ? "first quarter"
-                           : p < 0.47f ? "waxing gibbous" : p < 0.53f ? "full moon" : p < 0.72f ? "waning gibbous"
-                           : p < 0.78f ? "last quarter" : "waning crescent";
-            char fmt[48];
-            snprintf(fmt, sizeof(fmt), "%%.2f  %s", nm);
-            ImGui::SliderFloat("Moon phase", &rt_.moon_phase, 0.0f, 1.0f, fmt);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Like the time of day, but for the moon. 0 = new moon (dark nights), 0.5 = full moon. "
-                                  "The phase also sets when it is up: a full moon rises at sunset, a half moon is up for half the night.");
-        }
-        ImGui::Checkbox("Moon phase advances", &rt_.moon_phases);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("One full cycle every 8 days while the clock runs.");
-        ImGui::SliderFloat("Moon brightness", &rt_.moon_brightness, 0.0f, 1.0f, rt_.moon_brightness <= 0.0f ? "no moon" : "%.2f");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Overall strength of the moonlight. 0 = never any moon.");
-        ImGui::SliderFloat("Stars", &rt_.star_brightness, 0.0f, 2.0f, "%.2f");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Star brightness (they also light the land a little on clear nights). Clouds hide them; a bright moon dims the faint ones.");
-        ImGui::Checkbox("Weather", &rt_.weather_enabled);
-        if (rt_.weather_enabled) {
-            ImGui::SliderFloat("Bad weather chance", &rt_.weather_bad_chance, 0.0f, 1.0f, "%.2f");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("How often a weather change picks rain or a storm.\n0 = always fair, 1 = always bad.");
-            ImGui::SliderFloat("Weather change every (min)", &rt_.weather_change_minutes, 0.3f, 30.0f, "%.1f");
-            bool forced = rt_.weather_manual >= 0.0f;
-            if (ImGui::Checkbox("Force weather", &forced)) rt_.weather_manual = forced ? weather_state_ : -1.0f;
-            if (forced) ImGui::SliderFloat("0 clear .. 1 thunderstorm", &rt_.weather_manual, 0.0f, 1.0f, "%.2f");
-            ImGui::Text("Now: %s (%.2f)", weather_name(), weather_state_);
-        }
-        ImGui::SeparatorText("Sun");
-        ImGui::BeginDisabled(rt_.day_night_enabled);
-        ImGui::SliderFloat("pitch (deg)", &rt_.sun_pitch_deg, 5.0f, 89.0f);
-        ImGui::SliderFloat("yaw (deg)", &rt_.sun_yaw_deg, -180.0f, 180.0f);
-        ImGui::EndDisabled();
-        if (rt_.day_night_enabled || rt_.weather_enabled)
-            ImGui::TextDisabled("Sun, sky, cloud and fog values are driven by the clock / weather;\nturn those off to edit them by hand.");
+        ImGui::SeparatorText("Shadows (RT, contact-hardening)");
         if (ImGui::Button("Recalculate shadows")) shadow_rebake_request_ = true;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Re-bakes the precomputed ground shadow and ambient-occlusion maps\n"
                               "and the terrain ray-tracing geometry. Live shadows update every frame anyway.");
-        ImGui::Checkbox("Auto golden-hour tint (warm sun + sky when low)",
-                        &rt_.auto_golden_hour);
-        ImGui::SliderFloat("sun glare / flare strength", &rt_.sun_glare_strength,
-                            0.0f, 2.0f);
-        ImGui::SliderFloat("intensity", &rt_.sun_intensity, 0.0f, 8.0f);
-        ImGui::ColorEdit3("sun color", &rt_.sun_color.x);
-
-        ImGui::SeparatorText("Sky / Ambient");
-        ImGui::ColorEdit3("sky color", &rt_.sky_color.x);
-        ImGui::ColorEdit3("ground ambient", &rt_.ground_ambient.x);
-        ImGui::SliderFloat("ambient strength", &rt_.ambient_strength, 0.0f, 3.0f);
-
-        ImGui::SeparatorText("Shadows (RT, contact-hardening)");
         ImGui::Checkbox("enabled", &rt_.shadow_enabled);
         ImGui::Checkbox("half-rate shadow pass (perf)",
                         &rt_.half_rate_shadows);
@@ -909,7 +986,6 @@ void VulkanEngine::build_menu_ui() {
         // recovers detail the TAA spatial filter softened. 0 disables; 0.55
         // is the default; >1 looks deliberately punchy.
         ImGui::SliderFloat("post-TAA sharpening", &rt_.compose_sharpen_strength, 0.0f, 2.0f);
-        ImGui::SliderFloat("sun shafts (god rays)", &rt_.sun_shaft_intensity, 0.0f, 2.0f);
         // 4a-deep: enables the variance-moments temporal pass plus the
         // 3-pass a-trous spatial filter. Off by default (perf cost is
         // ~1.5 ms at 1080p); when on, TAA's own single-pass spatial is
@@ -1341,27 +1417,6 @@ void VulkanEngine::build_menu_ui() {
             ImGui::TreePop();
         }
 
-        if (ImGui::TreeNode("Distance fog")) {
-            ImGui::ColorEdit3("fog colour",
-                              &rt_.distance_fog_color.x);
-            ImGui::SliderFloat("fog strength",
-                               &rt_.distance_fog_strength,
-                               0.0f, 1.0f, "%.2f");
-            ImGui::SliderFloat("fog density",
-                               &rt_.distance_fog_density,
-                               0.0f, 0.05f, "%.4f");
-            ImGui::SliderFloat("fog start (m)",
-                               &rt_.distance_fog_start,
-                               0.0f, 500.0f, "%.0f");
-            ImGui::SliderFloat("fog height top (m)",
-                               &rt_.distance_fog_height,
-                               0.0f, 400.0f, "%.0f");
-            ImGui::SliderFloat("fog max",
-                               &rt_.distance_fog_max,
-                               0.0f, 1.0f, "%.2f");
-            ImGui::TextDisabled("strength=0 disables. height_top=0 -> uniform fog.");
-            ImGui::TreePop();
-        }
 
         ImGui::SeparatorText("Debug");
         const char* terrain_debug_labels[] = {
