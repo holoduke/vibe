@@ -150,7 +150,9 @@ void VulkanEngine::apply_environment(float dt) {
             // well below the horizon, where a real dusk sky is deep blue), then
             // full moonlight.
             const float n = glm::mix(2.6f, 1.0f, glm::smoothstep(0.6f, -9.0f, e));
-            pitch = std::max(-e, 26.0f);     // kept high: a low moon would redden like a setting sun yaw = base.sun_yaw_deg + az + 180.0f;
+            // Kept high: a low moon would redden like a setting sun.
+            pitch = std::max(-e, 26.0f);
+            yaw = base.sun_yaw_deg + az + 180.0f;
             sun_k = 0.045f * n;
             sky_k = 0.045f * n;
             light_col = glm::vec3(0.60f, 0.73f, 1.0f);
