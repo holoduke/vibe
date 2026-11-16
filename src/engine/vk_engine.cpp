@@ -91,7 +91,13 @@ VulkanEngine::~VulkanEngine() { shutdown(); }
 
 void VulkanEngine::init() {
     log::info("VulkanEngine::init()");
-    window_ = std::make_unique<Window>(WindowConfig{ .width = 1280, .height = 720,
+    // QLIKE_TEST_SIZE=WxH: window size for profiling at the played resolution.
+    uint32_t win_w = 1280, win_h = 720;
+    if (const char* ts = std::getenv("QLIKE_TEST_SIZE")) {
+        unsigned tw = 0, th = 0;
+        if (std::sscanf(ts, "%ux%u", &tw, &th) == 2 && tw >= 320 && th >= 200) { win_w = tw; win_h = th; }
+    }
+    window_ = std::make_unique<Window>(WindowConfig{ .width = win_w, .height = win_h,
                                                      .title = "quake-like" });
     // Audio engine starts before Vulkan so a missing audio device just
     // means silence; the renderer keeps working. Clip files are loaded
