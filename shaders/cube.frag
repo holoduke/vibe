@@ -2772,17 +2772,24 @@ void main() {
                     bool  br_cut = albedo_idx_raw == 1 || albedo_idx_raw == 4;
                     // Past depth Dm below the entry face every point is
                     // solid, so the march never needs to go further.
+                    // (True angle, however flat: with the camera almost in
+                    // the plane of a face - hugging a wall, peering round a
+                    // corner - the ray runs a long way through the relief
+                    // layer and must be followed until it meets a stone or
+                    // leaves the block; cutting it short painted smeared
+                    // stripes where there is nothing but air.)
                     float cosn  = max(dot(rd, -spom_face_n), 0.05);
-                    float t_deep = br_Dm / cosn * 1.02;
+                    float t_deep = br_Dm / max(dot(rd, -spom_face_n), 0.002) * 1.02;
                     float lod = textureQueryLod(u_height[br_h], spom_uv0).x;
                     // More steps at grazing angles (long march, thin
                     // features) - fewer head-on.
                     int   kSteps = int(mix(48.0, 16.0, cosn));
-                    float dt = t_deep / float(kSteps);
+                    float dt = 0.0;
                     // Start offset dithered per pixel: the fixed layers of a
                     // linear march show as bands on walls seen at a slant.
                     float t_lo = 0.0, t_hi = -1.0;
-                    float t_j = dt * ign(gl_FragCoord.xy);
+                    float t_j = 0.0;
+                    int   br_n = 0;
                     int   bf = br_ef;
                     br_relief_m = br_Dm;
                     // The ray is marched until it meets stone. If it first
@@ -2793,8 +2800,21 @@ void main() {
                     for (int pass = 0; pass < 3 && t_hi < 0.0; ++pass) {
                         int   xf;
                         float t_exit = br_exit(ro, rd, br_C, br_H, br_mask, xf);
-                        float L = min(t_exit, t_deep);
-                        for (float t = (pass == 0 ? t_j : t_lo); t < L; t += dt) {
+                        // The march runs all the way to the exit. Deeper than
+                        // Dm below the entry face the stone is USUALLY solid
+                        // (and the march stops there by itself) - but not
+                        // next to another open face, whose own relief and
+                        // worn corner cut into it: there the ray is still in
+                        // air and has to go on to the exit.
+                        float L = t_exit;
+                        if (pass == 0) {
+                            // Steps sized to the stretch actually travelled
+                            // (never coarser than ~half a joint width).
+                            dt  = min(min(t_exit, t_deep), 8.0) / float(kSteps);
+                            dt  = min(dt, max(br_Dm * 0.5, 0.03));
+                            t_j = dt * ign(gl_FragCoord.xy);
+                        }
+                        for (float t = (pass == 0 ? t_j : t_lo); t < L && br_n < 160; t += dt, ++br_n) {
                             if (br_margin(ro + rd * t, br_C, br_H, br_mask, br_Dm,
                                           br_h, lod, scale, br_asp, br_ef, bf) >= 0.0) {
                                 t_hi = t;
@@ -2803,7 +2823,7 @@ void main() {
                             t_lo = t;
                         }
                         if (t_hi >= 0.0) break;
-                        if (t_exit >= t_deep) { t_hi = t_deep; break; }   // reached the solid core
+                        if (t_exit > 1e8 || br_n >= 160) { t_hi = t_lo + dt; break; }   // no way out: solid
                         if (br_cut && br_open_air(ro + rd * t_exit, rd)) discard;
                         br_mask &= ~(1 << xf);
                         t_lo = max(t_lo, t_exit - dt);

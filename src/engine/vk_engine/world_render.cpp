@@ -1068,7 +1068,9 @@ void VulkanEngine::compute_brush_face_masks() {
     const auto& bs = world_.brushes;
     brush_face_mask_.assign(bs.size(), 0);
     constexpr float kTouch = 0.02f;   // faces within 2 cm count as touching
-    constexpr float kCovered = 0.6f;  // >= 60 % of the face area covered -> hidden
+    constexpr float kCovered = 0.98f; // only a (practically) fully covered face is hidden; a partly
+                                      // covered one (door jamb under a lintel) stays a boundary and the
+                                      // shader asks per ray whether the exit point is open air
     int exposed_total = 0;
     for (size_t i = 0; i < bs.size(); ++i) {
         const glm::vec3 lo = bs[i].center - bs[i].size * 0.5f;
