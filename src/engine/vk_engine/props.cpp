@@ -1258,13 +1258,15 @@ void VulkanEngine::init_doors() {
     const float plateau_y       = 22.0f;
     const float ent_half        = 1.6f;
     const float gate_z          = 11.0f;
-    const float panel_w_half    = 0.78f;   // 0.78 × 2 = 1.56 m; sub-2 cm gap
+    const float panel_w_half    = 0.814f;   // 0.78 × 2 = 1.56 m; sub-2 cm gap
                                             // at meet line so the closed
                                             // panels don't z-fight in the
                                             // middle
-    const float panel_h_half    = 1.70f;   // 3.4 m tall — fits in 3.6 m gap
+    const float panel_h_half    = 1.80f;   // 3.4 m tall — fits in 3.6 m gap
     const float panel_t_half    = 0.06f;   // 12 cm thick wooden plank
-    const float y_center        = plateau_y + panel_h_half + 0.05f;
+    const float y_center        = plateau_y + panel_h_half + 0.03f;   // top + hinge edge sit a few cm INSIDE the stone: the
+                                            // wall relief is cut back from the opening, so a door
+                                            // that only touches it leaves slits of light
 
     auto make_door = [&](float hinge_x, float closed_dx, float open_a) {
         Door d{};
@@ -1278,9 +1280,9 @@ void VulkanEngine::init_doors() {
     // Panels now swing INWARD (toward the courtyard): the gatehouse has a
     // round-arched front passage that an outward swing would clip into.
     // Left panel: hinge on -X side, swings outward (toward +Z) by ~85°.
-    doors_.push_back(make_door(-ent_half, +panel_w_half + 0.01f, -1.48f));
+    doors_.push_back(make_door(-ent_half, +panel_w_half - 0.03f, -1.48f));
     // Right panel: hinge on +X side, swings outward by -85°.
-    doors_.push_back(make_door(+ent_half, -panel_w_half - 0.01f, +1.48f));
+    doors_.push_back(make_door(+ent_half, -panel_w_half + 0.03f, +1.48f));
 }
 
 void VulkanEngine::update_doors(float dt) {

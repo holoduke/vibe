@@ -1345,6 +1345,12 @@ float br_noise(vec3 p) {
 // Outward direction of the worn corner at the last point br_margin looked
 // at (zero away from corners) - bends the shading normal round the corner.
 vec3 g_br_round_n = vec3(0.0);
+// Inside corner: the face of the neighbouring block this ray runs into
+// (-1 = none) and where its plane lies. Its stones are part of the solid
+// too, so the two walls meet along the uneven line where their stones
+// actually touch instead of the ruler-straight line of the two boxes.
+int   g_nb_f  = -1;
+float g_nb_pl = 0.0;
 
 // Signed solidity margin (>= 0 -> inside the masonry). Only EXPOSED faces
 // carry a surface; where a face is covered by a neighbouring block the
@@ -1389,6 +1395,25 @@ float br_margin(vec3 w, vec3 C, vec3 H, int mask, float Dm, int h_idx,
         if (k >= 2) {
             m = min(m, r - length(q));
             g_br_round_n = q * qs;
+        }
+    }
+    if (g_nb_f >= 0) {
+        int   a = g_nb_f >> 1;
+        float s = ((g_nb_f & 1) == 1) ? 1.0 : -1.0;
+        float d = s * (g_nb_pl - w[a]);              // depth below the neighbour's face
+        if (d > -0.06) {
+            float mb = d;
+            if (d < Dm) {
+                float h = textureLod(u_height[h_idx],
+                                     br_face_uv(g_nb_f, w, uv_scale, aspect), lod).r;
+                mb = d - Dm * (1.0 - h);
+            }
+            // Union of the two walls, with a little mortar packed into
+            // the angle.
+            const float k = 0.035;
+            float hh = clamp(0.5 + 0.5 * (mb - m) / k, 0.0, 1.0);
+            if (mb > m) { bind_face = g_nb_f; g_br_round_n = vec3(0.0); }
+            m = mix(m, mb, hh) + k * hh * (1.0 - hh);
         }
     }
     return m;
@@ -2797,6 +2822,35 @@ void main() {
                     // silhouette only when the exit point really is in open
                     // air; where another block or a tower stands there, that
                     // face stops being a boundary and the march goes on.
+                    // Which wall does this ray run into? Asked just above
+                    // the face, along it, as far as the march can travel.
+                    g_nb_f = -1;
+                    {
+                        vec3  td = rd - spom_face_n * dot(rd, spom_face_n);
+                        float tl = length(td);
+                        if (tl > 0.05) {
+                            td /= tl;
+                            vec3  po = ro + spom_face_n * 0.015;
+                            rayQueryEXT nq;
+                            rayQueryInitializeEXT(nq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
+                                                  po, 0.0, td, min(t_deep * tl, 2.5) + 0.02);
+                            while (rayQueryProceedEXT(nq)) {}
+                            if (rayQueryGetIntersectionTypeEXT(nq, true) ==
+                                    gl_RayQueryCommittedIntersectionTriangleEXT &&
+                                rayQueryGetIntersectionInstanceCustomIndexEXT(nq, true) == kStaticBlasSentinel &&
+                                BR_FRONT(rayQueryGetIntersectionFrontFaceEXT(nq, true))) {
+                                int  prim = rayQueryGetIntersectionPrimitiveIndexEXT(nq, true);
+                                int  cf   = (prim % kCubeTrisPerBox) / 2;   // +X -X +Y -Y +Z -Z
+                                int  na   = cf >> 1;
+                                Material nm = materials[prim / kCubeTrisPerBox];
+                                if (na != axis && int(nm.tex.x) == albedo_idx_raw &&
+                                    abs(nm.tex.z - scale) < 0.002) {
+                                    g_nb_f  = na * 2 + ((cf & 1) == 0 ? 1 : 0);
+                                    g_nb_pl = (po + td * rayQueryGetIntersectionTEXT(nq, true))[na];
+                                }
+                            }
+                        }
+                    }
                     for (int pass = 0; pass < 3 && t_hi < 0.0; ++pass) {
                         int   xf;
                         float t_exit = br_exit(ro, rd, br_C, br_H, br_mask, xf);
