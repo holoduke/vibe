@@ -3518,7 +3518,7 @@ void main() {
                         gl_RayQueryCommittedIntersectionTriangleEXT) {
                         float tf  = rayQueryGetIntersectionTEXT(fq, true);
                         float fad = 1.0 - smoothstep(20.0, 30.0, md);
-                        float ao  = mix(1.0, mix(0.62, 1.0, sqrt(clamp(tf / reach, 0.0, 1.0))), fad);
+                        float ao  = mix(1.0, mix(0.55, 1.0, sqrt(clamp(tf / reach, 0.0, 1.0))), fad);
                         vec3  rdm = normalize(vWorldPos - scene.camera_pos.xyz);
                         int   prim = rayQueryGetIntersectionPrimitiveIndexEXT(fq, true);
                         bool  on_floor =
@@ -3532,8 +3532,16 @@ void main() {
                             vec3  fp  = vWorldPos + rdm * (tf / max(-rdm.y, 1e-3));
                             vec2  fuv = br_face_uv(3, fp, max(fm.tex.z, 0.001),
                                                    (fh == 0 || fh == 2) ? vec2(0.5, 1.0) : vec2(1.0));
-                            albedo = texture(u_albedo[fi], fuv).rgb * fm.color.rgb * 0.8;
-                            vec3 fn = texture(u_normal[fi], fuv).rgb * 2.0 - 1.0;
+                            // (explicit gradients: fuv jumps where the paving starts)
+                            vec2 fgx = dFdx(vWorldPos.xz) * max(fm.tex.z, 0.001), fgy = dFdy(vWorldPos.xz) * max(fm.tex.z, 0.001);
+                            albedo = textureGrad(u_albedo[fi], fuv, fgx, fgy).rgb * fm.color.rgb;
+                            // The stones stand ON this strip of paving: it is
+                            // darkest right under them (contact shadow) and
+                            // eases out to what the open paving gets beside a
+                            // wall. Without it the stones looked pasted on,
+                            // hovering over a lit floor.
+                            ao = mix(1.0, mix(0.34, 0.72, smoothstep(0.0, 0.10, drop - tf)), fad);
+                            vec3 fn = textureGrad(u_normal[fi], fuv, fgx, fgy).rgb * 2.0 - 1.0;
                             N = normalize(vec3(1.0, 0.0, 0.0) * fn.x + vec3(0.0, 0.0, 1.0) * fn.y +
                                           vec3(0.0, 1.0, 0.0) * fn.z);
                         }
