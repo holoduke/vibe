@@ -776,6 +776,21 @@ float peb_layer(vec2 p, float cell, float dens, float layer_id, float hf, inout 
     }
     return h;
 }
+// Foam lace: distance between the nearest and second-nearest cell point
+// (small on the walls between cells). Foam sits on those walls and the
+// cell centres are open water - the net of bubbles real surf leaves.
+float foam_cells(vec2 p) {
+    vec2 ip = floor(p), fp = fract(p);
+    float f1 = 9.0, f2 = 9.0;
+    for (int j = -1; j <= 1; ++j)
+    for (int i = -1; i <= 1; ++i) {
+        vec2 g = vec2(float(i), float(j));
+        vec2 o = g + peb_h3(ip + g + 113.0).xy - fp;
+        float d = dot(o, o);
+        if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+    }
+    return sqrt(f2) - sqrt(f1);
+}
 // Lake / river bed: a bed of closely packed pebbles (after "Raymarching
 // Pebbles", shadertoy wlsBRX: a pebble height field, shaded with its slope,
 // darkened in the crevices between the stones, with a wet highlight).
@@ -3018,6 +3033,20 @@ void main() {
                 float patchy = smoothstep(0.25, 0.7, noise2(wpos.xz * 1.7 - vec2(0.0, wave_t * 0.12)));
                 float edge   = exp(-depth_clean * (22.0 / foam_w));
                 band *= max(edge, lap * mix(0.35, 1.0, patchy));
+                // Foam, not paint: a lace of bubble walls with open water in
+                // between (two sizes, drifting and slowly reshaping). Thick
+                // foam keeps narrow holes, thin foam is mostly holes - so the
+                // bed shows through it.
+                if (band > 0.01) {
+                    vec2  fq = wpos.xz + vec2(wave_t * 0.06, -wave_t * 0.04) + (lap_n - 0.5) * 0.25;
+                    float c1 = foam_cells(fq * 3.2 + 0.15 * sin(wave_t * 0.7 + fq.yx * 2.0));
+                    float c2 = foam_cells(fq * 8.5 + 7.3);
+                    float thick = clamp(band * 1.6, 0.0, 1.0);
+                    float wall1 = 1.0 - smoothstep(0.04 + 0.22 * thick, 0.16 + 0.55 * thick, c1);
+                    float wall2 = 1.0 - smoothstep(0.03 + 0.15 * thick, 0.14 + 0.40 * thick, c2);
+                    float lace  = max(wall1, 0.75 * wall2 * mix(0.4, 1.0, wall1 + thick));
+                    band = min(band * 1.5, 1.0) * mix(lace, 1.0, 0.10 * thick);
+                }
             }
             // River style: blend in the flow-driven foam pattern on top
             // of the shore band. pm_foam_tex was set in the river branch
