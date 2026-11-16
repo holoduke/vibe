@@ -6,7 +6,7 @@
 run, and builds — works from a vanilla PowerShell with no dev env set up:
 
 ```powershell
-cd C:\Users\gillis\dev\vibe
+cd C:\Users\gillis\dev\quake-like
 ./build.ps1 -Config Release       # add -Clean to wipe build/, -Test to run tests
 ```
 
@@ -24,7 +24,7 @@ From "Developer PowerShell for VS 2022" (env pre-loaded), or after sourcing
 `vcvars64.bat` manually:
 
 ```powershell
-cd C:\Users\gillis\dev\vibe
+cd C:\Users\gillis\dev\quake-like
 cmake -S . -B build              # only needed on fresh checkout or after adding files
 cmake --build build --config Release --target vibe
 ```
@@ -36,7 +36,7 @@ get picked up next `cmake -S . -B build`).
 ## Run
 
 ```powershell
-cd C:\Users\gillis\dev\vibe     # cwd MUST be project root or all textures load as gray placeholders
+cd C:\Users\gillis\dev\quake-like     # cwd MUST be project root or all textures load as gray placeholders
 .\build\vibe.exe
 ```
 

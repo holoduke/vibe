@@ -2,7 +2,7 @@
 # conifer spray right) from the magenta-keyed source images, and
 # assets/foliage/bark.png.
 Add-Type -AssemblyName System.Drawing
-$root = 'C:\Users\gillis\dev\vibe\assets\foliage'
+$root = 'C:\Users\gillis\dev\quake-like\assets\foliage'
 $S = 1024
 $atlas = New-Object Drawing.Bitmap (2 * $S), (2 * $S), ([Drawing.Imaging.PixelFormat]::Format32bppArgb)
 $ad = $atlas.LockBits((New-Object Drawing.Rectangle 0, 0, (2 * $S), (2 * $S)), 'WriteOnly', $atlas.PixelFormat)
