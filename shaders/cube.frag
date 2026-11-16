@@ -1328,6 +1328,24 @@ vec2 br_face_uv(int f, vec3 w, float uv_scale, vec2 aspect) {
     return uv * aspect;
 }
 
+// Smooth 3-D value noise (0..1) - how worn a wall corner is at a point.
+float br_hash3(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+float br_noise(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(br_hash3(i),                 br_hash3(i + vec3(1, 0, 0)), f.x),
+                   mix(br_hash3(i + vec3(0, 1, 0)), br_hash3(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(br_hash3(i + vec3(0, 0, 1)), br_hash3(i + vec3(1, 0, 1)), f.x),
+                   mix(br_hash3(i + vec3(0, 1, 1)), br_hash3(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+// Outward direction of the worn corner at the last point br_margin looked
+// at (zero away from corners) - bends the shading normal round the corner.
+vec3 g_br_round_n = vec3(0.0);
+
 // Signed solidity margin (>= 0 -> inside the masonry). Only EXPOSED faces
 // carry a surface; where a face is covered by a neighbouring block the
 // stone simply continues (no boundary there at all), so the relief of one
@@ -1339,6 +1357,8 @@ float br_margin(vec3 w, vec3 C, vec3 H, int mask, float Dm, int h_idx,
     vec3 rel = w - C;
     float m = 1e9;
     bind_face = entry_face;
+    vec3 qv = vec3(0.0), qs = vec3(1.0);
+    int  near_n = 0;
     for (int f = 0; f < 6; ++f) {
         if (((mask >> f) & 1) == 0) continue;
         int   a = f >> 1;
@@ -1351,6 +1371,25 @@ float br_margin(vec3 w, vec3 C, vec3 H, int mask, float Dm, int h_idx,
             mf = d - Dm * (1.0 - h);
         }
         if (mf < m) { m = mf; bind_face = f; }
+        if (mf < Dm) {
+            ++near_n;
+            if (Dm - mf > qv[a]) { qv[a] = Dm - mf; qs[a] = s; }
+        }
+    }
+    // Where two (or three) exposed faces meet, the corner is not a razor
+    // edge: it is rounded off and chipped, by an amount that wanders along
+    // the edge - so a wall corner reads as worn stone from any direction,
+    // not only where a joint happens to cut it.
+    g_br_round_n = vec3(0.0);
+    if (near_n >= 2) {
+        float n = br_noise(w * 3.1) * 0.65 + br_noise(w * 9.7) * 0.35;
+        float r = Dm * mix(0.20, 0.95, n);
+        vec3  q = max(qv - (Dm - r), vec3(0.0));     // = max(r - mf, 0)
+        int   k = int(q.x > 0.0) + int(q.y > 0.0) + int(q.z > 0.0);
+        if (k >= 2) {
+            m = min(m, r - length(q));
+            g_br_round_n = q * qs;
+        }
     }
     return m;
 }
@@ -2696,6 +2735,7 @@ void main() {
             // 1 = SPOM legacy (ray-query silhouette resolution),
             // 2 = SSDM (depth-override silhouette + recessed depth).
             int spom_mode = int(scene.grass_side_lit_params.z + 0.5);
+            vec3  br_round_n = vec3(0.0);
             float br_relief_m = 0.0;   // box relief depth in metres (0 = not that path)
             if (spom_mode == 0) {
                 // Flat path: forget the parallax UV shift entirely.
@@ -2782,6 +2822,7 @@ void main() {
                     vec3 p_hit = ro + rd * t_hi;
                     br_margin(p_hit, br_C, br_H, br_mask, br_Dm, br_h, lod,
                               scale, br_asp, br_ef, bf);
+                    br_round_n = g_br_round_n;
                     // Shade with the frame of the face actually hit (at an
                     // edge that can be the neighbouring face of the box).
                     int   fa = bf >> 1;
@@ -3174,6 +3215,9 @@ void main() {
                     vec2  slope = vec2(hx, hy) / (2.0 * e) * (scale * asp) * br_relief_m;
                     slope = clamp(slope, vec2(-2.5), vec2(2.5));
                     N = normalize(N - (spom_T * slope.x + spom_B * slope.y) * 0.7);
+                    // Worn corner: the surface really turns round the edge.
+                    if (dot(br_round_n, br_round_n) > 1e-10)
+                        N = normalize(N + normalize(br_round_n) - spom_face_n);
                 }
             }
         } else if (use_albedo && is_mesh_draw && pc.grass_params.z < 0.5) {
