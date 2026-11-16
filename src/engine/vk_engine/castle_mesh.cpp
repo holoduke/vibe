@@ -69,7 +69,8 @@ void VulkanEngine::build_mesh_part_blas(std::vector<CastleMeshGpu>& parts) {
         geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
         geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
         geom.geometry.triangles = tri;
-        geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR |
+                     VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;   // see rt.cpp
 
         VkAccelerationStructureBuildGeometryInfoKHR bgi{};
         bgi.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;

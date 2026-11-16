@@ -61,7 +61,11 @@ void VulkanEngine::init_rt() {
         geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
         geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
         geom.geometry.triangles = tri;
-        geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        // NO_DUPLICATE: the wall relief counts surface crossings along a ray
+
+        // (cube.frag br_open_air); a triangle reported twice breaks the count.
+        geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR |
+                     VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
 
         VkAccelerationStructureBuildGeometryInfoKHR bgi{};
         bgi.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -407,7 +411,11 @@ void VulkanEngine::record_terrain_blas_refit(VkCommandBuffer cb, VkBuffer* scrat
     geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
     geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
     geom.geometry.triangles = tri;
-    geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    // NO_DUPLICATE: the wall relief counts surface crossings along a ray
+
+    // (cube.frag br_open_air); a triangle reported twice breaks the count.
+    geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR |
+                 VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
     VkAccelerationStructureBuildGeometryInfoKHR bgi{};
     bgi.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     bgi.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
@@ -565,7 +573,11 @@ void VulkanEngine::bake_merged_static_blas() {
     geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
     geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
     geom.geometry.triangles = tri;
-    geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    // NO_DUPLICATE: the wall relief counts surface crossings along a ray
+
+    // (cube.frag br_open_air); a triangle reported twice breaks the count.
+    geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR |
+                 VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
 
     VkAccelerationStructureBuildGeometryInfoKHR bgi{};
     bgi.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -1253,7 +1265,11 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
     geom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
     geom.geometry.instances = inst_data;
-    geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    // NO_DUPLICATE: the wall relief counts surface crossings along a ray
+
+    // (cube.frag br_open_air); a triangle reported twice breaks the count.
+    geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR |
+                 VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
 
     // UPDATE mode if instance count is unchanged; BUILD mode otherwise.
     // Refits degrade as dynamic instances (jets, crates) drift; rebuild
