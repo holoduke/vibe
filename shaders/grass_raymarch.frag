@@ -326,6 +326,12 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     }
     terrainY = sampleHeight_lod_ray(p.xz, ray_t, p.y);
 #endif
+    // Raymarched terrain: the blades stand on the 1 m baked height, the
+    // drawn ground has finer bumps on top of it (+-several cm). Where the
+    // bake was the higher one the blades ended in mid-air above the soil.
+    // Root them a little lower - the real ground (depth test) hides what is
+    // below it, so every blade now comes out of the ground.
+    if (pc.emissive.x < 0.5) terrainY -= 0.09;
     float distToTerrain = 0.5 * (p.y - terrainY);
 
     // Above the tallest possible blade: no cell work at all (mask fetch,
