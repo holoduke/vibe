@@ -66,7 +66,22 @@ void inject(ivec3 c) {
     float n = textureLod(u_noise, (p + wind) / 45.0, 0.0).r * 0.6 +
               textureLod(u_noise, (p - wind * 0.7) / 13.0, 0.0).r * 0.4;
     dens *= mix(0.25, 1.75, n);
-    dens = min(dens, 0.2);
+    // Mist lying on the water: a thin layer that hugs the lake surface
+    // (thickest in the first metre, gone by ~3 m), drifting in banks with
+    // clear lanes between them.
+    float mist = 0.0;
+    if (pc.flash_dir.x > 0.001) {
+        float hb = p.y - (pc.sun_col.w - 1.0);              // height above the water level
+        if (hb > -0.3 && hb < 9.0) {
+            vec3  mw = vec3(1.0, 0.0, 0.45) * pc.eye.w * 0.35;
+            float banks = textureLod(u_noise, (vec3(p.x, p.y * 0.3, p.z) + mw) / 70.0, 0.0).r;
+            float wisps = textureLod(u_noise, (p * vec3(1.0, 2.5, 1.0) - mw * 1.6) / 9.0, 0.0).r;
+            float m = smoothstep(0.12, 0.60, banks) * mix(0.5, 1.3, wisps);
+            mist = pc.flash_dir.x * 0.075 * m * exp(-max(hb, 0.0) / mix(1.1, 2.6, banks));
+        }
+    }
+    dens = min(dens + mist, 0.4);
+    mist = min(mist, dens);
 
     // Sun visibility: one ray toward the sun (castle, trees, terrain).
     float vis = 0.0;
@@ -80,7 +95,10 @@ void inject(ivec3 c) {
     }
     vis *= sun_horizon_lit(u_sun_horizon, p);   // the ray above only reaches 600 m
     float ph = hg(dot(rd, sun), pc.params.z);
-    vec3 S = dens * (pc.sun_col.rgb * vis * ph + pc.amb.rgb * (1.0 / (4.0 * kPI)) * 4.0);
+    vec3 S = (dens - mist) * (pc.sun_col.rgb * vis * ph + pc.amb.rgb * (1.0 / (4.0 * kPI)) * 4.0);
+    // Mist is water droplets: it scatters nearly all the light it gets, in
+    // every direction - pale in the sun, sky-coloured in the shade.
+    S += mist * (pc.sun_col.rgb * vis * (0.5 * ph + 0.5 / (4.0 * kPI)) + pc.amb.rgb * 1.1);
     imageStore(o_inject, c, vec4(S, dens));
 }
 

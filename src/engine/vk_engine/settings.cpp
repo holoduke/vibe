@@ -299,6 +299,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("fog_density", s.rt_.fog_density);
     f("fog_height_falloff", s.rt_.fog_height_falloff);
     f("fog_anisotropy", s.rt_.fog_anisotropy);
+    f("lake_mist", s.rt_.lake_mist);
     f("fog_max_dist", s.rt_.fog_max_dist);
     f("use_merged_static_blas", s.rt_.use_merged_static_blas);
     f("terrain_brush_radius", s.terrain_brush_radius_);

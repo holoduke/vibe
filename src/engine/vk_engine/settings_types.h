@@ -123,6 +123,7 @@ struct RtSettings {
         float fog_density = 0.005f;        // 1/m at the reference height
         float fog_height_falloff = 0.035f; // 1/m
         float fog_anisotropy = 0.7f;       // HG g (forward scattering)
+        float lake_mist = 1.0f;            // mist lying on the water (0 = off); strongest at dawn / dusk
         float fog_max_dist = 300.0f;       // m
         // Static-castle BLAS merging: true = one BLAS for all 151 brushes
         // (the merged path baked at level load), false = per-brush TLAS

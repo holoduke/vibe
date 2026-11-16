@@ -747,6 +747,14 @@ void VulkanEngine::dispatch_fog(VkCommandBuffer cmd) {
     pc.amb = glm::vec4(last_sky_rgb_ * rt_.ambient_strength * 0.8f, float(frame_number_ % 64));
     pc.params = glm::vec4(std::max(0.0f, rt_.fog_density), std::max(0.0f, rt_.fog_height_falloff),
                           glm::clamp(rt_.fog_anisotropy, -0.9f, 0.95f), std::max(20.0f, rt_.fog_max_dist));
+    // Mist on the lake: thickest in the cool hours (dawn, dusk, night),
+    // nearly gone at midday. Carried in the unused flash_dir.x slot.
+    {
+        const float h = std::fmod(rt_.time_of_day + 24.0f, 24.0f);
+        auto bump = [](float x, float c, float w) { float t = std::clamp(1.0f - std::abs(x - c) / w, 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
+        const float cool = std::max({ bump(h, 6.5f, 3.5f), bump(h, 20.5f, 3.0f), (h < 5.0f || h > 22.0f) ? 0.7f : 0.0f });
+        pc.flash_dir.x = std::clamp(rt_.lake_mist, 0.0f, 3.0f) * (0.15f + 0.85f * cool);
+    }
     // (The flashlight beam is NOT injected here: at froxel resolution it was
     // a foggy ball in front of the lens. It is integrated per pixel instead,
     // see flashlight_beam in scene_ubo.glsl. flash_* stay zero = off.)
