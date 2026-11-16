@@ -1012,7 +1012,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
                               const glm::vec3& emissive, bool full_emissive,
                               VkDeviceAddress blas_ref,
                               const glm::vec4& tex_params,
-                              uint32_t mask = 0xFF) {
+                              uint32_t mask = 0x7F) {
         if (n >= tlas_max_instances_) return;
         VkAccelerationStructureInstanceKHR inst{};
         for (int row = 0; row < 3; ++row) {
@@ -1027,6 +1027,8 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
         // Mask convention:
         //   bit 0 = "shadow caster / AO occluder"
         //   bit 1 = "visible to GI / reflection"
+        //   bit 7 = "castle masonry" (static blocks + castle meshes only): the
+        //           wall relief asks it whether a point lies inside stone
         // Shadow + AO rays use cull-mask 0x01 (excludes anything without
         // bit 0 set — sparks + bullets are mask 0xFE so they're skipped);
         // GI + reflection rays use 0xFF and see everything.
@@ -1084,7 +1086,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
                 for (int row = 0; row < 3; ++row)
                     for (int col4 = 0; col4 < 4; ++col4) inst.transform.matrix[row][col4] = m[col4][row];
                 inst.instanceCustomIndex = static_mats + uint32_t(veg_tlas_inst_.size());
-                inst.mask = 0xFF;
+                inst.mask = 0x7F;
                 inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                 inst.accelerationStructureReference = veg_blas_[bq].addr;
                 {   // foliage-atlas cell + 1 for the alpha-tested leaf cards (ray queries read it back)
@@ -1146,7 +1148,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
         // reflections (mask 0xFF rays), but injects NO indirect light, so
         // it can't smear GI across the castle floor as it moves.
         write_instance(dr.model, dr.prev_model, dyn_base, glm::vec3(0.0f),
-                       false, blas_device_address_, tex, 0xFBu);
+                       false, blas_device_address_, tex, 0x7Bu);
     }
     // Castle gate panels as TLAS instances so RT shadow + GI rays see
     // them. Same cube BLAS the dyn-props use; per-panel hinge-rotated
@@ -1165,7 +1167,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
             ? glm::vec4(2.0f, 2.0f, 0.7f, 0.0f)
             : kNoTex;
         write_instance(model, model, door_color, glm::vec3(0.0f),
-                       false, blas_device_address_, door_tex);
+                       false, blas_device_address_, door_tex, 0x7Fu);
     }
 
     // Anti-aircraft vehicles (hull, turret, guns; radar too small to matter).
@@ -1206,7 +1208,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
                         g.triplanar ? g.uv_scale : (g.tex_albedo == 1 ? 0.12f : 0.55f), 0.0f)
             : kNoTex;
         write_instance(I, I, glm::vec4(tex_on ? g.tint : g.fallback, 1.0f),
-                       glm::vec3(0.0f), false, g.blas_addr, tex);
+                       glm::vec3(0.0f), false, g.blas_addr, tex, 0xFFu);
     }
 
     // Sparks are intentionally NOT added to the TLAS. With kMaxParticles=384
@@ -1239,7 +1241,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
         // line shows up in shiny surfaces.
         write_instance(m, m, p.color, p.emissive,
                        /*full_emissive=*/true, cylinder_blas_device_address_,
-                       kNoTex, 0xF8);
+                       kNoTex, 0x78);
     }
 
     VkAccelerationStructureGeometryInstancesDataKHR inst_data{};

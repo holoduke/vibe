@@ -744,12 +744,7 @@ vec2 pom_march(int hix, vec2 uv0, vec3 Vt, float hs, vec2 gdx, vec2 gdy) {
 // again - if the parallax hit is deeper, this pixel shows what is behind
 // (bumpy stone outline instead of a perfectly smooth tower edge). Flat
 // faces (curv ~ 0) are never clipped.
-bool pom_silhouette_clip(float depth_m, float c, float curv) {
-    if (curv < 0.02) return false;
-    c = clamp(c, 0.0, 1.0);
-    float max_d = (1.0 / curv) * (1.0 - sqrt(max(0.0, 1.0 - c * c)));
-    return depth_m > max_d + 0.005;
-}
+bool pom_silhouette_clip(float depth_m, float c, float curv);   // (below: needs the ray-query helpers)
 // Cavity darkening x parallax self-shadow toward the sun (Tatarchuk 2006).
 // Deferred lighting shades the FLAT surface, so these cues are what make
 // the relief read as depth; they go into albedo, recomputed every frame.
@@ -1307,6 +1302,7 @@ vec3 voxel_albedo(uint pal) {
 // real materials-buffer slot.
 const int kStaticBlasSentinel = 0xFFFFFF;
 const int kCubeTrisPerBox     = 12;
+#define BR_FRONT(x) (x)
 
 // ---------------------------------------------------------------------
 // Box relief: brick relief raymarched through the brush's AABB.
@@ -1332,19 +1328,24 @@ vec2 br_face_uv(int f, vec3 w, float uv_scale, vec2 aspect) {
     return uv * aspect;
 }
 
-// Signed solidity margin (>= 0 -> inside the brick volume). bind_face =
-// the face whose surface constrains this point most (= the face hit).
+// Signed solidity margin (>= 0 -> inside the masonry). Only EXPOSED faces
+// carry a surface; where a face is covered by a neighbouring block the
+// stone simply continues (no boundary there at all), so the relief of one
+// block runs on into the next without a seam. bind_face = the face whose
+// surface constrains this point most (= the face hit).
 float br_margin(vec3 w, vec3 C, vec3 H, int mask, float Dm, int h_idx,
-                float lod, float uv_scale, vec2 aspect, out int bind_face) {
+                float lod, float uv_scale, vec2 aspect, int entry_face,
+                out int bind_face) {
     vec3 rel = w - C;
     float m = 1e9;
-    bind_face = 0;
+    bind_face = entry_face;
     for (int f = 0; f < 6; ++f) {
+        if (((mask >> f) & 1) == 0) continue;
         int   a = f >> 1;
         float s = ((f & 1) == 1) ? 1.0 : -1.0;
         float d = H[a] - s * rel[a];               // depth below face f
         float mf = d;
-        if (((mask >> f) & 1) != 0 && d < Dm) {
+        if (d < Dm) {
             float h = textureLod(u_height[h_idx],
                                  br_face_uv(f, w, uv_scale, aspect), lod).r;
             mf = d - Dm * (1.0 - h);
@@ -1352,6 +1353,62 @@ float br_margin(vec3 w, vec3 C, vec3 H, int mask, float Dm, int h_idx,
         if (mf < m) { m = mf; bind_face = f; }
     }
     return m;
+}
+
+// Where the ray leaves the block through one of its exposed faces
+// (covered faces are no boundary). Returns the distance; `face` = -1 and a
+// huge distance when it never does.
+float br_exit(vec3 ro, vec3 rd, vec3 C, vec3 H, int mask, out int face) {
+    float t_exit = 1e9;
+    face = -1;
+    for (int a = 0; a < 3; ++a) {
+        if (abs(rd[a]) < 1e-6) continue;
+        bool pos = rd[a] > 0.0;
+        int  f = a * 2 + (pos ? 1 : 0);
+        if (((mask >> f) & 1) == 0) continue;
+        float t = (C[a] + (pos ? H[a] : -H[a]) - ro[a]) / rd[a];
+        if (t < t_exit) { t_exit = max(t, 0.0); face = f; }
+    }
+    return t_exit;
+}
+
+// Is the point where a ray left a block in open air? Asked of the real
+// castle geometry (blocks + tower / arch meshes carry TLAS mask bit 7):
+// if the first thing the ray meets from there is the INSIDE of a surface,
+// the point lies within another piece of masonry and the wall is solid
+// there. Only a "yes" lets a pixel be cut away, so a wrong answer can
+// never open a hole into a neighbouring block.
+bool br_open_air(vec3 p, vec3 rd) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
+                          p, 0.004, rd, 60.0);
+    while (rayQueryProceedEXT(rq)) {}
+    if (rayQueryGetIntersectionTypeEXT(rq, true) !=
+        gl_RayQueryCommittedIntersectionTriangleEXT) return true;
+    return BR_FRONT(rayQueryGetIntersectionFrontFaceEXT(rq, true));
+}
+
+// Relief silhouette on curved meshes (round towers), from the real
+// geometry instead of a curvature estimate (which punched holes wherever
+// the profile has a sharp step: string courses, parapet rims). The view
+// ray goes on into the stone from this pixel; the relief surface lies
+// `depth_m` below the mesh surface. If the ray comes OUT of the masonry
+// again before it has got that deep, and out into open air, it passed over
+// the stone: this pixel shows what is behind. c = N.V.
+bool pom_silhouette_clip(float depth_m, float c, float curv) {
+    c = clamp(c, 0.0, 1.0);
+    if (curv < 0.02 || c > 0.5 || depth_m < 0.008) return false;
+    vec3  rd = normalize(vWorldPos - scene.camera_pos.xyz);
+    float t_hit = min(depth_m / max(c, 0.04), 4.0);
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
+                          vWorldPos, 0.004, rd, t_hit);
+    while (rayQueryProceedEXT(rq)) {}
+    if (rayQueryGetIntersectionTypeEXT(rq, true) !=
+        gl_RayQueryCommittedIntersectionTriangleEXT) return false;   // still in the stone
+    if (BR_FRONT(rayQueryGetIntersectionFrontFaceEXT(rq, true))) return false;   // runs into more masonry
+    float t_out = rayQueryGetIntersectionTEXT(rq, true);
+    return br_open_air(vWorldPos + rd * t_out, rd);
 }
 
 void main() {
@@ -2667,54 +2724,59 @@ void main() {
                 if (br_Dm > 0.002) {
                     vec3  ro = vWorldPos;
                     vec3  rd = normalize(vWorldPos - scene.camera_pos.xyz);
-                    // Ray-box exit (slab test).
-                    vec3  inv_rd = 1.0 / (abs(rd) + vec3(1e-6)) * sign(rd + vec3(1e-9));
-                    vec3  t1 = (br_C - br_H - ro) * inv_rd;
-                    vec3  t2 = (br_C + br_H - ro) * inv_rd;
-                    vec3  tf = max(t1, t2);
-                    float t_exit = max(0.0, min(min(tf.x, tf.y), tf.z));
+                    int   br_ef = axis * 2 + (spom_face_n[axis] > 0.0 ? 1 : 0);
+                    // Blocks that are in the depth pre-pass (floors) must
+                    // cover every pixel they rasterise: nothing behind them
+                    // survives the depth test. Only walls may be cut away.
+                    bool  br_cut = albedo_idx_raw == 1 || albedo_idx_raw == 4;
                     // Past depth Dm below the entry face every point is
                     // solid, so the march never needs to go further.
                     float cosn  = max(dot(rd, -spom_face_n), 0.05);
                     float t_deep = br_Dm / cosn * 1.02;
-                    float L = min(t_exit, t_deep);
                     float lod = textureQueryLod(u_height[br_h], spom_uv0).x;
                     // More steps at grazing angles (long march, thin
-                    // features) — fewer head-on.
+                    // features) - fewer head-on.
                     int   kSteps = int(mix(48.0, 16.0, cosn));
-                    float dt = L / float(kSteps);
+                    float dt = t_deep / float(kSteps);
                     float t_lo = 0.0, t_hi = -1.0;
-                    int   bf = 0;
-                    for (int i = 0; i <= kSteps; ++i) {
-                        float t = float(i) * dt;
-                        if (br_margin(ro + rd * t, br_C, br_H, br_mask, br_Dm,
-                                      br_h, lod, scale, br_asp, bf) >= 0.0) {
-                            t_hi = t;
-                            break;
+                    int   bf = br_ef;
+                    // The ray is marched until it meets stone. If it first
+                    // leaves the block through an exposed face, that is a
+                    // silhouette only when the exit point really is in open
+                    // air; where another block or a tower stands there, that
+                    // face stops being a boundary and the march goes on.
+                    for (int pass = 0; pass < 3 && t_hi < 0.0; ++pass) {
+                        int   xf;
+                        float t_exit = br_exit(ro, rd, br_C, br_H, br_mask, xf);
+                        float L = min(t_exit, t_deep);
+                        for (float t = t_lo; t < L; t += dt) {
+                            if (br_margin(ro + rd * t, br_C, br_H, br_mask, br_Dm,
+                                          br_h, lod, scale, br_asp, br_ef, bf) >= 0.0) {
+                                t_hi = t;
+                                break;
+                            }
+                            t_lo = t;
                         }
-                        t_lo = t;
+                        if (t_hi >= 0.0) break;
+                        if (t_exit >= t_deep) { t_hi = t_deep; break; }   // reached the solid core
+                        if (br_cut && br_open_air(ro + rd * t_exit, rd)) discard;
+                        br_mask &= ~(1 << xf);
+                        t_lo = max(t_lo, t_exit - dt);
                     }
-                    if (t_hi < 0.0) {
-                        if (t_exit <= t_deep) {
-                            // Ray left the box through a groove at an
-                            // exposed edge: real silhouette -> see-through.
-                            discard;
-                        }
-                        t_hi = L;   // numerically missed the deep floor
-                    }
+                    if (t_hi < 0.0) t_hi = t_deep;
                     // Binary refinement of the surface crossing.
                     for (int i = 0; i < 5 && t_hi > 0.0; ++i) {
                         float tm = 0.5 * (t_lo + t_hi);
                         int bft;
                         if (br_margin(ro + rd * tm, br_C, br_H, br_mask, br_Dm,
-                                      br_h, lod, scale, br_asp, bft) >= 0.0)
+                                      br_h, lod, scale, br_asp, br_ef, bft) >= 0.0)
                             t_hi = tm;
                         else
                             t_lo = tm;
                     }
                     vec3 p_hit = ro + rd * t_hi;
                     br_margin(p_hit, br_C, br_H, br_mask, br_Dm, br_h, lod,
-                              scale, br_asp, bf);
+                              scale, br_asp, br_ef, bf);
                     // Shade with the frame of the face actually hit (at an
                     // edge that can be the neighbouring face of the box).
                     int   fa = bf >> 1;
@@ -2731,9 +2793,6 @@ void main() {
                         spom_T = vec3(fs, 0.0, 0.0); spom_B = vec3(0.0, 1.0, 0.0);
                     }
                     spom_uv_off = br_face_uv(bf, p_hit, scale, br_asp);
-                    // (No side-face "anti-smear" UV swap: sampling the
-                    // perpendicular mapping landed in the texture's dark
-                    // mortar and rendered black specks across close walls.)
                     // Depth + RT origin stay on the rasterised face: the box
                     // BLAS has culling disabled, so lighting from a point
                     // recessed INSIDE the box would self-shadow every brick.
