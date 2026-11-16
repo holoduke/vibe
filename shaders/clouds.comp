@@ -40,6 +40,9 @@ layout(set = 0, binding = 4) uniform sampler3D u_detail;
 layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D o_clouds;
 layout(set = 0, binding = 6, r16f) uniform writeonly image3D o_shape;
 layout(set = 0, binding = 7, r16f) uniform writeonly image3D o_detail;
+// Mode 3: how much direct sunlight the cloud layer lets through to the
+// ground, as a map of the land (scene_ubo.glsl cloud_shadow reads it).
+layout(set = 0, binding = 8, r16f) uniform writeonly image2D o_shadow;
 
 layout(push_constant) uniform PC {
     mat4 inv_vp;
@@ -301,8 +304,30 @@ void render(ivec2 px) {
     imageStore(o_clouds, px, vec4(L, alpha));
 }
 
+// Texel -> the point on the y = 0 plane it stands for; marched from there
+// toward the sun through the whole layer with the same density function
+// the sky is rendered with, so every shadow lies under its own cloud.
+const float kShadowExtent = 6144.0;    // m, centred on the world origin (keep in sync: scene_ubo.glsl)
+void shadow_map(ivec2 px) {
+    vec2 xz = ((vec2(px) + 0.5) / vec2(imageSize(o_shadow)) - 0.5) * kShadowExtent;
+    vec3 L = normalize(pc.sun.xyz);
+    float ly = max(L.y, 0.10);
+    float base_alt = pc.params3.x, tallest = pc.params3.y;
+    const int N = 12;
+    float od = 0.0;
+    for (int i = 0; i < N; ++i) {
+        float h = base_alt + tallest * (float(i) + 0.5) / float(N);
+        vec3 p = vec3(xz.x + L.x / ly * h, h, xz.y + L.z / ly * h);
+        p.y -= dot(p.xz, p.xz) / (2.0 * kPlanetR);          // sample_cloud works in altitude
+        od += soft_edge(sample_cloud(p, false));
+    }
+    od *= max(pc.params.y, 0.0) * kSigma * (tallest / float(N)) / ly;
+    imageStore(o_shadow, px, vec4(exp(-od)));
+}
+
 void main() {
     int mode = int(pc.sun.w + 0.5);
+    if (mode == 3) { shadow_map(ivec2(gl_GlobalInvocationID.xy)); return; }
     if (mode == 0) { gen_shape(ivec3(gl_GlobalInvocationID)); return; }
     if (mode == 1) { gen_detail(ivec3(gl_GlobalInvocationID)); return; }
     render(ivec2(gl_GlobalInvocationID.xy));

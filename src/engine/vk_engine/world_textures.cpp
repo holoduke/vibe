@@ -661,6 +661,15 @@ void VulkanEngine::load_foliage_textures() {
             ++loaded;
         }
     }
+    // Rock bake atlas (tools/rocks): in the normal-map slot next to the character atlas.
+    if (std::string p = resolve("../rocks/rocks_bake.png"); !p.empty()) {
+        int w = 0, h = 0, c = 0;
+        if (unsigned char* px = stbi_load(p.c_str(), &w, &h, &c, 4)) {
+            put(normal_textures_[kTexSoldier], px, w, h, VK_FORMAT_R8G8B8A8_UNORM, "rocks/rocks_bake");
+            stbi_image_free(px);
+            ++loaded;
+        }
+    }
     if (!retired.empty()) texture_upload_batch_sync(device_, allocator_, graphics_queue_);
     for (TextureSlot& s : retired) {
         if (s.view)  vkDestroyImageView(device_, s.view, nullptr);

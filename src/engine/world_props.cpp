@@ -11,6 +11,9 @@
 #include <glm/common.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstring>
+#include <fstream>
 #include <cstdlib>
 #include <cmath>
 #include <map>
@@ -1082,7 +1085,51 @@ void build_slab_rock(LevelMesh& m, float seed) {
 
 }  // namespace
 
+// Boulders sculpted and baked in Blender (tools/rocks/make_rocks.py):
+// four meshes per rock; vertex uv = position in the bake atlas. Stored the
+// way the vegetation vertex format wants it: u = atlas u, v = 4 (the rock
+// material) + 0.45 * atlas v.
+static std::vector<std::array<game::LevelMesh, kVegLods>> load_baked_rocks() {
+    std::vector<std::array<game::LevelMesh, kVegLods>> rocks;
+    std::ifstream f;
+    for (const char* p : { "assets/rocks/rocks.qrock", "../assets/rocks/rocks.qrock" }) {
+        f.open(p, std::ios::binary);
+        if (f.good()) break;
+        f.close(); f.clear();
+    }
+    if (!f.good()) return rocks;
+    char magic[4]{};
+    uint32_t n = 0;
+    f.read(magic, 4);
+    f.read(reinterpret_cast<char*>(&n), 4);
+    if (std::memcmp(magic, "QRK1", 4) != 0 || n == 0 || n > 64) return rocks;
+    rocks.resize(n);
+    for (uint32_t r = 0; r < n; ++r)
+        for (int l = 0; l < kVegLods; ++l) {
+            uint32_t nv = 0, ni = 0;
+            f.read(reinterpret_cast<char*>(&nv), 4);
+            f.read(reinterpret_cast<char*>(&ni), 4);
+            if (!f.good() || nv > 400000 || ni > 2400000) { rocks.clear(); return rocks; }
+            std::vector<float> v(size_t(nv) * 8);
+            f.read(reinterpret_cast<char*>(v.data()), std::streamsize(v.size() * 4));
+            game::LevelMesh& m = rocks[r][size_t(l)];
+            m.idx.resize(ni);
+            f.read(reinterpret_cast<char*>(m.idx.data()), std::streamsize(size_t(ni) * 4));
+            if (!f.good()) { rocks.clear(); return rocks; }
+            m.bmin = glm::vec3(1e9f); m.bmax = glm::vec3(-1e9f);
+            for (uint32_t i = 0; i < nv; ++i) {
+                const float* q = &v[size_t(i) * 8];
+                push_v(m, { glm::vec3(q[0], q[1], q[2]), glm::normalize(glm::vec3(q[3], q[4], q[5]) + glm::vec3(1e-9f)),
+                            q[6], 4.0f + 0.45f * glm::clamp(q[7], 0.0f, 1.0f) });
+            }
+        }
+    log::infof("[veg] %u baked rocks loaded (assets/rocks)", n);
+    return rocks;
+}
+
 std::vector<VegArchetype> build_veg_archetypes(int seed) {
+    const auto baked_rocks = load_baked_rocks();
+    int baked_next = 0;
     std::vector<VegArchetype> out;
     std::mt19937 rng{ uint32_t(seed) };
     std::uniform_real_distribution<float> U(0.0f, 1.0f);
@@ -1109,7 +1156,7 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
         finish(a); out.push_back(std::move(a));
     }
     // Old pines: 3 giants (20 m+), for the old-growth stands.
-    for (int v = 0; v < 3; ++v) {
+    for (int v = 0; v < 5; ++v) {
         VegArchetype a; a.species = 0; a.old = true;
         PineParams p{ 20.5f + 2.0f * float(v) + 1.5f * U(rng), 9, 3.5f + 0.5f * U(rng), U(rng) * 6.28f, (U(rng) - 0.5f) * 0.9f };
         for (int l = 0; l < kVegLods; ++l) build_pine(a.lods[l], p, l, lo, hi);
@@ -1132,7 +1179,7 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
         finish(a); out.push_back(std::move(a));
     }
     // Old oaks: 3 veterans - wide, heavy-limbed, for the old-growth stands.
-    for (int v = 0; v < 3; ++v) {
+    for (int v = 0; v < 5; ++v) {
         VegArchetype a; a.species = 1; a.old = true;
         const glm::vec2 crown(1.40f + 0.12f * float(v), 0.95f);
         OakParams p{ 11.0f + 1.0f * float(v) + 1.0f * U(rng), 6, U(rng) * 6.28f, 3.2f * crown.x,
@@ -1164,6 +1211,13 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
         float amp = 0.26f + 0.1f * glm::fract(float(v) * 0.37f);
         if (v % 3 == 1) {                              // slab formation (rock_params: strata < 0)
             for (int l = 0; l < kVegLods; ++l) build_slab_rock(a.lods[l], sd);
+            finish(a); out.push_back(std::move(a));
+            continue;
+        }
+        // Boulders: the Blender-sculpted ones when they are there.
+        if (baked_next < int(baked_rocks.size())) {
+            for (int l = 0; l < kVegLods; ++l) a.lods[l] = baked_rocks[size_t(baked_next)][size_t(l)];
+            a.baked = baked_next++;
             finish(a); out.push_back(std::move(a));
             continue;
         }
@@ -1385,6 +1439,10 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
             }
             return;
         }
+        // Test aid: QLIKE_LOG_ROCKS=1 lists the larger boulders near the castle.
+        { static const bool kLog = std::getenv("QLIKE_LOG_ROCKS") != nullptr; static int shown = 0;
+          if (kLog && s > 1.6f && std::abs(x) < 160.0f && std::abs(z) < 160.0f && shown++ < 12)
+              log::infof("[rock] baked %d at (%.1f, %.1f, %.1f) scale %.2f", arch[size_t(ai)].baked, x, gy, z, s); }
         float he = s * 0.72f;
         cols.push_back({ glm::vec3(x - he, gy - 1.0f, z - he),
                          glm::vec3(x + he, gy + s * ysq * 1.1f, z + he) });
@@ -1496,7 +1554,7 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         // across) where the veterans stand - bigger, further apart, with a
         // few ordinary trees between them.
         const float og = fbm(glm::vec3(x * 0.0048f, 57.0f, z * 0.0048f), 2);
-        const bool old_tree = og > 0.57f && !old_trees[pine ? 0 : 1].empty() && u() < 0.72f;
+        const bool old_tree = og > 0.515f && !old_trees[pine ? 0 : 1].empty() && u() < 0.72f;
         if (old_tree) scale = 0.95f + 0.35f * u();
         if (!try_mark(x, z, (pine ? 1.6f : 2.4f) * scale * (old_tree ? 2.1f : 1.0f))) continue;
         const auto& pool = old_tree ? old_trees[pine ? 0 : 1] : by_species[pine ? 0 : 1];

@@ -146,7 +146,8 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
         // Rocks: .z = -(variant + 1) (cube.frag derives the shape parameters
         // of the per-pixel detail from it).
         ainfo.push_back(glm::vec4(veg_arch_[a].radius, veg_arch_[a].height * 0.5f,
-                                  rock ? -float(++rock_variant) : float(veg_has_imp_[a]),
+                                  // (+100 = sculpted and baked in Blender: detail comes from its texture)
+                                  rock ? -float(++rock_variant + (veg_arch_[a].baked >= 0 ? 100 : 0)) : float(veg_has_imp_[a]),
                                   float(veg_arch_[a].species)));
     }
     veg_arch_buf_ = make_buffer(allocator_, sizeof(glm::vec4) * ainfo.size(), ssbo, true, veg_arch_alloc_, &mp);

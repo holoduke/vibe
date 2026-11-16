@@ -57,6 +57,7 @@ constexpr int kVegRtLevels = 4;   // BLAS detail levels for ray tracing (one per
 struct VegArchetype {
     int species = 0;                 // 0 pine, 1 broadleaf, 2 bush, 3 rock
     bool old = false;                // old-growth tree (placed in old-growth stands only)
+    int  baked = -1;                 // rock sculpted + baked in Blender (tools/rocks): its number, else -1
     game::LevelMesh lods[kVegLods];
     float radius = 1.0f;             // bounding-sphere radius (scale 1)
     float height = 1.0f;

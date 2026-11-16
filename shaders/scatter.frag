@@ -39,6 +39,8 @@ layout(location = 3) out vec4 outGBuffer1;
 const int kTextureCount = 19;
 layout(set = 0, binding = 3) uniform sampler2D u_albedo[kTextureCount];
 
+layout(set = 0, binding = 32) uniform sampler2D u_cloud_shadow;   // sunlight through the cloud layer (clouds.comp)
+#define CLOUD_SHADOW_MAP u_cloud_shadow
 #include "scene_ubo.glsl"
 
 #include "rock_sdf.glsl"

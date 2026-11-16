@@ -82,12 +82,12 @@ float VulkanEngine::cloud_shadow_at(glm::vec3 wp) const {
 
 const char* VulkanEngine::weather_name() const {
     const float w = weather_state_;
-    if (w < 0.18f) return "clear";
-    if (w < 0.40f) return "fair";
-    if (w < 0.58f) return "overcast";
-    if (w < 0.72f) return "light rain";
-    if (w < 0.87f) return "rain";
-    return "thunderstorm";
+    if (w < 0.25f) return "clear";
+    if (w < 0.53f) return "cloudy";
+    if (w < 0.67f) return "stormy";
+    if (w < 0.81f) return "rainy";
+    if (w < 0.94f) return "heavy storm";
+    return "lightning storm";
 }
 
 void VulkanEngine::apply_environment(float dt) {
@@ -96,6 +96,7 @@ void VulkanEngine::apply_environment(float dt) {
     if (env_applied_) { env_swap_base(); env_applied_ = false; }
     if (!want) {
         env_night_ = -1.0f; env_rain_ = 0.0f; env_wet_ = std::max(0.0f, env_wet_ - dt / 60.0f);
+        env_golden_ = 1.0f; env_sun_elev_ = -1000.0f; env_sky_real_ = false;
         env_lightning_ = 0.0f; env_cloud_k_ = 1.0f; env_cloud_direct_ = 1.0f; env_cloud_shadow_k_ = 0.72f;
         tick_rain_audio(0.0f);
         return;
@@ -156,6 +157,10 @@ void VulkanEngine::apply_environment(float dt) {
     float pitch = base.sun_pitch_deg, yaw = base.sun_yaw_deg;
     bool golden = base.auto_golden_hour;
     env_night_ = -1.0f;
+    float golden_k = 1.0f;         // how much of the warm low-sun tint applies
+    bool  sky_real = false;        // the sky is lit by the real sun (below the horizon) while the land light is the glow
+    float sky_e = 0.0f, sky_yaw = 0.0f;
+    env_sun_elev_ = -1000.0f;
     if (rt_.day_night_enabled) {
         if (rt_.day_length_minutes > 0.01f)
             rt_.time_of_day += dt * 24.0f / (rt_.day_length_minutes * 60.0f);
@@ -189,12 +194,17 @@ void VulkanEngine::apply_environment(float dt) {
         const float moon_sky = glm::clamp(rt_.moon_brightness, 0.0f, 1.0f) * std::pow(illum, 1.8f) *
                                glm::smoothstep(-1.0f, 10.0f, em);
         env_moon_ = moon_sky;
+        env_sun_elev_ = e;
         if (e > 0.6f) {
             // Day and twilight: the real sun, also below the horizon - the
             // atmosphere LUT then renders dusk on its own. Direct light dies
             // at the horizon; the sky fades out toward the end of twilight.
             pitch = e; yaw = base.sun_yaw_deg + az;
-            sun_k = glm::smoothstep(0.6f, 4.0f, e);
+            // The sun dims the way it does through a thickening atmosphere:
+            // gently from mid afternoon, half at ~8 degrees, a quarter at 4,
+            // gone at the horizon. (Was full strength down to 4 degrees and
+            // then off within minutes: the golden hour arrived as a jump.)
+            sun_k = std::min(1.0f, std::exp(-0.11f / std::max(std::sin(glm::radians(e)), 0.012f)) / 0.88f);
             // The LUT sky is physically ~100x darker at sunset than at noon;
             // the eye (and a camera) adapts, so lift it toward dusk.
             sky_k = glm::mix(0.35f, 1.0f, glm::smoothstep(0.6f, 3.0f, e)) *
@@ -211,7 +221,9 @@ void VulkanEngine::apply_environment(float dt) {
             // stands) lights the sky above them but hardly the land: the far-
             // mountain shadow map, which follows the light direction, says so.
             // Eased over a second so the fill light does not pop.
-            const bool moon_is_light = moon_sky > 0.02f && moon_sky >= 0.5f * 0.8f * twi;
+            // (the moon takes over as the light only once dusk is well under way:
+            // until then the sky keeps its sunset)
+            const bool moon_is_light = moon_sky > 0.02f && moon_sky >= 0.5f * 0.8f * twi && twi < 0.45f;
             const float vis_now = moon_is_light ? sun_horizon_visibility(player_.eye_position()) : 1.0f;
             env_moon_vis_ += (vis_now - env_moon_vis_) * glm::clamp(dt * 1.5f, 0.0f, 1.0f);
             const float moon_gnd = moon_sky * cloud_tr * glm::mix(0.10f, 1.0f, env_moon_vis_);
@@ -222,14 +234,18 @@ void VulkanEngine::apply_environment(float dt) {
             // can hide it), or - while it is the stronger - the glow where the
             // sun went down.
             const float glow = 0.8f * twi;
-            if (moon_sky > 0.02f && moon_sky >= 0.5f * glow) {
+            if (moon_is_light) {
                 pitch = std::max(em, 3.0f);
                 yaw = base.sun_yaw_deg + azm;
                 sun_k = 0.045f * moon_sky * (1.0f + 1.6f * twi);
             } else {
                 pitch = 16.0f;
                 yaw = base.sun_yaw_deg + az;
-                sun_k = 0.045f * glow;
+                // (fades in below the horizon: no step where the sun's own light ends)
+                sun_k = 0.045f * glow * glm::smoothstep(0.6f, -2.5f, e);
+                // Dusk and dawn: the sky itself is still lit by the real sun,
+                // under the horizon - the atmosphere renders the afterglow.
+                if (twi > 0.0f) { sky_real = true; sky_e = e; sky_yaw = yaw; }
             }
             sun_k *= glm::mix(1.0f, 0.45f, overcast);                      // on top of the day-time cloud dimming
             // Sky dome and clouds: twilight, moonlit haze, airglow; a cloud deck
@@ -240,17 +256,30 @@ void VulkanEngine::apply_environment(float dt) {
             const float night_sky = glm::clamp(moon_sky + 0.10f * glm::clamp(rt_.star_brightness, 0.0f, 1.5f) + 0.012f, 0.0f, 1.0f);
             sky_k = 0.045f * glm::mix(night_sky, 2.6f * glm::mix(0.5f, 1.0f, moon_sky), twi) *
                     glm::mix(1.0f, 0.05f, overcast * (1.0f - twi));
+            // (with the real sun in the sky: the same curve as by day)
+            if (sky_real) sky_k = glm::mix(0.35f, 1.0f, glm::smoothstep(0.6f, 3.0f, e)) *
+                                  glm::mix(4.0f, 1.0f, glm::smoothstep(-6.0f, 12.0f, e));
             // Fill light on the land (1 = a clear full-moon night).
             const float night_amb = std::max(0.90f * moon_gnd + star_gnd, 0.003f);
             amb_k = glm::mix(night_amb, 1.0f, twi);
-            light_col = glm::vec3(0.60f, 0.73f, 1.0f);
-            golden = false;
+            light_col = glm::mix(glm::vec3(0.60f, 0.73f, 1.0f), base.sun_color, twi * twi);
+            golden_k = twi;                    // the warm tint leaves with the twilight, not at the horizon
             env_night_ = 1.0f;
             cloud_direct = 0.6f;
         }
         while (yaw > 180.0f) yaw -= 360.0f;
         while (yaw < -180.0f) yaw += 360.0f;
     }
+
+    // A change of what lights the sky (sun under the horizon <-> moon / night
+    // glow) swaps the whole sky model: fade the new one in over a few seconds.
+    if (sky_real != env_sky_real_) { env_sky_real_ = sky_real; env_sky_ease_ = env_sky_init_ ? 0.0f : 1.0f; }
+    env_sky_init_ = true;
+    env_sky_ease_ = std::min(1.0f, env_sky_ease_ + dt / 5.0f);
+    sky_k *= glm::mix(0.15f, 1.0f, glm::smoothstep(0.0f, 1.0f, env_sky_ease_));
+    env_sky_pitch_ = std::max(sky_e, -14.0f);
+    env_sky_yaw_ = sky_yaw;
+    env_golden_ = golden_k;
 
     // ---------------- lightning ----------------
     // QLIKE_TEST_LIGHTNING=1: a strike every ~0.7 s, 500 m straight ahead (captures).
@@ -314,6 +343,13 @@ void VulkanEngine::apply_environment(float dt) {
     const float sky_lum = glm::dot(base.sky_color, glm::vec3(0.2126f, 0.7152f, 0.0722f));
     rt_.sky_color = glm::mix(base.sky_color, glm::vec3(0.92f, 0.96f, 1.04f) * sky_lum, overcast * 0.85f) * amb_k;
     env_amb_k_ = amb_k;
+    // Lightning: for the length of the flash the whole landscape is lit
+    // blue-white from the sky (strongest at night, a flicker by day).
+    if (env_lightning_ > 0.01f) {
+        const float fl = std::min(env_lightning_, 1.4f);
+        rt_.sky_color += glm::vec3(0.78f, 0.86f, 1.0f) * (2.4f * fl * std::max(sky_lum, 0.35f));
+        env_amb_k_ = std::max(env_amb_k_, std::min(1.0f, 0.9f * fl));
+    }
     rt_.cloud_coverage = glm::mix(std::min(base.cloud_coverage, 0.30f), 0.97f, glm::smoothstep(0.0f, 0.72f, w));
     if (!rt_.weather_enabled) rt_.cloud_coverage = base.cloud_coverage;
     rt_.cloud_density = base.cloud_density * glm::mix(1.0f, 2.4f, overcast);

@@ -26,6 +26,8 @@ layout(location = 1) out vec2 outMotion;
 layout(location = 2) out vec4 outGBuffer0;
 layout(location = 3) out vec4 outGBuffer1;
 
+layout(set = 0, binding = 32) uniform sampler2D u_cloud_shadow;   // sunlight through the cloud layer (clouds.comp)
+#define CLOUD_SHADOW_MAP u_cloud_shadow
 #include "scene_ubo.glsl"
 #include "sun_horizon.glsl"
 layout(set = 0, binding = 31) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
@@ -347,7 +349,8 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     // grassEligibility so the grass shader and the green terrain tint
     // agree about where grass exists.
     float alt_factor = 1.0 - smoothstep(55.0, 75.0, terrainY);
-    bool underwater  = ctx.underwater && terrainY < ctx.water_y;
+    // (not on the strip the water laps over either: the beach, see terrain_raymarch.frag)
+    bool underwater  = ctx.underwater && terrainY < ctx.water_y + 0.36;
     if (alt_factor <= 0.001 || underwater) return distToTerrain;
     // Castle keep-out: the courtyard floor slabs sit 5 cm above the
     // terrain, and blades rooted on the terrain poke up THROUGH them —

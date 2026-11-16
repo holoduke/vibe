@@ -560,32 +560,49 @@ void VulkanEngine::build_menu_ui() {
         }
 
         if (ImGui::CollapsingHeader("Weather", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Checkbox("Weather changes", &rt_.weather_enabled);
-            if (rt_.weather_enabled) {
-                ImGui::SliderFloat("Bad weather chance", &rt_.weather_bad_chance, 0.0f, 1.0f, "%.2f");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("How often a weather change picks rain or a storm.\n0 = always fair, 1 = always bad.");
-                ImGui::SliderFloat("Weather change every (min)", &rt_.weather_change_minutes, 0.3f, 30.0f, "%.1f");
-                bool forced = rt_.weather_manual >= 0.0f;
-                if (ImGui::Checkbox("Force weather", &forced)) rt_.weather_manual = forced ? weather_state_ : -1.0f;
-                if (forced) ImGui::SliderFloat("0 clear .. 1 thunderstorm", &rt_.weather_manual, 0.0f, 1.0f, "%.2f");
-                // Weather type: six stops, left = fine, right = worst.
-                {
-                    static const float kTypeVal[6] = { 0.05f, 0.45f, 0.60f, 0.74f, 0.88f, 1.00f };
-                    static const char* kTypeName[6] = { "Clear", "Cloudy", "Stormy", "Rainy", "Heavy storm", "Lightning storm" };
-                    const float cur = rt_.weather_manual >= 0.0f ? rt_.weather_manual : weather_state_;
-                    int type = 0;
-                    for (int i = 1; i < 6; ++i)
-                        if (std::abs(kTypeVal[i] - cur) < std::abs(kTypeVal[type] - cur)) type = i;
-                    if (ImGui::SliderInt("Weather type", &type, 0, 5, kTypeName[type]))
-                        rt_.weather_manual = kTypeVal[type];
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Clear - Cloudy - Stormy (dark and windy) - Rainy - Heavy storm - Lightning storm.\n"
-                                          "Sets the weather and holds it; 'Random' hands it back to the weather system.");
-                    ImGui::SameLine();
-                    if (ImGui::Button("Random")) rt_.weather_manual = -1.0f;
+            // Weather type: six stops, left = fine, right = worst. Always
+            // there; picking one turns the weather on and holds that type.
+            {
+                static const float kTypeVal[6] = { 0.05f, 0.45f, 0.60f, 0.74f, 0.88f, 1.00f };
+                static const char* kTypeName[6] = { "Clear", "Cloudy", "Stormy", "Rainy", "Heavy storm", "Lightning storm" };
+                const float cur = !rt_.weather_enabled ? 0.0f : rt_.weather_manual >= 0.0f ? rt_.weather_manual : weather_state_;
+                int type = 0;
+                for (int i = 1; i < 6; ++i)
+                    if (std::abs(kTypeVal[i] - cur) < std::abs(kTypeVal[type] - cur)) type = i;
+                ImGui::TextUnformatted("Weather type");
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::SliderInt("##weather_type", &type, 0, 5, kTypeName[type])) {
+                    rt_.weather_enabled = true;
+                    rt_.weather_manual = kTypeVal[type];
                 }
-                ImGui::Text("Now: %s (%.2f)", weather_name(), weather_state_);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Clear - Cloudy - Stormy (dark and windy) - Rainy - Heavy storm - Lightning storm (lightning and thunder).");
+                // The six stops as buttons under the slider.
+                for (int i = 0; i < 6; ++i) {
+                    if (i) ImGui::SameLine();
+                    const bool on = rt_.weather_enabled && i == type;
+                    if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                    static const char* kShort[6] = { "Clear", "Cloudy", "Stormy", "Rainy", "Heavy", "Lightning" };
+                    if (ImGui::SmallButton(kShort[i])) { rt_.weather_enabled = true; rt_.weather_manual = kTypeVal[i]; }
+                    if (on) ImGui::PopStyleColor();
+                }
+                if (rt_.weather_enabled) ImGui::Text("Now: %s%s", weather_name(), rt_.weather_manual < 0.0f ? " (changing by itself)" : "");
+                else ImGui::TextUnformatted("Now: weather off (always clear)");
+            }
+            ImGui::Separator();
+            ImGui::Checkbox("Weather on", &rt_.weather_enabled);
+            if (rt_.weather_enabled) {
+                bool random = rt_.weather_manual < 0.0f;
+                if (ImGui::Checkbox("Changes by itself", &random)) rt_.weather_manual = random ? -1.0f : weather_state_;
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: the weather system picks new weather now and then. Off: the type above is held.");
+                if (random) {
+                    ImGui::SliderFloat("Bad weather chance", &rt_.weather_bad_chance, 0.0f, 1.0f, "%.2f");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("How often a weather change picks rain or a storm. 0 = always fair, 1 = always bad.");
+                    ImGui::SliderFloat("Weather change every (min)", &rt_.weather_change_minutes, 0.3f, 30.0f, "%.1f");
+                } else {
+                    ImGui::SliderFloat("Fine: 0 clear .. 1 thunderstorm", &rt_.weather_manual, 0.0f, 1.0f, "%.2f");
+                }
             }
         }
 

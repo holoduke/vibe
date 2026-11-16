@@ -322,6 +322,8 @@ float rmRand(uvec3 seed) {
 
 // Scene UBO — same layout as cube.frag's binding 0. Only a handful of
 // fields are read here (camera, sun, sky); the rest are unused.
+layout(set = 0, binding = 32) uniform sampler2D u_cloud_shadow;   // sunlight through the cloud layer (clouds.comp)
+#define CLOUD_SHADOW_MAP u_cloud_shadow
 #include "scene_ubo.glsl"
 
 #include "atmosphere.glsl"
@@ -1431,8 +1433,10 @@ float grassEligibility(vec2 worldXZ, float terrainY) {
     float slope_w   = 1.0 - smoothstep(slope_max * 0.7,
                                         slope_max * 1.2, slope_mag);
     float alt_factor = 1.0 - smoothstep(55.0, 75.0, terrainY);
-    float underwater = (scene.water_params.x > 0.5 &&
-                         terrainY < scene.water_params.y) ? 0.0 : 1.0;
+    // No lawn in the water, and none on the strip the water laps over:
+    // a band of bare sand and pebbles runs along every shore.
+    float underwater = (scene.water_params.x > 0.5)
+        ? smoothstep(scene.water_params.y + 0.22, scene.water_params.y + 0.50, terrainY) : 1.0;
     return mg.r * slope_w * alt_factor * underwater;
 }
 
@@ -3905,8 +3909,24 @@ void main() {
             float tw = scene.water_params.w;
             float lap = 0.045 * sin(tw * 0.8 + pos.x * 0.31 + pos.z * 0.23) + 0.03 * sin(tw * 1.37 + pos.x * 0.83 - pos.z * 0.57);
             float above = pos.y - scene.water_params.y - lap;
-            shore = (1.0 - smoothstep(0.03, 0.42, above)) * smoothstep(0.80, 0.93, nor.y);
-            shore_foam = (1.0 - smoothstep(0.0, 0.035, abs(above - 0.012))) * smoothstep(0.8, 0.93, nor.y);
+            float flat_w = smoothstep(0.55, 0.85, nor.y);
+            shore = (1.0 - smoothstep(0.03, 0.50, above)) * flat_w;
+            shore_foam = (1.0 - smoothstep(0.0, 0.022, abs(above - 0.010))) * flat_w;
+            // The beach itself: bare sand with darker grit and pebbles from
+            // the waterline up to about 70 cm above it (also under water).
+            float beach = (1.0 - smoothstep(0.30, 0.75, above + 0.10 * noise2(pos.xz * 0.9))) * flat_w;
+            if (beach > 0.01) {
+                float grit = noise2(pos.xz * 6.0) * 0.6 + noise2(pos.xz * 19.0) * 0.4;
+                float peb = smoothstep(0.62, 0.72, noise2(pos.xz * 11.0 + 3.7)) * smoothstep(0.35, 0.6, noise2(pos.xz * 2.3));
+                vec3 sandc = mix(scene.terrain_sand_color.rgb, vec3(0.200, 0.172, 0.125), 0.65) * mix(0.78, 1.12, grit);
+                sandc = mix(sandc, vec3(0.10, 0.097, 0.09) * mix(0.6, 1.3, noise2(pos.xz * 5.1)), peb * 0.8);
+                // Lit with a smoothed normal: sand is fine-grained, the rocky
+                // relief of the ground it replaces would show through as veins.
+                vec3 bn = normalize(mix(nor, vec3(0.0, 1.0, 0.0), 0.8));
+                vec3 blin = scene.sun_color.rgb * scene.sun_color.a * (max(dot(bn, sunDir), 0.0) * sha * cl_sh) +
+                            scene.sky_color.rgb * (0.40 * ao_shaped);
+                col = mix(col, sandc * blin + gi_indirect * 0.5, beach);
+            }
         }
         float wet = max(scene.ripple_info.z, shore);
         float pd = distance(pos, ro);
@@ -3915,7 +3935,7 @@ void main() {
             float pn = noise2(pos.xz * 0.33) * 0.65 + noise2(pos.xz * 1.21 + 7.0) * 0.35;
             float thr = 0.70 - 0.30 * wet;
             float puddle = flatn * smoothstep(thr, thr + 0.07, pn) * smoothstep(0.25, 0.7, wet);
-            vec3 pn_n = normalize(mix(nor, vec3(0.0, 1.0, 0.0), max(puddle, 0.5 * wet)));
+            vec3 pn_n = normalize(mix(nor, vec3(0.0, 1.0, 0.0), max(max(puddle, 0.5 * wet), 0.92 * shore)));
             if (puddle > 0.01 && pd < 60.0) {
                 vec3 rw = water_ripples(pos.xz);
                 pn_n = normalize(vec3(pn_n.x - rw.x * puddle, pn_n.y, pn_n.z - rw.y * puddle));
@@ -3929,19 +3949,19 @@ void main() {
             float cov = scene.crater_info.y;
             skyr = mix(skyr, vec3(dot(skyr, vec3(0.2126, 0.7152, 0.0722))), cov);
             float film = max(puddle, 0.11 * wet * smoothstep(0.5, 0.95, nor.y));
-            film = max(film, 0.62 * shore);                          // the glassy sheet on wet sand
+            film = max(film, 0.40 * shore);                          // the glassy sheet on wet sand
             col *= mix(1.0, 0.55, puddle);
-            col *= mix(1.0, 0.58, shore * (1.0 - puddle));           // soaked sand is darker
+            col *= mix(1.0, 0.70, shore * (1.0 - puddle));           // soaked sand is darker
             col += skyr * Fw * film * ao_shaped;
             float sg = max(dot(normalize(rr), sunDir), 0.0);
             float sg2 = sg * sg; float sg8 = sg2 * sg2 * sg2 * sg2;
             float sg64 = sg8 * sg8 * sg8 * sg8 * sg8 * sg8 * sg8 * sg8;
-            col += scene.sun_color.rgb * scene.sun_color.a * sg64 * sg64 * sha * cl_sh * film * 1.5;
+            col += scene.sun_color.rgb * scene.sun_color.a * sg64 * sg64 * sha * cl_sh * max(puddle, 0.12 * film) * 1.5;
             // A thin line of foam where the water runs out.
             if (shore_foam > 0.01) {
                 float fb = noise2(pos.xz * 9.0 + vec2(scene.water_params.w * 0.4, 0.0)) * 0.6 + noise2(pos.xz * 23.0) * 0.4;
                 col = mix(col, (scene.sun_color.rgb * scene.sun_color.a * (0.25 + 0.75 * sha) + scene.sky_color.rgb * 0.6) * 0.55,
-                          shore_foam * smoothstep(0.35, 0.65, fb) * 0.75);
+                          shore_foam * smoothstep(0.48, 0.74, fb) * 0.5);
             }
         }
     }

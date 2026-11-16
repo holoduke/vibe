@@ -220,6 +220,7 @@ void VulkanEngine::init() {
     init_voxel();
     init_doors();
     init_sun_horizon();          // before the deferred / fog sets that bind it
+    init_cloud_shadow_map();     // likewise (scene set binding 32, deferred 23)
     init_deferred_lighting();
     init_terrain_pipelines();
     init_terrain_raymarch_pipeline();
@@ -1450,6 +1451,7 @@ void VulkanEngine::shutdown() {
     guarded("destroy_grass_mask_texture", [&]{ destroy_grass_mask_texture(); });
     guarded("destroy_terrain_aux_texture", [&]{ destroy_terrain_aux_texture(); });
     guarded("destroy_sun_horizon", [&]{ destroy_sun_horizon(); });
+    guarded("destroy_cloud_shadow_map", [&]{ destroy_cloud_shadow_map(); });
     guarded("destroy_fog_wisp_texture",   [&]{ destroy_fog_wisp_texture(); });
     guarded("destroy_textures", [&]{ destroy_textures(); });
     guarded("destroy_grass_raymarch_pipeline", [&]{ destroy_grass_raymarch_pipeline(); });

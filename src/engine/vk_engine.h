@@ -1283,6 +1283,12 @@ private:
     glm::vec4 cloud_a_{0.0f}, cloud_b_{0.0f};
     float cloud_shadow_k_now_ = 0.0f;
     float cloud_shadow_at(glm::vec3 wp) const;
+    // Dusk / dawn (environment.cpp): warm-tint amount, the real sun's
+    // elevation (-1000 = no clock), and the sky's own sun direction while
+    // the sun is under the horizon.
+    float env_golden_ = 1.0f, env_sun_elev_ = -1000.0f;
+    bool  env_sky_real_ = false, env_sky_init_ = false;
+    float env_sky_pitch_ = 0.0f, env_sky_yaw_ = 0.0f, env_sky_ease_ = 1.0f;
     float env_amb_k_ = 1.0f;          // night fill-light factor (1 by day and on a clear full-moon night)
     float env_moon_vis_ = 1.0f;       // moon not hidden by terrain from the player (eased 0..1)
     float env_moon_ = 1.0f;           // moonlight in the sky right now, 0..1 (phase, height, setting)
@@ -2423,6 +2429,13 @@ private:
     // All images live in GENERAL (storage in atmosphere.comp, sampled in compose).
     struct AtmoImage { VkImage image = VK_NULL_HANDLE; VmaAllocation alloc = nullptr; VkImageView view = VK_NULL_HANDLE; };
     AtmoImage              atmo_trans_, atmo_ms_, atmo_sky_, atmo_ap_;
+    // Sunlight let through by the cloud layer, as a map of the land
+    // (512^2 over 6144 m; written by clouds.comp mode 3 every frame).
+    AtmoImage              cloud_shadow_map_;
+    VkSampler              cloud_shadow_sampler_ = VK_NULL_HANDLE;
+    bool                   cloud_shadow_bound_ = false;
+    void init_cloud_shadow_map();
+    void destroy_cloud_shadow_map();
     VkSampler              atmo_sampler_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout  atmo_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool       atmo_pool_ = VK_NULL_HANDLE;

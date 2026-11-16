@@ -23,6 +23,8 @@
 layout(location = 0) in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 
+layout(set = 0, binding = 23) uniform sampler2D u_cloud_shadow;   // sunlight through the cloud layer (clouds.comp)
+#define CLOUD_SHADOW_MAP u_cloud_shadow
 #include "scene_ubo.glsl"
 #include "sun_horizon.glsl"
 layout(set = 0, binding = 20) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow

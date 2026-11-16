@@ -266,41 +266,27 @@ float cs_noise(vec2 p) {
     return mix(mix(cs_hash(i), cs_hash(i + vec2(1.0, 0.0)), f.x),
                mix(cs_hash(i + vec2(0.0, 1.0)), cs_hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
-// The same weather field clouds.comp builds its clouds from (same hash,
-// same scale, same wind), so the shadow on the ground lies under the cloud
-// that is actually between that point and the sun.
-vec3 cl_hash33(vec3 p) {
-    uvec3 q = uvec3(ivec3(p)) * uvec3(1597334673u, 3812015801u, 2798796415u);
-    q = (q.x ^ q.y ^ q.z) * uvec3(1597334673u, 3812015801u, 2798796415u);
-    return vec3(q) * (1.0 / 4294967295.0);
-}
-float cl_hvalue(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = cl_hash33(vec3(i, 7.0)).x, b = cl_hash33(vec3(i + vec2(1, 0), 7.0)).x;
-    float c = cl_hash33(vec3(i + vec2(0, 1), 7.0)).x, d = cl_hash33(vec3(i + vec2(1, 1), 7.0)).x;
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
 // How much of the direct sunlight the clouds let through at `wp` (1 = open
-// sky). crater_info.z is the strength (0 when the sky is one grey deck:
-// the light is uniformly dim then, and that is applied to the sun itself).
+// sky). The cloud pass (clouds.comp, mode 3) marches the real cloud layer
+// toward the sun for every point of the land and stores the result in a
+// map, so a shadow on the ground lies under the cloud that casts it.
+// crater_info.z is the strength (0 when the sky is one grey deck: the light
+// is uniformly dim then, and that is applied to the sun itself).
+// A shader that wants it declares the map sampler and names it:
+//   layout(set = 0, binding = N) uniform sampler2D u_cloud_shadow;
+//   #define CLOUD_SHADOW_MAP u_cloud_shadow      (before this include)
+#ifdef CLOUD_SHADOW_MAP
 float cloud_shadow(vec3 wp) {
     float k = scene.crater_info.z;
     if (k <= 0.001) return 1.0;
     vec3 L = scene.sun_direction.xyz;
-    float size = max(scene.cloud_a.y, 0.2);
-    // Where the ray toward the sun passes through the lower third of the layer.
-    float alt = scene.cloud_a.z + 0.30 * scene.cloud_a.w;
-    vec2 p = wp.xz + L.xz / max(L.y, 0.12) * max(alt - wp.y, 0.0);
-    vec2 q = (p + scene.cloud_b.xy) / (6500.0 * size);
-    float wn = cl_hvalue(q) * 0.7 + cl_hvalue(q * 2.17 + 13.0) * 0.3;
-    float cov = clamp(scene.cloud_a.x, 0.0, 1.0);
-    float map_cov = smoothstep(0.2, 0.8, clamp(smoothstep(0.2, 0.8, wn) + (cov - 0.5) * 1.5, 0.0, 1.0));
-    // The cloud's own lumps and gaps (the 3D shape noise, approximated in 2D).
-    vec2 qs = (p + scene.cloud_b.xy * 1.6) / (1900.0 * size);
-    float lump = cl_hvalue(qs) * 0.6 + cl_hvalue(qs * 2.3 + 5.0) * 0.4;
-    float opac = smoothstep(0.30, 0.78, map_cov * (0.62 + 0.75 * lump)) * clamp(scene.cloud_b.z, 0.3, 1.5);
-    return 1.0 - k * clamp(opac, 0.0, 1.0);
+    // The map is laid out on the y = 0 plane: slide down the sun ray to it.
+    vec2 g = wp.xz - L.xz / max(L.y, 0.10) * wp.y;
+    vec2 uv = g / 6144.0 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
+    float t = textureLod(CLOUD_SHADOW_MAP, uv, 0.0).r;
+    return 1.0 - k * (1.0 - clamp(t, 0.0, 1.0));
 }
+#endif
 
 #endif

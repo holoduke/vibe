@@ -82,6 +82,7 @@ void main() {
     // fine detail of the same function per pixel.
     float rock_tag = 0.0;
     if (matRaw == 4) {
+        windW = 0.0;                              // (its u is a texture coordinate, not a wind weight)
         vec4 air = arch[uint(I.rot_arch_phase.y + 0.5)];
         if (air.z < -0.5) rock_tag = air.z;
     }
@@ -202,6 +203,7 @@ void main() {
     vColor      = col;
     vEmissive   = vec4(0.0);
     vUv         = vec2(windW, float(mat0));
+    if (matRaw == 4) vUv = inUv;                  // rocks: (atlas u, 4 + 0.45 * atlas v) - baked rocks only, else (0, 4)
     vTexParams  = tp;
     if (mat0 == 5) { vUv = imp_uv; vColor = inNormal.z < 1.5 ? vec3(0.075, 0.16, 0.08) : vec3(0.16, 0.28, 0.07); }
     vVegInfo = vec4(fd, (ve & 0x80000000u) != 0u ? 1.0 : 0.0,

@@ -66,7 +66,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 17 + kSpomMaterialCount },
+            kTextureCount * 2 + 18 + kSpomMaterialCount },
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -86,7 +86,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[32]{};
+    VkDescriptorSetLayoutBinding bindings[33]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -324,11 +324,14 @@ void VulkanEngine::init_descriptors() {
     bindings[31].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[31].descriptorCount = 1;
     bindings[31].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 32: sunlight through the cloud layer (atmosphere.cpp, clouds.comp).
+    bindings[32] = bindings[31];
+    bindings[32].binding = 32;
 
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 32, .pBindings = bindings,
+        .bindingCount = 33, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -422,9 +425,13 @@ void VulkanEngine::update_scene_ubo() {
     glm::vec3 sun_rgb = rt_.sun_color;
     glm::vec3 sky_rgb = rt_.sky_color;
     if (rt_.auto_golden_hour) {
-        float alt = sun.y;                       // sin(pitch)
-        // 0 at zenith (alt≥0.6, ~37°), 1 at horizon (alt≤0.10, ~6°).
-        float t = glm::clamp((0.60f - alt) / 0.50f, 0.0f, 1.0f);
+        // Elevation of the real sun (with the clock running; the light's
+        // own direction otherwise). The warmth comes in slowly from mid
+        // afternoon and is strongest in the last few degrees; after sunset
+        // it fades with the twilight (env_golden_).
+        const float elev = env_sun_elev_ > -500.0f ? env_sun_elev_ : glm::degrees(std::asin(glm::clamp(sun.y, -1.0f, 1.0f)));
+        float t = 1.0f - glm::smoothstep(1.0f, 34.0f, elev);
+        t = t * t * (env_applied_ ? env_golden_ : 1.0f);
         // Warm sunset tint: orange-amber at horizon, peach at ~15°.
         // No brightness boost — just shift the spectrum. The previous
         // 1.35x lift over-cranked the sun and washed everything out.
@@ -779,8 +786,8 @@ void VulkanEngine::update_scene_ubo() {
     // y / z: cloud cover and cloud-shadow contrast (scene_ubo.glsl cloud_shadow).
     data.crater_info = glm::vec4(float(craters_.size()),
                                  (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_coverage * 0.80f, 0.0f, 1.0f) : 0.0f,
-                                 // (0.72 -> 0.88 of it: a cumulus takes most of the direct sun)
-                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? env_cloud_shadow_k_ * 1.22f : 0.0f,
+                                 // (a cumulus takes about 70% of the direct sun; the map itself goes to black under thick cloud)
+                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? env_cloud_shadow_k_ * 0.96f : 0.0f,
                                  // .w: light level of the haze / fog colours (1 by day, the
                                  // night fill-light factor after dark)
                                  env_amb_k_);

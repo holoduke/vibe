@@ -1402,7 +1402,11 @@ void main() {
         float rc = cos(rrot), rsn = sin(rrot);
         vec3  rscl = vec3(rs, rs * rysq, rs);
         float seed = 3.7 + 6.1 * r_variant;
-        bool  slab = abs(mod(r_variant, 3.0) - 1.0) < 0.5;
+        // Sculpted in Blender and baked (tools/rocks): normal, occlusion and
+        // curvature come from its texture instead of the procedural detail.
+        bool  baked = r_variant > 99.5;
+        if (baked) r_variant -= 100.0;
+        bool  slab = !baked && abs(mod(r_variant, 3.0) - 1.0) < 0.5;
         // Detail follows the pixel footprint (object units per pixel).
         float cam_d = distance(vWorldPos, scene.camera_pos.xyz);
         float fp = cam_d * 2.0 * scene.viewport.w / max(rs, 0.05);
@@ -1414,7 +1418,26 @@ void main() {
         vec3 ngo = normalize(vec3(rc * Ng.x + rsn * Ng.z, Ng.y, -rsn * Ng.x + rc * Ng.z) * rscl);
         float cav;
         float grike = slab ? smoothstep(0.75, 0.95, ngo.y) * (1.0 - smoothstep(0.02, 0.10, fp)) : 0.0;
-        vec3 no = rock_detail_normal(po, ngo, seed, fine, grike, max(fp * 0.7, 0.0025), cav);
+        vec3 no;
+        float bk_ao = 1.0, bk_curv = 0.5;
+        if (baked) {
+            vec2 buv = vec2(vUv.x, (vUv.y - 4.0) / 0.45);
+            vec4 bk = texture(u_normal[19], buv);
+            vec2 of = bk.rg * 2.0 - 1.0;
+            vec3 on = vec3(of.x, of.y, 1.0 - abs(of.x) - abs(of.y));
+            float ot = max(-on.z, 0.0);
+            on.x += on.x >= 0.0 ? -ot : ot;
+            on.y += on.y >= 0.0 ? -ot : ot;
+            no = normalize(on);
+            bk_ao = bk.b; bk_curv = bk.a;
+            // Grain finer than the bake resolves, close up.
+            float gc;
+            vec3 fine_n = rock_detail_normal(po, no, seed, fine, 0.0, max(fp * 0.7, 0.0025), gc);
+            no = normalize(mix(no, fine_n, 0.35 * fine));
+            cav = clamp((1.0 - bk_ao) * 1.5 + max(0.5 - bk_curv, 0.0) * 1.2, 0.0, 1.0);
+        } else {
+            no = rock_detail_normal(po, ngo, seed, fine, grike, max(fp * 0.7, 0.0025), cav);
+        }
         vec3 nl = no / rscl;
         vec3 Nr = normalize(vec3(rc * nl.x - rsn * nl.z, nl.y, rsn * nl.x + rc * nl.z));
         // Albedo: the rock set, triplanar by the MESH normal (weights from the
@@ -1428,6 +1451,18 @@ void main() {
         float big = rk_fbm(po * 0.9 + seed, 2);
         alb *= mix(0.82, 1.10, big) * mix(vec3(1.04, 1.0, 0.94), vec3(0.95, 0.98, 1.03), rk_vnoise(po * 0.55 - seed));
         alb *= 1.0 - 0.38 * clamp(cav, 0.0, 1.0);
+        if (baked) {
+            // Worn edges are paler (the weathered skin is chipped off there),
+            // crevices hold dirt, the shaded underside stays damp and dark.
+            float edge = smoothstep(0.56, 0.80, bk_curv);
+            alb = mix(alb, alb * 1.32 + vec3(0.025), edge * 0.6);
+            float dirt = smoothstep(0.75, 0.35, bk_ao) * smoothstep(0.35, 0.65, rk_vnoise(po * 3.3 + seed));
+            alb = mix(alb, vec3(0.085, 0.072, 0.052), dirt * 0.55);
+            alb *= mix(0.80, 1.0, smoothstep(-0.5, 0.3, no.y));
+            // Lichen: pale grey-green and ochre blotches on the lit faces.
+            float lic = smoothstep(0.60, 0.78, rk_fbm(po * 5.2 + seed * 2.0, 3)) * smoothstep(0.1, 0.6, no.y) * (1.0 - edge);
+            alb = mix(alb, mix(vec3(0.36, 0.38, 0.30), vec3(0.42, 0.34, 0.16), step(0.5, rk_vnoise(po * 1.7 - seed))), lic * 0.45);
+        }
         float moss = smoothstep(0.55, 0.9, Nr.y) * smoothstep(0.45, 0.75, rk_fbm(po * 2.6 - seed, 3)) * 0.55;
         alb = mix(alb, vec3(0.10, 0.17, 0.05), moss);
         float snr = smoothstep(scene.terrain_h_high.x + 10.0, scene.terrain_h_high.z, wposr.y) * smoothstep(0.35, 0.75, Nr.y);
@@ -3135,6 +3170,30 @@ void main() {
     if (g_veg_solid && int(vUv.y + 0.5) == 0) {
         float lum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
         albedo *= mix(0.42, 0.66, smoothstep(0.08, 0.40, lum));
+    }
+    // Where a trunk or a boulder meets the ground: no clean cut-out line.
+    // The foot is stained with soil thrown up by rain, moss creeps up from
+    // the ground (on boulders over the tops near the ground), and the last
+    // hand-width sits in its own contact shade. Height = above the terrain
+    // under this very pixel, so it follows slopes.
+    if (g_veg_solid) {
+        float gh = textureLod(u_heightmap_full, vWorldPos.xz / 2048.0 + 0.5, 0.0).r;
+        float above = vWorldPos.y - gh;
+        if (above < 1.8) {
+            bool  rock = int(vUv.y + 0.5) == 4;
+            float n1 = tnoise(vWorldPos.xz * 3.1 + vWorldPos.y * 2.3);
+            float n2 = tnoise(vWorldPos.xz * 0.7 + 9.0);
+            float n3 = tnoise(vWorldPos.xz * 1.9 + vWorldPos.y * 1.3 + 4.0);
+            float soil_w = 1.0 - smoothstep(0.02, rock ? 0.30 : 0.40, above - 0.14 * n1 + 0.07);
+            vec3  soil = mix(vec3(0.085, 0.070, 0.050), vec3(0.060, 0.082, 0.036), smoothstep(0.35, 0.70, n2));
+            albedo = mix(albedo, soil, soil_w * 0.72);
+            float moss_w = (1.0 - smoothstep(0.10, rock ? 0.95 : 1.50, above)) * smoothstep(0.42, 0.74, n3) *
+                           (rock ? smoothstep(0.15, 0.80, N.y) : 0.65);
+            albedo = mix(albedo, vec3(0.070, 0.105, 0.038) * mix(0.8, 1.25, n1), moss_w * 0.62);
+            albedo *= mix(0.55, 1.0, smoothstep(0.0, 0.20, above));
+            // Ease the shading normal toward the ground's at the very foot.
+            N = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.35 * (1.0 - smoothstep(0.0, 0.25, above))));
+        }
     }
     // GPU-veg rocks: snow caps on up-facing surfaces in the rock/snow band.
     if (is_mesh_draw && pc.grass_params.x > 0.5 && use_albedo) {

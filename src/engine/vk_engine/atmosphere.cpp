@@ -185,7 +185,68 @@ struct CloudPC {
 };
 }  // namespace
 
+// Cloud shadow map. Created by whoever needs it first (the cloud pass that
+// writes it, or the scene / deferred sets that sample it); the scene set is
+// written once it exists.
+void VulkanEngine::init_cloud_shadow_map() {
+    if (!cloud_shadow_map_.image) {
+        VkImageCreateInfo ici{};
+        ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = VK_FORMAT_R16_SFLOAT;
+        ici.extent = { 512, 512, 1 };
+        ici.mipLevels = 1; ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        vk_check(vmaCreateImage(allocator_, &ici, &aci, &cloud_shadow_map_.image, &cloud_shadow_map_.alloc, nullptr), "cloud shadow map");
+        VkImageViewCreateInfo vci{};
+        vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image = cloud_shadow_map_.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = VK_FORMAT_R16_SFLOAT;
+        vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &cloud_shadow_map_.view), "cloud shadow map view");
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+        si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        vk_check(vkCreateSampler(device_, &si, nullptr, &cloud_shadow_sampler_), "cloud shadow sampler");
+        vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
+            vkinit::transition_image(cb, cloud_shadow_map_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+            VkClearColorValue one{};
+            one.float32[0] = one.float32[1] = one.float32[2] = one.float32[3] = 1.0f;     // open sky
+            VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+            vkCmdClearColorImage(cb, cloud_shadow_map_.image, VK_IMAGE_LAYOUT_GENERAL, &one, 1, &r);
+        });
+    }
+    if (scene_desc_set_ && !cloud_shadow_bound_) {
+        VkDescriptorImageInfo ii{ cloud_shadow_sampler_, cloud_shadow_map_.view, VK_IMAGE_LAYOUT_GENERAL };
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = scene_desc_set_; w.dstBinding = 32; w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &ii;
+        vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+        cloud_shadow_bound_ = true;
+    }
+}
+
+void VulkanEngine::destroy_cloud_shadow_map() {
+    if (cloud_shadow_sampler_) vkDestroySampler(device_, cloud_shadow_sampler_, nullptr);
+    if (cloud_shadow_map_.view) vkDestroyImageView(device_, cloud_shadow_map_.view, nullptr);
+    if (cloud_shadow_map_.image) vmaDestroyImage(allocator_, cloud_shadow_map_.image, cloud_shadow_map_.alloc);
+    cloud_shadow_map_ = {};
+    cloud_shadow_sampler_ = VK_NULL_HANDLE;
+    cloud_shadow_bound_ = false;
+}
+
 void VulkanEngine::init_clouds() {
+    init_cloud_shadow_map();
     auto make = [&](AtmoImage& im, VkImageType type, VkFormat fmt, uint32_t w, uint32_t h, uint32_t d,
                     const char* name) {
         VkImageCreateInfo ici{};
@@ -236,8 +297,8 @@ void VulkanEngine::init_clouds() {
         vkCmdPipelineBarrier2(cb, &di);
     });
     {
-        VkDescriptorSetLayoutBinding b[8]{};
-        for (int i = 0; i < 8; ++i) {
+        VkDescriptorSetLayoutBinding b[9]{};
+        for (int i = 0; i < 9; ++i) {
             b[i].binding = uint32_t(i);
             b[i].descriptorType = (i < 5) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
                                           : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -246,11 +307,11 @@ void VulkanEngine::init_clouds() {
         }
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        lci.bindingCount = 8; lci.pBindings = b;
+        lci.bindingCount = 9; lci.pBindings = b;
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &cloud_set_layout_), "cloud set layout");
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5 },
-            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          3 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          4 },
         };
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -261,7 +322,7 @@ void VulkanEngine::init_clouds() {
         dai.descriptorPool = cloud_pool_; dai.descriptorSetCount = 1; dai.pSetLayouts = &cloud_set_layout_;
         vk_check(vkAllocateDescriptorSets(device_, &dai, &cloud_set_), "cloud set");
         // Binding 2 (scene depth) is written every dispatch (view changes on resize).
-        VkDescriptorImageInfo ii[8] = {
+        VkDescriptorImageInfo ii[9] = {
             { atmo_sampler_, atmo_trans_.view,   VK_IMAGE_LAYOUT_GENERAL },
             { atmo_sampler_, atmo_sky_.view,     VK_IMAGE_LAYOUT_GENERAL },
             { atmo_sampler_, VK_NULL_HANDLE,     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
@@ -270,10 +331,11 @@ void VulkanEngine::init_clouds() {
             { VK_NULL_HANDLE, cloud_img_.view,    VK_IMAGE_LAYOUT_GENERAL },
             { VK_NULL_HANDLE, cloud_shape_.view,  VK_IMAGE_LAYOUT_GENERAL },
             { VK_NULL_HANDLE, cloud_detail_.view, VK_IMAGE_LAYOUT_GENERAL },
+            { VK_NULL_HANDLE, cloud_shadow_map_.view, VK_IMAGE_LAYOUT_GENERAL },
         };
-        VkWriteDescriptorSet w[7]{};
+        VkWriteDescriptorSet w[8]{};
         int n = 0;
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < 9; ++i) {
             if (i == 2) continue;
             w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[n].dstSet = cloud_set_;
@@ -377,6 +439,7 @@ void VulkanEngine::dispatch_clouds(VkCommandBuffer cmd) {
         cloud_noise_ready_ = true;
     }
     run(2.0f, (cloud_w_ + 7) / 8, (cloud_h_ + 7) / 8, 1);
+    run(3.0f, 512 / 8, 512 / 8, 1);          // sunlight reaching the ground (cloud shadow map)
 }
 
 // The cloud layer was a fixed 1920x1080 - 1.76x the pixels of a 1720x685
@@ -455,6 +518,8 @@ void VulkanEngine::dispatch_atmosphere(VkCommandBuffer cmd) {
     if (!atmo_pipeline_) return;
     const FrameView& fv = current_frame_view_;
     float p = glm::radians(rt_.sun_pitch_deg), y = glm::radians(rt_.sun_yaw_deg);
+    // Dusk / dawn: the sky is lit by the real sun under the horizon.
+    if (env_applied_ && env_sky_real_) { p = glm::radians(env_sky_pitch_); y = glm::radians(env_sky_yaw_); }
     glm::vec3 sun(std::sin(y) * std::cos(p), std::sin(p), std::cos(y) * std::cos(p));
     AtmoPC pc{};
     // World Y is metres above sea level; planet frame == world axes.

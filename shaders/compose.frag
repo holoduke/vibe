@@ -299,7 +299,9 @@ float sun_visibility() {
     vis += float(texture(history_depth, clamp(c + vec2(-r, 0), vec2(0.0), vec2(1.0))).r >= kFar);
     vis += float(texture(history_depth, clamp(c + vec2(0,  r), vec2(0.0), vec2(1.0))).r >= kFar);
     vis += float(texture(history_depth, clamp(c + vec2(0, -r), vec2(0.0), vec2(1.0))).r >= kFar);
-    return vis * 0.2;  // 0/5 .. 5/5
+    // A cloud in front of the sun takes the glare, shafts and flare with it.
+    float cl = textureLod(u_clouds, c, 0.0).a;
+    return vis * 0.2 * (1.0 - 0.85 * smoothstep(0.15, 0.85, cl));  // 0/5 .. 5/5
 }
 
 // Direct-render lens flare: ghosts are placed at known positions on screen
