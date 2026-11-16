@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -1986,6 +1987,16 @@ private:
     void  paint_veg(bool erase);
     void  request_paint_apply(bool everything);
     void  replant_vegetation();
+    // The placement itself (the slow part) runs on a worker thread so the
+    // game keeps running while a painted stroke is applied.
+    struct VegJobResult { std::vector<VegInstance> inst; std::vector<collision::AABB> cols; WorldPropStats st; double ms = 0.0; };
+    std::future<VegJobResult> veg_job_;
+    bool      veg_job_active_ = false;
+    PaintMap  veg_job_paint_;
+    Heightmap veg_job_hm_;
+    bool      scatter_after_edit_ = false;    // ground cover catches up when edit mode is left
+    void  start_veg_replant();
+    void  finish_veg_replant(VegJobResult&& r);
     void  build_scatter_from(const Heightmap& hm);
     void  rebuild_scatter();
     void  build_edit_ui();

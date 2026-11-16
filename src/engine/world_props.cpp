@@ -1597,6 +1597,60 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         out.push_back(vi);
         ++bushes;
     }
+    // Painted areas are filled deliberately as well: the random attempts
+    // above cover the whole map, so a small painted patch caught few or
+    // none of them (painting a bush often planted nothing). Every painted
+    // 2 m cell gets its share of plants here, from a random stream of its
+    // own (stable from stroke to stroke).
+    if (P.paint && !P.paint->empty()) {
+        const float cell = PaintMap::cell();
+        for (int j = 0; j < kPaintDim; ++j)
+            for (int i = 0; i < kPaintDim; ++i) {
+                const size_t k = size_t(j) * kPaintDim + size_t(i);
+                const uint8_t it = P.paint->layer[kPaintTrees][k], ib = P.paint->layer[kPaintBushes][k];
+                if (!it && !ib) continue;
+                uint32_t rs = (uint32_t(k) + 1u) * 2654435761u ^ 0x9E3779B9u;
+                rs ^= rs >> 15; rs *= 0x2C1B3C6Du; rs ^= rs >> 12; rs |= 1u;
+                auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
+                const float x = (float(i) + u()) * cell - 0.5f * kPaintSide;
+                const float z = (float(j) + u()) * cell - 0.5f * kPaintSide;
+                const float h = h_at(x, z);
+                if (h < P.water_level + 0.4f || ny_at(x, z) < 0.6f) continue;
+                if (it && it < P.paint->presets.size()) {
+                    const PaintPreset& pt = P.paint->presets[it];
+                    // ~one tree per 5 x 5 m at full density.
+                    if (pt.trees && u() < pt.tree_density * 0.16f) {
+                        const bool pine = u() < pt.pine_share;
+                        const float scale = (0.75f + 0.55f * u()) * std::clamp(pt.tree_size, 0.3f, 2.5f);
+                        if (!by_species[pine ? 0 : 1].empty() && try_mark(x, z, (pine ? 1.6f : 2.4f) * scale)) {
+                            const auto& pool = by_species[pine ? 0 : 1];
+                            const int ai = pool[size_t(u() * float(pool.size())) % pool.size()];
+                            VegInstance vi{};
+                            vi.pos_scale = glm::vec4(x, h - 0.05f, z, scale);
+                            vi.rot_arch_phase = glm::vec4(u() * 6.2831853f, float(ai), u() * 6.2831853f, 0.0f);
+                            out.push_back(vi);
+                            const float tr = 0.38f * scale;
+                            cols.push_back({ glm::vec3(x - tr, h - 0.5f, z - tr),
+                                             glm::vec3(x + tr, h + arch[size_t(ai)].height * scale * 0.6f, z + tr) });
+                            if (pine) ++st.pines; else ++st.broadleaf;
+                        }
+                    }
+                }
+                if (ib && ib < P.paint->presets.size()) {
+                    const PaintPreset& pb = P.paint->presets[ib];
+                    // ~one bush per 2.5 x 2.5 m at full density.
+                    if (pb.bushes && !by_species[2].empty() && u() < pb.bush_density * 0.6f) {
+                        const auto& pool = by_species[2];
+                        const int ai = pool[size_t(u() * float(pool.size())) % pool.size()];
+                        VegInstance vi{};
+                        vi.pos_scale = glm::vec4(x, h, z, 0.6f + 0.9f * u());
+                        vi.rot_arch_phase = glm::vec4(u() * 6.2831853f, float(ai), u() * 6.2831853f, 0.0f);
+                        out.push_back(vi);
+                        ++bushes;
+                    }
+                }
+            }
+    }
     st.bushes = bushes;
     return out;
 }

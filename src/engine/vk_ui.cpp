@@ -591,6 +591,8 @@ void VulkanEngine::build_menu_ui() {
             }
             ImGui::Separator();
             ImGui::Checkbox("Weather on", &rt_.weather_enabled);
+            ImGui::SliderFloat("Mist on the water", &rt_.lake_mist, 0.0f, 3.0f, rt_.lake_mist <= 0.0f ? "off" : "%.2f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("A low layer of mist over the lake. Thickest at dawn and dusk, nearly gone at midday.");
             if (rt_.weather_enabled) {
                 bool random = rt_.weather_manual < 0.0f;
                 if (ImGui::Checkbox("Changes by itself", &random)) rt_.weather_manual = random ? -1.0f : weather_state_;
@@ -678,7 +680,6 @@ void VulkanEngine::build_menu_ui() {
             bool vf = rt_.fog_volumetric != 0;
             if (ImGui::Checkbox("Ground fog with light shafts", &vf)) rt_.fog_volumetric = vf ? 1 : 0;
             ImGui::SliderFloat("fog thickness", &fog_density, 0.0f, 0.05f, "%.4f");
-            ImGui::SliderFloat("mist on the water", &rt_.lake_mist, 0.0f, 3.0f, "%.2f");
             ImGui::SliderFloat("fog thins out with height", &rt_.fog_height_falloff, 0.0f, 0.2f, "%.3f");
             ImGui::SliderFloat("fog reach (m)", &rt_.fog_max_dist, 50.0f, 1000.0f, "%.0f");
             ImGui::SeparatorText("Valley fog (on the terrain)");

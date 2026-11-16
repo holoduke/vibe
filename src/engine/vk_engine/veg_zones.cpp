@@ -190,20 +190,42 @@ WorldPropParams VulkanEngine::veg_place_params() const {
 // Catch-up: trees + bushes
 // ---------------------------------------------------------------------
 
-void VulkanEngine::replant_vegetation() {
-    if (veg_arch_.empty() || terrain_data_.heights.empty() || !veg_inst_buf_) return;
-    const auto t0 = std::chrono::steady_clock::now();
-    Heightmap hm;
-    hm.dim = terrain_data_.dim;
-    hm.cell = terrain_data_.cell;
-    hm.origin_x = terrain_data_.origin_x;
-    hm.origin_z = terrain_data_.origin_z;
-    hm.heights = terrain_data_.heights;
+void VulkanEngine::start_veg_replant() {
+    if (veg_job_active_ || veg_arch_.empty() || terrain_data_.heights.empty() || !veg_inst_buf_) return;
+    veg_job_hm_.dim = terrain_data_.dim;
+    veg_job_hm_.cell = terrain_data_.cell;
+    veg_job_hm_.origin_x = terrain_data_.origin_x;
+    veg_job_hm_.origin_z = terrain_data_.origin_z;
+    veg_job_hm_.heights = terrain_data_.heights;
+    veg_job_paint_ = paint_;                       // snapshot: painting may go on meanwhile
+    WorldPropParams wp = veg_place_params();
+    if (wp.paint) wp.paint = &veg_job_paint_;
+    paint_dirty_veg_ = false;
+    veg_job_active_ = true;
+    veg_job_ = std::async(std::launch::async, [this, wp]() {
+        const auto t0 = std::chrono::steady_clock::now();
+        VegJobResult r;
+        r.inst = place_vegetation(veg_job_hm_, &castle_road_, wp, veg_arch_, r.cols, r.st);
+        r.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        return r;
+    });
+}
 
-    std::vector<collision::AABB> cols;
-    WorldPropStats st{};
-    const WorldPropParams wp = veg_place_params();
-    std::vector<VegInstance> inst = place_vegetation(hm, &castle_road_, wp, veg_arch_, cols, st);
+void VulkanEngine::replant_vegetation() {
+    // Synchronous variant (level load, presets): start and wait.
+    if (!veg_job_active_) start_veg_replant();
+    if (!veg_job_active_) return;
+    VegJobResult r = veg_job_.get();
+    veg_job_active_ = false;
+    finish_veg_replant(std::move(r));
+}
+
+void VulkanEngine::finish_veg_replant(VegJobResult&& r) {
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<collision::AABB> cols = std::move(r.cols);
+    WorldPropStats st = r.st;
+    std::vector<VegInstance> inst = std::move(r.inst);
+    const double place_ms = r.ms;
 
     vkDeviceWaitIdle(device_);
 
@@ -274,10 +296,9 @@ void VulkanEngine::replant_vegetation() {
     }
     vkUpdateDescriptorSets(device_, 3, w, 0, nullptr);
     veg_rt_valid_ = false;                      // re-pick the ray-traced tree set
-    paint_dirty_veg_ = false;
 
-    log::infof("[paint] replanted in %.0f ms: %u instances (%d pines, %d broadleaf, %d bushes)",
-               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(),
+    log::infof("[paint] replanted: placement %.0f ms (background) + apply %.0f ms: %u instances (%d pines, %d broadleaf, %d bushes)",
+               place_ms, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(),
                veg_count_, st.pines, st.broadleaf, st.bushes);
 }
 

@@ -1102,10 +1102,23 @@ void VulkanEngine::run(const RunOptions& opts) {
                 if (kTestEdit) { terrain_edit_mode_ = true; terrain_brush_mode_ = TerrainBrushMode::ZonePaint; }
             }
         }
-        if (veg_replant_request_) {
+        if (veg_replant_request_ && !veg_job_active_) {
             veg_replant_request_ = false;
-            replant_vegetation();
-            // Ground cover depends on where the tree crowns are.
+            start_veg_replant();                 // placement runs in the background
+        }
+        if (veg_job_active_ && veg_job_.valid() &&
+            veg_job_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            VegJobResult r = veg_job_.get();
+            veg_job_active_ = false;
+            finish_veg_replant(std::move(r));
+            // Ground cover depends on where the tree crowns are - but that
+            // rebuild stalls the game for most of a second, so while editing
+            // it waits until edit mode is left.
+            if (terrain_edit_mode_) scatter_after_edit_ = true;
+            else scatter_rebuild_request_ = true;
+        }
+        if (scatter_after_edit_ && !terrain_edit_mode_) {
+            scatter_after_edit_ = false;
             scatter_rebuild_request_ = true;
         }
         if (scatter_rebuild_request_) {
