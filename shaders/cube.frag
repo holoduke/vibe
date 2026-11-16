@@ -3432,6 +3432,10 @@ void main() {
             vec3 Bm = dp2p * du1.y + dp1p * du2.y;
             float im = inversesqrt(max(max(dot(Tm, Tm), dot(Bm, Bm)), 1e-20));
             // Parallax occlusion on UV-mapped meshes (castle towers / keep).
+            float m_dm = 0.0;            // depth of the relief at the hit (metres)
+            float m_hs = 0.0;            // relief depth in uv units
+            float m_vz = 1.0;
+            vec3  m_Ng = N;              // surface normal before the normal map
             {
                 int   hix   = height_idx_for_albedo(albedo_idx_raw);
                 float fadeP = 1.0 - smoothstep(30.0, 65.0, distance(vWorldPos, scene.camera_pos.xyz));
@@ -3439,20 +3443,33 @@ void main() {
                     vec3 Tn = normalize(Tm), Bn = normalize(Bm);
                     vec3 Vw = normalize(scene.camera_pos.xyz - vWorldPos);
                     vec3 Vt = vec3(dot(Vw, Tn), dot(Vw, Bn), dot(Vw, N));
-                    if (Vt.z > 0.12) {
+                    m_vz = Vt.z;
+                    if (Vt.z > 0.04) {
                         // uv per metre from the derivatives -> relief in metres
                         float uvpm = sqrt(max(dot(du1, du1), dot(du2, du2)) /
                                           max(max(dot(dp1, dp1), dot(dp2, dp2)), 1e-10));
                         float hs = clamp(0.05 / max(uvpm, 0.01), 0.06, 0.3) * uvpm *
                                    scene.spom_params.x * fadeP;
+                        // On a round tower a ray that meets the surface at a
+                        // slant can only get so far below it before it is
+                        // out of the stone again (R * (1 - sqrt(1 - c^2))).
+                        // Marching deeper than that dragged the texture into
+                        // long streaks where the tower curves away.
+                        if (mesh_curv > 0.02) {
+                            float can = (1.0 - sqrt(max(1.0 - Vt.z * Vt.z, 0.0))) / mesh_curv;
+                            hs *= clamp(can * uvpm / max(hs, 1e-6), 0.12, 1.0);
+                        }
                         vec2 uvp = pom_march(hix, muv, Vt, hs, du1, du2);
+                        float dm_hit = 0.0;
                         {   // relief silhouette on round towers
                             float dm = (1.0 - textureGrad(u_height[hix], uvp, du1, du2).r) * hs / max(uvpm, 1e-4);
                             if (pom_silhouette_clip(dm, Vt.z, mesh_curv)) discard;
+                            dm_hit = dm;
                         }
                         vec3 Lt = vec3(dot(L, Tn), dot(L, Bn), dot(L, N));
-                        mesh_pom_shade = mix(1.0, pom_shade(hix, uvp, Lt, hs, du1, du2, 0.0), fadeP);
+                        mesh_pom_shade = mix(1.0, pom_shade(hix, uvp, Lt, hs, du1, du2, 1.0), fadeP);
                         muv = uvp;
+                        m_dm = dm_hit; m_hs = hs;
                     } else if (mesh_curv > 0.02) {
                         // Grazing silhouette pixels (no march): clip by the
                         // height at the unshifted uv - the stone outline.
@@ -3470,6 +3487,59 @@ void main() {
                 int  ni = clamp(normal_idx_raw, 0, kTextureCount - 1);
                 vec3 nt = textureGrad(u_normal[ni], muv, du1, du2).xyz * 2.0 - 1.0;
                 N = normalize(Tm * (im * nt.x) - Bm * (im * nt.y) + N * nt.z);
+                if (m_hs > 0.0) {
+                    // The stones are really that deep: their flanks turn
+                    // toward / away from the light (same as the straight
+                    // walls) - slope of the height field on top of the fine
+                    // normal map.
+                    int   hn = height_idx_for_albedo(albedo_idx_raw);
+                    vec2  e  = 1.5 * vec2(length(du1), length(du2)) + 1.0 / vec2(textureSize(u_height[hn], 0));
+                    float hx = textureGrad(u_height[hn], muv + vec2(e.x, 0.0), du1, du2).r -
+                               textureGrad(u_height[hn], muv - vec2(e.x, 0.0), du1, du2).r;
+                    float hy = textureGrad(u_height[hn], muv + vec2(0.0, e.y), du1, du2).r -
+                               textureGrad(u_height[hn], muv - vec2(0.0, e.y), du1, du2).r;
+                    vec2  slope = clamp(vec2(hx, hy) / (2.0 * e) * m_hs, vec2(-2.5), vec2(2.5));
+                    N = normalize(N - (normalize(Tm) * slope.x + normalize(Bm) * slope.y) * 0.7);
+                }
+            }
+            // Where a tower stands on paving: a soft shadow in the angle, and
+            // the paving shows in the recesses between the lowest stones (the
+            // same join the straight walls have) - instead of a clean arc
+            // that makes the tower look as if it floats on the floor.
+            {
+                float md = distance(vWorldPos, scene.camera_pos.xyz);
+                if (height_idx_for_albedo(albedo_idx_raw) >= 0 && md < 30.0 && abs(m_Ng.y) < 0.6) {
+                    const float reach = 0.45;
+                    rayQueryEXT fq;
+                    rayQueryInitializeEXT(fq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
+                                          vWorldPos + m_Ng * 0.12, 0.0, vec3(0.0, -1.0, 0.0), reach);
+                    while (rayQueryProceedEXT(fq)) {}
+                    if (rayQueryGetIntersectionTypeEXT(fq, true) ==
+                        gl_RayQueryCommittedIntersectionTriangleEXT) {
+                        float tf  = rayQueryGetIntersectionTEXT(fq, true);
+                        float fad = 1.0 - smoothstep(20.0, 30.0, md);
+                        float ao  = mix(1.0, mix(0.62, 1.0, sqrt(clamp(tf / reach, 0.0, 1.0))), fad);
+                        vec3  rdm = normalize(vWorldPos - scene.camera_pos.xyz);
+                        int   prim = rayQueryGetIntersectionPrimitiveIndexEXT(fq, true);
+                        bool  on_floor =
+                            rayQueryGetIntersectionInstanceCustomIndexEXT(fq, true) == kStaticBlasSentinel &&
+                            (prim % kCubeTrisPerBox) / 2 == 2;                    // a block's top face
+                        float drop = m_dm * max(-rdm.y, 0.0) / max(m_vz, 0.15);
+                        Material fm = materials[prim / kCubeTrisPerBox];
+                        if (on_floor && drop > tf && int(fm.tex.x) >= 0 && fad > 0.5) {
+                            int   fi  = clamp(int(fm.tex.x), 0, kTextureCount - 1);
+                            int   fh  = height_idx_for_albedo(fi);
+                            vec3  fp  = vWorldPos + rdm * (tf / max(-rdm.y, 1e-3));
+                            vec2  fuv = br_face_uv(3, fp, max(fm.tex.z, 0.001),
+                                                   (fh == 0 || fh == 2) ? vec2(0.5, 1.0) : vec2(1.0));
+                            albedo = texture(u_albedo[fi], fuv).rgb * fm.color.rgb * 0.8;
+                            vec3 fn = texture(u_normal[fi], fuv).rgb * 2.0 - 1.0;
+                            N = normalize(vec3(1.0, 0.0, 0.0) * fn.x + vec3(0.0, 0.0, 1.0) * fn.y +
+                                          vec3(0.0, 1.0, 0.0) * fn.z);
+                        }
+                        albedo *= ao;
+                    }
+                }
             }
         } else if (use_albedo && int(vTexParams.y - 0.5) == -8) {
             // Skinned character: its own UVs into its texture atlas.
