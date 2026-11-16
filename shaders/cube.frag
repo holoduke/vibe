@@ -3492,6 +3492,10 @@ void main() {
                         // Marching deeper than that dragged the texture into
                         // long streaks where the tower curves away.
                         hs *= mix(1.0, smoothstep(0.0, 0.45, m_ground), m_gfade);
+                        // Seen at a flat slant (where a tower curves away) the
+                        // shift gets long and drags the stones into streaks:
+                        // ease the relief out there.
+                        hs *= smoothstep(0.04, 0.38, Vt.z);
                         if (mesh_curv > 0.02) {
                             float can = (1.0 - sqrt(max(1.0 - Vt.z * Vt.z, 0.0))) / mesh_curv;
                             hs *= clamp(can * uvpm / max(hs, 1e-6), 0.12, 1.0);
