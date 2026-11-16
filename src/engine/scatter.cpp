@@ -738,61 +738,139 @@ void build_mushrooms(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
     }
 }
 
-// Water lilies: one instance = a small raft of floating pads (round leaves
-// with the V-shaped notch of a lily pad, a slightly raised rim) and, on
-// some, an open flower - two rings of pointed petals round a golden centre.
-// Parts: 9 = pad (uv.y = distance from the pad centre 0..1), 1 = petal
-// (instance colour), 2 = flower centre. Double-sided, no sway.
+// Water lilies: one instance = a raft of floating pads, each on its own
+// stem down to the lake bed, with one or two flowers.
+//   pad    part 9: uv.x = 9 + 0.4 * angle / pi (angle round the pad centre,
+//          for the veins), uv.y = radius 0..1 (packed below 1/32 so the wind
+//          sway stays a few millimetres - the pads bob a little).
+//   petal  part 1 (instance colour), flower centre part 2, stems part 0.
+// Pads are real surfaces: 4 rings x 28 segments, gently domed, the rim
+// wavy and here and there curled up or dipping under; some pads tilt.
 void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
     g_seed = 0x11117u;
-    auto tri2 = [&](uint32_t a, uint32_t b, uint32_t c) { ix.insert(ix.end(), { a, b, c, a, c, b }); };
-    const int pads = 6;
+    const float kPi = 3.14159265f;
+    auto tri = [&](uint32_t a, uint32_t b, uint32_t c) { ix.insert(ix.end(), { a, b, c }); };
+    auto stem = [&](glm::vec3 top, float r, float lean_a) {
+        // A soft S-curve down to (and a little into) the bed.
+        std::vector<glm::vec3> path;
+        const glm::vec3 drift(std::cos(lean_a) * 0.22f, 0.0f, std::sin(lean_a) * 0.22f);
+        for (int k = 0; k <= 7; ++k) {
+            const float t = float(k) / 7.0f;
+            path.push_back(top + glm::vec3(0.0f, -1.30f * t, 0.0f) + drift * (std::sin(t * kPi * 0.9f) * (1.0f - 0.3f * t)));
+        }
+        plant_tube(v, ix, path, r, r * 1.5f, 5, 0.0f, 0.0f);
+    };
+    const int pads = 7;
     for (int i = 0; i < pads; ++i) {
-        const float a = 6.2831853f * (float(i) + 0.7f * grnd()) / float(pads);
-        const float d = i == 0 ? 0.0f : 0.20f + 0.26f * grnd();
-        const glm::vec3 c(std::cos(a) * d, 0.012f + 0.004f * grnd(), std::sin(a) * d);
-        const float r = i == 0 ? 0.17f : 0.09f + 0.08f * grnd();
-        const float notch = 6.2831853f * grnd();                 // direction of the cut
-        const float gap = 0.22f + 0.12f * grnd();                // its angular width (rad)
-        const int seg = 18;
+        const float a = 2.0f * kPi * (float(i) + 0.7f * grnd()) / float(pads - 1);
+        const float d = i == 0 ? 0.0f : 0.22f + 0.30f * grnd();
+        const glm::vec3 c(std::cos(a) * d, 0.010f + 0.004f * grnd(), std::sin(a) * d);
+        const float r = i == 0 ? 0.19f : 0.10f + 0.09f * grnd();
+        const float notch = 2.0f * kPi * grnd();
+        const float gap = 0.20f + 0.16f * grnd();
+        // Tilt: most lie flat, a few ride up on a neighbour.
+        const float tilt = grnd() < 0.3f ? 0.10f + 0.12f * grnd() : 0.02f * grnd();
+        const float tilt_a = 2.0f * kPi * grnd();
+        const float curl_a = 2.0f * kPi * grnd();                  // where the rim curls up
+        const float curl = grnd() < 0.5f ? 0.035f + 0.05f * grnd() : 0.008f;
+        const float dip_a = curl_a + 2.2f + grnd();                // and where it dips under
+        const int seg = 28, rings = 4;
+        auto P = [&](float rr01, float ang) {
+            const float wav = 1.0f + 0.05f * std::sin(ang * 5.0f + float(i)) + 0.025f * std::sin(ang * 11.0f);
+            const float rr = r * rr01 * (rr01 > 0.7f ? wav : 1.0f);
+            glm::vec3 p = c + glm::vec3(std::cos(ang) * rr, 0.0f, std::sin(ang) * rr);
+            // Dome (centre slightly raised where the stem pushes), raised rim.
+            p.y += 0.006f * (1.0f - rr01 * rr01) + 0.004f * rr01 * rr01 * rr01;
+            // Rim curled up on one side, dipping into the water on another.
+            const float e = rr01 * rr01 * rr01;
+            p.y += curl * e * std::pow(std::max(std::cos(ang - curl_a), 0.0f), 3.0f);
+            p.y -= 0.012f * e * std::pow(std::max(std::cos(ang - dip_a), 0.0f), 4.0f);
+            p.y += 0.004f * e * std::sin(ang * 7.0f + float(i) * 1.7f);
+            p.y += tilt * rr * std::cos(ang - tilt_a);
+            return p;
+        };
+        auto uvp = [&](float rr01, float ang) {
+            float an = std::fmod(ang - notch, 2.0f * kPi); if (an < 0.0f) an += 2.0f * kPi;
+            return glm::vec2(9.0f + 0.4f * (an / kPi - 1.0f), rr01 * 0.98f / 32.0f);
+        };
         const uint32_t b0 = uint32_t(v.size());
-        v.push_back({ c + glm::vec3(0.0f, 0.004f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), { 9.0f, 0.0f } });
         for (int k = 0; k <= seg; ++k) {
-            const float t = float(k) / float(seg);
-            const float ang = notch + gap * 0.5f + (6.2831853f - gap) * t;
-            const float rr = r * (1.0f + 0.05f * std::sin(ang * 5.0f + float(i)));
+            const float ang = notch + gap * 0.5f + (2.0f * kPi - gap) * float(k) / float(seg);
+            for (int q = 0; q <= rings; ++q) {
+                const float rr01 = float(q) / float(rings);
+                const glm::vec3 p = P(rr01, ang);
+                // Normal from neighbouring surface points.
+                const glm::vec3 du = P(std::min(rr01 + 0.05f, 1.0f), ang) - P(std::max(rr01 - 0.05f, 0.0f), ang);
+                const glm::vec3 dv = P(std::max(rr01, 0.05f), ang + 0.05f) - P(std::max(rr01, 0.05f), ang - 0.05f);
+                glm::vec3 n = glm::cross(dv, du);
+                n = glm::dot(n, n) > 1e-12f ? glm::normalize(n) : glm::vec3(0.0f, 1.0f, 0.0f);
+                if (n.y < 0.0f) n = -n;
+                v.push_back({ p, n, uvp(rr01, ang) });
+            }
+        }
+        for (int k = 0; k < seg; ++k)
+            for (int q = 0; q < rings; ++q) {
+                const uint32_t i0 = b0 + uint32_t(k) * uint32_t(rings + 1) + uint32_t(q), i1 = i0 + uint32_t(rings + 1);
+                tri(i0, i1, i1 + 1); tri(i0, i1 + 1, i0 + 1);
+            }
+        stem(c + glm::vec3(0.0f, 0.004f, 0.0f), 0.0045f, 2.0f * kPi * grnd());
+    }
+    // Flowers: three rings of curved, cupped petals round a crown of
+    // stamens; the first opens wide beside the central pad, the second is
+    // a smaller, half-closed one further out.
+    auto flower = [&](glm::vec3 fc, float sz, float open) {
+        for (int ring = 0; ring < 3; ++ring) {
+            const int n = ring == 0 ? 10 : (ring == 1 ? 8 : 6);
+            const float len = sz * (ring == 0 ? 0.085f : (ring == 1 ? 0.068f : 0.050f));
+            const float wid = sz * (ring == 0 ? 0.021f : (ring == 1 ? 0.018f : 0.014f));
+            const float rise = (ring == 0 ? 0.30f : (ring == 1 ? 0.75f : 1.5f)) / open;
+            for (int k = 0; k < n; ++k) {
+                const float ang = 2.0f * kPi * (float(k) + 0.5f * float(ring) + 0.15f * grnd()) / float(n);
+                const glm::vec3 dir(std::cos(ang), 0.0f, std::sin(ang)), side(-dir.z, 0.0f, dir.x);
+                // Petal surface: 5 stations along, 3 across; it curves up
+                // along its length and is cupped across.
+                const uint32_t b0 = uint32_t(v.size());
+                const int st = 5;
+                for (int s2 = 0; s2 < st; ++s2) {
+                    const float t = float(s2) / float(st - 1);
+                    const float up_a = std::atan(rise) * (0.55f + 0.75f * t);          // steeper toward the tip
+                    const glm::vec3 along = dir * std::cos(up_a) + glm::vec3(0.0f, std::sin(up_a), 0.0f);
+                    const glm::vec3 mid = fc + dir * (sz * 0.010f) + (dir * std::cos(std::atan(rise) * 0.8f) +
+                                          glm::vec3(0.0f, std::sin(std::atan(rise) * 0.8f), 0.0f)) * (len * t) +
+                                          glm::vec3(0.0f, len * 0.18f * t * t, 0.0f);
+                    const float hw = wid * std::pow(std::sin(kPi * std::pow(std::min(t + 0.04f, 1.0f), 0.8f)), 0.7f) * (t > 0.98f ? 0.05f : 1.0f);
+                    const glm::vec3 nrm0 = glm::normalize(glm::cross(side, along));
+                    for (int u2 = -1; u2 <= 1; ++u2) {
+                        const float uu = float(u2);
+                        const glm::vec3 p = mid + side * (hw * uu) + nrm0 * (hw * 0.35f * uu * uu);
+                        v.push_back({ p, glm::normalize(nrm0 - side * (0.5f * uu)), { 1.0f, 0.0f } });
+                    }
+                }
+                for (int s2 = 0; s2 + 1 < st; ++s2)
+                    for (int u2 = 0; u2 < 2; ++u2) {
+                        const uint32_t i0 = b0 + uint32_t(s2) * 3u + uint32_t(u2), i1 = i0 + 3u;
+                        tri(i0, i1, i1 + 1); tri(i0, i1 + 1, i0 + 1);
+                    }
+            }
+        }
+        // Stamens: a crown of short golden filaments, and the centre.
+        for (int k = 0; k < 14; ++k) {
+            const float ang = 2.0f * kPi * float(k) / 14.0f;
             const glm::vec3 dir(std::cos(ang), 0.0f, std::sin(ang));
-            v.push_back({ c + dir * (rr * 0.62f), glm::vec3(0.0f, 1.0f, 0.0f), { 9.0f, 0.0f } });
-            v.push_back({ c + dir * rr + glm::vec3(0.0f, 0.006f, 0.0f),
-                          glm::normalize(glm::vec3(-dir.x * 0.25f, 1.0f, -dir.z * 0.25f)), { 9.0f, 0.0f } });
-        }
-        for (int k = 0; k < seg; ++k) {
-            const uint32_t i0 = b0 + 1 + uint32_t(k) * 2, i1 = i0 + 2;
-            tri2(b0, i1, i0);
-            tri2(i0, i1, i1 + 1); tri2(i0, i1 + 1, i0 + 1);
-        }
-    }
-    // The flower, beside the central pad.
-    const glm::vec3 fc(0.13f, 0.03f, -0.10f);
-    for (int ring = 0; ring < 2; ++ring) {
-        const int n = ring == 0 ? 9 : 7;
-        const float len = ring == 0 ? 0.075f : 0.055f, wid = ring == 0 ? 0.020f : 0.016f;
-        const float rise = ring == 0 ? 0.45f : 1.05f;            // outer petals lie flatter
-        for (int k = 0; k < n; ++k) {
-            const float ang = 6.2831853f * (float(k) + 0.5f * float(ring)) / float(n);
-            const glm::vec3 dir(std::cos(ang), 0.0f, std::sin(ang)), side(-dir.z, 0.0f, dir.x);
-            const glm::vec3 tipd = glm::normalize(dir + glm::vec3(0.0f, rise, 0.0f));
-            const glm::vec3 nrm = glm::normalize(glm::cross(side, tipd));
+            const glm::vec3 b = fc + dir * (sz * 0.006f) + glm::vec3(0.0f, sz * 0.006f, 0.0f);
+            const glm::vec3 t = b + dir * (sz * 0.012f) + glm::vec3(0.0f, sz * 0.026f, 0.0f);
+            const glm::vec3 sd(-dir.z * sz * 0.0025f, 0.0f, dir.x * sz * 0.0025f);
             const uint32_t b0 = uint32_t(v.size());
-            const glm::vec3 base = fc + dir * 0.008f;
-            v.push_back({ base, nrm, { 1.0f, 0.0f } });
-            v.push_back({ base + tipd * (len * 0.45f) + side * wid, nrm, { 1.0f, 0.0f } });
-            v.push_back({ base + tipd * (len * 0.45f) - side * wid, nrm, { 1.0f, 0.0f } });
-            v.push_back({ base + tipd * len, nrm, { 1.0f, 0.0f } });
-            tri2(b0, b0 + 1, b0 + 2); tri2(b0 + 1, b0 + 3, b0 + 2);
+            v.push_back({ b - sd, dir, { 2.0f, 0.0f } }); v.push_back({ b + sd, dir, { 2.0f, 0.0f } });
+            v.push_back({ t + sd, dir, { 2.0f, 0.0f } }); v.push_back({ t - sd, dir, { 2.0f, 0.0f } });
+            tri(b0, b0 + 1, b0 + 2); tri(b0, b0 + 2, b0 + 3);
         }
-    }
-    plant_lathe(v, ix, fc, glm::vec3(0.0f, 1.0f, 0.0f), { { 0.0f, 0.0f }, { 0.014f, 0.004f }, { 0.012f, 0.020f }, { 0.0f, 0.024f } }, 8, 2.0f);
+        plant_lathe(v, ix, fc, glm::vec3(0.0f, 1.0f, 0.0f), { { 0.0f, 0.0f }, { sz * 0.012f, sz * 0.004f },
+                    { sz * 0.010f, sz * 0.016f }, { 0.0f, sz * 0.020f } }, 8, 2.0f);
+        stem(fc, 0.0055f, 2.0f * kPi * grnd());
+    };
+    flower(glm::vec3(0.15f, 0.035f, -0.12f), 1.0f, 1.0f);
+    flower(glm::vec3(-0.30f, 0.045f, 0.24f), 0.7f, 0.55f);
 }
 
 // Sort instances by 32 m ground cell and emit one contiguous range per

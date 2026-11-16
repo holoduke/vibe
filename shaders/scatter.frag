@@ -110,17 +110,31 @@ void main() {
         leaf *= 0.8 + 0.4 * vUv.y;                // tips catch more light
         albedo = (part == 0) ? leaf : (part == 1 ? vColor : vec3(0.75, 0.55, 0.04));
         if (part == 9) {
-            // Lily pad: glossy dark green, paler veins fanning out from the
-            // centre, a browner rim.
-            float pr = smoothstep(0.0, 0.03, 1.0 - N.y);          // the raised rim tilts outward
-            vec2  pl = vObj.xz;
-            float va = atan(pl.y, pl.x);
-            float veins = smoothstep(0.75, 1.0, abs(sin(va * 9.0 + wpos.x * 3.0)));
-            albedo = mix(vec3(0.050, 0.150, 0.040), vec3(0.095, 0.230, 0.060), veins * 0.6);
-            albedo = mix(albedo, vec3(0.16, 0.14, 0.05), pr * 0.6);
-            albedo *= 0.85 + 0.3 * fract(sin(dot(floor(wpos.xz * 9.0), vec2(12.9898, 78.233))) * 43758.5453);
+            // Lily pad. Leaf coordinates from the mesh: angle round the pad
+            // centre and radius. Glossy deep green; paler veins fan out from
+            // the centre and fork toward the rim; a thin brown, slightly
+            // nibbled margin. The underside (seen from under water) is the
+            // purplish red of a real lily pad, with the veins standing out.
+            float pang = (vUv.x - 9.0) / 0.4 * 3.14159265;
+            float pr   = clamp(vUv.y * 32.0 / 0.98, 0.0, 1.0);
+            float nv   = mix(11.0, 22.0, smoothstep(0.45, 0.75, pr));          // veins fork further out
+            float vd   = abs(fract(pang / 6.2831853 * nv + 0.5) - 0.5) * 2.0;
+            float vw   = max(fwidth(pang / 6.2831853 * nv) * 2.0, 0.02);
+            float veins = (1.0 - smoothstep(0.06, 0.06 + vw + 0.10, vd)) * smoothstep(0.03, 0.2, pr);
+            float mott = fract(sin(dot(floor(wpos.xz * 60.0), vec2(12.9898, 78.233))) * 43758.5453);
+            vec3 top = mix(vec3(0.045, 0.140, 0.038), vec3(0.085, 0.215, 0.055), veins * 0.75);
+            top *= 0.85 + 0.30 * mott;
+            top = mix(top, vec3(0.20, 0.16, 0.05), smoothstep(0.90, 1.0, pr) * 0.75);
+            top = mix(top, vec3(0.12, 0.10, 0.03), step(0.93, mott) * smoothstep(0.5, 1.0, pr) * 0.6);   // blemishes
+            vec3 under = mix(vec3(0.22, 0.07, 0.10), vec3(0.34, 0.20, 0.16), veins);
+            bool from_below = scene.camera_pos.y < wpos.y;
+            albedo = from_below ? under : top;
         }
         if ((part == 1 || part == 2) && vColor.r < 0.05 && vColor.g < 0.05 && vColor.b < 0.05) discard;   // lily raft without a flower
+        if (part == 1 && vColor.r > 0.85 && vColor.b > 0.5) {
+            // Lily petals: translucent, a touch warmer toward the base.
+            albedo = vColor * mix(vec3(1.0, 0.93, 0.80), vec3(1.0), smoothstep(0.0, 0.05, wpos.y - vInst.y - 0.03 * vInst.w));
+        }
         if (part == 6) {
             // Mushroom stem + gills: pale cream, fibrous streaks, gills darker.
             float gn = fract(sin(dot(floor(wpos * vec3(420.0, 60.0, 420.0)), vec3(12.9898, 78.233, 37.719))) * 43758.5453);
