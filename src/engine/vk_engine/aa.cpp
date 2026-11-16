@@ -208,11 +208,17 @@ void VulkanEngine::tick_aa(float dt) {
     dt = std::min(dt, 0.05f);
     uint32_t& R = aa_rng_;
 
+    bool aa_threat = false;
+    for (const auto& f : spacejet_flights_)
+        if (!f.dead && !f.destroying && !f.strike) { aa_threat = true; break; }
+
     for (auto& v : aa_) {
         v.prev_turret_yaw = v.turret_yaw;
         v.prev_gun_pitch = v.gun_pitch;
         v.prev_radar_spin = v.radar_spin;
-        v.radar_spin += dt * 4.2f;
+        // Nothing to shoot at: the vehicle stands still - no radar sweep, no
+        // turret scan. The radar only turns while enemy aircraft are up.
+        if (aa_threat) v.radar_spin += dt * 4.2f;
         if (v.flash_t > 0.0f) v.flash_t -= dt;
         if (v.kind == 1) continue;   // missile launchers: tick_sam
 
@@ -241,7 +247,8 @@ void VulkanEngine::tick_aa(float dt) {
             want_yaw = wrap_pi(wyaw - v.body_yaw);
             want_pitch = std::atan2(d.y, glm::length(glm::vec2(d.x, d.z)));
         } else {
-            want_yaw = v.turret_yaw + std::sin(v.radar_spin * 0.15f) * 0.2f;   // idle scan
+            want_yaw = v.turret_yaw;                    // idle: hold still
+            want_pitch = v.gun_pitch;
         }
         want_pitch = glm::clamp(want_pitch, -0.05f, 1.40f);
         float dy = wrap_pi(want_yaw - v.turret_yaw);
