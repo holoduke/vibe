@@ -776,6 +776,21 @@ float peb_layer(vec2 p, float cell, float dens, float layer_id, float hf, inout 
     }
     return h;
 }
+// Lake / river bed: a bed of closely packed pebbles (after "Raymarching
+// Pebbles", shadertoy wlsBRX: a pebble height field, shaded with its slope,
+// darkened in the crevices between the stones, with a wet highlight).
+// Two sizes, every cell occupied; the small ones fill the gaps.
+float bed_h(vec2 wp, float wA, float wB, out float id, out float k) {
+    float best = 0.0, h = 0.0;
+    g_peb_id = 0.0; g_peb_k = 0.0;
+    if (wA > 0.0) {
+        h = wA * peb_layer(wp, 0.22, 1.0, 5.0, 1.0, best);
+        h = max(h, wA * peb_layer(wp + vec2(0.11, 0.11), 0.22, 1.0, 7.0, 0.85, best));   // second set in the gaps: packed
+    }
+    if (wB > 0.0) h = max(h, wB * peb_layer(wp + 5.3, 0.075, 1.0, 6.0, 1.0, best));
+    id = g_peb_id; k = g_peb_k;
+    return h;
+}
 // One smooth random value per ~1/f metres (4 hashes; noise2 also computes
 // derivatives nobody needs here).
 float peb_vnoise(vec2 p) {
@@ -2906,11 +2921,41 @@ void main() {
                 vec3 u_nor = water_only ? meshNormal(u_pos.xz)
                                         : calcNormal(u_pos, t_water);
                 vec3 u_mat = getMaterial(u_pos, u_nor);
+                float bed_spec = 0.0;
+                {
+                    float bfp = max(t_water, 0.05) * 2.0 * scene.viewport.w;      // ~metres per pixel
+                    float bwA = smoothstep(2.0, 5.0, 0.22 / bfp);
+                    float bwB = smoothstep(2.0, 5.0, 0.075 / bfp);
+                    if (bwA > 0.01) {
+                        // Where the bed is seen through the water it lies a little
+                        // further along the line of sight than straight below.
+                        vec2  bp = u_pos.xz + rd.xz / max(-rd.y, 0.25) * min(depth_m, 1.5) * 0.6;
+                        float be = max(0.004, 1.5 * bfp), bid, bk, tmp1, tmp2;
+                        float hR = bed_h(bp + vec2(be, 0.0), bwA, bwB, tmp1, tmp2);
+                        float hU = bed_h(bp + vec2(0.0, be), bwA, bwB, tmp1, tmp2);
+                        float hC = bed_h(bp, bwA, bwB, bid, bk);
+                        u_nor = normalize(u_nor + vec3(hC - hR, 0.0, hC - hU) / be * 0.9);
+                        // Crevices between the stones are dark; stone tops stay open.
+                        float crev = smoothstep(0.0, 0.045, hC) * smoothstep(0.0, 0.45, bk);
+                        float gl = max(dot(u_mat, vec3(0.3, 0.5, 0.2)), 0.03);
+                        vec3 sc = gl * mix(vec3(1.35, 1.15, 1.05), vec3(1.05, 1.0, 0.95), fract(bid * 5.3)) *
+                                  mix(0.55, 1.45, fract(bid * 23.1));
+                        sc = mix(sc, gl * vec3(1.75, 1.20, 1.05), step(0.70, fract(bid * 3.1)));     // pink-brown
+                        sc = mix(sc, gl * vec3(0.55, 0.55, 0.60), step(0.86, fract(bid * 9.7)));     // dark
+                        sc = mix(sc, gl * vec3(2.20, 2.10, 1.95), step(0.92, fract(bid * 17.9)));    // pale
+                        sc *= mix(0.85, 1.15, noise2(bp * 90.0 + bid * 40.0));
+                        u_mat = mix(u_mat, mix(u_mat * 0.45, sc, smoothstep(0.0, 0.2, bk)), bwA) * mix(1.0, mix(0.10, 1.0, crev), bwA);
+                        // Wet stones: a tight highlight from the sun.
+                        vec3 bh = normalize(sunDirW - rd);
+                        bed_spec = pow(max(dot(u_nor, bh), 0.0), 90.0) * 0.6 * crev * bwA * water_lit;
+                    }
+                }
                 float u_dif = max(dot(u_nor, sunDirW), 0.0) * water_lit;
                 float u_amb = 0.5 + 0.5 * u_nor.y;
                 vec3  u_col = u_mat * (u_dif * scene.sun_color.rgb *
                                         scene.sun_color.a * 0.8 +
-                                        u_amb * scene.sky_color.rgb * 0.35);
+                                        u_amb * scene.sky_color.rgb * 0.35) +
+                             bed_spec * scene.sun_color.rgb * scene.sun_color.a;
                 // Tint the underwater colour by the water tint so it
                 // reads as "looking through water", not "no water".
                 u_col *= mix(vec3(1.0), shallow * 1.5 + vec3(0.05),
