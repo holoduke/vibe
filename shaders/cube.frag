@@ -1353,6 +1353,9 @@ int   g_nb_f  = -1;
 // True once the wall relief has run for this pixel.
 bool  g_br_relief = false;
 float g_nb_pl = 0.0;
+// The neighbour is of another material (paving under a wall): it joins as
+// a plain level surface, drawn with its own texture where the ray lands on it.
+bool  g_nb_flat = false;
 
 // Signed solidity margin (>= 0 -> inside the masonry). Only EXPOSED faces
 // carry a surface; where a face is covered by a neighbouring block the
@@ -1405,7 +1408,7 @@ float br_margin(vec3 w, vec3 C, vec3 H, int mask, float Dm, int h_idx,
         float d = s * (g_nb_pl - w[a]);              // depth below the neighbour's face
         if (d > -0.06) {
             float mb = d;
-            if (d < Dm) {
+            if (d < Dm && !g_nb_flat) {
                 float h = textureLod(u_height[h_idx],
                                      br_face_uv(g_nb_f, w, uv_scale, aspect), lod).r;
                 mb = d - Dm * (1.0 - h);
@@ -2772,6 +2775,11 @@ void main() {
             // 2 = SSDM (depth-override silhouette + recessed depth).
             int spom_mode = int(scene.grass_side_lit_params.z + 0.5);
             vec3  br_round_n = vec3(0.0);
+            bool  br_nb_hit   = false;       // the ray landed on the neighbour of another material
+            int   br_nb_idx   = 0;
+            float br_nb_scale = 1.0;
+            vec3  br_nb_tint  = vec3(1.0);
+            float br_ao       = 1.0;         // soft shadow in the angle between wall and floor
             float br_relief_m = 0.0;   // box relief depth in metres (0 = not that path)
             if (spom_mode == 0) {
                 // Flat path: forget the parallax UV shift entirely.
@@ -2874,6 +2882,29 @@ void main() {
                     // Which wall does this ray run into? Asked just above
                     // the face, along it, as far as the march can travel.
                     g_nb_f = -1;
+                    g_nb_flat = false;
+                    // Soft shadow where wall and floor meet: how close is
+                    // the other one? (walls look down, floors look round.)
+                    if (br_dist < 30.0) {
+                        float reach = 0.45, nearest = reach;
+                        vec3  ao_o = ro + spom_face_n * 0.04;
+                        int   n_dir = (axis == 1) ? 4 : 1;
+                        for (int k = 0; k < n_dir; ++k) {
+                            vec3 ad = (axis != 1) ? vec3(0.0, -1.0, 0.0)
+                                    : vec3(k == 0 ? 1.0 : k == 1 ? -1.0 : 0.0, 0.0,
+                                           k == 2 ? 1.0 : k == 3 ? -1.0 : 0.0);
+                            rayQueryEXT aq;
+                            rayQueryInitializeEXT(aq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
+                                                  ao_o, 0.0, ad, reach);
+                            while (rayQueryProceedEXT(aq)) {}
+                            if (rayQueryGetIntersectionTypeEXT(aq, true) ==
+                                gl_RayQueryCommittedIntersectionTriangleEXT)
+                                nearest = min(nearest, rayQueryGetIntersectionTEXT(aq, true));
+                        }
+                        float a01 = clamp(nearest / reach, 0.0, 1.0);
+                        br_ao = mix(1.0, mix(0.50, 1.0, sqrt(a01)),
+                                    1.0 - smoothstep(20.0, 30.0, br_dist));
+                    }
                     {
                         vec3  td = rd - spom_face_n * dot(rd, spom_face_n);
                         float tl = length(td);
@@ -2892,10 +2923,15 @@ void main() {
                                 int  cf   = (prim % kCubeTrisPerBox) / 2;   // +X -X +Y -Y +Z -Z
                                 int  na   = cf >> 1;
                                 Material nm = materials[prim / kCubeTrisPerBox];
-                                if (na != axis && int(nm.tex.x) == albedo_idx_raw &&
-                                    abs(nm.tex.z - scale) < 0.002) {
+                                if (na != axis) {
                                     g_nb_f  = na * 2 + ((cf & 1) == 0 ? 1 : 0);
                                     g_nb_pl = (po + td * rayQueryGetIntersectionTEXT(nq, true))[na];
+                                    g_nb_flat = !(int(nm.tex.x) == albedo_idx_raw &&
+                                                  abs(nm.tex.z - scale) < 0.002);
+                                    br_nb_idx   = clamp(int(nm.tex.x), 0, kTextureCount - 1);
+                                    br_nb_scale = max(nm.tex.z, 0.001);
+                                    br_nb_tint  = nm.color.rgb;
+                                    if (int(nm.tex.x) < 0) g_nb_f = -1;
                                 }
                             }
                         }
@@ -2962,6 +2998,12 @@ void main() {
                         spom_T = vec3(fs, 0.0, 0.0); spom_B = vec3(0.0, 1.0, 0.0);
                     }
                     spom_uv_off = br_face_uv(bf, p_hit, scale, br_asp);
+                    if (g_nb_flat && bf == g_nb_f) {
+                        br_nb_hit = true;
+                        int nh = height_idx_for_albedo(br_nb_idx);
+                        spom_uv_off = br_face_uv(bf, p_hit, br_nb_scale,
+                                                 (nh == 0 || nh == 2) ? vec2(0.5, 1.0) : vec2(1.0));
+                    }
                     // Depth + RT origin stay on the rasterised face: the box
                     // BLAS has culling disabled, so lighting from a point
                     // recessed INSIDE the box would self-shadow every brick.
@@ -3299,7 +3341,7 @@ void main() {
             // out of the displaced crevice; deferred shades the flat face.
             {
                 float fadeB = 1.0 - smoothstep(30.0, 65.0, distance(vWorldPos, scene.camera_pos.xyz));
-                if (fadeB > 0.01 && scene.spom_params.x > 0.01) {
+                if (fadeB > 0.01 && scene.spom_params.x > 0.01 && !br_nb_hit) {
                     int  hb = clamp(spom_h_idx, 0, 5);
                     vec3 Lt = vec3(dot(L, spom_T), dot(L, spom_B), dot(L, spom_face_n));
                     if (hb == 0 || hb == 2) Lt.x *= 0.5;   // 2:1 brick texture aspect (spom_uv)
@@ -3315,14 +3357,20 @@ void main() {
             // The shifted uv is discontinuous across a quad (per-pixel march
             // result): sample with the smooth un-shifted uv's gradients.
             vec2 sgdx = dFdx(spom_uv0), sgdy = dFdy(spom_uv0);
+            vec3 sh_tint = vColor;
+            if (br_nb_hit) {
+                a_idx = br_nb_idx;
+                sh_tint = br_nb_tint;
+                sgdx *= br_nb_scale / scale; sgdy *= br_nb_scale / scale;
+            }
             vec3 tex_albedo = textureGrad(u_albedo[a_idx], spom_uv_off, sgdx, sgdy).rgb;
-            albedo = tex_albedo * vColor * mesh_pom_shade;
+            albedo = tex_albedo * sh_tint * mesh_pom_shade * br_ao;
             if (use_normal) {
                 vec3 n_t = textureGrad(u_normal[a_idx], spom_uv_off, sgdx, sgdy).rgb * 2.0 - 1.0;
                 N = normalize(spom_T  * n_t.x +
                               spom_B  * n_t.y +
                               spom_face_n * n_t.z);
-                if (br_relief_m > 0.0) {
+                if (br_relief_m > 0.0 && !br_nb_hit) {
                     // Box relief: the stones are really that deep, so their
                     // flanks have to turn toward / away from the light. Slope
                     // of the height field itself (metres per metre) on top of
