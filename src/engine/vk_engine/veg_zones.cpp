@@ -399,6 +399,73 @@ void VulkanEngine::build_edit_ui() {
             }
     }
 
+    // ---- Simple mode: pick an item, draw it ----
+    // A bar of things to plant along the bottom of the screen. 1-5 pick one,
+    // left mouse draws it, right mouse removes it again. The full panel
+    // (presets, densities, terrain tools) only appears with M.
+    {
+        struct Item { const char* label; const char* preset; bool t; float td, pine; bool b; float bd; bool g; float gd, gh; };
+        static const Item kItems[] = {
+            { "Pine trees", "Item: pine trees", true,  1.0f, 1.0f, false, 0.0f, false, 1.0f, 1.0f },
+            { "Leaf trees", "Item: leaf trees", true,  1.0f, 0.0f, false, 0.0f, false, 1.0f, 1.0f },
+            { "Bushes",     "Item: bushes",     false, 0.0f, 0.5f, true,  0.9f, false, 1.0f, 1.0f },
+            { "Grass",      "Item: grass",      false, 0.0f, 0.5f, false, 0.0f, true,  1.6f, 1.3f },
+            { "Clear all",  "Item: nothing",    true,  0.0f, 0.5f, true,  0.0f, true,  0.0f, 1.0f },
+        };
+        constexpr int kN = IM_ARRAYSIZE(kItems);
+        int item_id[kN];
+        for (int k = 0; k < kN; ++k) {
+            item_id[k] = 0;
+            for (int id = 1; id < int(paint_.presets.size()); ++id)
+                if (std::strcmp(paint_.presets[size_t(id)].name, kItems[k].preset) == 0) { item_id[k] = id; break; }
+            if (!item_id[k] && !paint_.empty() && int(paint_.presets.size()) < kPaintMaxPresets) {
+                const Item& it = kItems[k];
+                paint_.presets.push_back(make_preset(it.preset, it.t, it.td, it.pine, it.b, it.bd, it.g, it.gd, it.gh, 0.0f));
+                item_id[k] = int(paint_.presets.size()) - 1;
+            }
+        }
+        GLFWwindow* w = window_->handle();
+        static bool num_prev[kN] = {};
+        static bool first_pick = true;
+        for (int k = 0; k < kN; ++k) {
+            const bool d = glfwGetKey(w, GLFW_KEY_1 + k) == GLFW_PRESS;
+            if (d && !num_prev[k] && item_id[k] && state_ == State::Playing && !io.WantTextInput) {
+                paint_active_ = item_id[k];
+                terrain_brush_mode_ = TerrainBrushMode::ZonePaint;
+            }
+            num_prev[k] = d;
+        }
+        if (first_pick && item_id[0]) {            // start on an item, with the plant tool
+            first_pick = false;
+            paint_active_ = item_id[0];
+            terrain_brush_mode_ = TerrainBrushMode::ZonePaint;
+        }
+        if (!edit_cursor_free_) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            const float bw2 = 150.0f, bh = 58.0f, gap = 10.0f;
+            const float total = kN * bw2 + (kN - 1) * gap;
+            const float x0 = (io.DisplaySize.x - total) * 0.5f, y0 = io.DisplaySize.y - bh - 92.0f;
+            const bool planting = terrain_brush_mode_ == TerrainBrushMode::ZonePaint;
+            dl->AddRectFilled(ImVec2(x0 - 14.0f, y0 - 34.0f), ImVec2(x0 + total + 14.0f, y0 + bh + 34.0f), IM_COL32(12, 14, 18, 190), 8.0f);
+            dl->AddText(ImVec2(x0, y0 - 26.0f), IM_COL32(255, 170, 70, 255), "EDIT MODE  -  pick what to draw (1-5), then hold the left mouse button");
+            for (int k = 0; k < kN; ++k) {
+                const ImVec2 a(x0 + k * (bw2 + gap), y0), b(a.x + bw2, a.y + bh);
+                const bool sel = planting && item_id[k] && paint_active_ == item_id[k];
+                dl->AddRectFilled(a, b, sel ? IM_COL32(230, 110, 30, 255) : IM_COL32(48, 52, 60, 235), 6.0f);
+                if (sel) dl->AddRect(a, b, IM_COL32(255, 235, 200, 255), 6.0f, 0, 2.0f);
+                if (item_id[k]) dl->AddRectFilled(ImVec2(a.x + 10.0f, a.y + 32.0f), ImVec2(a.x + 26.0f, a.y + 48.0f), preset_color(item_id[k]), 3.0f);
+                char num[4]; std::snprintf(num, sizeof(num), "%d", k + 1);
+                dl->AddText(ImVec2(a.x + 10.0f, a.y + 8.0f), IM_COL32(255, 255, 255, 150), num);
+                dl->AddText(ImVec2(a.x + 34.0f, a.y + 32.0f), IM_COL32(255, 255, 255, 255), kItems[k].label);
+            }
+            char hint[200];
+            std::snprintf(hint, sizeof(hint), "Left mouse: draw      Right mouse: remove      [ ] brush size (%.0f m)      M: more options      E: done%s",
+                          terrain_brush_radius_, paint_unsaved_ ? "      (unsaved - M, then Save)" : "");
+            dl->AddText(ImVec2(x0, y0 + bh + 10.0f), IM_COL32(220, 220, 220, 255), hint);
+            return;
+        }
+    }
+
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
                              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize |
                              ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;

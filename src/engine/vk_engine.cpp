@@ -634,7 +634,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         // pause menu / chat input wouldn't flip it.
         if (state_ != State::Playing) fly_mode_ = false;
         // Weapon select: 1 = laser gun, 2 = airstrike tablet.
-        if (state_ == State::Playing) {
+        if (state_ == State::Playing && !terrain_edit_mode_) {      // (edit mode: the number keys pick what to draw)
             if (in.weapon1 && !prev_weapon_key_[0]) { weapon_ = 0; flashlight_on_ = false; }
             if (in.weapon2 && !prev_weapon_key_[1]) { weapon_ = 1; flashlight_on_ = false; }
         }
