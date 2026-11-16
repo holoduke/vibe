@@ -267,7 +267,9 @@ void VulkanEngine::update_player_body(float dt) {
     body_move_ += (glm::clamp(speed / 1.2f, 0.0f, 1.0f) - body_move_) * ease;
     if (speed > 0.2f) body_dir_ = glm::normalize(glm::mix(body_dir_, vm / speed, ease));
     if (glm::dot(body_dir_, body_dir_) < 0.25f) body_dir_ = glm::vec2(0.0f, -1.0f);
-    const float stride = (0.34f + 0.085f * speed) * (1.0f - 0.45f * crouch);   // metres per step
+    // Step length as people really walk and run: ~0.7 m at a stroll, ~1.25 m
+    // at a run (was 0.48 / 0.77 m: twice too many small, hurried steps).
+    const float stride = glm::clamp(0.44f + 0.185f * speed, 0.40f, 1.30f) * (1.0f - 0.45f * crouch);   // metres per step
     if (grounded) body_phase_ += 3.14159265f * speed * dt / std::max(stride, 0.2f);
     if (body_phase_ > 6.2831853f * 64.0f) body_phase_ -= 6.2831853f * 64.0f;
 
@@ -278,7 +280,10 @@ void VulkanEngine::update_player_body(float dt) {
     const int hips = body_bone("Hips");
     const int spine[3] = { body_bone("Spine"), body_bone("Spine1"), body_bone("Spine2") };
     // Hips: lower when crouching, a small bounce per step, a breath of sway.
-    const float bounce = -0.018f * (0.5f - 0.5f * std::cos(2.0f * body_phase_)) * body_move_ * (1.0f - body_air_);
+    // The body is lowest when both feet are down and rides up over the
+    // standing leg; more at a run.
+    const float bounce = -(0.022f + 0.010f * glm::clamp(speed, 0.0f, 6.0f)) * (0.5f + 0.5f * std::cos(2.0f * body_phase_)) *
+                         body_move_ * (1.0f - body_air_);
     const float hip_drop = (stand_eye - eye_h) * 0.62f;
     body_root_off_ = glm::vec3(0.012f * std::sin(body_phase_) * body_move_, -hip_drop + bounce, 0.10f * crouch);
     // Torso: leans into the run and folds forward when crouched; a little of
@@ -288,7 +293,9 @@ void VulkanEngine::update_player_body(float dt) {
     const float breath = 0.006f * std::sin(tnow * 1.5f);
     for (int s : spine)
         if (s >= 0) body_local_[s] = rot_axis(glm::vec3(1, 0, 0), (lean + breath) / 3.0f);
-    if (hips >= 0) body_local_[hips] = rot_axis(glm::vec3(0, 1, 0), 0.05f * std::sin(body_phase_) * body_move_);
+    // Pelvis: turns with the stride and drops a little on the swinging side.
+    if (hips >= 0) body_local_[hips] = rot_axis(glm::vec3(0, 1, 0), 0.09f * std::cos(body_phase_) * body_move_) *
+                                       rot_axis(glm::vec3(0, 0, 1), 0.035f * std::sin(body_phase_) * body_move_);
     body_fk();
 
     // ---- legs ----
@@ -300,10 +307,21 @@ void VulkanEngine::update_player_body(float dt) {
         const int ft = body_bone((std::string(L) + "Foot").c_str());
         if (up < 0 || lo < 0 || ft < 0) continue;
         const float ph = body_phase_ + (side == 0 ? 0.0f : 3.14159265f);
-        const float swing = std::max(0.0f, -std::sin(ph));               // 0 on the ground, 1 mid-swing
+        // One cycle: the first half the foot stands (it moves back under the
+        // body at exactly walking speed - no sliding), the second half it
+        // swings forward, lifting early and reaching out before it lands.
+        const float cyc = ph / 6.2831853f - std::floor(ph / 6.2831853f);
+        const bool  stance = cyc < 0.5f;
+        const float u = stance ? cyc / 0.5f : (cyc - 0.5f) / 0.5f;          // 0..1 within the half
+        const float along = stance ? (0.5f - u) : (-0.5f + u * u * (3.0f - 2.0f * u));
+        const float run = glm::clamp((speed - 2.0f) / 3.5f, 0.0f, 1.0f);
+        // Lift: quick off the ground, peak before the middle, down to land.
+        const float swing = stance ? 0.0f : std::sin(3.14159265f * std::pow(u, 0.75f));
         glm::vec3 target = body_bones_[ft].head;
-        target += dir3 * (0.5f * stride * std::cos(ph) * body_move_);
-        target.y += (0.05f + 0.10f * glm::clamp(speed / 6.0f, 0.0f, 1.0f)) * swing * body_move_;
+        target += dir3 * (stride * along * body_move_);
+        target.y += (0.055f + 0.16f * run) * swing * body_move_;
+        // A runner's trailing foot kicks up behind.
+        if (!stance) target.y += 0.10f * run * std::sin(3.14159265f * glm::clamp(u * 2.0f, 0.0f, 1.0f)) * body_move_;
         // Crouched: feet a little apart and forward.
         target += glm::vec3((side == 0 ? -1.0f : 1.0f) * 0.05f * crouch, 0.0f, -0.10f * crouch);
         // In the air: legs hang, knees a little bent, one ahead of the other.
@@ -312,7 +330,12 @@ void VulkanEngine::update_player_body(float dt) {
         const glm::vec3 pole(side == 0 ? -0.18f : 0.18f, 0.0f, -1.0f);
         body_ik(up, lo, ft, target, pole);
         // Foot: flat on the ground, toes down while it swings.
-        const float toe = -0.45f * swing * body_move_ * (1.0f - body_air_) - 0.35f * body_air_;
+        // Foot roll: heel strikes first (toes up), flat through the stance,
+        // heel lifts before push-off, toes hang down through the swing.
+        float roll = 0.0f;
+        if (stance) roll = 0.30f * (1.0f - glm::smoothstep(0.0f, 0.18f, u)) - 0.55f * glm::smoothstep(0.70f, 1.0f, u);
+        else        roll = -0.55f * (1.0f - glm::smoothstep(0.0f, 0.55f, u)) + 0.30f * glm::smoothstep(0.65f, 1.0f, u);
+        const float toe = roll * body_move_ * (1.0f - body_air_) - 0.35f * body_air_;
         body_R_[ft] = rot_axis(glm::vec3(1, 0, 0), toe);
         body_set_[ft] = 1;
     }
@@ -321,7 +344,7 @@ void VulkanEngine::update_player_body(float dt) {
     // ---- arms ----
     // What the hands hold decides where they go (view space, metres).
     static const glm::vec3 kGunR = env_vec3("QLIKE_BODY_RH", glm::vec3(0.165f, -0.300f, -0.120f));
-    static const glm::vec3 kGunL = env_vec3("QLIKE_BODY_LH", glm::vec3(0.150f, -0.268f, -0.420f));
+    static const glm::vec3 kGunL = env_vec3("QLIKE_BODY_LH", glm::vec3(0.160f, -0.250f, -0.430f));
     const float bob_x = 0.006f * std::sin(body_phase_) * body_move_;
     const float bob_y = -0.005f * (0.5f - 0.5f * std::cos(2.0f * body_phase_)) * body_move_;
     for (int side = 0; side < 2; ++side) {
@@ -345,6 +368,7 @@ void VulkanEngine::update_player_body(float dt) {
         float curl[3] = { 0.9f, 1.15f, 0.8f };                       // finger joints (rad)
         float index_curl = 1.0f;
         bool  free_arm = false;
+        bool  grip_thumb = false;        // thumb closes round the grip instead of sticking out
         if (flashlight_on_ && side == 1) {
             // Fist round the torch body, thumb forward along it.
             const glm::vec3 f = glm::normalize(glm::vec3(glm::dot(flash_fwd_, right), flash_fwd_.y, -glm::dot(flash_fwd_, fwd)));
@@ -364,9 +388,11 @@ void VulkanEngine::update_player_body(float dt) {
         } else if (!flashlight_on_ && weapon_ == 0 && side == 0) {
             // Left hand under the fore-end.
             grip = view_pt(kGunL + glm::vec3(bob_x, bob_y, body_recoil_));
-            a1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LA", glm::vec3(0.75f, 0.15f, -0.60f))));
-            n1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LN", glm::vec3(0.15f, 0.95f, 0.20f))));
-            curl[0] = 0.75f; curl[1] = 0.9f; curl[2] = 0.6f;
+            a1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LA", glm::vec3(0.45f, 0.25f, -1.0f))));
+            n1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LN", glm::vec3(1.0f, 0.15f, 0.35f))));
+            // Fingers wrapped right round the vertical fore-grip.
+            curl[0] = 1.05f; curl[1] = 1.30f; curl[2] = 0.85f;
+            grip_thumb = true;
         } else if (!flashlight_on_ && weapon_ == 1 && side == 1) {
             // The tablet lies on the right hand.
             grip = view_pt(glm::vec3(0.170f, -0.200f + bob_y, -0.375f));
@@ -406,7 +432,9 @@ void VulkanEngine::update_player_body(float dt) {
         // Thumb: swings in over the fingers.
         for (int j = 0; j < 3; ++j) {
             const int tb = body_bone((S + "HandThumb" + char('1' + j)).c_str());
-            if (tb >= 0) body_local_[tb] = rot_axis(a0, -sx * (j == 0 ? 0.35f : 0.0f)) * rot_axis(n0, sx * (j == 0 ? 0.10f : 0.30f) * (free_arm ? 0.3f : 1.0f));
+            if (tb >= 0) body_local_[tb] = grip_thumb
+                ? rot_axis(a0, -sx * (j == 0 ? 0.85f : 0.0f)) * rot_axis(b0, j == 0 ? 0.35f : 0.55f)
+                : rot_axis(a0, -sx * (j == 0 ? 0.35f : 0.0f)) * rot_axis(n0, sx * (j == 0 ? 0.10f : 0.30f) * (free_arm ? 0.3f : 1.0f));
         }
     }
     body_fk();
