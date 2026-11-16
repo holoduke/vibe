@@ -2901,13 +2901,12 @@ void main() {
                     // Soft shadow where wall and floor meet: how close is
                     // the other one? (walls look down, floors look round.)
                     if (br_dist < 30.0) {
-                        float reach = 0.45, nearest = reach;
+                        float reach = 1.0, nearest = reach;
                         vec3  ao_o = ro + spom_face_n * 0.04;
-                        int   n_dir = (axis == 1) ? 4 : 1;
+                        int   n_dir = (axis == 1) ? 8 : 1;        // floors: 8 directions (round towers, corners)
                         for (int k = 0; k < n_dir; ++k) {
                             vec3 ad = (axis != 1) ? vec3(0.0, -1.0, 0.0)
-                                    : vec3(k == 0 ? 1.0 : k == 1 ? -1.0 : 0.0, 0.0,
-                                           k == 2 ? 1.0 : k == 3 ? -1.0 : 0.0);
+                                    : vec3(cos(float(k) * 0.7853982), 0.0, sin(float(k) * 0.7853982));
                             rayQueryEXT aq;
                             rayQueryInitializeEXT(aq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
                                                   ao_o, 0.0, ad, reach);
@@ -2919,7 +2918,8 @@ void main() {
                         if (axis != 1)
                             nearest = min(nearest, max(ao_o.y - textureLod(u_heightmap_full, ao_o.xz / 2048.0 + 0.5, 0.0).r, 0.0));
                         float a01 = clamp(nearest / reach, 0.0, 1.0);
-                        br_ao = mix(1.0, mix(0.62, 1.0, sqrt(a01)),
+                        a01 = 0.5 * a01 + 0.5 * a01 * a01 * (3.0 - 2.0 * a01);   // stays dark near the contact
+                        br_ao = mix(1.0, mix(0.22, 1.0, a01),
                                     1.0 - smoothstep(20.0, 30.0, br_dist));
                     }
                     {
@@ -3460,7 +3460,7 @@ void main() {
                     m_ground = gp.y - textureLod(u_heightmap_full, gp.xz / 2048.0 + 0.5, 0.0).r;
                     rayQueryEXT fq;
                     rayQueryInitializeEXT(fq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
-                                          gp, 0.0, vec3(0.0, -1.0, 0.0), 0.6);
+                                          gp, 0.0, vec3(0.0, -1.0, 0.0), 1.1);
                     while (rayQueryProceedEXT(fq)) {}
                     if (rayQueryGetIntersectionTypeEXT(fq, true) ==
                         gl_RayQueryCommittedIntersectionTriangleEXT)
@@ -3544,7 +3544,8 @@ void main() {
                 }
             }
             // Soft shadow toward the ground the tower stands on.
-            albedo *= mix(1.0, mix(0.60, 1.0, sqrt(clamp(m_ground / 0.5, 0.0, 1.0))), m_gfade);
+            { float g01 = clamp(m_ground / 1.0, 0.0, 1.0); g01 = 0.5 * g01 + 0.5 * g01 * g01 * (3.0 - 2.0 * g01);
+              albedo *= mix(1.0, mix(0.22, 1.0, g01), m_gfade); }
         } else if (use_albedo && int(vTexParams.y - 0.5) == -8) {
             // Skinned character: its own UVs into its texture atlas.
             albedo = texture(u_albedo[clamp(albedo_idx_raw, 0, kTextureCount - 1)], vUv).rgb * vColor;
