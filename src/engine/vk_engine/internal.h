@@ -478,4 +478,26 @@ void write_scene_descriptors_once(
     VkBuffer reservoir_prev,
     VkBuffer reservoir_cur);
 
+// Hash + value noise shared by the terrain sculpt / texture bakes.
+inline float fbm_hash(float x, float y) {
+    float n = std::sin(x * 12.9898f + y * 78.233f) * 43758.5453f;
+    return n - std::floor(n);
+}
+inline float fbm_noise2(float x, float y) {
+    float ix = std::floor(x), iy = std::floor(y);
+    float fx = x - ix,        fy = y - iy;
+    float a = fbm_hash(ix,        iy);
+    float b = fbm_hash(ix + 1.0f, iy);
+    float c = fbm_hash(ix,        iy + 1.0f);
+    float d = fbm_hash(ix + 1.0f, iy + 1.0f);
+    float ux = fx * fx * (3.0f - 2.0f * fx);
+    float uy = fy * fy * (3.0f - 2.0f * fy);
+    return (a * (1 - ux) + b * ux) * (1 - uy) +
+           (c * (1 - ux) + d * ux) * uy;
+}
+
+// Hash + value-noise with analytical derivatives, matching the
+// `noised()` GLSL helper in terrain_raymarch.frag. The brush's
+// "FBM erosion" mode uses this so a stroke's high-frequency detail
+// matches the procedural raymarched terrain in character.
 } // namespace qlike
