@@ -682,6 +682,39 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     }
     render_world(frame.command_buffer);
     vkCmdEndRendering(frame.command_buffer);
+    // The pre-pass depth copy has done its job for this frame (ground and
+    // grass marches). Overwrite it with the FINISHED depth - ground, castle
+    // walls and all: next frame's vegetation Hi-Z is built from it, so hills
+    // and walls hide trees. (The pre-pass alone holds neither the raymarched
+    // ground nor the relief walls, so almost nothing was ever occluded.)
+    if (depth_copy_image_ && depth_copy_layout_valid_) {
+        VkCommandBuffer c = frame.command_buffer;
+        const vkinit::ImageTransition pre[] = {
+            { depth_image_, VK_IMAGE_ASPECT_DEPTH_BIT,
+              VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL },
+            { depth_copy_image_, VK_IMAGE_ASPECT_DEPTH_BIT,
+              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL },
+        };
+        vkinit::transition_images_batch(c, pre, 2);
+        VkImageCopy region{};
+        region.srcSubresource = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1 };
+        region.dstSubresource = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1 };
+        region.extent = { render_extent_.width, render_extent_.height, 1 };
+        vkCmdCopyImage(c, depth_image_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       depth_copy_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &region);
+        const vkinit::ImageTransition post[] = {
+            { depth_image_, VK_IMAGE_ASPECT_DEPTH_BIT,
+              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+              VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL },
+            { depth_copy_image_, VK_IMAGE_ASPECT_DEPTH_BIT,
+              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        };
+        vkinit::transition_images_batch(c, post, 2);
+    }
     prof_mark(frame.command_buffer, "world_tail");
 }
 

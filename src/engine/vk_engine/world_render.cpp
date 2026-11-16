@@ -294,7 +294,21 @@ void VulkanEngine::render_world_depth_pass(VkCommandBuffer cmd) {
         const auto& b = world_.brushes[i];
         const auto& a = world_.render_aabbs[i];
         if (!aabb_visible(frustum, a.min, a.max)) continue;
-        if (is_spom_albedo(b.tex_albedo)) continue;
+        if (is_spom_albedo(b.tex_albedo)) {
+            // Relief walls cut their own outline, so their faces cannot be
+            // in the pre-pass - but their CORE can: the relief never reaches
+            // deeper than 0.3 m (0.3 x the thinnest side for thin blocks), so
+            // a block shrunk by that much on every side is solid stone for
+            // every ray. It gives the ground / grass marches and the tree
+            // occlusion something to stop at behind castle walls (they used
+            // to run in full behind every wall pixel).
+            const float mn = std::min({ b.size.x, b.size.y, b.size.z });
+            const float inset = std::min(0.3f, 0.3f * mn) + 0.01f;
+            const glm::vec3 core = b.size - glm::vec3(2.0f * inset);
+            if (core.x > 0.05f && core.y > 0.05f && core.z > 0.05f)
+                push_depth(glm::scale(glm::translate(glm::mat4(1.0f), b.center), core));
+            continue;
+        }
         push_depth(static_brush_models_[i]);    // pre-baked, see init_world
     }
     // Castle mesh parts (no discard in mesh mode -> safe in the prepass).
@@ -308,9 +322,11 @@ void VulkanEngine::render_world_depth_pass(VkCommandBuffer cmd) {
         vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
         vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
     }
+    prof_mark(cmd, "d_solid");
     // GPU-instanced vegetation + rocks (indirect, culled on the GPU).
     if (veg_count_ > 0) {
         draw_vegetation(cmd, true);
+        prof_mark(cmd, "d_veg");
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline_);
         vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
         vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
@@ -927,6 +943,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
                    i < brush_face_mask_.size() ? brush_face_mask_[i] : -1);
         ++drawn_static;
     }
+    prof_mark(cmd, "w_brushes");
     if (!castle_meshes_.empty()) {
         draw_castle_meshes(cmd, vp, prev_vp, frustum, false, VK_NULL_HANDLE);
         vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
@@ -937,8 +954,10 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
         vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
     }
+    prof_mark(cmd, "w_castle");
     if (veg_count_ > 0) {
         draw_vegetation(cmd, false);
+        prof_mark(cmd, "w_veg");
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());
         vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
         vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
