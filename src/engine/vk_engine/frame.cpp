@@ -116,17 +116,16 @@ void VulkanEngine::draw(uint32_t img_index) {
     { CPU_SCOPE("rec-shadow");  record_shadow_passes(frame); }                   // sun shadow, depth pre-pass, half-rate shadow
     { CPU_SCOPE("rec-world");   record_terrain_and_world(frame); }               // low-res raymarch terrain + world G-buffer
     { CPU_SCOPE("rec-light");   record_lighting_and_upscale(frame); }            // deferred, SVGF, TAA, sky fill, DLSS/FSR/TAAU
+    hide_ui_this_frame_ = !pending_screenshot_path_.empty();   // F12 photo: no HUD / crosshair / debug boxes
     { CPU_SCOPE("rec-compose"); record_compose_and_ui(frame, img_index); }       // bloom, compose, ImGui -> swapchain
 
 
     // Two screenshot triggers: the --screenshot CLI one-shot AND F12 in-game.
     std::string screenshot_path_this_frame;
-    hide_ui_this_frame_ = false;
     bool screenshot_is_oneshot = false;
     if (!pending_screenshot_path_.empty()) {
         screenshot_path_this_frame = pending_screenshot_path_;
         pending_screenshot_path_.clear();
-        hide_ui_this_frame_ = true;      // F12 photo: no HUD / crosshair / debug boxes
     } else if (!opts_.screenshot_path.empty() && !screenshot_taken_ &&
                static_cast<int>(frame_number_) >= opts_.screenshot_after_frames) {
         if (opts_.screenshot_burst <= 1) {

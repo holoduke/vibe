@@ -43,6 +43,18 @@ source: this is one data point, with the full commit history as the log.
 |---|---|
 | ![Rain and overcast sky](docs/screenshots/rain.png) | ![Underwater view with Snell's window](docs/screenshots/underwater.png) |
 
+| The road to the castle | Lake shore with reeds and water lilies |
+|---|---|
+| ![The castle seen from the road](docs/screenshots/castle_road.png) | ![Lake shore](docs/screenshots/lake_shore.png) |
+
+| Castle and lake from above | Courtyard at night, lit by lanterns |
+|---|---|
+| ![Aerial view of the castle on the lake](docs/screenshots/aerial_castle.png) | ![Lantern-lit courtyard at night](docs/screenshots/courtyard_night.png) |
+
+| The lake from the air |
+|---|
+| ![Aerial view along the lake](docs/screenshots/aerial_lake.png) |
+
 | Water splash and ripples |
 |---|
 | ![A bullet splash on the lake](docs/screenshots/splash.png) |
