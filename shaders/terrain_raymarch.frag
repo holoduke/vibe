@@ -746,8 +746,9 @@ vec3 peb_h3(vec2 c) {
 }
 float g_peb_id = 0.0;    // random 0..1 of the stone at the last query
 float g_peb_k  = 0.0;    // 0 at its rim .. 1 at its centre (0 = bare soil)
-float g_peb_sz = 0.0;    // its layer: 1 pebble, 2 gravel, 3 grit
-float peb_layer(vec2 p, float cell, float dens, float layer_id, inout float best) {
+float g_peb_sz = 0.0;    // its layer: 1 pebble, 2 gravel, 3 grit, 4 big cobble
+float g_peb_small = 1.0; // weight of the small layers (the march drops them with distance)
+float peb_layer(vec2 p, float cell, float dens, float layer_id, float hf, inout float best) {
     vec2 q  = p / cell;
     vec2 ip = floor(q), fq = fract(q);
     float h = 0.0;
@@ -761,9 +762,11 @@ float peb_layer(vec2 p, float cell, float dens, float layer_id, inout float best
         vec2  d  = vec2(cos(a) * o.x + sin(a) * o.y, -sin(a) * o.x + cos(a) * o.y);
         d.y *= mix(1.0, 1.75, r3.y);                         // oval stones
         float rr = mix(0.27, 0.50, fract(r3.z * 17.3));
-        float k  = 1.0 - dot(d, d) / (rr * rr);
+        // Shape: from round river pebbles to blocky broken stone.
+        float sn = mix(2.0, 4.5, fract(r3.z * 29.1) * fract(r3.x * 3.3 + 0.37));
+        float k  = 1.0 - pow(pow(abs(d.x), sn) + pow(abs(d.y), sn), 2.0 / sn) / (rr * rr);
         if (k <= 0.0) continue;
-        float hh = cell * rr * mix(0.65, 1.05, fract(r3.x * 7.7)) * k * (1.75 - 0.75 * k);
+        float hh = hf * cell * rr * mix(0.55, 1.05, fract(r3.x * 7.7)) * k * (1.75 - 0.75 * k);
         if (hh > h) h = hh;
         if (hh > best) { best = hh; g_peb_id = fract(r3.y * 13.7 + r3.x); g_peb_k = k; g_peb_sz = layer_id; }
     }
@@ -780,9 +783,27 @@ float rm_pebbles(vec2 wp, float t) {
     float wA = smoothstep(2.5, 6.0, 0.110 / fp);
     float wB = smoothstep(2.5, 6.0, 0.034 / fp);
     float wC = smoothstep(2.5, 6.0, 0.010 / fp);
-    if (wA > 0.0) h = max(h, wA * peb_layer(wp, 0.110, 0.10 + 0.55 * dens, 1.0, best));
-    if (wB > 0.0) h = max(h, wB * peb_layer(wp + 3.7, 0.034, 0.15 + 0.60 * dens, 2.0, best));
-    if (wC > 0.0) h = max(h, wC * peb_layer(wp + 9.1, 0.010, 0.45 + 0.40 * dens, 3.0, best));
+    wA *= g_peb_small; wB *= g_peb_small; wC *= g_peb_small;
+    if (wA > 0.0) h = max(h, wA * peb_layer(wp, 0.110, 0.10 + 0.55 * dens, 1.0, 1.0, best));
+    if (wB > 0.0) h = max(h, wB * peb_layer(wp + 3.7, 0.034, 0.15 + 0.60 * dens, 2.0, 1.0, best));
+    if (wC > 0.0) h = max(h, wC * peb_layer(wp + 9.1, 0.010, 0.45 + 0.40 * dens, 3.0, 1.0, best));
+    // Big cobbles: fist- to head-sized stones, few, and in OTHER places
+    // than the pebble drifts (their own patch pattern) - singles and
+    // small groups half sunk in the soil.
+    {
+        float p2 = noise2(wp * 0.21 + 31.7) * 0.6 + noise2(wp * 0.9 + 4.4) * 0.4;
+        float d2 = 0.03 + 0.30 * smoothstep(0.45, 0.80, p2);
+        float sid = g_peb_id, sk = g_peb_k, ssz = g_peb_sz, bb = 0.0;
+        float hb = peb_layer(wp + 17.3, 0.420, d2, 4.0, 0.5, bb);
+        if (hb > h) h = hb;
+        else { g_peb_id = sid; g_peb_k = sk; g_peb_sz = ssz; }   // a smaller stone on top keeps its own look
+    }
+    return h;
+}
+float rm_pebbles_march(vec2 wp, float t) {
+    g_peb_small = 1.0 - smoothstep(4.0, 7.0, t);
+    float h = rm_pebbles(wp, t);
+    g_peb_small = 1.0;
     return h;
 }
 float rm_ground_detail(vec2 wp, float t, float h) {
@@ -805,7 +826,7 @@ float rm_ground_detail(vec2 wp, float t, float h) {
     // hit point lands within ~5 cm of the full surface; the normal and the
     // shading (called without the flag) still use the full relief.
     if (g_rm_ray_y > -1e8) return (0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
-                                   (t < 7.0 ? rm_pebbles(wp, t) * (1.0 - smoothstep(4.0, 7.0, t)) : 0.0)) * w;
+                                   rm_pebbles_march(wp, t)) * w;
     float lod = log2(max(t * 2.0 * scene.viewport.w * 0.45 * 2048.0, 1.0));
     float disp = textureLod(u_normal[9], wp * 0.45, lod).a;
     float g2 = 1.0 - smoothstep(0.0, 0.25, abs(noise2(q * 2.7 + 3.1) * 2.0 - 1.0));  // side cracks
@@ -925,8 +946,8 @@ float terrainM_lod(vec2 p, float ray_t) {
     // ring. Skip the texture tap on far raymarch steps — biggest
     // single texture-bandwidth win on terrain pixels.
     h += sampleHeightDelta(wp);   // (reverted 80 m gate — no near/far seam)
-    if (g_rm_ray_y - h > 0.40) {
-        h += 0.36 * (1.0 - smoothstep(10.0, 26.0, ray_t)) * (1.0 - tpl);   // conservative bound
+    if (g_rm_ray_y - h > 0.46) {
+        h += 0.42 * (1.0 - smoothstep(10.0, 26.0, ray_t)) * (1.0 - tpl);   // conservative bound
     } else {
         h += rm_ground_detail(wp, ray_t, h) * (1.0 - tpl);
     }
@@ -3570,6 +3591,25 @@ void main() {
         float far_sh = any_hit_no_terrain(fo, sunDir, 220.0) ? scene.rt_params.w * far_w : 0.0;
         dyn_shadow = mix(far_sh, dyn_shadow, rt_lod_t);
     }
+    // The stones cast shadows on the soil and on each other: a short walk
+    // toward the sun over the stone heights.
+    if (t < 9.0 && sunDir.y > 0.03 && self_shadow < 0.98) {
+        float pfd = (1.0 - smoothstep(6.0, 9.0, t)) * (1.0 - plateauWeight(pos.xz));
+        vec2  sxz = sunDir.xz;
+        float sl  = length(sxz);
+        if (pfd > 0.01 && sl > 1e-3) {
+            sxz /= sl;
+            float rise = sunDir.y / sl;
+            float h0 = rm_pebbles(pos.xz, t);
+            float occ = 0.0, sd = 0.008;
+            for (int i = 0; i < 7; ++i) {
+                sd *= 1.75;
+                float hs = rm_pebbles(pos.xz + sxz * sd, t);
+                occ = max(occ, smoothstep(0.0, 0.004 + 0.02 * sd, hs - (h0 + sd * rise)));
+            }
+            self_shadow = max(self_shadow, occ * pfd * 0.9);
+        }
+    }
     float shadow = max(dyn_shadow, self_shadow);
 
     float sha = (1.0 - shadow) * rm_road_vis * sun_horizon_lit(u_sun_horizon, pos);
@@ -3653,6 +3693,17 @@ void main() {
                        mix(0.80, 1.25, fract(id * 23.1));
             pc0 = mix(pc0, gl * vec3(0.50, 0.52, 0.58), step(0.82, fract(id * 3.1)));     // dark basalt
             pc0 = mix(pc0, gl * vec3(2.30, 2.25, 2.10), step(0.90, fract(id * 9.7)));     // pale quartz
+            pc0 = mix(pc0, gl * vec3(1.70, 1.05, 0.80), step(0.87, fract(id * 17.9)));    // red sandstone
+            pc0 = mix(pc0, gl * vec3(0.95, 1.05, 1.20), step(0.88, fract(id * 41.3)));    // blue-grey slate
+            // Veins / banding across some stones.
+            pc0 *= 1.0 + 0.22 * step(0.6, fract(id * 6.1)) *
+                         sin(dot(pos.xz, vec2(cos(id * 40.0), sin(id * 40.0))) * 260.0 + id * 9.0);
+            if (g_peb_sz > 3.5) {
+                // Big stones: weathered, moss and lichen on top.
+                float ms = noise2(pos.xz * 11.0 + id * 20.0) * 0.6 + noise2(pos.xz * 37.0) * 0.4;
+                pc0 = mix(pc0, gl * vec3(0.55, 1.05, 0.40), smoothstep(0.50, 0.72, ms) * smoothstep(0.35, 0.8, k) * step(0.35, fract(id * 2.7)));
+                pc0 = mix(pc0, gl * vec3(1.9, 1.85, 1.5), smoothstep(0.80, 0.86, noise2(pos.xz * 55.0 + 3.0)) * 0.7);   // lichen spots
+            }
             pc0 *= mix(0.85, 1.15, noise2(pos.xz * 140.0 + id * 50.0));                    // speckle
             pc0 *= mix(0.40, 1.0, smoothstep(0.0, 0.22, k));                               // sits in the soil
             peb_cover = smoothstep(0.0, 0.12, k) * pw;

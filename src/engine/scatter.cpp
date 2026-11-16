@@ -835,7 +835,8 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
         ScatterInstance si{};
         float sc = boulder
             ? 0.15f + u01(rng) * u01(rng) * 0.45f          // 0.15-0.6 m
-            : 0.035f + u01(rng) * 0.085f;                  // 0.035-0.12 m
+            : (u01(rng) < 0.28f ? 0.10f + u01(rng) * u01(rng) * 0.20f     // cobbles 0.10-0.30 m
+                                : 0.035f + u01(rng) * 0.085f);            // pebbles 0.035-0.12 m
         // Sink proportionally so the flattened base sits in the ground.
         si.pos_scale = glm::vec4(wx, h - sc * 0.18f, wz, sc);
         float tint = 0.8f + u01(rng) * 0.4f;
@@ -843,6 +844,15 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
         glm::vec3 tc(tint * (0.96f + u01(rng) * 0.08f),
                      tint,
                      tint * (0.94f + u01(rng) * 0.08f));
+        // Stone families: most neutral, some dark basalt, pale limestone,
+        // red sandstone, blue-grey slate.
+        {
+            float fam = u01(rng);
+            if      (fam < 0.14f) tc *= glm::vec3(0.55f, 0.56f, 0.60f);
+            else if (fam < 0.26f) tc *= glm::vec3(1.35f, 1.32f, 1.22f);
+            else if (fam < 0.36f) tc *= glm::vec3(1.25f, 0.92f, 0.78f);
+            else if (fam < 0.45f) tc *= glm::vec3(0.88f, 0.96f, 1.10f);
+        }
         si.rot_tint = glm::vec4(u01(rng) * glm::two_pi<float>(),
                                 tc.x, tc.y, tc.z);
         inst.push_back(si);

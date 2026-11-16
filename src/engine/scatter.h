@@ -71,7 +71,7 @@ struct ScatterSet {
 struct ScatterParams {
     float half_extent   = 220.0f;   // placement square around origin (m)
     // 24k x 240 verts ≈ 5.8M VS invocations — bounded vertex cost.
-    int   max_instances = 24000;
+    int   max_instances = 32000;
     int   seed          = 0xB0BA;
     // Rules (heights in world Y, matching the splat bands).
     float water_level   = 20.9f;    // reject below water + margin
