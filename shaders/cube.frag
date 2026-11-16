@@ -1350,6 +1350,8 @@ vec3 g_br_round_n = vec3(0.0);
 // too, so the two walls meet along the uneven line where their stones
 // actually touch instead of the ruler-straight line of the two boxes.
 int   g_nb_f  = -1;
+// True once the wall relief has run for this pixel.
+bool  g_br_relief = false;
 float g_nb_pl = 0.0;
 
 // Signed solidity margin (>= 0 -> inside the masonry). Only EXPOSED faces
@@ -2826,6 +2828,7 @@ void main() {
                     int   br_n = 0;
                     int   bf = br_ef;
                     br_relief_m = br_Dm;
+                    g_br_relief = true;
                     // The ray is marched until it meets stone. If it first
                     // leaves the block through an exposed face, that is a
                     // silhouette only when the exit point really is in open
@@ -2850,6 +2853,23 @@ void main() {
                         vec3 od = vec3(0.0); od[a] = sg;
                         if (!br_open_air(q, normalize(od + vec3(0.013, 0.017, 0.011))))
                             br_mask &= ~(1 << f);
+                    }
+                    // A side face that is only partly covered by a neighbour
+                    // (wall beside a doorway: open at the door, joined to the
+                    // lintel above it) counts as open for the whole block.
+                    // Close to such a face, ask whether stone really ends
+                    // there AT THIS PIXEL; if a neighbour carries on, the face
+                    // is no edge here - no worn corner, no cut - and the seam
+                    // stays invisible.
+                    for (int sf = 0; sf < 6; ++sf) {
+                        if (((br_mask >> sf) & 1) == 0 || (sf >> 1) == axis) continue;
+                        int   sa = sf >> 1;
+                        float ss = ((sf & 1) == 1) ? 1.0 : -1.0;
+                        float sd = br_H[sa] - ss * (ro[sa] - br_C[sa]);
+                        if (sd > br_Dm * 1.3) continue;
+                        vec3 sp = ro - spom_face_n * 0.03;
+                        sp[sa] = br_C[sa] + ss * (br_H[sa] + 0.012);
+                        if (!br_open_air(sp, rd)) br_mask &= ~(1 << sf);
                     }
                     // Which wall does this ray run into? Asked just above
                     // the face, along it, as far as the march can travel.
@@ -3470,7 +3490,10 @@ void main() {
     // edge we're close to) inside the last `kCornerWidth` of the
     // brush extent. Costs ~10 ALU per fragment; gives a smooth
     // ~25 m m-scale wrap around outside corners.
-    if (!is_terrain && !obj_space && !is_mesh_draw) {
+    // (Not for walls with relief: their corners are really worn round where
+    // they are open, and this would also bend the light at the hidden edges
+    // where two blocks join flush - a line up the wall in low sun.)
+    if (!is_terrain && !obj_space && !is_mesh_draw && !g_br_relief) {
         vec3 face_size_w = vec3(length(pc.model[0].xyz),
                                 length(pc.model[1].xyz),
                                 length(pc.model[2].xyz));
