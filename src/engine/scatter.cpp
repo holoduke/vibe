@@ -1160,6 +1160,12 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                     z > params.road->bb_min.y - 2.0f && z < params.road->bb_max.y + 2.0f)
                     d *= glm::smoothstep(params.road->half_width + 0.1f, params.road->half_width + 0.9f,
                                          params.road->distance(x, z));
+                // Ferns and flowers (species 0-3) stand on thin stems: the drawn
+                // ground is up to ~5 cm below this estimate (the soil texture's own
+                // displacement is only known on the GPU), which left a visible gap
+                // under some of them. Root them that much lower - the ground hides
+                // the rest of the stem.
+                if (sp <= 3) d -= 0.055f;
                 const float q = std::clamp(std::floor(d / 0.004f + 0.5f), 0.0f, 120.0f);
                 si.rot_tint.x = std::fmod(si.rot_tint.x, glm::two_pi<float>()) + glm::two_pi<float>() * q;
             }
