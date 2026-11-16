@@ -1443,13 +1443,22 @@ float br_exit(vec3 ro, vec3 rd, vec3 C, vec3 H, int mask, out int face) {
 // there. Only a "yes" lets a pixel be cut away, so a wrong answer can
 // never open a hole into a neighbouring block.
 bool br_open_air(vec3 p, vec3 rd) {
+    // Every surface the ray crosses from here is counted: leaving a solid
+    // (+1) or entering one (-1). A point in open air enters and leaves each
+    // piece of masonry in pairs; a point inside stone leaves once more than
+    // it enters. (Judging by the first surface alone failed where pieces
+    // overlap - a corbel poking into a tower shell is entered first, and
+    // the wall next to the tower was cut open.)
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
-                          p, 0.004, rd, 60.0);
-    while (rayQueryProceedEXT(rq)) {}
-    if (rayQueryGetIntersectionTypeEXT(rq, true) !=
-        gl_RayQueryCommittedIntersectionTriangleEXT) return true;
-    return BR_FRONT(rayQueryGetIntersectionFrontFaceEXT(rq, true));
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoOpaqueEXT, 0x80u,
+                          p, 0.004, rd, 30.0);
+    int inside = 0;
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) ==
+            gl_RayQueryCandidateIntersectionTriangleEXT)
+            inside += BR_FRONT(rayQueryGetIntersectionFrontFaceEXT(rq, false)) ? -1 : 1;
+    }
+    return inside <= 0;
 }
 
 // Relief silhouette on curved meshes (round towers), from the real
@@ -2822,6 +2831,26 @@ void main() {
                     // silhouette only when the exit point really is in open
                     // air; where another block or a tower stands there, that
                     // face stops being a boundary and the march goes on.
+                    // A side face of this block only shapes the stone here
+                    // (relief cut in from the side, worn corner) if it is
+                    // open at THIS spot. Where another block sits flush
+                    // against it - a lintel on a door post, the next piece
+                    // of the same wall - there is no corner, the masonry
+                    // just carries on. Asked once per pixel, and only within
+                    // reach of such a face.
+                    for (int f = 0; f < 6; ++f) {
+                        if (f == br_ef || ((br_mask >> f) & 1) == 0) continue;
+                        int   a = f >> 1;
+                        float sg = ((f & 1) == 1) ? 1.0 : -1.0;
+                        if (a == (br_ef >> 1)) continue;
+                        float pl = br_C[a] + sg * br_H[a];
+                        if (sg * (pl - ro[a]) > br_Dm * 1.3) continue;
+                        vec3 q = ro - spom_face_n * (br_Dm * 0.5);
+                        q[a] = pl + sg * 0.012;
+                        vec3 od = vec3(0.0); od[a] = sg;
+                        if (!br_open_air(q, normalize(od + vec3(0.013, 0.017, 0.011))))
+                            br_mask &= ~(1 << f);
+                    }
                     // Which wall does this ray run into? Asked just above
                     // the face, along it, as far as the march can travel.
                     g_nb_f = -1;
@@ -2882,7 +2911,7 @@ void main() {
                         br_mask &= ~(1 << xf);
                         t_lo = max(t_lo, t_exit - dt);
                     }
-                    if (t_hi < 0.0) t_hi = t_deep;
+                    if (t_hi < 0.0) t_hi = t_lo + dt;
                     // Binary refinement of the surface crossing.
                     for (int i = 0; i < 5 && t_hi > 0.0; ++i) {
                         float tm = 0.5 * (t_lo + t_hi);
