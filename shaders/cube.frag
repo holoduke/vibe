@@ -3783,11 +3783,23 @@ void main() {
 #else
     if (scene.terrain_disp_params.w > 0.5 && vEmissive.a <= 0.5) {
 #endif
+        // Rain on the courtyard paving: the stone darkens as it gets wet and
+        // pools of water gather in patches - flat, dark mirrors.
+        float rain_pool = 0.0, rain_wet = 0.0;
+        if (!is_terrain_pre && !is_mesh_draw && albedo_idx_raw == 5 && N.y > 0.85 && scene.ripple_info.z > 0.02) {
+            rain_wet = scene.ripple_info.z;
+            float pn = br_noise(vec3(vWorldPos.xz * 0.42, 3.0)) * 0.65 + br_noise(vec3(vWorldPos.xz * 1.5, 9.0)) * 0.35;
+            float thr = 0.66 - 0.30 * rain_wet;
+            rain_pool = smoothstep(thr, thr + 0.05, pn) * smoothstep(0.2, 0.6, rain_wet);
+            albedo *= mix(1.0, 0.72, rain_wet) * mix(1.0, 0.50, rain_pool);
+            N = normalize(mix(N, vec3(0.0, 1.0, 0.0), rain_pool));
+        }
         int fast_mat = is_terrain_pre ? 3 : 1;
         outColor    = vec4(albedo, 1.0);
         outGBuffer0 = vec4(clamp(albedo * terrain_grass_occ, vec3(0.0), vec3(1.0)),
                            float(fast_mat) / 255.0);
         vec2 rmf = surface_rough_metal(albedo_idx_raw, is_foliage_px, is_mesh_draw);
+        rmf.x = mix(mix(rmf.x, rmf.x * 0.55, rain_wet), 0.04, rain_pool);
         outGBuffer1 = vec4(octa_encode(N), is_terrain_pre ? terrain_pom_vis : rmf.x, gbuf_flags(is_foliage_px, rmf.y));
         return;
     }

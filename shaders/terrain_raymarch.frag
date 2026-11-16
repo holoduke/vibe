@@ -4201,10 +4201,10 @@ void main() {
         float wet = max(scene.ripple_info.z, shore);
         float pd = distance(pos, ro);
         if (wet > 0.01 && pd < 400.0) {
-            float flatn = smoothstep(0.90, 0.985, nor.y);
+            float flatn = smoothstep(0.80, 0.95, nor.y);            // (was 0.90..0.985: almost no ground qualified)
             float pn = noise2(pos.xz * 0.33) * 0.65 + noise2(pos.xz * 1.21 + 7.0) * 0.35;
-            float thr = 0.70 - 0.30 * wet;
-            float puddle = flatn * smoothstep(thr, thr + 0.07, pn) * smoothstep(0.25, 0.7, wet);
+            float thr = 0.66 - 0.34 * wet;
+            float puddle = flatn * smoothstep(thr, thr + 0.06, pn) * smoothstep(0.2, 0.6, wet);
             vec3 pn_n = normalize(mix(nor, vec3(0.0, 1.0, 0.0), max(max(puddle, 0.5 * wet), 0.92 * shore)));
             if (puddle > 0.01 && pd < 60.0) {
                 vec3 rw = water_ripples(pos.xz);

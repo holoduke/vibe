@@ -172,6 +172,56 @@ void VulkanEngine::destroy_imgui() {
 }
 
 void VulkanEngine::build_hud_ui() {
+    // Lightning bolt: a jagged, forked line from the cloud base down to
+    // where the strike lands, drawn for the length of the flash. Hidden
+    // where a hill stands between the camera and the bolt.
+    if (env_lightning_ > 0.03f && state_ == State::Playing) {
+        ImGuiIO& lio = ImGui::GetIO();
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
+        const glm::vec3 eye = player_.eye_position();
+        uint32_t rs = uint32_t(lightning_seed_ * 65535.0f) * 2654435761u | 1u;
+        auto rnd = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f - 0.5f; };
+        const float dist = glm::distance(glm::vec2(eye.x, eye.z), glm::vec2(lightning_pos_.x, lightning_pos_.z));
+        const float top = lightning_pos_.y + 520.0f;
+        auto project = [&](const glm::vec3& p, ImVec2& out) {
+            const glm::vec4 c = last_view_proj_ * glm::vec4(p, 1.0f);
+            if (c.w < 1.0f) return false;
+            out = ImVec2((c.x / c.w * 0.5f + 0.5f) * lio.DisplaySize.x, (c.y / c.w * 0.5f + 0.5f) * lio.DisplaySize.y);
+            // Terrain between the eye and the point hides it.
+            for (int k = 1; k < 10; ++k) {
+                const glm::vec3 q = glm::mix(eye, p, float(k) / 10.0f);
+                if (sample_terrain_height(q.x, q.z) > q.y + 2.0f) return false;
+            }
+            return true;
+        };
+        const float a = std::min(env_lightning_, 1.0f);
+        const float w = glm::clamp(900.0f / std::max(dist, 150.0f), 1.2f, 4.5f);
+        auto strand = [&](glm::vec3 from, glm::vec3 to, int segs, float wob, float width, int depth) {
+            auto self = [&](auto& me, glm::vec3 f, glm::vec3 t, int n, float wb, float wd, int dp) -> void {
+                glm::vec3 prev = f; ImVec2 sp, sq; bool pv = project(prev, sp);
+                for (int i = 1; i <= n; ++i) {
+                    glm::vec3 p = glm::mix(f, t, float(i) / float(n));
+                    if (i < n) p += glm::vec3(rnd(), rnd() * 0.3f, rnd()) * wb;
+                    const bool qv = project(p, sq);
+                    if (pv && qv) {
+                        dl->AddLine(sp, sq, IM_COL32(150, 170, 255, int(70 * a)), wd * 5.0f);
+                        dl->AddLine(sp, sq, IM_COL32(200, 215, 255, int(150 * a)), wd * 2.2f);
+                        dl->AddLine(sp, sq, IM_COL32(255, 255, 255, int(255 * a)), wd);
+                    }
+                    // Forks: shorter, thinner, heading outward and down.
+                    if (dp > 0 && i > 1 && i < n - 1 && rnd() > 0.18f) {
+                        const glm::vec3 d = glm::vec3(rnd() * 2.0f, -0.55f, rnd() * 2.0f) * (glm::distance(f, t) * 0.32f);
+                        me(me, p, p + d, std::max(3, n / 2), wb * 0.6f, wd * 0.55f, dp - 1);
+                    }
+                    prev = p; sp = sq; pv = qv;
+                }
+            };
+            self(self, from, to, segs, wob, width, depth);
+        };
+        const glm::vec3 foot = lightning_pos_;
+        const glm::vec3 head(foot.x + rnd() * 160.0f, top, foot.z + rnd() * 160.0f);
+        strand(head, foot, 16, 34.0f, w, 2);
+    }
     if (state_ != State::Playing) return;
 
     // Push current frame samples into the rolling history (Three.js
