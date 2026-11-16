@@ -115,8 +115,10 @@ void lathe(LevelMesh& m, glm::vec3 c, const std::vector<glm::vec2>& prof,
            int segs, float tile_m) {
     float max_r = 0.0f;
     for (const auto& p : prof) max_r = (std::max)(max_r, p.x);
+    // Even count: the masonry texture is 2:1, so the shader halves u (same
+    // stone size as the straight walls) and the seam must still wrap.
     const float tiles_around =
-        (std::max)(1.0f, std::round(2.0f * kPi * max_r / tile_m));
+        (std::max)(2.0f, 2.0f * std::round(kPi * max_r / tile_m));
     float s = 0.0f;
     for (size_t j = 0; j + 1 < prof.size(); ++j) {
         glm::vec2 p0 = prof[j], p1 = prof[j + 1];

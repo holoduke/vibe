@@ -3427,6 +3427,8 @@ void main() {
             // (Schueler 2013). NormalGL green = image-up = -dP/dv.
             int  ai  = clamp(albedo_idx_raw, 0, kTextureCount - 1);
             vec2 muv = vUv * scale;
+            // 2:1 masonry textures: same stone proportions as on the wall blocks.
+            { int hq = height_idx_for_albedo(albedo_idx_raw); if (hq == 0 || hq == 2) muv.x *= 0.5; }
             // Cotangent frame (Schueler 2013) - needed for the normal map AND
             // the parallax march; derivatives taken before any uv shift.
             vec3 dp1 = dFdx(vWorldPos), dp2 = dFdy(vWorldPos);
@@ -3434,6 +3436,14 @@ void main() {
             vec3 dp2p = cross(dp2, N), dp1p = cross(N, dp1);
             vec3 Tm = dp2p * du1.x + dp1p * du2.x;
             vec3 Bm = dp2p * du1.y + dp1p * du2.y;
+            // The frame must point the way u / v actually increase across
+            // the surface. With this renderer's screen-space handedness the
+            // construction above comes out NEGATED (measured: T and B both
+            // opposite to dP/du, dP/dv on every mesh) - which lit the normal
+            // map as hollows and ran the parallax backwards, so tower stones
+            // swam against the camera and never sat still on the ground.
+            // Test it instead of assuming: moving along +T must raise u.
+            if (dot(Tm, dp1) * du1.x + dot(Tm, dp2) * du2.x < 0.0) { Tm = -Tm; Bm = -Bm; }
             float im = inversesqrt(max(max(dot(Tm, Tm), dot(Bm, Bm)), 1e-20));
             // Parallax occlusion on UV-mapped meshes (castle towers / keep).
             // How far below this point is the ground (paving or terrain)?
@@ -3526,7 +3536,7 @@ void main() {
                     float hy = textureGrad(u_height[hn], muv + vec2(0.0, e.y), du1, du2).r -
                                textureGrad(u_height[hn], muv - vec2(0.0, e.y), du1, du2).r;
                     vec2  slope = clamp(vec2(hx, hy) / (2.0 * e) * m_hs, vec2(-2.5), vec2(2.5));
-                    N = normalize(N + (normalize(Tm) * slope.x + normalize(Bm) * slope.y) * 0.7);
+                    N = normalize(N - (normalize(Tm) * slope.x + normalize(Bm) * slope.y) * 0.7);
                 }
             }
             // Soft shadow toward the ground the tower stands on.
