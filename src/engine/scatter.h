@@ -48,7 +48,7 @@ struct ScatterSet {
     // fern, daisy, poppy, bluebell, cornflower, buttercup, lupin, reed,
     // clover, plantain, dandelion, nettle, foxglove, thistle, mushrooms,
     // grass tuft (a clump of long blades; uv.x = 8 +- 0.4 across the blade)
-    static constexpr int kPlantSpecies = 16;
+    static constexpr int kPlantSpecies = 17;   // 16 = water lilies
     Mesh          plant_mesh[kPlantSpecies]{};
     uint32_t      plant_first[kPlantSpecies]{};
     uint32_t      plant_count[kPlantSpecies]{};

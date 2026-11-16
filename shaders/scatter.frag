@@ -109,6 +109,18 @@ void main() {
         vec3 leaf = fern ? vColor : vec3(0.11, 0.22, 0.05);
         leaf *= 0.8 + 0.4 * vUv.y;                // tips catch more light
         albedo = (part == 0) ? leaf : (part == 1 ? vColor : vec3(0.75, 0.55, 0.04));
+        if (part == 9) {
+            // Lily pad: glossy dark green, paler veins fanning out from the
+            // centre, a browner rim.
+            float pr = smoothstep(0.0, 0.03, 1.0 - N.y);          // the raised rim tilts outward
+            vec2  pl = vObj.xz;
+            float va = atan(pl.y, pl.x);
+            float veins = smoothstep(0.75, 1.0, abs(sin(va * 9.0 + wpos.x * 3.0)));
+            albedo = mix(vec3(0.050, 0.150, 0.040), vec3(0.095, 0.230, 0.060), veins * 0.6);
+            albedo = mix(albedo, vec3(0.16, 0.14, 0.05), pr * 0.6);
+            albedo *= 0.85 + 0.3 * fract(sin(dot(floor(wpos.xz * 9.0), vec2(12.9898, 78.233))) * 43758.5453);
+        }
+        if ((part == 1 || part == 2) && vColor.r < 0.05 && vColor.g < 0.05 && vColor.b < 0.05) discard;   // lily raft without a flower
         if (part == 6) {
             // Mushroom stem + gills: pale cream, fibrous streaks, gills darker.
             float gn = fract(sin(dot(floor(wpos * vec3(420.0, 60.0, 420.0)), vec3(12.9898, 78.233, 37.719))) * 43758.5453);

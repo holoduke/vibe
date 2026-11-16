@@ -738,6 +738,63 @@ void build_mushrooms(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
     }
 }
 
+// Water lilies: one instance = a small raft of floating pads (round leaves
+// with the V-shaped notch of a lily pad, a slightly raised rim) and, on
+// some, an open flower - two rings of pointed petals round a golden centre.
+// Parts: 9 = pad (uv.y = distance from the pad centre 0..1), 1 = petal
+// (instance colour), 2 = flower centre. Double-sided, no sway.
+void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
+    g_seed = 0x11117u;
+    auto tri2 = [&](uint32_t a, uint32_t b, uint32_t c) { ix.insert(ix.end(), { a, b, c, a, c, b }); };
+    const int pads = 6;
+    for (int i = 0; i < pads; ++i) {
+        const float a = 6.2831853f * (float(i) + 0.7f * grnd()) / float(pads);
+        const float d = i == 0 ? 0.0f : 0.20f + 0.26f * grnd();
+        const glm::vec3 c(std::cos(a) * d, 0.012f + 0.004f * grnd(), std::sin(a) * d);
+        const float r = i == 0 ? 0.17f : 0.09f + 0.08f * grnd();
+        const float notch = 6.2831853f * grnd();                 // direction of the cut
+        const float gap = 0.22f + 0.12f * grnd();                // its angular width (rad)
+        const int seg = 18;
+        const uint32_t b0 = uint32_t(v.size());
+        v.push_back({ c + glm::vec3(0.0f, 0.004f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), { 9.0f, 0.0f } });
+        for (int k = 0; k <= seg; ++k) {
+            const float t = float(k) / float(seg);
+            const float ang = notch + gap * 0.5f + (6.2831853f - gap) * t;
+            const float rr = r * (1.0f + 0.05f * std::sin(ang * 5.0f + float(i)));
+            const glm::vec3 dir(std::cos(ang), 0.0f, std::sin(ang));
+            v.push_back({ c + dir * (rr * 0.62f), glm::vec3(0.0f, 1.0f, 0.0f), { 9.0f, 0.0f } });
+            v.push_back({ c + dir * rr + glm::vec3(0.0f, 0.006f, 0.0f),
+                          glm::normalize(glm::vec3(-dir.x * 0.25f, 1.0f, -dir.z * 0.25f)), { 9.0f, 0.0f } });
+        }
+        for (int k = 0; k < seg; ++k) {
+            const uint32_t i0 = b0 + 1 + uint32_t(k) * 2, i1 = i0 + 2;
+            tri2(b0, i1, i0);
+            tri2(i0, i1, i1 + 1); tri2(i0, i1 + 1, i0 + 1);
+        }
+    }
+    // The flower, beside the central pad.
+    const glm::vec3 fc(0.13f, 0.03f, -0.10f);
+    for (int ring = 0; ring < 2; ++ring) {
+        const int n = ring == 0 ? 9 : 7;
+        const float len = ring == 0 ? 0.075f : 0.055f, wid = ring == 0 ? 0.020f : 0.016f;
+        const float rise = ring == 0 ? 0.45f : 1.05f;            // outer petals lie flatter
+        for (int k = 0; k < n; ++k) {
+            const float ang = 6.2831853f * (float(k) + 0.5f * float(ring)) / float(n);
+            const glm::vec3 dir(std::cos(ang), 0.0f, std::sin(ang)), side(-dir.z, 0.0f, dir.x);
+            const glm::vec3 tipd = glm::normalize(dir + glm::vec3(0.0f, rise, 0.0f));
+            const glm::vec3 nrm = glm::normalize(glm::cross(side, tipd));
+            const uint32_t b0 = uint32_t(v.size());
+            const glm::vec3 base = fc + dir * 0.008f;
+            v.push_back({ base, nrm, { 1.0f, 0.0f } });
+            v.push_back({ base + tipd * (len * 0.45f) + side * wid, nrm, { 1.0f, 0.0f } });
+            v.push_back({ base + tipd * (len * 0.45f) - side * wid, nrm, { 1.0f, 0.0f } });
+            v.push_back({ base + tipd * len, nrm, { 1.0f, 0.0f } });
+            tri2(b0, b0 + 1, b0 + 2); tri2(b0 + 1, b0 + 3, b0 + 2);
+        }
+    }
+    plant_lathe(v, ix, fc, glm::vec3(0.0f, 1.0f, 0.0f), { { 0.0f, 0.0f }, { 0.014f, 0.004f }, { 0.012f, 0.020f }, { 0.0f, 0.024f } }, 8, 2.0f);
+}
+
 // Sort instances by 32 m ground cell and emit one contiguous range per
 // cell with a conservative AABB (instance size + raymarch-surface offset).
 void sort_into_cells(std::vector<ScatterInstance>& v, uint32_t base,
@@ -882,6 +939,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
             case 13: build_herb(pv, pi, { 0.62f, 6, 5, 0.17f, 0.030f, false, 2, 0.12f, 30, 0.026f, 2.4f, 0.35f, 0, 0.3f, 137.5f, 62.0f, 0.0f, 19u }); break;
             case 14: build_mushrooms(pv, pi); break;
             case 15: build_grass_tuft(pv, pi); break;
+            case 16: build_water_lily(pv, pi); break;
             case 6: build_herb(pv, pi, { 0.66f, 4, 4, 0.20f, 0.040f, true, 0, 0.10f, 5, 0.030f, 0.45f, 0.95f, 12, 0.48f, 137.5f, 58.0f, 0.0f, 13u }); break;  // lupin: palmate leaves, dense spike
             }
             s.plant_mesh[sp] = create_mesh_from_data(device, alloc, queue, queue_family,
@@ -965,6 +1023,36 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 si.rot_tint = glm::vec4(u01(rng) * glm::two_pi<float>(), col.x, col.y, col.z);
                 per[7].push_back(si);
                 ++reeds;
+            }
+            // Water lilies: rafts of pads on the quiet shallows, in groups -
+            // a group is a patch of 20-60 rafts within a few metres, mostly
+            // close to the shore (10 cm to 1.1 m of water).
+            {
+                int lilies = 0;
+                for (int g = 0; g < 90000 && lilies < 9000; ++g) {
+                    const float gx = (u01(rng) * 2.0f - 1.0f) * ext, gz = (u01(rng) * 2.0f - 1.0f) * ext;
+                    const float gh = h_at(gx, gz);
+                    if (gh > params.water_level - 0.12f || gh < params.water_level - 1.0f) continue;
+                    const int n = 20 + int(u01(rng) * 40.0f);
+                    const float gr = 2.0f + 3.5f * u01(rng);
+                    const bool pink = u01(rng) < 0.3f;
+                    for (int k = 0; k < n; ++k) {
+                        const float a = u01(rng) * glm::two_pi<float>(), d = gr * std::sqrt(u01(rng));
+                        const float wx = gx + std::cos(a) * d, wz = gz + std::sin(a) * d;
+                        const float h = h_at(wx, wz);
+                        if (h > params.water_level - 0.10f || h < params.water_level - 1.15f) continue;
+                        ScatterInstance si{};
+                        si.pos_scale = glm::vec4(wx, params.water_level, wz, 0.8f + 0.7f * u01(rng));
+                        // Flower colour; a raft without a flower is marked by a
+                        // dark tint (the shader hides its petals).
+                        glm::vec3 col = pink ? glm::vec3(0.92f, 0.55f, 0.66f) : glm::vec3(0.95f, 0.94f, 0.88f);
+                        if (u01(rng) < 0.55f) col = glm::vec3(0.02f);
+                        si.rot_tint = glm::vec4(u01(rng) * glm::two_pi<float>(), col.x, col.y, col.z);
+                        per[16].push_back(si);
+                        ++lilies;
+                    }
+                }
+                log::infof("[scatter] %d water lily rafts", lilies);
             }
         }
 
@@ -1152,6 +1240,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
         // (Per-instance and independent: spread over the worker pool.)
         for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp)
             jobs::parallel_for(int(per[sp].size()), 2048, [&, sp](int i_begin, int i_end) {
+            if (sp == 16) return;                      // water lilies float: no ground relief
             for (int ii = i_begin; ii < i_end; ++ii) {
                 ScatterInstance& si = per[sp][size_t(ii)];
                 const float x = si.pos_scale.x, z = si.pos_scale.z;
@@ -1185,6 +1274,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                     s.plant_dy[size_t(i)] = raymarch_fine_correction(hm, *params.rm_params, all[size_t(i)].pos_scale.x,
                                                                      all[size_t(i)].pos_scale.z, params.rm_octaves);
             });
+            for (uint32_t i = 0; i < s.plant_count[16]; ++i) s.plant_dy[size_t(s.plant_first[16] + i)] = 0.0f;   // lilies float
         }
         if (!all.empty()) {
             VkBufferCreateInfo pb{};
