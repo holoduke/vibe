@@ -3526,7 +3526,7 @@ void main() {
                     float hy = textureGrad(u_height[hn], muv + vec2(0.0, e.y), du1, du2).r -
                                textureGrad(u_height[hn], muv - vec2(0.0, e.y), du1, du2).r;
                     vec2  slope = clamp(vec2(hx, hy) / (2.0 * e) * m_hs, vec2(-2.5), vec2(2.5));
-                    N = normalize(N - (normalize(Tm) * slope.x + normalize(Bm) * slope.y) * 0.7);
+                    N = normalize(N + (normalize(Tm) * slope.x + normalize(Bm) * slope.y) * 0.7);
                 }
             }
             // Soft shadow toward the ground the tower stands on.
