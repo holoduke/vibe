@@ -1356,6 +1356,12 @@ float g_nb_pl = 0.0;
 // The neighbour is of another material (paving under a wall): it joins as
 // a plain level surface, drawn with its own texture where the ray lands on it.
 bool  g_nb_flat = false;
+// Its own relief (height map, tile size, depth) - so what a wall pixel sees of
+// the floor inside its recesses is exactly what the floor pixels next to it draw.
+int   g_nb_h = -1;
+float g_nb_scale = 1.0;
+vec2  g_nb_asp = vec2(1.0);
+float g_nb_dm = 0.0;
 
 // Signed solidity margin (>= 0 -> inside the masonry). Only EXPOSED faces
 // carry a surface; where a face is covered by a neighbouring block the
@@ -1408,11 +1414,18 @@ float br_margin(vec3 w, vec3 C, vec3 H, int mask, float Dm, int h_idx,
         float d = s * (g_nb_pl - w[a]);              // depth below the neighbour's face
         if (d > -0.06) {
             float mb = d;
-            if (d < Dm && !g_nb_flat) {
-                float h = textureLod(u_height[h_idx],
-                                     br_face_uv(g_nb_f, w, uv_scale, aspect), lod).r;
-                mb = d - Dm * (1.0 - h);
+            if (!g_nb_flat) {
+                if (d < Dm) {
+                    float h = textureLod(u_height[h_idx],
+                                         br_face_uv(g_nb_f, w, uv_scale, aspect), lod).r;
+                    mb = d - Dm * (1.0 - h);
+                }
+            } else if (g_nb_h >= 0 && d < g_nb_dm) {
+                float h = textureLod(u_height[g_nb_h],
+                                     br_face_uv(g_nb_f, w, g_nb_scale, g_nb_asp), lod).r;
+                mb = d - g_nb_dm * (1.0 - h);
             }
+
             // Union of the two walls, with a little mortar packed into
             // the angle.
             const float k = 0.035;
@@ -2902,7 +2915,7 @@ void main() {
                                 nearest = min(nearest, rayQueryGetIntersectionTEXT(aq, true));
                         }
                         float a01 = clamp(nearest / reach, 0.0, 1.0);
-                        br_ao = mix(1.0, mix(0.50, 1.0, sqrt(a01)),
+                        br_ao = mix(1.0, mix(0.62, 1.0, sqrt(a01)),
                                     1.0 - smoothstep(20.0, 30.0, br_dist));
                     }
                     {
@@ -2932,6 +2945,20 @@ void main() {
                                     br_nb_scale = max(nm.tex.z, 0.001);
                                     br_nb_tint  = nm.color.rgb;
                                     if (int(nm.tex.x) < 0) g_nb_f = -1;
+                                    if (g_nb_flat) {
+                                        // A floor never shows the wall beside
+                                        // it (from a low angle that read as
+                                        // seeing under the paving): only the
+                                        // surface a wall STANDS ON joins in.
+                                        if (g_nb_f != 3) g_nb_f = -1;
+                                        g_nb_h     = height_idx_for_albedo(br_nb_idx);
+                                        g_nb_scale = br_nb_scale;
+                                        g_nb_asp   = (g_nb_h == 0 || g_nb_h == 2) ? vec2(0.5, 1.0) : vec2(1.0);
+                                        g_nb_dm    = clamp(0.05 / br_nb_scale, 0.06, 0.3) *
+                                                     max(0.0, scene.spom_params.x) *
+                                                     (1.0 - smoothstep(35.0, 70.0, br_dist));
+                                        g_nb_dm    = min(g_nb_dm, 0.15);
+                                    }
                                 }
                             }
                         }
