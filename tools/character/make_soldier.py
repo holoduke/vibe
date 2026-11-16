@@ -3,7 +3,8 @@
 #
 #   blender -b --python tools/character/make_soldier.py -- <mh_assets_dir> <out_dir>
 #
-# <mh_assets_dir>: a copy of the MakeHuman system assets (skins, eyes, hair,
+# <mh_assets_dir>: the MakeHuman system assets plus the community packs
+# gloves01, hats02, shoes01 (CC0) and equipment03 (CC-BY) unpacked into it (skins, eyes, hair,
 # clothes ...; CC0), laid out as in MakeHuman's data folder.
 # Writes <out_dir>/soldier.glb (mesh + skeleton, glTF binary) and
 # <out_dir>/soldier_preview.png.
@@ -71,7 +72,13 @@ add("Eyebrows", "eyebrows", "eyebrow001", "eyebrow001.mhclo")
 add("Eyelashes", "eyelashes", "eyelashes01", "eyelashes01.mhclo")
 add("Teeth", "teeth", "teeth_base", "teeth_base.mhclo")
 suit = add("Clothes", "clothes", "male_casualsuit05", "male_casualsuit05.mhclo")   # field jacket, shirt, trousers
-boots = add("Clothes", "clothes", "shoes03", "shoes03.mhclo")
+# Real gear from the MakeHuman community asset packs (see Credits in README.md):
+# tall leather boots, a MOLLE tactical vest with magazine pouches, short
+# gloves and an M1 steel helmet with a net.
+boots = add("Clothes", "clothes", "culturalibre_male_boots", "culturalibre_male_boots.mhclo")
+vest = add("Clothes", "clothes", "mindfront_tactical_vest_male", "mindfront_tactical_vest_male.mhclo")
+gloves = add("Clothes", "clothes", "toigo_gloves_short", "toigo_gloves_short.mhclo")
+helmet = add("Clothes", "clothes", "mrgreaterthan_m1_helmet", "mrgreaterthan_m1_helmet.mhclo")
 
 import bmesh
 import numpy as np
@@ -141,6 +148,24 @@ def camouflage(obj, seed):
     img.pixels.foreach_set(px.ravel())
     img.pack()
     log("camouflage applied to", obj.name, img.name, w, h)
+
+
+def tint(obj, mul, desat=0.0):
+    """Darkens / recolours a garment texture in place (keeps its detail)."""
+    img, _ = base_color_image(obj)
+    if img is None:
+        log("no base colour image on", obj.name)
+        return
+    w, h = img.size
+    px = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)
+    lum = (px[..., 0] * 0.2126 + px[..., 1] * 0.7152 + px[..., 2] * 0.0722)[..., None]
+    rgb = px[..., :3] * (1.0 - desat) + lum * desat
+    px[..., :3] = np.clip(rgb * np.array(mul, np.float32), 0.0, 1.0)
+    img.pixels.foreach_set(px.ravel())
+    img.pack()
+    log("tint applied to", obj.name, img.name)
 
 
 def flat_material(name, color, rough=0.8, metal=0.0):
@@ -232,86 +257,61 @@ log("height", round(height, 3), "head bone", head_bone, tuple(round(c, 3) for c 
 # Uniform: woodland camouflage on the jacket / shirt / trousers.
 camouflage(suit, 7)
 
-mat_web = flat_material("webbing", (0.050, 0.058, 0.038), rough=0.9)
-mat_helmet = flat_material("helmet", (0.060, 0.072, 0.045), rough=0.75)
-mat_black = flat_material("black_gear", (0.012, 0.012, 0.013), rough=0.6)
-
-# Tactical vest: the torso part of the jacket, thicker and in webbing green.
-chest_lo, chest_hi = height * 0.585, height * 0.800
-half_w = (hi.x - lo.x) * 0.5
-shoulder = height * 0.118                               # half shoulder width: keeps the sleeves out
-vest = shell_from(suit, "Human.vest",
-                  lambda c: chest_lo < c.z < chest_hi and abs(c.x) < shoulder,
-                  0.014, mat_web)
-
-# Gloves: the hands of the body, as a thin black shell.
-wrist = rig.matrix_world @ rig.data.bones[("hand_l" if "hand_l" in bones else bone_named("lefthand"))].head_local
-hand_x = abs(wrist.x) - 0.012
-log("wrist", tuple(round(c, 3) for c in wrist))
-gloves = shell_from(basemesh, "Human.gloves",
-                    lambda c: abs(c.x) > hand_x and c.z > wrist.z - 0.30,
-                    0.004, mat_black)
-for m in list(gloves.modifiers):
-    if m.type == "MASK":
-        gloves.modifiers.remove(m)
-if len(gloves.data.vertices) == 0:
-    bpy.data.objects.remove(gloves)
-
-# Helmet: an ellipsoid shell over the skull, open below the ears.
-skull_lo, skull_hi = world_bbox(basemesh)
-head_r = Vector((height * 0.058, height * 0.070, height * 0.068))
-# The real top of the skull, from the morphed (evaluated) body mesh.
-dg = bpy.context.evaluated_depsgraph_get()
-ev = basemesh.evaluated_get(dg)
-skull = [ev.matrix_world @ v.co for v in ev.data.vertices]
-skull = [c for c in skull if abs(c.x) < 0.11 and c.z > head_pos.z + 0.05 and abs(c.y - head_pos.y) < 0.16]
-skull_top = max(c.z for c in skull)
-skull_y = 0.5 * (min(c.y for c in skull) + max(c.y for c in skull))
-log("skull top", round(skull_top, 3), "centre y", round(skull_y, 3), "body max |x|", round(max(abs((ev.matrix_world @ v.co).x) for v in ev.data.vertices), 3))
-head_c = Vector((0.0, skull_y, skull_top - head_r.z * 0.86))
+# Black leather boots and gloves; the vest stays in its own olive webbing.
+tint(boots, (0.16, 0.15, 0.15), desat=0.85)
+tint(gloves, (0.55, 0.55, 0.55), desat=0.6)
 
 
-def helmet_mesh(bm):
-    bmesh.ops.create_uvsphere(bm, u_segments=28, v_segments=16, radius=1.0)
-    for v in bm.verts:
-        v.co = Vector((v.co.x * head_r.x * 1.24, v.co.y * head_r.y * 1.22, v.co.z * head_r.z * 1.14)) + head_c
-    # Down to the brow in front, lower over the ears and the back of the head.
-    cut = head_c.z - head_r.z * 0.42
-    def rim(v):
-        front = max(0.0, (head_c.y - v.co.y) / (head_r.y * 1.22))
-        return cut + head_r.z * 0.62 * front * front
-    bmesh.ops.delete(bm, geom=[v for v in bm.verts if v.co.z < rim(v)], context="VERTS")
-    # Brim: flare the lowest ring a little.
-    for v in bm.verts:
-        if v.co.z < rim(v) + head_r.z * 0.12:
-            v.co.x *= 1.03
-            v.co.y = head_c.y + (v.co.y - head_c.y) * 1.03
+def widen(obj, factor):
+    """Scales a garment horizontally about its own vertical axis, so it
+    fits over what is worn under it (keeps hard details like pouches
+    intact, which pushing along the normals does not)."""
+    n = len(obj.data.vertices)
+    cx = sum(v.co.x for v in obj.data.vertices) / n
+    cy = sum(v.co.y for v in obj.data.vertices) / n
+    for v in obj.data.vertices:
+        v.co.x = cx + (v.co.x - cx) * factor
+        v.co.y = cy + (v.co.y - cy) * factor
+    obj.data.update()
 
 
-helmet = rigid_part("Human.helmet", helmet_mesh, head_bone, mat_helmet)
-hm = helmet.modifiers.new("thick", "SOLIDIFY")
-hm.thickness = 0.009
-hm.offset = 1.0
-bpy.context.view_layer.objects.active = helmet
-bpy.ops.object.modifier_move_up(modifier="thick")
-
-# Pouches on the vest front and a belt.
-front_y = min((vest.matrix_world @ v.co).y for v in vest.data.vertices) if len(vest.data.vertices) else -0.12
-
-
-def pouch_mesh_at(cx, cz, w, hgt, d):
-    def fn(bm):
-        bmesh.ops.create_cube(bm, size=1.0)
-        for v in bm.verts:
-            v.co = Vector((cx + v.co.x * w, front_y - d * 0.35 + v.co.y * d, cz + v.co.z * hgt))
-        bmesh.ops.bevel(bm, geom=list(bm.edges), offset=min(w, hgt, d) * 0.12, segments=2, affect="EDGES")
-    return fn
+def cut_below(obj, z_world):
+    """Removes the part of a garment below a height (trousers tucked in)."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    mw = obj.matrix_world
+    drop = [f for f in bm.faces if all((mw @ v.co).z < z_world for v in f.verts)]
+    bmesh.ops.delete(bm, geom=drop, context="FACES")
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.data.update()
+    log("cut", obj.name, "faces below", round(z_world, 3), len(drop))
 
 
-belly = height * 0.635
-for i, cx in enumerate((-0.105, -0.035, 0.035, 0.105)):
-    rigid_part("Human.pouch%d" % i, pouch_mesh_at(cx * height / 1.8, belly, 0.060, 0.115, 0.045), spine_bone, mat_web)
-rigid_part("Human.radio", pouch_mesh_at(0.085 * height / 1.8, height * 0.745, 0.050, 0.095, 0.035), spine_bone, mat_black)
+# The vest is worn over the jacket; the trousers are tucked into the boots.
+vest_lo, vest_hi = world_bbox(vest)
+vest_cx, vest_cy = 0.5 * (vest_lo.x + vest_hi.x), 0.5 * (vest_lo.y + vest_hi.y)
+vest_hw = 0.5 * (vest_hi.x - vest_lo.x)
+widen(vest, 1.15)
+# ... and the jacket is pulled in under it (it hangs open and loose, and
+# would otherwise cover the vest).
+_mw = suit.matrix_world
+_inv = _mw.inverted()
+for v in suit.data.vertices:
+    c = _mw @ v.co
+    if abs(c.x - vest_cx) > vest_hw * 0.98:
+        continue
+    t = min((c.z - vest_lo.z) / 0.05, (vest_hi.z - c.z) / 0.05)
+    if t <= 0.0:
+        continue
+    t = min(t, 1.0)
+    k = 1.0 - 0.10 * t * t * (3.0 - 2.0 * t)
+    c.x = vest_cx + (c.x - vest_cx) * k
+    c.y = vest_cy + (c.y - vest_cy) * k
+    v.co = _inv @ c
+suit.data.update()
+boot_lo, boot_hi = world_bbox(boots)
+cut_below(suit, boot_hi.z - 0.06)
 
 for o in bpy.data.objects:
     log("object", o.name, o.type, len(o.data.vertices) if o.type == "MESH" else "", [m.type for m in o.modifiers] if o.type == "MESH" else "")

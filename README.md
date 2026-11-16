@@ -128,6 +128,14 @@ Parts of this project are ports of other people's open-source work (MIT licensed
 - **Procedural trees**: the growth algorithm is a C++ port of
   [dgreenheck/ez-tree](https://github.com/dgreenheck/ez-tree) (Copyright (c) 2024 Daniel Greenheck).
 
+The player character is built with [MakeHuman / MPFB](https://static.makehumancommunity.org/)
+from its community assets (script: `tools/character/make_soldier.py`):
+
+- Body, skin, field uniform: MakeHuman system assets (CC0).
+- **Tactical vest**: "Tactical vest (male)" by MindFront, CC-BY (widened to fit over the jacket).
+- Boots by culturalibre, gloves by MargaretToigo, M1 helmet by MrGreaterThan (all CC0; boots and
+  gloves recoloured).
+
 ## Keywords
 
 Vulkan game engine, C++ Vulkan renderer, real-time ray tracing, ray query, deferred rendering,

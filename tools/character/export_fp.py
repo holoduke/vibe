@@ -155,7 +155,14 @@ out_i = []
 vmap = {}
 dg = bpy.context.evaluated_depsgraph_get()
 
-for obj in [o for o in bpy.data.objects if o.type == "MESH"]:
+# The two large atlas tiles go to what fills the first-person view: the
+# uniform and the vest (the skin is almost entirely covered).
+def _prio(o):
+    low = o.name.lower()
+    return 0 if ("suit" in low or "vest" in low) else 1
+
+
+for obj in sorted([o for o in bpy.data.objects if o.type == "MESH"], key=_prio):
     low = obj.name.lower()
     if any(k in low for k in SKIP):
         log("skip", obj.name)
