@@ -272,14 +272,18 @@ void hip_roof(LevelMesh& m, glm::vec3 c, float hx, float hz, float y0,
     mesh_quad(m, {k[3], dn, 0, 0}, {k[2], dn, 1, 0}, {k[1], dn, 1, 1}, {k[0], dn, 0, 1});
 }
 
-// Player collision for a round tower: octagon-ish union of 3 boxes.
+// Player collision for a round tower: a union of boxes whose corners lie
+// on the circle (8 per quarter turn, so the flats between them cut at most
+// about 1 % of the radius into the round - three boxes left gaps one could
+// walk 30 cm into).
 void tower_colliders(std::vector<collision::AABB>& out, glm::vec3 c, float r,
                      float y0, float y1) {
-    const glm::vec3 ext[3] = { {r * 0.92f, 0, r * 0.38f}, {r * 0.38f, 0, r * 0.92f},
-                               {r * 0.71f, 0, r * 0.71f} };
-    for (const auto& e : ext) {
-        out.push_back({ glm::vec3(c.x - e.x, c.y + y0, c.z - e.z),
-                             glm::vec3(c.x + e.x, c.y + y1, c.z + e.z) });
+    constexpr int kN = 8;
+    for (int k = 0; k < kN; ++k) {
+        const float a = (float(k) + 0.5f) * (1.5707963f / float(kN));
+        const float ex = r * std::cos(a), ez = r * std::sin(a);
+        out.push_back({ glm::vec3(c.x - ex, c.y + y0, c.z - ez),
+                        glm::vec3(c.x + ex, c.y + y1, c.z + ez) });
     }
 }
 }

@@ -748,9 +748,9 @@ bool pom_silhouette_clip(float depth_m, float c, float curv);   // (below: needs
 // Cavity darkening x parallax self-shadow toward the sun (Tatarchuk 2006).
 // Deferred lighting shades the FLAT surface, so these cues are what make
 // the relief read as depth; they go into albedo, recomputed every frame.
-float pom_shade(int hix, vec2 uv, vec3 Lt, float hs, vec2 gdx, vec2 gdy) {
+float pom_shade(int hix, vec2 uv, vec3 Lt, float hs, vec2 gdx, vec2 gdy, float deep) {
     float h0  = textureGrad(u_height[hix], uv, gdx, gdy).r;
-    float cav = mix(0.80, 1.0, smoothstep(0.0, 0.6, h0));
+    float cav = mix(mix(0.80, 0.62, deep), 1.0, smoothstep(0.0, 0.6, h0));
     float vis = 1.0;
     if (Lt.z > 0.05 && h0 < 0.98) {
         vec2 sP = Lt.xy / max(Lt.z, 0.15) * hs * (1.0 - h0);
@@ -761,7 +761,7 @@ float pom_shade(int hix, vec2 uv, vec3 Lt, float hs, vec2 gdx, vec2 gdy) {
             float sh = textureGrad(u_height[hix], uv + sP * t, gdx, gdy).r;
             occ = max(occ, (sh - rh) * (1.0 - t));
         }
-        vis = 1.0 - 0.40 * smoothstep(0.0, 0.12, occ);
+        vis = 1.0 - mix(0.40, 0.72, deep) * smoothstep(0.0, 0.12, occ);
     } else if (Lt.z <= 0.05) {
         vis = 0.9;   // face turned away from the sun: crevices stay a bit darker
     }
@@ -1830,7 +1830,7 @@ void main() {
                 }
                 sample_pos += Tp * (uv.x - uv0.x) + Bp * (uv.y - uv0.y);
                 vec3 Lt = vec3(dot(L, Tp), dot(L, Bp), dot(L, Fp));
-                mesh_pom_shade = mix(1.0, pom_shade(hix, uv, Lt, hs, gdx, gdy), fadeP);
+                mesh_pom_shade = mix(1.0, pom_shade(hix, uv, Lt, hs, gdx, gdy, 0.0), fadeP);
             }
         }
     }
@@ -2696,6 +2696,7 @@ void main() {
             // 1 = SPOM legacy (ray-query silhouette resolution),
             // 2 = SSDM (depth-override silhouette + recessed depth).
             int spom_mode = int(scene.grass_side_lit_params.z + 0.5);
+            float br_relief_m = 0.0;   // box relief depth in metres (0 = not that path)
             if (spom_mode == 0) {
                 // Flat path: forget the parallax UV shift entirely.
                 // Bricks use the un-displaced sample point; silhouette
@@ -2738,8 +2739,12 @@ void main() {
                     // features) - fewer head-on.
                     int   kSteps = int(mix(48.0, 16.0, cosn));
                     float dt = t_deep / float(kSteps);
+                    // Start offset dithered per pixel: the fixed layers of a
+                    // linear march show as bands on walls seen at a slant.
                     float t_lo = 0.0, t_hi = -1.0;
+                    float t_j = dt * ign(gl_FragCoord.xy);
                     int   bf = br_ef;
+                    br_relief_m = br_Dm;
                     // The ray is marched until it meets stone. If it first
                     // leaves the block through an exposed face, that is a
                     // silhouette only when the exit point really is in open
@@ -2749,7 +2754,7 @@ void main() {
                         int   xf;
                         float t_exit = br_exit(ro, rd, br_C, br_H, br_mask, xf);
                         float L = min(t_exit, t_deep);
-                        for (float t = t_lo; t < L; t += dt) {
+                        for (float t = (pass == 0 ? t_j : t_lo); t < L; t += dt) {
                             if (br_margin(ro + rd * t, br_C, br_H, br_mask, br_Dm,
                                           br_h, lod, scale, br_asp, br_ef, bf) >= 0.0) {
                                 t_hi = t;
@@ -3134,9 +3139,11 @@ void main() {
                     int  hb = clamp(spom_h_idx, 0, 5);
                     vec3 Lt = vec3(dot(L, spom_T), dot(L, spom_B), dot(L, spom_face_n));
                     if (hb == 0 || hb == 2) Lt.x *= 0.5;   // 2:1 brick texture aspect (spom_uv)
-                    float hsB = 0.04 * scene.spom_params.x;
+                    // Box relief: the real depth of the stones (metres -> uv).
+                    float hsB = br_relief_m > 0.0 ? br_relief_m * scale : 0.04 * scene.spom_params.x;
                     mesh_pom_shade = mix(1.0, pom_shade(hb, spom_uv_off, Lt, hsB,
-                                                        dFdx(spom_uv0), dFdy(spom_uv0)), fadeB);
+                                                        dFdx(spom_uv0), dFdy(spom_uv0),
+                                                        br_relief_m > 0.0 ? 1.0 : 0.0), fadeB);
                 }
             }
             if (axis != 1) shading_pos = spom_world;
@@ -3151,6 +3158,23 @@ void main() {
                 N = normalize(spom_T  * n_t.x +
                               spom_B  * n_t.y +
                               spom_face_n * n_t.z);
+                if (br_relief_m > 0.0) {
+                    // Box relief: the stones are really that deep, so their
+                    // flanks have to turn toward / away from the light. Slope
+                    // of the height field itself (metres per metre) on top of
+                    // the fine normal map.
+                    int   hn  = clamp(spom_h_idx, 0, 5);
+                    vec2  asp = (hn == 0 || hn == 2) ? vec2(0.5, 1.0) : vec2(1.0);
+                    float hl  = textureQueryLod(u_height[hn], spom_uv0).x + 1.0;
+                    vec2  e   = vec2(exp2(hl)) / vec2(textureSize(u_height[hn], 0));
+                    float hx  = textureLod(u_height[hn], spom_uv_off + vec2(e.x, 0.0), hl).r -
+                                textureLod(u_height[hn], spom_uv_off - vec2(e.x, 0.0), hl).r;
+                    float hy  = textureLod(u_height[hn], spom_uv_off + vec2(0.0, e.y), hl).r -
+                                textureLod(u_height[hn], spom_uv_off - vec2(0.0, e.y), hl).r;
+                    vec2  slope = vec2(hx, hy) / (2.0 * e) * (scale * asp) * br_relief_m;
+                    slope = clamp(slope, vec2(-2.5), vec2(2.5));
+                    N = normalize(N - (spom_T * slope.x + spom_B * slope.y) * 0.7);
+                }
             }
         } else if (use_albedo && is_mesh_draw && pc.grass_params.z < 0.5) {
             // Static mesh: real UVs + derivative (cotangent) tangent frame
@@ -3185,7 +3209,7 @@ void main() {
                             if (pom_silhouette_clip(dm, Vt.z, mesh_curv)) discard;
                         }
                         vec3 Lt = vec3(dot(L, Tn), dot(L, Bn), dot(L, N));
-                        mesh_pom_shade = mix(1.0, pom_shade(hix, uvp, Lt, hs, du1, du2), fadeP);
+                        mesh_pom_shade = mix(1.0, pom_shade(hix, uvp, Lt, hs, du1, du2, 0.0), fadeP);
                         muv = uvp;
                     } else if (mesh_curv > 0.02) {
                         // Grazing silhouette pixels (no march): clip by the
