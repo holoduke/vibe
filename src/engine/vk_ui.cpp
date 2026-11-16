@@ -513,7 +513,7 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SliderInt("cubes / minute", &game_.cubes_per_minute, 0, 1000);
         ImGui::SliderFloat("bullet mass (kg)",  &game_.bullet_mass, 0.5f, 200.0f,
                            "%.1f", ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderFloat("bullet speed (m/s)", &game_.bullet_speed, 20.0f, 600.0f,
+        ImGui::SliderFloat("bullet speed (m/s)", &game_.bullet_speed, 20.0f, 3000.0f,
                            "%.0f");
         ImGui::SliderFloat("fire rate (rps)", &game_.fire_rate_rps, 0.0f, 30.0f,
                            "%.1f");

@@ -704,7 +704,7 @@ void VulkanEngine::load_settings() {
     clampi(game_.cubes_per_minute, 0,    1000);
     clampf(game_.bullet_mass,    0.5f,  200.0f);
     clampf(game_.fire_rate_rps,  0.0f,  60.0f);
-    clampf(game_.bullet_speed,   20.0f, 600.0f);
+    clampf(game_.bullet_speed,   20.0f, 3000.0f);
     clampf(game_.spark_scale,    0.05f, 3.0f);
 
     log::infof("settings loaded from %s (%d keys)  textures=%d  shadows=%d/%d  gi=%d",
