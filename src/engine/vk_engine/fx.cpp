@@ -769,7 +769,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             float conv  = std::max(0.0f, 1.0f - flown / 12.0f);
             glm::vec3 head = pos + dir * pr.half_length + pr.trail_offset * conv;
             glm::vec3 barrel = pr.spawn_origin + pr.trail_offset;
-            float len = std::min(3.0f, glm::dot(head - barrel, dir));
+            float len = std::min(3.0f * pr.half_length / kProjectileHalf, glm::dot(head - barrel, dir));
             if (len < 0.02f) continue;
             glm::vec3 tail = head - dir * len;
             // Fade in with distance from the eye: the first metres of the

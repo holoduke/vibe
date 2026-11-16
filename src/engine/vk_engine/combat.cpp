@@ -126,7 +126,11 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
     p.body_id = id;
     p.jolt_handle = physics_->handle_of(id);
     p.radius = kProjectileRad;
-    p.half_length = kProjectileHalf;
+    // The faster the gun fires, the shorter each bolt: at a high rate long
+    // bolts ran together into one continuous beam. Full length up to 6
+    // shots a second, down to a quarter at 24 and above (the look only -
+    // the physics body keeps its size).
+    p.half_length = kProjectileHalf * std::clamp(6.0f / std::max(game_.fire_rate_rps, 0.1f), 0.25f, 1.0f);
     p.ttl = kProjectileTtl;
     p.initial_speed = speed;
     p.initial_dir = dir;
