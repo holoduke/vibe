@@ -156,7 +156,7 @@ was produced that way.
 - `src/game/` — player movement, collision, level.
 - `shaders/` — GLSL 4.60, compiled to SPIR-V at build time.
 - `assets/` — models, textures, sounds.
-- `docs/` — design notes and screenshots.
+- `docs/` — the code map (`docs/ARCHITECTURE.md`), design notes and screenshots.
 
 ## Credits
 

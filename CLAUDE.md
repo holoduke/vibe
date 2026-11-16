@@ -1,5 +1,7 @@
 # Vibe — build & run
 
+**Start with `docs/ARCHITECTURE.md`**: the code map (which file does what, and which file to open for a given change). Keep it up to date when files are split or renamed.
+
 ## Build (recommended: build.ps1 wrapper)
 
 `build.ps1` sources `vcvars64.bat` itself, configures CMake (Ninja) on first
