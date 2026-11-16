@@ -169,7 +169,7 @@ void VulkanEngine::present_loader_frame(const char* label, float progress) {
     if (!device_ || !swapchain_ || swapchain_images_.empty()) return;
 
     if (window_) {
-        std::string title = "quake-like — ";
+        std::string title = "Vibe — ";
         title += label ? label : "Loading…";
         glfwSetWindowTitle(window_->handle(), title.c_str());
         // Pump GLFW so the OS doesn't mark the window as "not responding"

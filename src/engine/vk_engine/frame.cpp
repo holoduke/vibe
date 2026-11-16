@@ -1174,7 +1174,7 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         // Post-TAA unsharp strength. 0.55 is a reasonable default that
         // recovers most of the detail taa.frag's à-trous spatial filter
         // blurs away (default taa_spatial_strength can be 0.4–0.5). User
-        // can override via `compose_sharpen_strength` in qlike_settings.cfg.
+        // can override via `compose_sharpen_strength` in vibe_settings.cfg.
         // sharpen_params.y carries auto_exposure_strength so compose.frag
         // can scale pre-tonemap HDR by (target / scene_avg). 0 = off.
         pc_data.sharpen_params = glm::vec4(rt_.compose_sharpen_strength,

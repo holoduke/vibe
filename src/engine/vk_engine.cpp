@@ -10,7 +10,7 @@
 //   === Section: viewmodel   — procedural / glTF-loaded weapon viewmodel
 //   === Section: combat      — projectiles + spark particles + trails
 //   === Section: world+ui    — level setup, render_world, ui hooks
-//   === Section: settings    — load/save/autosave qlike_settings.cfg
+//   === Section: settings    — load/save/autosave vibe_settings.cfg
 //   === Section: textures    — albedo + normal map upload (calls into
 //                              engine/texture.cpp for the per-image work)
 //   === Section: skybox      — engine/skybox.cpp wrapper + sun-sync

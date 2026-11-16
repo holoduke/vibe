@@ -1,5 +1,5 @@
 // Settings persistence — debounced auto-save / load / clamp. Reads
-// qlike_settings.cfg in the working directory; ignored if missing (defaults
+// vibe_settings.cfg in the working directory; ignored if missing (defaults
 // from RtSettings / GameSettings apply). Format is one `key = value` per
 // line; vec3 fields use space-separated triples.
 
@@ -17,7 +17,7 @@
 
 namespace qlike {
 
-// Quick scan of qlike_settings.cfg for the raymarch flag — load_settings()
+// Quick scan of vibe_settings.cfg for the raymarch flag — load_settings()
 // runs AFTER init_world() (it restores the saved player pose, which init_world
 // would otherwise overwrite), but init_world needs to know whether to use
 // the FBM-matching heightmap source up-front. So we peek just this one key
@@ -585,7 +585,7 @@ void VulkanEngine::save_settings() const {
             log::warnf("could not open %s for write", tmp_path.c_str());
             return;
         }
-        f << "# quake-like RT settings - auto-generated; safe to edit\n";
+        f << "# Vibe settings - auto-generated; safe to edit\n";
         // The clock / weather driver overrides sun, sky, cloud and fog
         // values at run time: save the user's own ones.
         struct BaseSwap {

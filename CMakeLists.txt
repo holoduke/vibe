@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(quake_like CXX)
+project(vibe CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -415,25 +415,25 @@ elseif(UNIX)
     target_compile_definitions(qlike_engine PUBLIC VK_USE_PLATFORM_XLIB_KHR)
 endif()
 
-add_executable(quake_like src/main.cpp)
-target_link_libraries(quake_like PRIVATE qlike_engine)
+add_executable(vibe src/main.cpp)
+target_link_libraries(vibe PRIVATE qlike_engine)
 
-# Stage the FSR3 DLL next to quake_like.exe so it loads at process start.
+# Stage the FSR3 DLL next to vibe.exe so it loads at process start.
 # Must be on the exe target (not qlike_engine, which is a static lib —
 # its POST_BUILD doesn't carry over to the exe's output dir).
 if(TARGET ffx_sdk_vk)
-    add_custom_command(TARGET quake_like POST_BUILD
+    add_custom_command(TARGET vibe POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FFX_SDK_ROOT}/PrebuiltSignedDLL/amd_fidelityfx_vk.dll"
-            "$<TARGET_FILE_DIR:quake_like>/amd_fidelityfx_vk.dll"
-        COMMENT "Staging amd_fidelityfx_vk.dll alongside quake_like.exe")
+            "$<TARGET_FILE_DIR:vibe>/amd_fidelityfx_vk.dll"
+        COMMENT "Staging amd_fidelityfx_vk.dll alongside vibe.exe")
 endif()
 if(QLIKE_HAVE_SL)
     foreach(dll sl.interposer.dll sl.common.dll sl.dlss.dll nvngx_dlss.dll sl.dlss_d.dll nvngx_dlssd.dll NvLowLatencyVk.dll
                 sl.dlss_g.dll nvngx_dlssg.dll sl.reflex.dll sl.pcl.dll)
-        add_custom_command(TARGET quake_like POST_BUILD
+        add_custom_command(TARGET vibe POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${SL_ROOT}/bin/x64/${dll}" "$<TARGET_FILE_DIR:quake_like>/${dll}"
+                "${SL_ROOT}/bin/x64/${dll}" "$<TARGET_FILE_DIR:vibe>/${dll}"
             COMMENT "Staging ${dll} (Streamline / DLSS)")
     endforeach()
 endif()
@@ -529,7 +529,7 @@ list(APPEND COMPILED_SHADERS ${WATER_SPV})
 
 if(COMPILED_SHADERS)
     add_custom_target(shaders ALL DEPENDS ${COMPILED_SHADERS})
-    add_dependencies(quake_like shaders)
+    add_dependencies(vibe shaders)
 endif()
 
 enable_testing()

@@ -43,7 +43,7 @@ inline bool vk_validation_enabled() {
 }
 
 // Path of the autosaved settings file relative to CWD.
-inline constexpr const char* kSettingsPath = "qlike_settings.cfg";
+inline constexpr const char* kSettingsPath = "vibe_settings.cfg";
 
 // Pi constants used by several engine sections. Float-precision; matches the
 // literal `3.14159265f` previously scattered across combat / world / helpers.

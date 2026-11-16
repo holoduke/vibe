@@ -68,7 +68,7 @@ void VulkanEngine::init_vulkan() {
     // proxy: SL adds its extensions / features / queues itself and sees the
     // swapchain.
     vkb::InstanceBuilder builder = sl_gipa_ ? vkb::InstanceBuilder(sl_gipa_) : vkb::InstanceBuilder();
-    auto& b = builder.set_app_name("quake-like")
+    auto& b = builder.set_app_name("Vibe")
                   .request_validation_layers(vk_validation_enabled())
                   .require_api_version(1, 3, 0)
                   .enable_extension("VK_EXT_swapchain_colorspace")

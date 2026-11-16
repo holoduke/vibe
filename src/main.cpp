@@ -13,7 +13,7 @@ namespace {
 
 struct Args {
     qlike::RunOptions opts;
-    std::string log_path = "qlike.log";
+    std::string log_path = "vibe.log";
 };
 
 bool parse_args(int argc, char** argv, Args& out) {
@@ -51,11 +51,11 @@ bool parse_args(int argc, char** argv, Args& out) {
             const char* v = next("--deferred"); if (!v) return false;
             out.opts.deferred = std::atoi(v);
         } else if (a == "--help" || a == "-h") {
-            std::printf("usage: quake_like [options]\n"
+            std::printf("usage: vibe [options]\n"
                         "  --frames N            Run N frames then exit (-1 = forever)\n"
                         "  --screenshot PATH     Capture one frame to PATH (PPM) and exit\n"
                         "  --screenshot-after N  Wait N frames before capturing (default 5)\n"
-                        "  --log PATH            Log file path (default qlike.log)\n"
+                        "  --log PATH            Log file path (default vibe.log)\n"
                         "  --autodemo SECS       Synthesise walk+fire input for SECS, then exit\n"
                         "  --scene N             Teleport to deferred-renderer reference scene 1..7\n");
             std::exit(0);
@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
 
     qlike::log::open(args.log_path);
     qlike::crash::install();
-    qlike::log::infof("quake-like startup (argc=%d)", argc);
+    qlike::log::infof("Vibe startup (argc=%d)", argc);
 
     int rc = 0;
     try {
@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
         rc = 1;
     }
 
-    qlike::log::info("quake-like shutdown");
+    qlike::log::info("Vibe shutdown");
     qlike::log::close();
     return rc;
 }

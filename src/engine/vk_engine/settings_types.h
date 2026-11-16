@@ -1,7 +1,7 @@
 #pragma once
 
 // Graphics (RtSettings) and gameplay (GameSettings) tuning structs: plain
-// data persisted to qlike_settings.cfg by settings.cpp and driven by the
+// data persisted to vibe_settings.cfg by settings.cpp and driven by the
 // ImGui menu in vk_ui.cpp. Extracted from the VulkanEngine god-header so a
 // settings tweak no longer recompiles the whole engine include surface.
 

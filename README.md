@@ -4,7 +4,7 @@
 raymarched open world, a castle, dynamic weather and a day/night cycle — written entirely by AI
 through conversation ("vibe coding"). No human has read or written the code.**
 
-*Formerly "Vulcan3D Vibecoded" / "quake-like".*
+*Formerly "Vulcan3D Vibecoded".*
 
 ![Vulkan 1.3](https://img.shields.io/badge/Vulkan-1.3-red) ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey) ![Ray tracing](https://img.shields.io/badge/ray%20tracing-KHR%20ray%20query-green) ![Vibe coded](https://img.shields.io/badge/vibe%20coded-100%25-purple)
 
@@ -87,7 +87,7 @@ Windows, Visual Studio 2022, Vulkan SDK 1.3 and a GPU with ray-query support
 
 ```powershell
 ./build.ps1 -Config Release
-./build/quake_like.exe        # run from the repository root
+./build/vibe.exe        # run from the repository root
 ```
 
 Dependencies (GLFW, glm, Dear ImGui, VMA, vk-bootstrap, Jolt Physics, tinygltf, miniaudio, …)
@@ -106,7 +106,7 @@ are fetched by CMake. FidelityFX and the NVIDIA Streamline SDK are vendored unde
 | F12 | Photo: saves a clean PNG (no HUD) to `screenshots/` |
 | Esc | Pause menu with every graphics, weather and gameplay setting |
 
-Settings are saved to `qlike_settings.cfg`. Time of day, clock speed and weather live in the
+Settings are saved to `vibe_settings.cfg`. Time of day, clock speed and weather live in the
 pause menu under **Graphics Settings → Time of day & weather**.
 
 ## FAQ

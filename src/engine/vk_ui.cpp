@@ -40,12 +40,12 @@ void VulkanEngine::init_imgui() {
     // landing on the Quit button and exiting the game. Mouse-only
     // for the menu is fine here; no controller use.
     io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
-    // Pin imgui.ini next to qlike_settings.cfg so menu collapse /
+    // Pin imgui.ini next to vibe_settings.cfg so menu collapse /
     // expand / position state persists across restarts regardless
     // of the launch cwd. Default behaviour writes "imgui.ini" in
     // cwd, which means launching from build/ vs the repo root used
     // two different files and the saved state didn't follow you.
-    io.IniFilename = "qlike_imgui.ini";
+    io.IniFilename = "vibe_imgui.ini";
     ImGui::StyleColorsDark();
 
     // ===== Synthwave style ============================================
@@ -438,7 +438,7 @@ void VulkanEngine::build_menu_ui() {
     if (state_ != State::Paused) return;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     // Cond_FirstUseEver: centred on first launch, then ImGui restores
-    // whatever position / size the user left in qlike_imgui.ini.
+    // whatever position / size the user left in vibe_imgui.ini.
     float max_h = vp->WorkSize.y * 0.90f;
     ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_FirstUseEver,
                              ImVec2(0.5f, 0.5f));
@@ -447,7 +447,7 @@ void VulkanEngine::build_menu_ui() {
     // menu and have ImGui persist position + open/closed state of
     // every CollapsingHeader inside it across restarts. The title
     // bar is the drag handle; "Pause Menu" is the persistent ID
-    // that ImGui keys saved state against in qlike_imgui.ini.
+    // that ImGui keys saved state against in vibe_imgui.ini.
     ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_AlwaysVerticalScrollbar;
@@ -1012,7 +1012,7 @@ void VulkanEngine::build_menu_ui() {
         if (fsr3_fatal_) {
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                 "FSR3 unavailable on this device (CreateContext AVed in SDK DLL "
-                "— see qlike.log). Backend auto-reverted to FSR2.");
+                "— see vibe.log). Backend auto-reverted to FSR2.");
         }
         // FSR3 Frame Generation. Only meaningful when FSR3 backend is
         // active. Session 3 dispatches FG to a private image that
@@ -1024,7 +1024,7 @@ void VulkanEngine::build_menu_ui() {
                             &rt_.fg_enabled);
             if (fsr3_fg_fatal_) {
                 ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                    "FG unavailable (init failed) — see qlike.log");
+                    "FG unavailable (init failed) — see vibe.log");
             } else if (rt_.fg_enabled && fg_runtime_disabled_) {
                 ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
                     "FG auto-disabled (render < 50 fps base — interpolation "

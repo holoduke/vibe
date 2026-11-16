@@ -1456,7 +1456,7 @@ void VulkanEngine::init_pipeline_cache() {
     // Load any existing cache blob from disk so subsequent runs reuse the
     // GPU's pre-compiled pipelines. First run on a clean machine is a few
     // hundred ms slower; every run after is near-instant.
-    constexpr const char* kCachePath = "qlike_pipeline.cache";
+    constexpr const char* kCachePath = "vibe_pipeline.cache";
     std::vector<char> initial;
     if (std::ifstream f(kCachePath, std::ios::binary | std::ios::ate); f) {
         std::streamsize sz = f.tellg();
@@ -1482,7 +1482,7 @@ void VulkanEngine::init_pipeline_cache() {
 
 void VulkanEngine::destroy_pipeline_cache() {
     if (!pipeline_cache_) return;
-    constexpr const char* kCachePath = "qlike_pipeline.cache";
+    constexpr const char* kCachePath = "vibe_pipeline.cache";
     size_t sz = 0;
     vkGetPipelineCacheData(device_, pipeline_cache_, &sz, nullptr);
     if (sz > 0) {
