@@ -1942,6 +1942,7 @@ void main() {
     // specular on rock/snow.
     float terrain_micro_h = 0.6;
     float terrain_pom_vis = 1.0;   // relief self-shadow (sun visibility)
+    float terrain_grass_occ = 1.0; // soil under grass / flowers is dark (plants looked as if they floated on bright ground)
     float terrain_spec_w  = 0.0;
     if (is_terrain) {
         // ---- Terrain layer blend (height + slope) ----
@@ -2331,6 +2332,7 @@ void main() {
         bool  pom_grass = grass_w_band >= rockiness;
         int   pom_kind  = road_w > 0.5 ? 2 : (pom_grass ? 0 : 1);
         float pom_k     = pom_grass ? _grass_present : pdw;
+        terrain_grass_occ = mix(1.0, 0.42, _grass_present * (1.0 - smoothstep(40.0, 90.0, cam_dist)));
         float pom_far   = max(70.0, scene.terrain_disp_params.z);
         float pom_fade  = 1.0 - smoothstep(0.5 * pom_far, pom_far, cam_dist);
         float pom_w     = pom_str * pom_fade *
@@ -2914,6 +2916,8 @@ void main() {
                                 gl_RayQueryCommittedIntersectionTriangleEXT)
                                 nearest = min(nearest, rayQueryGetIntersectionTEXT(aq, true));
                         }
+                        if (axis != 1)
+                            nearest = min(nearest, max(ao_o.y - textureLod(u_heightmap_full, ao_o.xz / 2048.0 + 0.5, 0.0).r, 0.0));
                         float a01 = clamp(nearest / reach, 0.0, 1.0);
                         br_ao = mix(1.0, mix(0.62, 1.0, sqrt(a01)),
                                     1.0 - smoothstep(20.0, 30.0, br_dist));
@@ -3432,6 +3436,28 @@ void main() {
             vec3 Bm = dp2p * du1.y + dp1p * du2.y;
             float im = inversesqrt(max(max(dot(Tm, Tm), dot(Bm, Bm)), 1e-20));
             // Parallax occlusion on UV-mapped meshes (castle towers / keep).
+            // How far below this point is the ground (paving or terrain)?
+            // The stone relief is flattened out toward it: relief only cuts
+            // INTO the wall, so at full depth the stones appear to stand a
+            // hand's width inside the tower's footprint, and the tower looked
+            // as if it hovered over a gap. Pinned at the ground line it sits.
+            float m_ground = 1e9, m_gfade = 0.0;
+            {
+                float md = distance(vWorldPos, scene.camera_pos.xyz);
+                if (height_idx_for_albedo(albedo_idx_raw) >= 0 && md < 40.0 && abs(N.y) < 0.6) {
+                    m_gfade = 1.0 - smoothstep(28.0, 40.0, md);
+                    vec3 gp = vWorldPos + N * 0.12;
+                    m_ground = gp.y - textureLod(u_heightmap_full, gp.xz / 2048.0 + 0.5, 0.0).r;
+                    rayQueryEXT fq;
+                    rayQueryInitializeEXT(fq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
+                                          gp, 0.0, vec3(0.0, -1.0, 0.0), 0.6);
+                    while (rayQueryProceedEXT(fq)) {}
+                    if (rayQueryGetIntersectionTypeEXT(fq, true) ==
+                        gl_RayQueryCommittedIntersectionTriangleEXT)
+                        m_ground = min(m_ground, rayQueryGetIntersectionTEXT(fq, true));
+                    m_ground = max(m_ground, 0.0);
+                }
+            }
             float m_dm = 0.0;            // depth of the relief at the hit (metres)
             float m_hs = 0.0;            // relief depth in uv units
             float m_vz = 1.0;
@@ -3455,6 +3481,7 @@ void main() {
                         // out of the stone again (R * (1 - sqrt(1 - c^2))).
                         // Marching deeper than that dragged the texture into
                         // long streaks where the tower curves away.
+                        hs *= mix(1.0, smoothstep(0.0, 0.45, m_ground), m_gfade);
                         if (mesh_curv > 0.02) {
                             float can = (1.0 - sqrt(max(1.0 - Vt.z * Vt.z, 0.0))) / mesh_curv;
                             hs *= clamp(can * uvpm / max(hs, 1e-6), 0.12, 1.0);
@@ -3502,53 +3529,8 @@ void main() {
                     N = normalize(N - (normalize(Tm) * slope.x + normalize(Bm) * slope.y) * 0.7);
                 }
             }
-            // Where a tower stands on paving: a soft shadow in the angle, and
-            // the paving shows in the recesses between the lowest stones (the
-            // same join the straight walls have) - instead of a clean arc
-            // that makes the tower look as if it floats on the floor.
-            {
-                float md = distance(vWorldPos, scene.camera_pos.xyz);
-                if (height_idx_for_albedo(albedo_idx_raw) >= 0 && md < 30.0 && abs(m_Ng.y) < 0.6) {
-                    const float reach = 0.45;
-                    rayQueryEXT fq;
-                    rayQueryInitializeEXT(fq, topLevelAS, gl_RayFlagsOpaqueEXT, 0x80u,
-                                          vWorldPos + m_Ng * 0.12, 0.0, vec3(0.0, -1.0, 0.0), reach);
-                    while (rayQueryProceedEXT(fq)) {}
-                    if (rayQueryGetIntersectionTypeEXT(fq, true) ==
-                        gl_RayQueryCommittedIntersectionTriangleEXT) {
-                        float tf  = rayQueryGetIntersectionTEXT(fq, true);
-                        float fad = 1.0 - smoothstep(20.0, 30.0, md);
-                        float ao  = mix(1.0, mix(0.55, 1.0, sqrt(clamp(tf / reach, 0.0, 1.0))), fad);
-                        vec3  rdm = normalize(vWorldPos - scene.camera_pos.xyz);
-                        int   prim = rayQueryGetIntersectionPrimitiveIndexEXT(fq, true);
-                        bool  on_floor =
-                            rayQueryGetIntersectionInstanceCustomIndexEXT(fq, true) == kStaticBlasSentinel &&
-                            (prim % kCubeTrisPerBox) / 2 == 2;                    // a block's top face
-                        float drop = m_dm * max(-rdm.y, 0.0) / max(m_vz, 0.15);
-                        Material fm = materials[prim / kCubeTrisPerBox];
-                        if (on_floor && drop > tf && int(fm.tex.x) >= 0 && fad > 0.5) {
-                            int   fi  = clamp(int(fm.tex.x), 0, kTextureCount - 1);
-                            int   fh  = height_idx_for_albedo(fi);
-                            vec3  fp  = vWorldPos + rdm * (tf / max(-rdm.y, 1e-3));
-                            vec2  fuv = br_face_uv(3, fp, max(fm.tex.z, 0.001),
-                                                   (fh == 0 || fh == 2) ? vec2(0.5, 1.0) : vec2(1.0));
-                            // (explicit gradients: fuv jumps where the paving starts)
-                            vec2 fgx = dFdx(vWorldPos.xz) * max(fm.tex.z, 0.001), fgy = dFdy(vWorldPos.xz) * max(fm.tex.z, 0.001);
-                            albedo = textureGrad(u_albedo[fi], fuv, fgx, fgy).rgb * fm.color.rgb;
-                            // The stones stand ON this strip of paving: it is
-                            // darkest right under them (contact shadow) and
-                            // eases out to what the open paving gets beside a
-                            // wall. Without it the stones looked pasted on,
-                            // hovering over a lit floor.
-                            ao = mix(1.0, mix(0.34, 0.72, smoothstep(0.0, 0.10, drop - tf)), fad);
-                            vec3 fn = textureGrad(u_normal[fi], fuv, fgx, fgy).rgb * 2.0 - 1.0;
-                            N = normalize(vec3(1.0, 0.0, 0.0) * fn.x + vec3(0.0, 0.0, 1.0) * fn.y +
-                                          vec3(0.0, 1.0, 0.0) * fn.z);
-                        }
-                        albedo *= ao;
-                    }
-                }
-            }
+            // Soft shadow toward the ground the tower stands on.
+            albedo *= mix(1.0, mix(0.60, 1.0, sqrt(clamp(m_ground / 0.5, 0.0, 1.0))), m_gfade);
         } else if (use_albedo && int(vTexParams.y - 0.5) == -8) {
             // Skinned character: its own UVs into its texture atlas.
             albedo = texture(u_albedo[clamp(albedo_idx_raw, 0, kTextureCount - 1)], vUv).rgb * vColor;
@@ -3788,7 +3770,7 @@ void main() {
 #endif
         int fast_mat = is_terrain_pre ? 3 : 1;
         outColor    = vec4(albedo, 1.0);
-        outGBuffer0 = vec4(clamp(albedo, vec3(0.0), vec3(1.0)),
+        outGBuffer0 = vec4(clamp(albedo * terrain_grass_occ, vec3(0.0), vec3(1.0)),
                            float(fast_mat) / 255.0);
         vec2 rmf = surface_rough_metal(albedo_idx_raw, is_foliage_px, is_mesh_draw);
         outGBuffer1 = vec4(octa_encode(N), is_terrain_pre ? terrain_pom_vis : rmf.x, gbuf_flags(is_foliage_px, rmf.y));
@@ -4941,7 +4923,7 @@ void main() {
     // vColor.a or a 3rd gbuffer slot.
     int mat_id = is_terrain_pre ? 3 : 1;
     if (vEmissive.a > 0.5) mat_id = 5;     // emissive — handled above too
-    outGBuffer0 = vec4(clamp(albedo, vec3(0.0), vec3(1.0)),
+    outGBuffer0 = vec4(clamp(albedo * terrain_grass_occ, vec3(0.0), vec3(1.0)),
                        float(mat_id) / 255.0);
     vec2 rmf = surface_rough_metal(albedo_idx_raw, is_foliage_px, is_mesh_draw);
     outGBuffer1 = vec4(octa_encode(N), is_terrain_pre ? terrain_pom_vis : rmf.x, gbuf_flags(is_foliage_px, rmf.y));
