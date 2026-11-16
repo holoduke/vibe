@@ -3616,11 +3616,40 @@ void main() {
         // Leaf-scale facets (GPU vegetation, near): every ~8 cm cell is one
         // "leaf" with its own tilt and tone, so a canopy catches the sun
         // as a mass of leaves rather than as one smooth surface.
+        // Depth inside the crown. A real canopy is a mass of leaf clumps
+        // with dark gaps between and under them; lit evenly it reads as one
+        // green blob. Three scales of 3-D structure in the tree's own space
+        // (so it does not swim as the tree sways): boughs (~1.6 m), leaf
+        // clumps (~0.5 m), sprays (~0.17 m) - the gaps go dark and cooler,
+        // undersides and the side away from the sun darker still.
+        float crown = 1.0;
+        vec3  crown_tint = vec3(1.0);
+        if (pc.grass_params.x > 0.5 && !g_veg_solid) {
+            float cd = distance(vWorldPos, scene.camera_pos.xyz);
+            float n1 = br_noise(vObjectPos * 0.62 + 11.0);
+            float n2 = br_noise(vObjectPos * 2.0 + 3.0);
+            float n3 = cd < 90.0 ? br_noise(vObjectPos * 5.9) : 0.5;
+            float gaps = smoothstep(0.30, 0.62, n1 * 0.50 + n2 * 0.35 + n3 * 0.15);
+            float under = clamp(N.y * 0.5 + 0.55, 0.0, 1.0);
+            float sunny = clamp(dot(N, normalize(scene.sun_direction.xyz)) * 0.5 + 0.6, 0.0, 1.0);
+            crown = mix(0.36, 1.16, gaps) * mix(0.68, 1.0, under) * mix(0.82, 1.0, sunny);
+            // Shaded foliage is bluer and less saturated; sunlit tips yellower.
+            crown_tint = mix(vec3(0.72, 0.88, 1.05), vec3(1.06, 1.02, 0.86), gaps * sunny);
+        }
         if (g_card_tex.a >= 0.0) {
             // Leaf card: photographed leaves, tinted per leaf / per tree (vColor).
-            albedo = g_card_tex.rgb * vColor;
+            // (Keeps the large-scale hue drift between trees; the old code
+            // dropped every variation here, so all cards of a crown had one
+            // flat colour.)
+            albedo = g_card_tex.rgb * vColor * mix(vec3(0.85, 1.05, 0.80), vec3(1.15, 0.95, 1.10), big);
+            // The darker parts of the leaf photo are the gaps between leaves:
+            // push them down so single leaves stand out.
+            float cl = dot(g_card_tex.rgb, vec3(0.3, 0.6, 0.1));
+            albedo *= mix(0.55, 1.15, smoothstep(0.10, 0.45, cl));
+            albedo *= crown * crown_tint;
         } else if (pc.grass_params.x > 0.5) {
-            float lk = 1.0 - smoothstep(25.0, 55.0, distance(vWorldPos, scene.camera_pos.xyz));
+            albedo *= crown * crown_tint;
+            float lk = 1.0 - smoothstep(70.0, 150.0, distance(vWorldPos, scene.camera_pos.xyz));
             if (lk > 0.01) {
                 vec3 lh;
                 float ld = veg_leaf_cell(vObjectPos, lh);
