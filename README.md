@@ -1,8 +1,10 @@
-# Vulcan3D Vibecoded — a 100 % AI-written Vulkan ray-tracing game engine
+# Vibe — a 100 % AI-written (vibe coded) Vulkan ray-tracing game and engine
 
-**A real-time C++ / Vulkan 1.3 first-person game engine with hardware ray tracing, a raymarched
-open world, dynamic weather and a day/night cycle — written entirely by AI through conversation.
-No human has read or written the code.**
+**Vibe is a real-time C++ / Vulkan 1.3 first-person game and engine with hardware ray tracing, a
+raymarched open world, a castle, dynamic weather and a day/night cycle — written entirely by AI
+through conversation ("vibe coding"). No human has read or written the code.**
+
+*Formerly "Vulcan3D Vibecoded" / "quake-like".*
 
 ![Vulkan 1.3](https://img.shields.io/badge/Vulkan-1.3-red) ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey) ![Ray tracing](https://img.shields.io/badge/ray%20tracing-KHR%20ray%20query-green) ![Vibe coded](https://img.shields.io/badge/vibe%20coded-100%25-purple)
 
@@ -56,6 +58,10 @@ source: this is one data point, with the full commit history as the log.
   with roads, bomb craters that turn to mud, and close-range ground relief.
 - **Raymarched SDF grass** plus GPU-driven vegetation: compute-shader culling, hi-Z occlusion,
   LOD buckets, procedural trees, 15 species of ground plants.
+- **Displaced stone walls**: relief-marched castle masonry with real stone-by-stone silhouettes,
+  worn corners, self-shadowing and contact shadows where walls meet the ground.
+- **Procedural pebbles**: formula-generated stones, gravel and grit that stay sharp at any
+  distance, a packed pebble lake bed and lace-like shore foam.
 - **Physical sky** (Hillaire atmosphere LUTs), **volumetric clouds**, **froxel volumetric fog**
   with ray-traced light shafts, aerial perspective, auto exposure, bloom, lens flare,
   ACES / AgX / PBR-Neutral tonemapping and HDR10 output.
@@ -68,6 +74,8 @@ source: this is one data point, with the full commit history as the log.
   and thunder. How often the weather turns bad is a setting.
 - **Water**: reflective lake with splashes and expanding ripples when shot, swimming and diving,
   and an underwater view with light absorption, caustics, light shafts and Snell's window.
+- **In-game world editor**: press E, pick trees, bushes or grass from a bar and paint them
+  onto the landscape.
 - **Combat sandbox**: laser rifle, an airstrike tablet that calls in a bomber, anti-aircraft
   vehicles, jets that can be shot down, volumetric explosions, an optional destructible voxel tower,
   cloth flags, [Jolt Physics](https://github.com/jrouwe/JoltPhysics) rigid bodies.
@@ -94,10 +102,29 @@ are fetched by CMake. FidelityFX and the NVIDIA Streamline SDK are vendored unde
 | Left mouse | Fire, or mark the airstrike target |
 | 1 / 2 | Laser rifle / airstrike tablet |
 | V | Free-fly camera |
+| E | World editor: 1-5 pick what to plant, left mouse paints, right mouse removes |
+| F12 | Photo: saves a clean PNG (no HUD) to `screenshots/` |
 | Esc | Pause menu with every graphics, weather and gameplay setting |
 
 Settings are saved to `qlike_settings.cfg`. Time of day, clock speed and weather live in the
 pause menu under **Graphics Settings → Time of day & weather**.
+
+## FAQ
+
+**Can an AI write a complete 3D game engine?** This repository is the experiment. Every line of
+C++ and GLSL here was written by an AI agent; the human only plays the build and says what to
+change. The commit history is the full record.
+
+**What is vibe coding?** Building software by describing what you want in plain language and
+judging only the result, without reading the code.
+
+**Which AI wrote it?** [Claude Code](https://claude.com/claude-code), Anthropic's coding agent.
+
+**What hardware does it need?** Windows and a GPU with Vulkan ray-query support (NVIDIA RTX
+20-series or newer, AMD RX 6000-series or newer, Intel Arc).
+
+**Is it a game or an engine?** Both: a small open-world shooter sandbox (castle, lake, forest,
+jets, airstrikes) on top of a custom Vulkan engine.
 
 ## How it is developed
 
@@ -142,4 +169,5 @@ Vulkan game engine, C++ Vulkan renderer, real-time ray tracing, ray query, defer
 DLSS 3 frame generation, DLSS ray reconstruction, FSR 3, raymarched terrain, SDF grass,
 volumetric clouds, volumetric fog, physical sky, day night cycle, dynamic weather system, rain,
 water rendering, underwater shader, GPU-driven rendering, vibe coding, AI-generated code,
-AI-written game engine, Claude Code, LLM coding experiment.
+AI-written game engine, AI-made game, vibe coded game, Claude Code, LLM coding experiment,
+parallax occlusion mapping, relief mapping, procedural pebbles, open-world castle, in-game editor.

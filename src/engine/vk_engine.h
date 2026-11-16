@@ -2732,6 +2732,7 @@ private:
     bool screenshot_taken_ = false;
     // F12 in-game capture: input handler stores a generated path here,
     // the next render frame writes a PPM to it and clears.
+    bool hide_ui_this_frame_ = false;
     std::string pending_screenshot_path_;
     int  ingame_screenshot_counter_ = 0;
 };

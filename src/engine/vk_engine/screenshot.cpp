@@ -12,6 +12,12 @@
 #include <fstream>
 #include <vector>
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_STATIC
+#pragma warning(push, 0)
+#include "../../../external/FidelityFX-SDK/framework/cauldron/framework/libs/stb/stb_image_write.h"
+#pragma warning(pop)
+
 namespace qlike {
 
 void VulkanEngine::capture_screenshot(VkCommandBuffer cmd, VkImage src,
@@ -61,12 +67,18 @@ void VulkanEngine::write_ppm(const std::string& path, uint32_t w, uint32_t h) {
         return;
     }
 
-    std::ofstream out(path, std::ios::binary);
-    if (!out) {
-        log::errorf("failed to open screenshot path: %s", path.c_str());
-        return;
+    const bool png = path.size() > 4 && path.compare(path.size() - 4, 4, ".png") == 0;
+    std::vector<uint8_t> all;
+    if (png) all.resize(size_t(w) * h * 3);
+    std::ofstream out;
+    if (!png) {
+        out.open(path, std::ios::binary);
+        if (!out) {
+            log::errorf("failed to open screenshot path: %s", path.c_str());
+            return;
+        }
+        out << "P6\n" << w << " " << h << "\n255\n";
     }
-    out << "P6\n" << w << " " << h << "\n255\n";
 
     const uint8_t* src = static_cast<const uint8_t*>(mapped);
     const float paper = std::max(80.0f, rt_.hdr_paper_nits);
@@ -100,9 +112,12 @@ void VulkanEngine::write_ppm(const std::string& path, uint32_t w, uint32_t h) {
             row[x * 3 + 1] = px[1];
             row[x * 3 + 2] = px[0];
         }
-        out.write(reinterpret_cast<const char*>(row.data()),
-                  static_cast<std::streamsize>(row.size()));
+        if (png) std::memcpy(all.data() + size_t(y) * w * 3, row.data(), row.size());
+        else out.write(reinterpret_cast<const char*>(row.data()),
+                       static_cast<std::streamsize>(row.size()));
     }
+    if (png && !stbi_write_png(path.c_str(), int(w), int(h), 3, all.data(), int(w) * 3))
+        log::errorf("failed to write screenshot: %s", path.c_str());
     log::infof("screenshot written: %s (%ux%u)  brushes=%zu  dyn=%zu  proj=%zu  spark=%zu",
                path.c_str(), w, h,
                world_.brushes.size(), dyn_props_.size(),

@@ -121,10 +121,12 @@ void VulkanEngine::draw(uint32_t img_index) {
 
     // Two screenshot triggers: the --screenshot CLI one-shot AND F12 in-game.
     std::string screenshot_path_this_frame;
+    hide_ui_this_frame_ = false;
     bool screenshot_is_oneshot = false;
     if (!pending_screenshot_path_.empty()) {
         screenshot_path_this_frame = pending_screenshot_path_;
         pending_screenshot_path_.clear();
+        hide_ui_this_frame_ = true;      // F12 photo: no HUD / crosshair / debug boxes
     } else if (!opts_.screenshot_path.empty() && !screenshot_taken_ &&
                static_cast<int>(frame_number_) >= opts_.screenshot_after_frames) {
         if (opts_.screenshot_burst <= 1) {
@@ -1266,7 +1268,7 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
                 }
             }
         }
-        if (dd) ImGui_ImplVulkan_RenderDrawData(dd, frame.command_buffer);
+        if (dd && !hide_ui_this_frame_) ImGui_ImplVulkan_RenderDrawData(dd, frame.command_buffer);
         vkCmdEndRendering(frame.command_buffer);
     }
 

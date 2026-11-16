@@ -24,6 +24,9 @@
 //   engine/mesh.cpp        — cube/cylinder/glTF mesh data → vertex/index VkBuffer
 //
 #include "engine/vk_engine.h"
+#include <ctime>
+#include <filesystem>
+#include <system_error>
 #include "engine/vk_engine/internal.h"
 #include "engine/frame_pacer.h"
 // Pulled in here (not in vk_engine.h) so the unique_ptr<voxel::VoxelWorld>
@@ -98,7 +101,7 @@ void VulkanEngine::init() {
         if (std::sscanf(ts, "%ux%u", &tw, &th) == 2 && tw >= 320 && th >= 200) { win_w = tw; win_h = th; }
     }
     window_ = std::make_unique<Window>(WindowConfig{ .width = win_w, .height = win_h,
-                                                     .title = "quake-like" });
+                                                     .title = "Vibe" });
     // Audio engine starts before Vulkan so a missing audio device just
     // means silence; the renderer keeps working. Clip files are loaded
     // by name from assets/sounds/; missing files are ignored.
@@ -298,7 +301,7 @@ void VulkanEngine::init() {
     // screenshot-after counters in run() count from the first real
     // gameplay frame, not from "real frames + N loader frames".
     frame_number_ = 0;
-    if (window_) glfwSetWindowTitle(window_->handle(), "quake-like");
+    if (window_) glfwSetWindowTitle(window_->handle(), "Vibe");
     initialized_ = true;
     log::info("VulkanEngine::init() done");
 }
@@ -486,9 +489,16 @@ void VulkanEngine::run(const RunOptions& opts) {
         // F12 in-game capture: queue a numbered PPM in the working dir.
         // The render frame below picks it up and writes to disk.
         if (in.screenshot && pending_screenshot_path_.empty()) {
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "screenshot_%04d.ppm",
-                          ingame_screenshot_counter_++);
+            // PNG in screenshots/, named by date and time (never overwrites).
+            char buf[96];
+            std::error_code ec;
+            std::filesystem::create_directories("screenshots", ec);
+            const std::time_t tt = std::time(nullptr);
+            std::tm tmv{};
+            localtime_s(&tmv, &tt);
+            std::snprintf(buf, sizeof(buf), "screenshots/vibe_%04d-%02d-%02d_%02d-%02d-%02d_%02d.png",
+                          tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec,
+                          ingame_screenshot_counter_++ % 100);
             pending_screenshot_path_ = buf;
             log::infof("[screenshot] F12 queued %s", buf);
         }
