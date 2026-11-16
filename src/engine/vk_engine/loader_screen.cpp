@@ -339,6 +339,26 @@ void VulkanEngine::present_loader_frame(const char* label, float progress) {
             case 'D': return G(0x7F,0x41,0x41,0x41,0x3E);
             case 'N': return G(0x7F,0x02,0x0C,0x30,0x7F);
             case 'G': return G(0x3E,0x41,0x49,0x49,0x7A);
+            case 'B': return G(0x7F,0x49,0x49,0x49,0x36);
+            case 'C': return G(0x3E,0x41,0x41,0x41,0x22);
+            case 'F': return G(0x7F,0x09,0x09,0x09,0x01);
+            case 'H': return G(0x7F,0x08,0x08,0x08,0x7F);
+            case 'J': return G(0x20,0x40,0x41,0x3F,0x01);
+            case 'M': return G(0x7F,0x02,0x0C,0x02,0x7F);
+            case 'P': return G(0x7F,0x09,0x09,0x09,0x06);
+            case 'R': return G(0x7F,0x09,0x19,0x29,0x46);
+            case 'S': return G(0x46,0x49,0x49,0x49,0x31);
+            case 'T': return G(0x01,0x01,0x7F,0x01,0x01);
+            case 'V': return G(0x1F,0x20,0x40,0x20,0x1F);
+            case 'W': return G(0x3F,0x40,0x38,0x40,0x3F);
+            case 'X': return G(0x63,0x14,0x08,0x14,0x63);
+            case 'Y': return G(0x07,0x08,0x70,0x08,0x07);
+            case 'Z': return G(0x61,0x51,0x49,0x45,0x43);
+            case '.': return G(0x00,0x60,0x60,0x00,0x00);
+            case '-': return G(0x08,0x08,0x08,0x08,0x08);
+            case '/': return G(0x20,0x10,0x08,0x04,0x02);
+            case ':': return G(0x00,0x36,0x36,0x00,0x00);
+            case '+': return G(0x08,0x08,0x3E,0x08,0x08);
             case ' ': default: return G(0,0,0,0,0);
         }
     };
@@ -358,69 +378,55 @@ void VulkanEngine::present_loader_frame(const char* label, float progress) {
         }
     };
 
-    // ---- "QUAKE LIKE" title centred near the top third ----
-    {
-        const char* title = "QUAKE LIKE";
-        int px = std::max(3, W / 280);
+    // ---- Title: the key art carries the logo; without it, big letters ----
+    if (!used_bg) {
+        const char* title = "VIBE";
+        int px = std::max(6, W / 90);
         int title_w = static_cast<int>(strlen(title)) * 6 * px - px;
-        int tx = (W - title_w) / 2;
-        int ty = H / 3;
-        // Drop shadow for legibility
-        draw_text(tx + px, ty + px, px, title, 0.0f, 0.0f, 0.0f);
-        draw_text(tx,      ty,      px, title, 0.92f, 0.94f, 0.98f);
-        // Accent rule below title
-        int rule_w = title_w + px * 8;
-        int rule_x = (W - rule_w) / 2;
-        clear_rect(rule_x, ty + 7 * px + px * 3, rule_w, std::max(1, px / 2),
-                   0.32f, 0.55f, 0.92f);
+        int tx = (W - title_w) / 2, ty = H / 3;
+        draw_text(tx + px / 2, ty + px / 2, px, title, 0.0f, 0.0f, 0.0f);
+        draw_text(tx, ty, px, title, 0.96f, 0.96f, 0.98f);
+        clear_rect(tx, ty + 9 * px, title_w, std::max(2, px / 3), 1.0f, 0.55f, 0.15f);
     }
 
-    // ---- Progress bar — bigger, framed, with bright leading edge ----
-    int bar_w = std::min(720, W - 120);
-    int bar_h = std::max(18, H / 60);
-    int bar_x = (W - bar_w) / 2;
-    int bar_y = H * 5 / 8;
-    int frame_t = std::max(2, bar_h / 8);
-    // Outer frame (subtle blue)
-    clear_rect(bar_x - frame_t, bar_y - frame_t,
-               bar_w + 2 * frame_t, bar_h + 2 * frame_t,
-               0.18f, 0.26f, 0.38f);
-    // Track (deep)
-    clear_rect(bar_x, bar_y, bar_w, bar_h, 0.04f, 0.06f, 0.10f);
+    // ---- Bottom strip: what is loading (left), percentage (right), a
+    //      slim bar across the screen ----
     float p = progress;
     if (p < 0.0f) p = 0.0f;
     if (p > 1.0f) p = 1.0f;
-    int fill_w = static_cast<int>(static_cast<float>(bar_w) * p + 0.5f);
-    // Fill — bright brand blue
-    clear_rect(bar_x, bar_y, fill_w, bar_h, 0.32f, 0.58f, 0.95f);
-    // Leading edge — brighter highlight column for "active" feel
-    int edge_w = std::max(2, bar_h / 4);
-    if (fill_w >= edge_w) {
-        clear_rect(bar_x + fill_w - edge_w, bar_y, edge_w, bar_h,
-                   0.85f, 0.92f, 1.00f);
-    }
-
-    // ---- Percentage display centred below the bar ("XX%") ----
+    const int margin = std::max(40, W / 18);
+    const int bar_w = W - 2 * margin;
+    const int bar_h = std::max(4, H / 180);
+    const int bar_y = H - std::max(48, H / 11);
+    const int px = std::max(2, W / 640);
     {
-        int pct = static_cast<int>(p * 100.0f + 0.5f);
-        char buf[6];
-        std::snprintf(buf, sizeof(buf), "%d%%", pct);
-        int px = std::max(2, W / 360);
-        int txt_w = static_cast<int>(strlen(buf)) * 6 * px - px;
-        int tx = (W - txt_w) / 2;
-        int ty = bar_y + bar_h + std::max(16, bar_h);
-        draw_text(tx + 1, ty + 1, px, buf, 0.0f, 0.0f, 0.0f);
-        draw_text(tx,     ty,     px, buf, 0.82f, 0.92f, 1.00f);
+        // Stage name, in capitals.
+        char lbl[48];
+        size_t n = 0;
+        for (const char* c = (label ? label : "Loading"); *c && n + 1 < sizeof(lbl); ++c) {
+            unsigned char ch = static_cast<unsigned char>(*c);
+            if (ch >= 'a' && ch <= 'z') ch = static_cast<unsigned char>(ch - 32);
+            if (ch < 128) lbl[n++] = static_cast<char>(ch);
+        }
+        lbl[n] = 0;
+        const int ty = bar_y - 7 * px - std::max(10, 3 * px);
+        draw_text(margin + 1, ty + 1, px, lbl, 0.0f, 0.0f, 0.0f);
+        draw_text(margin,     ty,     px, lbl, 0.90f, 0.90f, 0.92f);
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(p * 100.0f + 0.5f));
+        const int tw = static_cast<int>(strlen(buf)) * 6 * px - px;
+        draw_text(margin + bar_w - tw + 1, ty + 1, px, buf, 0.0f, 0.0f, 0.0f);
+        draw_text(margin + bar_w - tw,     ty,     px, buf, 1.0f, 0.62f, 0.22f);
     }
-
-    // ---- "LOADING" label at the bottom ----
+    // Track, fill (warm accent, as the logo's glow), bright leading edge.
+    clear_rect(margin - 1, bar_y - 1, bar_w + 2, bar_h + 2, 0.0f, 0.0f, 0.0f);
+    clear_rect(margin, bar_y, bar_w, bar_h, 0.16f, 0.17f, 0.19f);
+    const int fill_w = static_cast<int>(static_cast<float>(bar_w) * p + 0.5f);
+    clear_rect(margin, bar_y, fill_w, bar_h, 1.0f, 0.55f, 0.15f);
     {
-        const char* lbl = "LOADING";
-        int px = std::max(2, W / 480);
-        int txt_w = static_cast<int>(strlen(lbl)) * 6 * px - px;
-        int tx = (W - txt_w) / 2;
-        int ty = H - H / 10;
-        draw_text(tx, ty, px, lbl, 0.42f, 0.50f, 0.62f);
+        const int edge_w = std::max(3, bar_h);
+        if (fill_w >= edge_w)
+            clear_rect(margin + fill_w - edge_w, bar_y - 1, edge_w, bar_h + 2, 1.0f, 0.90f, 0.70f);
     }
 
     vkCmdEndRendering(frame.command_buffer);

@@ -8,6 +8,8 @@ through conversation ("vibe coding"). No human has read or written the code.**
 
 ![Vulkan 1.3](https://img.shields.io/badge/Vulkan-1.3-red) ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey) ![Ray tracing](https://img.shields.io/badge/ray%20tracing-KHR%20ray%20query-green) ![Vibe coded](https://img.shields.io/badge/vibe%20coded-100%25-purple)
 
+![Vibe: key art with the logo over a castle on a misty lake](docs/screenshots/keyart.png)
+
 ![Daylight: castle, lake, forest and mountains](docs/screenshots/day.png)
 
 ## What is this?
