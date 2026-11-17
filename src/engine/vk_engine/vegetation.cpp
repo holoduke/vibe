@@ -368,6 +368,8 @@ void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, veg_cull_layout_, 1, 1, &veg_set_, 0, nullptr);
     vkCmdPushConstants(cmd, veg_cull_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (regular + 127) / 128, 1, 1);
+    veg_cull_prev_vp_ = pc.prev_vp;            // (cull_clusters runs next, with the same pyramid)
+    veg_cull_hiz_on_ = pc.params.w > 0.5f;
     veg_prev_vp_ = fv.vp;          // next frame's Hi-Z = this frame's prepass
 
     mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -709,6 +711,7 @@ void VulkanEngine::write_veg_hiz_binding() {
     w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w.pImageInfo = &di;
     vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+    write_cluster_hiz_binding();
 }
 
 void VulkanEngine::destroy_veg_hiz() {

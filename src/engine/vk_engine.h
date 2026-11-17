@@ -1774,6 +1774,9 @@ private:
     // are the last veg_cluster_count_ of the instance buffer.
     uint32_t      veg_cluster_first_ = 0, veg_cluster_count_ = 0;
     uint32_t      cl_vis_base_ = 0, cl_cmd_cap_ = 0;
+    glm::mat4     veg_cull_prev_vp_{1.0f};     // the view the Hi-Z pyramid was made for, as used by this frame's cull
+    bool          veg_cull_hiz_on_ = false;    // this frame's cull used the occlusion test
+    void          write_cluster_hiz_binding();
     Mesh          cl_mesh_{};
     VkBuffer      cl_cluster_buf_ = VK_NULL_HANDLE, cl_table_buf_ = VK_NULL_HANDLE, cl_cmd_buf_ = VK_NULL_HANDLE;
     VmaAllocation cl_cluster_alloc_ = nullptr, cl_table_alloc_ = nullptr, cl_cmd_alloc_ = nullptr;

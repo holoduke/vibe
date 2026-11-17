@@ -73,21 +73,21 @@ void VulkanEngine::init_cluster_draw() {
                             cl_cmd_alloc_, nullptr, 0);
 
     // Descriptor set: instances, visible, fade, arch info, clusters, table, commands.
-    VkDescriptorSetLayoutBinding b[7]{};
-    for (uint32_t i = 0; i < 7; ++i) {
+    VkDescriptorSetLayoutBinding b[8]{};
+    for (uint32_t i = 0; i < 8; ++i) {
         b[i].binding = i;
-        b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b[i].descriptorType = i == 7 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo lci{};
     lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    lci.bindingCount = 7; lci.pBindings = b;
+    lci.bindingCount = 8; lci.pBindings = b;
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &cl_set_layout_), "cluster set layout");
-    VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7 };
+    VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7 }, { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 } };
     VkDescriptorPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pci.maxSets = 1; pci.poolSizeCount = 1; pci.pPoolSizes = &ps;
+    pci.maxSets = 1; pci.poolSizeCount = 2; pci.pPoolSizes = ps;
     vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &cl_pool_), "cluster pool");
     VkDescriptorSetAllocateInfo dai{};
     dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -105,8 +105,9 @@ void VulkanEngine::init_cluster_draw() {
         w[i].pBufferInfo = &bi[i];
     }
     vkUpdateDescriptorSets(device_, 7, w, 0, nullptr);
+    write_cluster_hiz_binding();
 
-    VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(glm::vec4) * 9 };
+    VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(glm::vec4) * 14 };
     VkPipelineLayoutCreateInfo pli{};
     pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pli.setLayoutCount = 1; pli.pSetLayouts = &cl_set_layout_;
@@ -126,6 +127,18 @@ void VulkanEngine::init_cluster_draw() {
                veg_cluster_count_, clusters.size(), idx.size() / 3);
 }
 
+// The depth pyramid (re-made when the window size changes: vegetation.cpp calls this again).
+void VulkanEngine::write_cluster_hiz_binding() {
+    if (!cl_set_ || !veg_hiz_view_ || !veg_hiz_sampler_) return;
+    VkDescriptorImageInfo ii{ veg_hiz_sampler_, veg_hiz_view_, VK_IMAGE_LAYOUT_GENERAL };
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = cl_set_; w.dstBinding = 7; w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &ii;
+    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+}
+
 void VulkanEngine::destroy_cluster_draw() {
     if (cl_pipeline_) vkDestroyPipeline(device_, cl_pipeline_, nullptr);
     if (cl_layout_) vkDestroyPipelineLayout(device_, cl_layout_, nullptr);
@@ -138,6 +151,7 @@ void VulkanEngine::destroy_cluster_draw() {
     if (cl_mesh_.vertex_buffer) destroy_mesh(allocator_, cl_mesh_);
     cl_pipeline_ = VK_NULL_HANDLE; cl_layout_ = VK_NULL_HANDLE; cl_module_ = VK_NULL_HANDLE; cl_pool_ = VK_NULL_HANDLE;
     cl_set_layout_ = VK_NULL_HANDLE; cl_cluster_buf_ = cl_table_buf_ = cl_cmd_buf_ = VK_NULL_HANDLE;
+    cl_set_ = VK_NULL_HANDLE;
 }
 
 // Each frame, after cull_vegetation (same place in the frame).
@@ -157,14 +171,17 @@ void VulkanEngine::cull_clusters(VkCommandBuffer cmd) {
     dep.memoryBarrierCount = 1; dep.pMemoryBarriers = &mb;
     vkCmdPipelineBarrier2(cmd, &dep);
 
-    struct { glm::vec4 planes[6]; glm::vec4 cam; glm::uvec4 range; glm::vec4 params; } pc{};
+    struct { glm::vec4 planes[6]; glm::vec4 cam; glm::uvec4 range; glm::vec4 params; glm::mat4 prev_vp; glm::vec4 hiz; } pc{};
     for (int i = 0; i < 6; ++i) pc.planes[i] = fv.frustum.planes[i];
     // Detail for the OUTPUT resolution, like the vegetation.
     const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(80.0f) * 0.5f));
     pc.cam = glm::vec4(fv.eye_pos, ppr);
     pc.range = glm::uvec4(veg_cluster_first_, veg_cluster_count_, cl_vis_base_, cl_cmd_cap_);
     // One pixel of error at detail 1; the vegetation detail slider scales it.
-    pc.params = glm::vec4(1450.0f, 1.0f / std::max(0.25f, rt_.veg_lod_bias), 0.0f, 0.0f);
+    const bool occl = veg_cull_hiz_on_ && veg_hiz_view_ && !std::getenv("QLIKE_NO_CLUSTER_OCCL");
+    pc.params = glm::vec4(1450.0f, 1.0f / std::max(0.25f, rt_.veg_lod_bias), occl ? 1.0f : 0.0f, 0.0f);
+    pc.prev_vp = veg_cull_prev_vp_;
+    pc.hiz = glm::vec4(float(veg_hiz_w_), float(veg_hiz_h_), float(veg_hiz_mips_), 0.0f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cl_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cl_layout_, 0, 1, &cl_set_, 0, nullptr);
     vkCmdPushConstants(cmd, cl_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);

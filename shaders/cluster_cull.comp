@@ -9,7 +9,7 @@
 layout(local_size_x = 64) in;
 
 struct VegInstance { vec4 pos_scale; vec4 rot_arch_phase; };
-struct Cluster { vec4 self; vec4 parent; float self_error; float parent_error; uint first_index; uint index_count; };
+struct Cluster { vec4 bounds; vec4 self; vec4 parent; float self_error; float parent_error; uint first_index; uint index_count; };
 
 layout(std430, set = 0, binding = 0) readonly buffer Instances { VegInstance inst[]; };
 layout(std430, set = 0, binding = 1) writeonly buffer Visible  { uint visible[]; };
@@ -18,13 +18,36 @@ layout(std430, set = 0, binding = 3) readonly buffer ArchInfo  { vec4 arch[]; };
 layout(std430, set = 0, binding = 4) readonly buffer Clusters  { Cluster cl[]; };
 layout(std430, set = 0, binding = 5) readonly buffer Table     { uvec4 tab[]; };     // per archetype: first cluster, count, index base, vertex base
 layout(std430, set = 0, binding = 6) buffer Commands           { uint cmd[]; };      // [0] = count; commands (5 uints each) from [4]
+layout(set = 0, binding = 7) uniform sampler2D u_hiz;                                // max-depth pyramid of the previous frame (vegetation.cpp)
 
 layout(push_constant) uniform PC {
     vec4  planes[6];
     vec4  cam;        // .xyz eye, .w pixels per radian
     uvec4 range;      // .x first instance, .y instance count, .z first visible slot, .w command capacity
-    vec4  params;     // .x max distance, .y error threshold (pixels)
+    vec4  params;     // .x max distance, .y error threshold (pixels), .z occlusion test on (0/1)
+    mat4  prev_vp;    // previous frame view-proj (the pyramid's view)
+    vec4  hiz;        // .xy pyramid level-0 size, .z mip count
 } pc;
+
+// Is the sphere (world centre c, radius r, at distance d) hidden behind last frame's depth?
+bool occluded(vec3 c, float r, float d) {
+    vec4 cc = pc.prev_vp * vec4(c, 1.0);
+    if (cc.w <= r) return false;
+    vec2 uv = (cc.xyz / cc.w).xy * 0.5 + 0.5;
+    float r_uv = r / max(d, 0.1) * pc.cam.w / pc.hiz.y;
+    vec2 lo = uv - vec2(r_uv * pc.hiz.y / pc.hiz.x, r_uv);
+    vec2 hi = uv + vec2(r_uv * pc.hiz.y / pc.hiz.x, r_uv);
+    if (!(lo.x > 0.02 && lo.y > 0.02 && hi.x < 0.98 && hi.y < 0.98)) return false;
+    vec4 fc = pc.prev_vp * vec4(c + normalize(pc.cam.xyz - c) * r, 1.0);       // nearest point of the sphere
+    float zmin = fc.z / fc.w;
+    vec2 ext = (hi - lo) * pc.hiz.xy;
+    float mip = clamp(ceil(log2(max(max(ext.x, ext.y), 1.0))), 0.0, pc.hiz.z - 1.0);
+    float z = textureLod(u_hiz, vec2(lo.x, lo.y), mip).r;
+    z = max(z, textureLod(u_hiz, vec2(hi.x, lo.y), mip).r);
+    z = max(z, textureLod(u_hiz, vec2(lo.x, hi.y), mip).r);
+    z = max(z, textureLod(u_hiz, vec2(hi.x, hi.y), mip).r);
+    return zmin > z + 1e-5;
+}
 
 void main() {
     uint k = gl_GlobalInvocationID.x;
@@ -40,7 +63,11 @@ void main() {
     float r = ai.x * s * max(ysq, 1.0) + 0.6;
     for (int p = 0; p < 6; ++p)
         if (dot(pc.planes[p].xyz, c) + pc.planes[p].w < -r) return;
-    if (distance(c, pc.cam.xyz) > pc.params.x + r) return;
+    float d_inst = distance(c, pc.cam.xyz);
+    if (d_inst > pc.params.x + r) return;
+    // The whole rock behind something (a hill, the castle, other rocks)?
+    bool occl_on = pc.params.z > 0.5;
+    if (occl_on && d_inst > r + 30.0 && occluded(c, r, d_inst)) return;
 
     uint slot = pc.range.z + k;                        // veg.vert finds the instance through this slot
     visible[slot] = i;
@@ -65,6 +92,17 @@ void main() {
             e_parent = C.parent_error * smax / max(distance(wp, pc.cam.xyz) - C.parent.w * smax, 0.05) * pc.cam.w;
         }
         if (e_self <= pc.params.y && e_parent > pc.params.y) {
+            // This cluster on its own: outside the view, or behind something
+            // (also the far side of its own rock)?
+            vec3 blp = C.bounds.xyz * vec3(s, s * ysq, s);
+            vec3 bw = vec3(cs * blp.x - sn * blp.z, blp.y, sn * blp.x + cs * blp.z) + I.pos_scale.xyz;
+            float br = C.bounds.w * smax;
+            bool out_of_view = false;
+            for (int p = 0; p < 6; ++p)
+                if (dot(pc.planes[p].xyz, bw) + pc.planes[p].w < -br) { out_of_view = true; break; }
+            if (out_of_view) continue;
+            float bd = distance(bw, pc.cam.xyz);
+            if (occl_on && bd > br + 12.0 && occluded(bw, br, bd)) continue;
             uint n = atomicAdd(cmd[0], 1u);
             if (n < pc.range.w) {
                 uint o = 4u + n * 5u;

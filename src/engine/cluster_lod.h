@@ -21,8 +21,9 @@
 
 namespace qlike {
 
-// GPU layout (std430, 48 bytes) - keep in sync with cluster_cull.comp.
+// GPU layout (std430, 64 bytes) - keep in sync with cluster_cull.comp.
 struct ClusterGpu {
+    glm::vec4 bounds;      // xyz centre, w radius of this cluster's own triangles (culling)
     glm::vec4 self;        // xyz centre, w radius of the group this cluster was simplified FROM (its own error sphere)
     glm::vec4 parent;      // xyz centre, w radius of the group this cluster is IN (the coarser version above it)
     float     self_error;  // object-space error of this cluster's geometry (0 = original triangles)

@@ -21,6 +21,7 @@ ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const u
     if (!verts || !indices || index_count < 3 * 256) return out;
 
     clodConfig cfg = clodDefaultConfig(128);
+    cfg.optimize_bounds = true;        // cluster bounds from its own triangles (they are culled one by one)
     clodMesh mesh{};
     mesh.indices = indices;
     mesh.index_count = index_count;
@@ -45,6 +46,7 @@ ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const u
         for (size_t i = 0; i < cluster_count; ++i) {
             const clodCluster& c = clusters[i];
             ClusterGpu g{};
+            g.bounds = glm::vec4(c.bounds.center[0], c.bounds.center[1], c.bounds.center[2], c.bounds.radius);
             // Its own error: that of the group it was simplified from (0 for original triangles).
             if (c.refined >= 0 && size_t(c.refined) < groups.size()) {
                 const clodBounds& b = groups[size_t(c.refined)];
