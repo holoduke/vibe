@@ -788,7 +788,7 @@ void main() {
         vec3 rip_w = water_ripples(wpos.xz);
         wnor = normalize(vec3(wnor.x - rip_w.x, wnor.y, wnor.z - rip_w.y));
         // Winter: the lake freezes - no waves, a nearly flat sheet with a faint ripple in the surface.
-        float ice_k = smoothstep(0.35, 0.75, scene_snow());
+        float ice_k = smoothstep(0.35, 0.75, g_snow);
         if (ice_k > 0.001) {
             vec3 n_ice = normalize(vec3((noise2(wpos.xz * 1.7) - 0.5) * 0.05, 1.0, (noise2(wpos.xz * 1.7 + 31.0) - 0.5) * 0.05));
             wnor = normalize(mix(wnor, n_ice, ice_k));
@@ -1683,7 +1683,9 @@ void main() {
         }
         t_s = max(t_s, 0.05);
         // (not where snow lies on the paving: that surface is the marched one)
-        float road_snow = scene_snow() < 0.01 ? 0.0 : snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, scene_snow());
+        // (a real branch: `a ? b : c` may evaluate both sides, and the winter side is not free)
+        float road_snow = 0.0;
+        if (g_snow >= 0.01) road_snow = snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, g_snow);
         t = mix(t, t_s, clamp(rm_road.x + rm_road.y * 0.5, 0.0, 1.0) * (1.0 - smoothstep(0.02, 0.25, road_snow)));
         pos = ro + t * rd;
         rm_road = roadWeights(pos.xz, rm_road_uv, rm_road_dir);
@@ -1830,7 +1832,7 @@ void main() {
     // lumps and the prints pressed into it shade it. Before the lighting.
     float snow_cov = 0.0;
     {
-        float sn = scene_snow();
+        float sn = g_snow;
         if (sn > 0.01 && !(scene.water_params.x > 0.5 && pos.y < scene.water_params.y)) {
             float road_w = clamp(rm_road.x, 0.0, 1.0);
             snow_cov = mix(smoothstep(0.1, 0.5, sn), snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, sn), road_w);
@@ -2149,7 +2151,8 @@ void main() {
     }
     float shadow = max(dyn_shadow, self_shadow);
 
-    float sha = (1.0 - shadow) * mix(rm_road_vis, 1.0, scene_snow() < 0.01 ? 0.0 : snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, scene_snow())) * sun_horizon_lit(u_sun_horizon, pos);
+    if (g_snow >= 0.01) rm_road_vis = mix(rm_road_vis, 1.0, snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, g_snow));
+    float sha = (1.0 - shadow) * rm_road_vis * sun_horizon_lit(u_sun_horizon, pos);
 
     // RT ambient occlusion against castle / boxes / dyn-props
     // (mask 0x02 — terrain BLAS skipped). Mirrors cube.frag's RTAO
@@ -2300,7 +2303,7 @@ void main() {
     // is looked up where the line of sight meets its floor (parallax), its
     // walls tilt the normal and the low sun leaves part of the floor in shade.
     {
-        float sn = scene_snow();
+        float sn = g_snow;
         if (sn > 0.01 && !(scene.water_params.x > 0.5 && pos.y < scene.water_params.y)) {
             float road_w = clamp(rm_road.x, 0.0, 1.0);
             float snow_patch = snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, sn);

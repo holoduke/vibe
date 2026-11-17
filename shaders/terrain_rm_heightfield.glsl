@@ -16,7 +16,7 @@ float rm_smax(float a, float b, float k) { return log(exp(k * a) + exp(k * b)) /
 // `road_keep`: 0 on the paving, 1 off it. On the paving the snow lies in
 // patches a few cm thick; feet press prints into the snow.
 float rm_snow_on(float d, vec2 wp, float h, float road_keep) {
-    float sn = scene_snow();
+    float sn = g_snow;
     if (sn < 0.01 || (scene.water_params.x > 0.5 && h < scene.water_params.y + 0.05)) return d;
     float open_h = rm_smax(d, sn * snow_layer_h(wp), 28.0);
     float road_h = 0.0;
@@ -38,7 +38,10 @@ float rm_ground_detail(vec2 wp, float t, float h) {
         float keep = scene.road_info.y;
         float rdist = rm_road_dist_thr(wp, keep + 0.9);                 // paving only; the dirt verge keeps its relief
         road_keep = smoothstep(keep + 0.1, keep + 0.9, rdist);
-        if (road_keep <= 0.0) return scene_snow() < 0.01 ? 0.0 : rm_snow_on(0.0, wp, h, 0.0) * w;
+        if (road_keep <= 0.0) {
+            if (g_snow < 0.01) return 0.0;          // (a real branch, not ?: - the winter side has loops)
+            return rm_snow_on(0.0, wp, h, 0.0) * w;
+        }
     }
     float wn = noise2(wp * 0.21);                      // one noise warps both axes
     vec2  q  = wp * 0.55 + vec2(wn, 1.0 - wn) * 1.7;
