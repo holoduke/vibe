@@ -204,6 +204,13 @@ void main() {
     vNormal     = N;
     vColor      = col;
     vEmissive   = vec4(0.0);
+    // Seasons (cube.frag season_leaf): leaves of broadleaf trees and bushes carry their
+    // tree's own number in .a (0.05 .. 0.45; 0 = no seasonal colour: conifers, bark, rocks).
+    {
+        float species = arch[uint(I.rot_arch_phase.y + 0.5)].w;
+        if (species > 0.5 && species < 2.5 && (matRaw == 2 || matRaw == 3 || matRaw == 7 || matRaw >= 9))
+            vEmissive.a = 0.05 + 0.40 * fract(sin(dot(I.pos_scale.xz, vec2(12.9898, 78.233))) * 43758.5453);
+    }
     vUv         = vec2(windW, float(mat0));
     if (matRaw == 4) vUv = inUv;                  // rocks: (atlas u, 4 + 0.45 * atlas v) - baked rocks only, else (0, 4)
     vTexParams  = tp;

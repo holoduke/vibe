@@ -96,18 +96,16 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   season;           // how much of each season shows: x spring, y summer, z autumn, w winter
 } scene;
 
-// Leaves through the year. `wp`: world position (each tree turns its own
-// colour and at its own pace in autumn). Returns the leaf colour to use.
-vec3 season_leaf(vec3 col, vec3 wp) {
+// Leaves through the year. `h`: a number 0..1 of the tree (each tree turns
+// its own colour and at its own pace in autumn). Returns the leaf colour to use.
+vec3 season_leaf(vec3 col, float h) {
     float sp = scene.season.x, au = scene.season.z;
     if (sp + au < 0.004) return col;
     float lum = dot(col, vec3(0.3, 0.5, 0.2));
     // Spring: young leaves - lighter, yellower green.
     col = mix(col, lum * vec3(1.05, 1.42, 0.62), sp * 0.55);
-    // Autumn: per tree (5 m cells) yellow, orange or rust; some turn early, some late.
-    vec2 cell = floor(wp.xz / 5.0);
-    float h1 = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
-    float h2 = fract(sin(dot(cell, vec2(39.3468, 11.135))) * 24634.6345);
+    // Autumn: per tree yellow, orange or rust; some turn early, some late.
+    float h1 = h, h2 = fract(h * 7.13 + 0.37);
     vec3 tone = h1 < 0.40 ? vec3(2.05, 1.45, 0.32) : (h1 < 0.75 ? vec3(2.15, 0.98, 0.26) : vec3(1.75, 0.55, 0.24));
     float turned = smoothstep(h2 * 0.55, h2 * 0.55 + 0.45, au);
     return mix(col, lum * tone, turned * 0.85);

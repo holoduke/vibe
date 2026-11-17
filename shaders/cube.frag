@@ -774,6 +774,9 @@ void main() {
         albedo *= mix(vec3(0.85, 1.05, 0.80), vec3(1.15, 0.95, 1.10), big);
         albedo *= 0.65 + 0.7 * fine;
         albedo *= mix(0.55, 1.0, clamp(N.y * 0.5 + 0.6, 0.0, 1.0));
+        // Seasons: this tree's leaves (veg.vert marks them in vEmissive.a).
+        bool season_px = pc.grass_params.x > 0.5 && vEmissive.a > 0.01 && vEmissive.a < 0.5;
+        if (season_px) albedo = season_leaf(albedo, (vEmissive.a - 0.05) / 0.40);
         // Leaf-scale facets (GPU vegetation, near): every ~8 cm cell is one
         // "leaf" with its own tilt and tone, so a canopy catches the sun
         // as a mass of leaves rather than as one smooth surface.
@@ -803,6 +806,7 @@ void main() {
             // dropped every variation here, so all cards of a crown had one
             // flat colour.)
             albedo = g_card_tex.rgb * vColor * mix(vec3(0.85, 1.05, 0.80), vec3(1.15, 0.95, 1.10), big);
+            if (season_px) albedo = season_leaf(albedo, (vEmissive.a - 0.05) / 0.40);
             // The darker parts of the leaf photo are the gaps between leaves:
             // push them down so single leaves stand out.
             float cl = dot(g_card_tex.rgb, vec3(0.3, 0.6, 0.1));

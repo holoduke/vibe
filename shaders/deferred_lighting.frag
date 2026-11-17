@@ -396,8 +396,6 @@ void main() {
             if (!leafy && metallic < 0.5) albedo *= mix(1.0, 0.58, wk);
             roughness = mix(roughness, min(roughness, 0.16), wk * 0.85);
         }
-        // Seasons: the leaves (young green in spring, turning in autumn).
-        if (leafy) albedo = season_leaf(albedo, world_pos);
         // Winter: snow on what faces up - roofs, wall tops, branches, stones.
         float sc = snow_cover(N, world_pos);
         if (sc > 0.001) {
