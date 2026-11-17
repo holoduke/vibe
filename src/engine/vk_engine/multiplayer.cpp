@@ -333,7 +333,7 @@ void VulkanEngine::mp_hud() {
         std::snprintf(line, sizeof(line), "LAN: %s for other players...", net_->role_name());
     }
     const ImVec2 ts = ImGui::CalcTextSize(line);
-    const ImVec2 p0(disp.x - ts.x - 18.0f, 12.0f);
+    const ImVec2 p0(disp.x - ts.x - 26.0f, 22.0f);
     dl->AddRectFilled(ImVec2(p0.x - 8.0f, p0.y - 4.0f), ImVec2(p0.x + ts.x + 8.0f, p0.y + ts.y + 4.0f), IM_COL32(0, 0, 0, 120), 4.0f);
     dl->AddText(p0, others > 0 ? IM_COL32(150, 255, 170, 255) : IM_COL32(220, 220, 220, 200), line);
     float y = p0.y + ts.y + 12.0f;
@@ -343,11 +343,6 @@ void VulkanEngine::mp_hud() {
         y += fs.y + 3.0f;
     }
     if (others > 0) {
-        // Health bar, bottom left.
-        const float w = 220.0f, h = 14.0f, x = 24.0f, yb = disp.y - 44.0f;
-        const float k = glm::clamp(mp_health_ / 100.0f, 0.0f, 1.0f);
-        dl->AddRectFilled(ImVec2(x - 2, yb - 2), ImVec2(x + w + 2, yb + h + 2), IM_COL32(0, 0, 0, 150), 3.0f);
-        dl->AddRectFilled(ImVec2(x, yb), ImVec2(x + w * k, yb + h), k > 0.35f ? IM_COL32(90, 220, 110, 230) : IM_COL32(235, 70, 60, 230), 2.0f);
         if (mp_hurt_ > 0.0f)
             dl->AddRect(ImVec2(0, 0), disp, IM_COL32(255, 30, 20, int(170.0f * mp_hurt_)), 0.0f, 0, 28.0f);
         if (mp_hitmark_ > 0.0f) {

@@ -125,79 +125,8 @@ void VulkanEngine::build_hud_ui() {
         }
     };
 
-    // Stats panels — stacked vertically in the top-left.
-    {
-        // Min/max over the live history.
-        float fps_min = fps_history_[0], fps_max = fps_history_[0];
-        float ms_min  = ms_history_[0],  ms_max  = ms_history_[0];
-        for (int i = 1; i < kStatsHistory; ++i) {
-            fps_min = std::min(fps_min, fps_history_[i]);
-            fps_max = std::max(fps_max, fps_history_[i]);
-            ms_min  = std::min(ms_min,  ms_history_[i]);
-            ms_max  = std::max(ms_max,  ms_history_[i]);
-        }
-        ImVec2 p(8.0f, 8.0f);
-        draw_panel(p, "FPS", ema_fps_, fps_min, fps_max,
-                   fps_history_, kStatsHistory, stats_history_head_,
-                   IM_COL32(180, 220, 70, 255));  // green
-        p.y += 52.0f;
-        draw_panel(p, "MS", last_frame_dt_ * 1000.0f, ms_min, ms_max,
-                   ms_history_, kStatsHistory, stats_history_head_,
-                   IM_COL32(220, 110, 180, 255));  // pink
-        if (dlss_fg_active()) {
-            // The panels count rendered frames; DLSS Frame Generation adds
-            // generated ones on top (measured presented / rendered ratio).
-            const ImVec2 q(136.0f, 8.0f);   // beside the FPS panel
-            char buf[64];
-            const float ratio = dlssg_present_ratio_ > 0.5f ? dlssg_present_ratio_ : float(dlssg_frames_sent_ + 1);
-            snprintf(buf, sizeof(buf), "%.0f FPS shown (FG %.1fx)", ema_fps_ * ratio, ratio);
-            ImDrawList* dl = ImGui::GetForegroundDrawList();
-            dl->AddRectFilled(q, ImVec2(q.x + 170.0f, q.y + 20.0f), IM_COL32(0, 0, 16, 220));
-            dl->AddText(ImVec2(q.x + 6.0f, q.y + 3.0f), IM_COL32(120, 200, 255, 255), buf);
-        }
-    }
-
-    // Compact gameplay info — small ImGui window below the stats
-    // panels. Kept minimal: position, score, draw counts, stance.
-    ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration |
-        ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoFocusOnAppearing |
-        ImGuiWindowFlags_NoNav |
-        ImGuiWindowFlags_NoInputs |
-        ImGuiWindowFlags_NoMove;
-    ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f + 52.0f * 2 + 4.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.55f);
-    ImGui::Begin("##hud_info", nullptr, flags);
-    glm::vec2 hv(player_.velocity.x, player_.velocity.z);
-    float speed_h = glm::length(hv);
-    const char* stance = "walk";
-    if (speed_h > 11.0f)      stance = "SPRINT";
-    else if (speed_h < 4.0f && (player_.velocity.x != 0.0f ||
-                                 player_.velocity.z != 0.0f))
-        stance = "crawl";
-    ImGui::Text("pos %5.1f %5.1f %5.1f",
-                player_.position.x, player_.position.y, player_.position.z);
-    ImGui::Text("spd %5.1f m/s  %s%s", speed_h, stance,
-                player_.on_ground ? "" : "  (air)");
-    ImGui::Text("score %d  dyn %zu/%d", score_, dyn_props_.size(), kMaxDynProps);
-    ImGui::Text("draws %d+%d  culled %d  phys %d",
-                last_draw_static_, last_draw_dyn_, last_culled_,
-                last_physics_ticks_);
-    const uint64_t v_warn = g_validation_warning_count.load(std::memory_order_relaxed);
-    const uint64_t v_err  = g_validation_error_count.load(std::memory_order_relaxed);
-    if (v_err > 0) {
-        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                           "vk %llu warn / %llu ERR",
-                           static_cast<unsigned long long>(v_warn),
-                           static_cast<unsigned long long>(v_err));
-    } else if (v_warn > 0) {
-        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f),
-                           "vk %llu warn",
-                           static_cast<unsigned long long>(v_warn));
-    }
-    ImGui::End();
+    (void)draw_panel;
+    draw_game_hud();          // health, weapon, slots, frame rate (ui_gamehud.cpp)
 
     // EDIT MODE banner — centered top, bright orange, impossible to
     // miss. Earlier issue: user pressed E by accident (next to D walk
@@ -205,52 +134,6 @@ void VulkanEngine::build_hud_ui() {
     // sculpted terrain instead of firing. With this banner the state
     // is always obvious.
     build_edit_ui();     // tool panel + zone overlay (veg_zones.cpp)
-
-    // Weapon line (bottom centre): which weapon, and the airstrike state.
-    {
-        ImGuiIO& io_w = ImGui::GetIO();
-        ImDrawList* dl_w = ImGui::GetForegroundDrawList();
-        char msg[128];
-        ImU32 col = IM_COL32(200, 200, 200, 200);
-        if (weapon_ == 1) {
-            switch (airstrike_.phase) {
-            case 0:  snprintf(msg, sizeof(msg), airstrike_.aim_valid ? "[2] AIRSTRIKE  -  click to mark the target"
-                                                                     : "[2] AIRSTRIKE  -  aim at the ground");
-                     col = IM_COL32(90, 255, 150, 235); break;
-            case 1:  snprintf(msg, sizeof(msg), "[2] AIRSTRIKE  -  target marked, aircraft inbound");
-                     col = IM_COL32(255, 180, 40, 245); break;
-            case 2:  snprintf(msg, sizeof(msg), "[2] AIRSTRIKE  -  BOMB AWAY");
-                     col = IM_COL32(255, 70, 40, 255); break;
-            default: snprintf(msg, sizeof(msg), "[2] AIRSTRIKE  -  stand by");
-                     col = IM_COL32(170, 170, 170, 220); break;
-            }
-        } else {
-            // Flashlight line: brightness level as filled / empty dots.
-            static const char* const kFlashHud[4] = {
-                "[F] FLASHLIGHT  *...  (click: brighter)     [1] laser     [2] airstrike",
-                "[F] FLASHLIGHT  **..  (click: brighter)     [1] laser     [2] airstrike",
-                "[F] FLASHLIGHT  ***.  (click: brighter)     [1] laser     [2] airstrike",
-                "[F] FLASHLIGHT  ****  (click: back to low)     [1] laser     [2] airstrike" };
-            const char* flash_hud = kFlashHud[std::clamp(flash_level_, 0, 3)];
-            snprintf(msg, sizeof(msg), "%s", flashlight_on_ ? flash_hud
-                                                      : "[1] LASER     [2] airstrike     [F] flashlight");
-            if (rt_.day_night_enabled || rt_.weather_enabled) {
-                const int hh = int(rt_.time_of_day) % 24, mm = int((rt_.time_of_day - std::floor(rt_.time_of_day)) * 60.0f);
-                if (rt_.day_night_enabled && rt_.weather_enabled)
-                    snprintf(msg, sizeof(msg), "%s     %02d:%02d  %s", flashlight_on_ ? flash_hud : "[1] LASER     [2] airstrike     [F] flashlight", hh, mm, weather_name());
-                else if (rt_.day_night_enabled)
-                    snprintf(msg, sizeof(msg), "%s     %02d:%02d", flashlight_on_ ? flash_hud : "[1] LASER     [2] airstrike     [F] flashlight", hh, mm);
-                else
-                    snprintf(msg, sizeof(msg), "%s     %s", flashlight_on_ ? flash_hud : "[1] LASER     [2] airstrike     [F] flashlight", weather_name());
-            }
-            if (airstrike_.phase == 1) { snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike: aircraft inbound"); col = IM_COL32(255, 180, 40, 230); }
-            if (airstrike_.phase == 2) { snprintf(msg, sizeof(msg), "[1] LASER     [2] airstrike: BOMB AWAY"); col = IM_COL32(255, 70, 40, 245); }
-        }
-        const ImVec2 ts = ImGui::CalcTextSize(msg);
-        const ImVec2 p((io_w.DisplaySize.x - ts.x) * 0.5f, io_w.DisplaySize.y - ts.y - 18.0f);
-        dl_w->AddRectFilled(ImVec2(p.x - 8.0f, p.y - 4.0f), ImVec2(p.x + ts.x + 8.0f, p.y + ts.y + 4.0f), IM_COL32(0, 0, 16, 150), 4.0f);
-        dl_w->AddText(p, col, msg);
-    }
 
     // Last-target damage indicator — industry-standard FPS placement:
     // a single bar at TOP-CENTER showing the most-recently-hit plane's

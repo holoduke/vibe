@@ -43,6 +43,27 @@ void VulkanEngine::init_imgui() {
     // landing on the Quit button and exiting the game. Mouse-only
     // for the menu is fine here; no controller use.
     io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+    // Fonts, from Windows itself (nothing shipped): Segoe UI for the menus,
+    // Bahnschrift (DIN) for the HUD - small for labels, large for the numbers.
+    // Missing files fall back to ImGui's built-in font.
+    {
+        auto have = [](const char* p) { FILE* fp = std::fopen(p, "rb"); if (fp) std::fclose(fp); return fp != nullptr; };
+        const char* kUi = "C:\\Windows\\Fonts\\segoeui.ttf";
+        const char* kHud = "C:\\Windows\\Fonts\\bahnschrift.ttf";
+        ImFontConfig fc;
+        fc.OversampleH = 3; fc.OversampleV = 2;
+        if (have(kUi)) io.Fonts->AddFontFromFileTTF(kUi, 18.0f, &fc); else io.Fonts->AddFontDefault();
+        if (have(kHud)) {
+            ImFontConfig hc;
+            hc.OversampleH = 3; hc.OversampleV = 2;
+            hc.RasterizerMultiply = 1.15f;
+            font_hud_ = io.Fonts->AddFontFromFileTTF(kHud, 26.0f, &hc);
+            ImFontConfig bc;
+            bc.OversampleH = 2; bc.OversampleV = 1;
+            bc.RasterizerMultiply = 1.2f;
+            font_hud_big_ = io.Fonts->AddFontFromFileTTF(kHud, 84.0f, &bc);
+        }
+    }
     // Pin imgui.ini next to vibe_settings.cfg so menu collapse /
     // expand / position state persists across restarts regardless
     // of the launch cwd. Default behaviour writes "imgui.ini" in

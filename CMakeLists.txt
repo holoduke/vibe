@@ -309,6 +309,7 @@ add_library(qlike_engine STATIC
     src/engine/vk_engine/player_body.cpp
     src/engine/net/net.cpp
     src/engine/vk_engine/multiplayer.cpp
+    src/engine/vk_engine/ui_gamehud.cpp
     src/engine/cpu_prof.cpp
     src/engine/jobs.cpp
     src/engine/vk_engine/dlss.cpp

@@ -36,6 +36,8 @@
 #include "game/player.h"
 #include "engine/net/net.h"   // LAN multiplayer session (plain data + Session)
 
+struct ImFont;      // Dear ImGui (HUD fonts)
+
 namespace qlike {
 
 // Running totals of validation-layer warnings / errors observed during this
@@ -1213,6 +1215,9 @@ private:
     bool mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit);
     void mp_feed(const std::string& line);
     void mp_hud();
+    void draw_game_hud();                              // ui_gamehud.cpp
+    ::ImFont* font_hud_ = nullptr;                // HUD fonts (null: the default font)
+    ::ImFont* font_hud_big_ = nullptr;
     void mp_sync_world(float dt);                      // weather + clock: the same on every machine
     net::WorldState mp_world_last_{};                  // what was last sent / applied (change detection)
     bool      mp_world_init_ = false;

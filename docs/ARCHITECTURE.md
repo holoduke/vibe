@@ -55,6 +55,7 @@ Everything is in `namespace qlike`. Runtime files live in the project root:
 | Player body (soldier, hands, walk cycle) | `player_body.cpp`, `flashlight.cpp` |
 | LAN multiplayer: discovery, host election, snapshots, interpolation | `src/engine/net/net.h`, `net.cpp` (ENet; no engine types) |
 | Multiplayer game side: other players (avatars), their shots, hits, health, HUD | `multiplayer.cpp` |
+| In-game HUD (health, weapon, slots, frame rate); fonts are loaded in `ui_setup.cpp` | `ui_gamehud.cpp` |
 | Water effects (splashes, ripples) | `water_fx.cpp` |
 | UI | `ui_setup.cpp`, `ui_hud.cpp` (HUD, crosshair), `ui_menu.cpp` (pause menu) |
 | Settings: load / save / presets / types | `settings.cpp`, `settings_types.h` |
