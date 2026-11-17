@@ -1786,6 +1786,23 @@ private:
     VkPipelineLayout      cl_layout_ = VK_NULL_HANDLE;
     VkPipeline            cl_pipeline_ = VK_NULL_HANDLE;
     VkShaderModule        cl_module_ = VK_NULL_HANDLE;
+    // Small plants on the GPU path (vk_engine/plant_gpu.cpp, plant_cull.comp).
+    uint32_t      pg_total_ = 0, pg_packed_cap_ = 0;
+    bool          pg_hiz_bound_ = false, pg_drawn_ = false;
+    VkBuffer      pg_packed_buf_ = VK_NULL_HANDLE, pg_cmd_buf_ = VK_NULL_HANDLE, pg_tmpl_buf_ = VK_NULL_HANDLE, pg_spec_buf_ = VK_NULL_HANDLE;
+    VmaAllocation pg_packed_alloc_ = nullptr, pg_cmd_alloc_ = nullptr, pg_tmpl_alloc_ = nullptr, pg_spec_alloc_ = nullptr;
+    void*         pg_spec_mapped_ = nullptr;
+    VkDescriptorSetLayout pg_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool      pg_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet       pg_set_ = VK_NULL_HANDLE;
+    VkPipelineLayout      pg_layout_ = VK_NULL_HANDLE;
+    VkPipeline            pg_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule        pg_module_ = VK_NULL_HANDLE;
+    void init_plant_gpu();
+    void destroy_plant_gpu();
+    void write_plant_hiz_binding();
+    void cull_plants(VkCommandBuffer cmd);
+    bool draw_plants_gpu(VkCommandBuffer cmd, int species);
     void init_cluster_draw();
     void destroy_cluster_draw();
     void cull_clusters(VkCommandBuffer cmd);

@@ -1515,6 +1515,7 @@ void VulkanEngine::shutdown() {
     guarded("destroy_deferred_lighting", [&]{ destroy_deferred_lighting(); });
     guarded("destroy_pipeline", [&]{ destroy_pipeline(); });
     guarded("destroy_grass", [&]{ destroy_grass(allocator_, grass_); });
+    guarded("destroy_plant_gpu", [&]{ destroy_plant_gpu(); });
     guarded("destroy_scatter", [&]{ destroy_scatter(allocator_, scatter_); });
     guarded("stop_terrain_shadow_worker", [&]{ stop_terrain_shadow_worker(); });
     guarded("destroy_terrain_shadow_texture", [&]{ destroy_terrain_shadow_texture(); });

@@ -712,6 +712,7 @@ void VulkanEngine::write_veg_hiz_binding() {
     w.pImageInfo = &di;
     vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
     write_cluster_hiz_binding();
+    write_plant_hiz_binding();
 }
 
 void VulkanEngine::destroy_veg_hiz() {

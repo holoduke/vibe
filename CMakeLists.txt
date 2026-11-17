@@ -317,6 +317,7 @@ add_library(qlike_engine STATIC
     src/engine/net/net.cpp
     src/engine/cluster_lod.cpp
     src/engine/vk_engine/cluster_draw.cpp
+    src/engine/vk_engine/plant_gpu.cpp
     src/engine/vk_engine/multiplayer.cpp
     src/engine/vk_engine/ui_gamehud.cpp
     src/engine/cpu_prof.cpp

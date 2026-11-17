@@ -1,0 +1,83 @@
+#version 460
+// GPU culling of the small plants (flowers, ferns, reeds, grass tufts,
+// water lilies) - vk_engine/plant_gpu.cpp.
+//
+// One thread per plant: drop it when it is out of range or thinned out
+// (the same rule scatter.vert fades by), outside the view, or hidden behind
+// last frame's depth; otherwise pick its level of detail by distance and
+// copy its instance record into that (species, level) bucket. The buckets
+// are then drawn as they are - only plants that can be seen, each with the
+// mesh its distance needs.
+layout(local_size_x = 128) in;
+
+struct Inst { vec4 pos_scale; vec4 rot_tint; };
+layout(std430, set = 0, binding = 0) readonly buffer Plants  { Inst inst[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Packed { Inst packed[]; };
+layout(std430, set = 0, binding = 2) buffer Commands        { uint cmd[]; };       // 5 uints per (species, level): VkDrawIndexedIndirectCommand
+layout(std430, set = 0, binding = 3) readonly buffer Species { vec4 spec[]; };     // per species: first instance, count, max draw distance, -
+layout(set = 0, binding = 4) uniform sampler2D u_hiz;                              // max-depth pyramid of the previous frame
+
+layout(push_constant) uniform PC {
+    vec4  planes[6];
+    vec4  cam;        // .xyz eye, .w pixels per radian
+    vec4  params;     // .x plant count, .y species count, .z occlusion on (0/1), .w far-level distance 1
+    mat4  prev_vp;
+    vec4  hiz;        // .xy pyramid level-0 size, .z mip count, .w far-level distance 2
+} pc;
+
+bool occluded(vec3 c, float r, float d) {
+    vec4 cc = pc.prev_vp * vec4(c, 1.0);
+    if (cc.w <= r) return false;
+    vec2 uv = (cc.xyz / cc.w).xy * 0.5 + 0.5;
+    float r_uv = r / max(d, 0.1) * pc.cam.w / pc.hiz.y;
+    vec2 lo = uv - vec2(r_uv * pc.hiz.y / pc.hiz.x, r_uv);
+    vec2 hi = uv + vec2(r_uv * pc.hiz.y / pc.hiz.x, r_uv);
+    if (!(lo.x > 0.02 && lo.y > 0.02 && hi.x < 0.98 && hi.y < 0.98)) return false;
+    vec4 fc = pc.prev_vp * vec4(c + normalize(pc.cam.xyz - c) * r, 1.0);
+    float zmin = fc.z / fc.w;
+    vec2 ext = (hi - lo) * pc.hiz.xy;
+    float mip = clamp(ceil(log2(max(max(ext.x, ext.y), 1.0))), 0.0, pc.hiz.z - 1.0);
+    float z = textureLod(u_hiz, vec2(lo.x, lo.y), mip).r;
+    z = max(z, textureLod(u_hiz, vec2(hi.x, lo.y), mip).r);
+    z = max(z, textureLod(u_hiz, vec2(lo.x, hi.y), mip).r);
+    z = max(z, textureLod(u_hiz, vec2(hi.x, hi.y), mip).r);
+    return zmin > z + 1e-5;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uint(pc.params.x)) return;
+    Inst I = inst[i];
+    vec3  base = I.pos_scale.xyz;
+    float scale = I.pos_scale.w;
+
+    // Which species (the instances lie species by species).
+    uint sp = 0u;
+    uint nsp = uint(pc.params.y);
+    for (uint k = 1u; k < nsp; ++k) if (float(i) >= spec[k].x && spec[k].y > 0.0) sp = k;
+    vec4 S = spec[sp];
+
+    // Range and thinning: the rule of scatter.vert (keep in sync), a little
+    // generous so nothing it would draw is dropped here.
+    float dist = distance(base, pc.cam.xyz);
+    float max_d = max(S.z, 10.0);
+    float reach = max_d * clamp(scale * 2.2 + 0.22, 0.22, 0.85);
+    float fade = 1.0 - smoothstep(reach * 0.75, reach, dist);
+    float thin = smoothstep(reach * 0.35, reach * 0.9, dist) * 0.7;
+    float ph = fract(sin(dot(base.xz, vec2(12.9898, 78.233))) * 43758.5453);
+    fade *= smoothstep(thin - 0.10, thin + 0.02, ph + 0.02) * (1.0 + 0.6 * thin);
+    if (fade < 0.02) return;
+
+    // In view? (a plant is at most ~2 m in any direction)
+    float r = 1.6 * max(scale, 0.6) + 0.5;
+    vec3 c = base + vec3(0.0, 0.6 * scale, 0.0);
+    for (int p = 0; p < 6; ++p)
+        if (dot(pc.planes[p].xyz, c) + pc.planes[p].w < -r) return;
+    // Behind a wall, a hill, a rock?
+    if (pc.params.z > 0.5 && dist > r + 14.0 && occluded(c, r, dist)) return;
+
+    uint lod = dist < pc.params.w ? 0u : (dist < pc.hiz.w ? 1u : 2u);
+    uint b = (sp * 3u + lod) * 5u;
+    uint slot = atomicAdd(cmd[b + 1u], 1u);
+    packed[cmd[b + 4u] + slot] = I;
+}

@@ -974,6 +974,8 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
                 if (scatter_.plant_count[sp] == 0) continue;
                 ppc.grass_params.x = plant_max_d(sp);   // per-group draw distance (settings)
                 vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &ppc);
+                // GPU path: only the plants that can be seen, each with the mesh its distance needs.
+                if (draw_plants_gpu(cmd, sp)) continue;
                 VkBuffer pb[2] = { scatter_.plant_mesh[sp].vertex_buffer, scatter_.plant_buffer };
                 VkDeviceSize po[2] = { 0, 0 };
                 vkCmdBindVertexBuffers(cmd, 0, 2, pb, po);

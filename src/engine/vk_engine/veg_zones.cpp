@@ -334,6 +334,7 @@ void VulkanEngine::build_scatter_from(const Heightmap& hm) {
     if (!paint_.empty()) sp.paint = &paint_;
     scatter_ = build_scatter(device_, allocator_, graphics_queue_, graphics_queue_family_, hm, sp);
     scatter_set_raymarch_surface(scatter_, rt_.terrain_raymarch_enabled);
+    init_plant_gpu();
 }
 
 void VulkanEngine::rebuild_scatter() {
@@ -346,6 +347,7 @@ void VulkanEngine::rebuild_scatter() {
     hm.origin_z = terrain_data_.origin_z;
     hm.heights = terrain_data_.heights;
     vkDeviceWaitIdle(device_);
+    destroy_plant_gpu();
     destroy_scatter(allocator_, scatter_);
     scatter_ = ScatterSet{};
     build_scatter_from(hm);
