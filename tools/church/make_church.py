@@ -143,10 +143,10 @@ trim.append(box('plinth', -hx - 0.12, hx + 0.12, -hy - 0.12, hy + 0.12, BASE, PL
 for sy, (y0, y1) in ((-1, (-hy, -hy + T)), (1, (hy - T, hy))):
     wall = box('wall', -hx, hx, y0, y1, PLINTH, top)
     for x in win_x:
-        boolean(wall, arch_cutter('cut', (x, sy * (hy - REC * 0.5 + 0.02), PLINTH + 1.15), 0.80, 1.95, REC + 0.04, 'Y'))
+        boolean(wall, arch_cutter('cut', (x, sy * (hy - T * 0.5), PLINTH + 1.15), 0.80, 1.95, T + 0.1, 'Y'))
     stone.append(wall)
 gw = gable_wall('gable_w', -hx + T * 0.5)
-boolean(gw, arch_cutter('cut', (-hx + REC * 0.5 - 0.02, 0.0, PLINTH), 1.35, 2.55, REC + 0.04, 'X'))
+boolean(gw, arch_cutter('cut', (-hx + T * 0.5, 0.0, PLINTH), 1.35, 2.55, T + 0.1, 'X'))
 boolean(gw, arch_cutter('cut', (-hx + REC * 0.5 - 0.02, 0.0, top + 0.55), 0.70, 0.95, REC + 0.04, 'X'))
 stone.append(gw)
 stone.append(gable_wall('gable_e', hx - T * 0.5))
@@ -179,21 +179,108 @@ trim_ob = join(trim, 'trim'); bevel(trim_ob, 0.03)
 
 # ---------------------------------------------------------------- glass + door (sit in the recesses)
 glass, wood, iron = [], [], []
+# Side windows: leaded stained glass in the middle of the wall, drawn from
+# both sides. Written out directly with its own 0..1 texture coordinates
+# (u across the window, v from the top down).
+stained_tris = []
 for sy in (-1, 1):
     for x in win_x:
-        o = arch_cutter('g', (x, sy * (hy - REC - 0.01), PLINTH + 1.15), 0.80, 1.95, 0.03, 'Y'); glass.append(o)
-        # Stone-coloured mullion + transom are part of the iron set (dark lead).
-        iron.append(box('m', x - 0.02, x + 0.02, sy * (hy - REC - 0.04), sy * (hy - REC + 0.02), PLINTH + 1.15, PLINTH + 3.05))
-        iron.append(box('m', x - 0.40, x + 0.40, sy * (hy - REC - 0.04), sy * (hy - REC + 0.02), PLINTH + 2.05, PLINTH + 2.09))
+        r, h, z0 = 0.40, 1.95, PLINTH + 1.15
+        prof = [(-r, 0.0), (r, 0.0)] + [(r * math.cos(math.pi * k / 16.0), h - r + r * math.sin(math.pi * k / 16.0)) for k in range(17)]
+        yp = sy * (hy - T * 0.5)
+        for face in (-1, 1):
+            for i in range(len(prof)):
+                tri = [(0.0, h * 0.5), prof[i], prof[(i + 1) % len(prof)]]
+                for (ul, zl) in tri:
+                    stained_tris.append((Vector((x + ul, yp + face * 0.012, z0 + zl)), Vector((0.0, float(face), 0.0)),
+                                         (0.5 + ul / 0.8 * 0.73, 1.0 - zl / h)))
+        # Iron saddle bars across the window, as old leaded lights have.
+        for zz in (0.55, 1.10):
+            iron.append(box('bar', x - 0.40, x + 0.40, yp - 0.03, yp + 0.03, z0 + zz - 0.008, z0 + zz + 0.008))
 glass.append(arch_cutter('g', (-hx + REC + 0.01, 0.0, top + 0.55), 0.70, 0.95, 0.03, 'X'))
 glass.append(arch_cutter('g', (hx + APSE_R - REC - 0.01, 0.0, PLINTH + 1.05), 0.70, 1.70, 0.03, 'X'))
-door = arch_cutter('door', (-hx + REC - 0.02, 0.0, PLINTH), 1.35, 2.55, 0.08, 'X'); wood.append(door)
-# Plank grooves + iron straps and a ring handle on the door.
-for k in range(-2, 3):
-    iron.append(box('groove', -hx + REC - 0.075, -hx + REC - 0.060, k * 0.27 - 0.006, k * 0.27 + 0.006, PLINTH + 0.02, PLINTH + 2.0))
-for z in (0.45, 1.25, 2.0):
-    iron.append(box('strap', -hx + REC - 0.085, -hx + REC - 0.060, -0.62, 0.62, PLINTH + z - 0.035, PLINTH + z + 0.035))
-iron.append(box('handle', -hx + REC - 0.12, -hx + REC - 0.06, 0.40, 0.46, PLINTH + 1.05, PLINTH + 1.20))
+
+# The door stands open: built closed at the inner face of the wall, then
+# swung inward on its hinge (south jamb) with its ironwork.
+DX = -hx + T - 0.10
+door_w, door_i = [], []
+door_w.append(arch_cutter('door', (DX, 0.0, PLINTH + 0.02), 1.31, 2.50, 0.07, 'X'))
+for side in (-1, 1):
+    for k in range(-2, 3):
+        door_i.append(box('groove', DX + side * 0.036, DX + side * 0.046, k * 0.26 - 0.006, k * 0.26 + 0.006, PLINTH + 0.05, PLINTH + 1.95))
+    for z in (0.45, 1.25, 2.0):
+        door_i.append(box('strap', DX + side * 0.036, DX + side * 0.056, -0.62, 0.62, PLINTH + z - 0.035, PLINTH + z + 0.035))
+    door_i.append(box('handle', DX + side * 0.04, DX + side * 0.10, 0.40, 0.46, PLINTH + 1.05, PLINTH + 1.20))
+ang = math.radians(-100.0)
+for o in door_w + door_i:
+    for v in o.data.vertices:
+        dx, dy = v.co.x - DX, v.co.y - (-0.675)
+        v.co.x = DX + dx * math.cos(ang) - dy * math.sin(ang)
+        v.co.y = -0.675 + dx * math.sin(ang) + dy * math.cos(ang)
+wood += door_w; iron += door_i
+
+# ---------------------------------------------------------------- interior
+# A plain old village church: flagstone floor, two blocks of oak pews, a
+# stone altar on a step with a wooden cross above it, tie beams under the
+# roof, and candles - on the altar, on two tall iron stands, on the walls.
+FL = PLINTH
+floor_ob = box('floor', -hx + T, hx - T, -hy + T, hy - T, FL - 0.05, FL + 0.012)
+altar = [box('step', 2.55, hx - T, -1.7, 1.7, FL, FL + 0.15),
+         box('altar_base', 3.05, 3.75, -0.72, 0.72, FL + 0.15, FL + 1.02),
+         box('altar_top', 2.98, 3.82, -0.85, 0.85, FL + 1.02, FL + 1.12)]
+altar_ob = join(altar, 'altar'); bevel(altar_ob, 0.02)
+
+def pew(px, sy):
+    y0, y1 = sy * 0.55, sy * 2.25
+    ya, yb = min(y0, y1), max(y0, y1)
+    wood.append(box('seat', px - 0.05, px + 0.36, ya, yb, FL + 0.40, FL + 0.45))
+    wood.append(box('back', px + 0.33, px + 0.38, ya, yb, FL + 0.30, FL + 0.92))
+    wood.append(box('rail', px + 0.30, px + 0.42, ya, yb, FL + 0.90, FL + 0.95))
+    wood.append(box('kneel', px - 0.30, px - 0.18, ya + 0.05, yb - 0.05, FL + 0.10, FL + 0.14))
+    for ye in (ya, yb - 0.05, (ya + yb) * 0.5 - 0.025):
+        wood.append(box('end', px - 0.08, px + 0.42, ye, ye + 0.05, FL, FL + (0.98 if ye != (ya + yb) * 0.5 - 0.025 else 0.42)))
+for px in (-2.75, -1.8, -0.85, 0.1, 1.05):
+    pew(px, -1); pew(px, 1)
+# Cross on the east wall, tie beams and king posts.
+wood.append(box('cross_v', hx - T - 0.07, hx - T - 0.01, -0.06, 0.06, FL + 1.45, FL + 3.05))
+wood.append(box('cross_h', hx - T - 0.07, hx - T - 0.01, -0.50, 0.50, FL + 2.45, FL + 2.57))
+for bx in (-1.3, 1.3):
+    wood.append(box('tie', bx - 0.10, bx + 0.10, -hy + 0.2, hy - 0.2, top - 0.02, top + 0.20))
+    wood.append(box('king', bx - 0.08, bx + 0.08, -0.08, 0.08, top + 0.20, top + ROOF_RISE - 0.25))
+
+wax, flame = [], []
+def cyl(name, cx, cy, z0, z1, r0, r1=None, n=10):
+    r1 = r0 if r1 is None else r1
+    v = [(cx + r0 * math.cos(2 * math.pi * k / n), cy + r0 * math.sin(2 * math.pi * k / n), z0) for k in range(n)] + \
+        [(cx + r1 * math.cos(2 * math.pi * k / n), cy + r1 * math.sin(2 * math.pi * k / n), z1) for k in range(n)]
+    f = [tuple(reversed(range(n))), tuple(range(n, 2 * n))] + [(k, (k + 1) % n, n + (k + 1) % n, n + k) for k in range(n)]
+    return obj_from(name, v, f)
+def candle(cx, cy, z, hgt=0.22, r=0.018):
+    wax.append(cyl('wax', cx, cy, z, z + hgt, r, r * 0.9))
+    # Flame: a small teardrop.
+    fz = z + hgt + 0.012
+    ring = [(cx + 0.011 * math.cos(2 * math.pi * k / 8), cy + 0.011 * math.sin(2 * math.pi * k / 8), fz + 0.018) for k in range(8)]
+    v = ring + [(cx, cy, fz), (cx, cy, fz + 0.065)]
+    f = [(k, (k + 1) % 8, 9) for k in range(8)] + [((k + 1) % 8, k, 8) for k in range(8)]
+    flame.append(obj_from('flame', v, f))
+def stand(cx, cy, hgt):
+    iron.append(cyl('foot', cx, cy, FL, FL + 0.03, 0.14, 0.10))
+    iron.append(cyl('stem', cx, cy, FL + 0.03, FL + hgt, 0.016))
+    iron.append(cyl('pan', cx, cy, FL + hgt, FL + hgt + 0.02, 0.03, 0.06))
+    candle(cx, cy, FL + hgt + 0.02, 0.28, 0.022)
+# Altar: two brass-like sticks.
+for sy in (-1, 1):
+    iron.append(cyl('stick', 3.4, sy * 0.55, FL + 1.12, FL + 1.34, 0.045, 0.02))
+    candle(3.4, sy * 0.55, FL + 1.34, 0.26, 0.02)
+    stand(2.75, sy * 1.25, 1.25)
+# Wall sconces between the windows.
+for sy in (-1, 1):
+    for x in (-1.3, 1.3):
+        yw = sy * (hy - T)
+        iron.append(box('arm', x - 0.012, x + 0.012, min(yw, yw - sy * 0.16), max(yw, yw - sy * 0.16), FL + 1.78, FL + 1.80))
+        iron.append(cyl('cup', x, yw - sy * 0.15, FL + 1.80, FL + 1.83, 0.03, 0.045))
+        candle(x, yw - sy * 0.15, FL + 1.83, 0.18, 0.016)
+wax_ob = join(wax, 'wax'); flame_ob = join(flame, 'flame')
 
 # ---------------------------------------------------------------- roof
 def slab(name, a, b, c, d, thick):
@@ -390,8 +477,11 @@ def export(ob, f):
 out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'assets', 'church')
 os.makedirs(out_dir, exist_ok=True)
 with open(os.path.join(out_dir, 'church.mesh'), 'w') as f:
-    for ob in (walls, trim_ob, roof_ob, wood_ob, iron_ob, glass_ob):
+    for ob in (walls, trim_ob, roof_ob, wood_ob, iron_ob, glass_ob, floor_ob, altar_ob, wax_ob, flame_ob):
         export(ob, f)
+    f.write('mesh stained %d\n' % (len(stained_tris) // 3))
+    for p, n, uv in stained_tris:
+        f.write('%.4f %.4f %.4f %.3f %.3f %.3f %.4f %.4f\n' % (p.x, p.z, -p.y, n.x, n.z, -n.y, uv[0], uv[1]))
     for grp, tris in tile_tris.items():
         f.write('mesh %s %d\n' % (grp, len(tris) // 3))
         for p, n, uv in tris:

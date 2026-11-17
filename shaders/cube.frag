@@ -148,7 +148,7 @@ layout(set = 0, binding = 25, std430) readonly buffer VoxShapeDir {
 const uint kVoxEmpty = 0xFFFFFFFFu;
 
 // Bound texture arrays (must match kTextureCount on the C++ side).
-const int kTextureCount = 21;     // +1 for kTexProcGrass (slot 12)
+const int kTextureCount = 22;     // +1 for kTexProcGrass (slot 12)
 // Procedurally-baked terrain material slots (see bake_terrain_materials
 // in world.cpp). Must match kTexRock/.. in vk_engine.h.
 const int kMatRock  = 7;
@@ -449,6 +449,9 @@ void main() {
 
     if (vEmissive.a > 0.5) {
         vec3 e = vColor + vEmissive.rgb;
+        // Self-lit textured mesh (stained glass): the texture is the light.
+        if (pc.grass_params.w < -0.5 && vTexParams.x > -0.5 && vTexParams.x < float(kTextureCount) - 0.5)
+            e = texture(u_albedo[int(vTexParams.x + 0.5)], vUv * vTexParams.z).rgb * vColor + vEmissive.rgb;
         outColor = vec4(e, 1.0);
         // Also fill gbuffer with the lit emissive value tagged mat 5 so the
         // deferred shader's mat≥5 pass-through reads scene_color (which

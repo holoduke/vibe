@@ -1,4 +1,4 @@
-#include "game/level.h"
+﻿#include "game/level.h"
 
 #include <cstdio>
 #include <string>
@@ -53,7 +53,7 @@ collision::AABB to_render_aabb(const Brush& b) {
     return { b.center - half, b.center + half };
 }
 
-// Sentinel for "no separate fallback" — substitutes `rgb` so brushes added
+// Sentinel for "no separate fallback" вЂ” substitutes `rgb` so brushes added
 // without an explicit fallback look the same in textured and untextured mode
 // (lanterns, lamps, anything whose `rgb` is already the desired color).
 constexpr glm::vec3 kFallbackUseRgb(-1.0f, -1.0f, -1.0f);
@@ -72,7 +72,7 @@ void add(Level& lv, glm::vec3 center, glm::vec3 size, glm::vec3 rgb,
 
 void add_lamp(Level& lv, glm::vec3 center, glm::vec3 size, glm::vec3 rgb,
               glm::vec3 emissive) {
-    // Full-emissive shading bypasses albedo/normal entirely — set fallback
+    // Full-emissive shading bypasses albedo/normal entirely вЂ” set fallback
     // to rgb so the box looks identical in both texture modes.
     Brush b{ center, size, glm::vec4(rgb, 1.0f), emissive, true,
              -1, -1, 1.0f, glm::vec4(rgb, 1.0f) };
@@ -306,16 +306,16 @@ Level make_arena(float r, float wh) {
     constexpr int kTile2  = 6;     // keep interior floor
 
     // For each brush we pass two colors:
-    //   `tint`    — multiplies the texture (near-white so the texture's hue
+    //   `tint`    вЂ” multiplies the texture (near-white so the texture's hue
     //               dominates when textures are on)
-    //   `proto`   — the saturated prototype color used when textures are off
+    //   `proto`   вЂ” the saturated prototype color used when textures are off
     //
     // Without `proto`, switching textures off would leave near-white walls
-    // everywhere, with no distinguishing detail to mask RT GI noise — the
+    // everywhere, with no distinguishing detail to mask RT GI noise вЂ” the
     // user sees that as "stripes / weird texture / flicker on the wall."
     auto T = [](float r, float g, float b) { return glm::vec3(r, g, b); };
 
-    // Floor + arena perimeter walls removed — replaced by the procedural
+    // Floor + arena perimeter walls removed вЂ” replaced by the procedural
     // terrain heightmap (see src/engine/terrain.cpp). The castle below
     // sits on a flattened plateau in the heightmap so the brushes still
     // align at y=0..keep_h.
@@ -558,7 +558,7 @@ Level make_arena(float r, float wh) {
     }
 
     // Outer arena lanterns removed along with the floor + perimeter walls
-    // — they used to anchor the corners of the brick arena. With the
+    // вЂ” they used to anchor the corners of the brick arena. With the
     // open terrain there is nothing to corner.
     return lv;
 }
@@ -667,10 +667,15 @@ bool append_church(Level& lv, glm::vec3 base) {
         LevelMesh m;
         float tile = 1.0f;
         const std::string nm(name);
-        if (nm == "stone" || nm == "trim") {
+        if (nm == "floor")        { m.tex_albedo = 5; m.tex_normal = 5; m.tint = glm::vec3(0.72f, 0.70f, 0.66f); m.fallback = glm::vec3(0.45f, 0.42f, 0.38f); tile = 2.0f; }
+        else if (nm == "wax")     { m.tint = glm::vec3(0.86f, 0.80f, 0.62f); m.fallback = m.tint; }
+        else if (nm == "flame")   { m.tint = glm::vec3(1.0f, 0.72f, 0.30f); m.fallback = m.tint; m.emissive = glm::vec3(4.0f, 2.2f, 0.7f); m.full_emissive = true; }
+        // Leaded stained glass: self-lit, so it glows from inside and out.
+        else if (nm == "stained") { m.tex_albedo = 21; m.tex_normal = 21; m.tint = glm::vec3(1.5f); m.fallback = glm::vec3(0.3f, 0.2f, 0.4f); m.full_emissive = true; tile = 1.0f; }
+        else if (nm == "stone" || nm == "trim" || nm == "altar") {
             // Walls: shallower relief than the castle (they are half as thick).
             // Trim (steps, plinth, buttresses): small parts, nearly flat.
-            m.relief = nm == "trim" ? 0.10f : 0.40f; m.tex_albedo = kBrick; m.tex_normal = kBrick; m.tint = glm::vec3(0.80f, 0.84f, 0.90f); m.fallback = glm::vec3(0.5f, 0.47f, 0.42f); tile = 1.0f / 0.33f; }   // smaller, greyer stones than the castle
+            m.relief = nm == "stone" ? 0.40f : 0.10f; m.tex_albedo = kBrick; m.tex_normal = kBrick; m.tint = glm::vec3(0.80f, 0.84f, 0.90f); m.fallback = glm::vec3(0.5f, 0.47f, 0.42f); tile = 1.0f / 0.33f; }   // smaller, greyer stones than the castle
         // The boarding under the tiles (seen where a tile is missing, and from below the eaves).
         else if (nm == "roof")  { m.tex_albedo = kWood;  m.tex_normal = kWood;  m.tint = glm::vec3(0.22f, 0.17f, 0.13f); m.fallback = glm::vec3(0.12f, 0.09f, 0.07f); tile = 0.55f; }
         // Roof tiles: individually modelled, in three tones of weathered clay (lichen from the texture).
@@ -700,7 +705,18 @@ bool append_church(Level& lv, glm::vec3 base) {
     std::fclose(fp);
     // Player colliders (the chapel is closed): nave, apse, door step.
     auto col = [&](glm::vec3 lo, glm::vec3 hi) { lv.aabbs.push_back({ base + lo, base + hi }); };
-    col(glm::vec3(-4.62f, -1.2f, -3.12f), glm::vec3(4.62f, 7.6f, 3.12f));
+    // The chapel is open: floor, four walls (a gap for the door), furniture.
+    col(glm::vec3(-4.62f, -1.2f, -3.12f), glm::vec3(4.62f, 0.45f, 3.12f));            // floor
+    col(glm::vec3(-4.62f, 0.45f, 2.45f), glm::vec3(4.62f, 4.3f, 3.12f));              // side walls
+    col(glm::vec3(-4.62f, 0.45f, -3.12f), glm::vec3(4.62f, 4.3f, -2.45f));
+    col(glm::vec3(3.95f, 0.45f, -3.12f), glm::vec3(4.62f, 7.6f, 3.12f));              // east wall
+    col(glm::vec3(-4.62f, 0.45f, 0.675f), glm::vec3(-3.95f, 7.6f, 3.12f));            // west wall, either side of the door
+    col(glm::vec3(-4.62f, 0.45f, -3.12f), glm::vec3(-3.95f, 7.6f, -0.675f));
+    col(glm::vec3(-4.62f, 3.0f, -0.675f), glm::vec3(-3.95f, 7.6f, 0.675f));           // over the door
+    col(glm::vec3(-2.95f, 0.45f, 0.55f), glm::vec3(1.5f, 1.3f, 2.25f));               // pew blocks
+    col(glm::vec3(-2.95f, 0.45f, -2.25f), glm::vec3(1.5f, 1.3f, -0.55f));
+    col(glm::vec3(2.55f, 0.45f, -1.7f), glm::vec3(3.95f, 0.6f, 1.7f));                // altar step
+    col(glm::vec3(2.98f, 0.45f, -0.85f), glm::vec3(3.82f, 1.57f, 0.85f));             // altar
     col(glm::vec3(4.4f, -1.2f, -2.3f), glm::vec3(6.6f, 4.0f, 2.3f));
     col(glm::vec3(6.6f, -1.2f, -1.3f), glm::vec3(7.2f, 4.0f, 1.3f));
     col(glm::vec3(-5.35f, -1.2f, -1.05f), glm::vec3(-4.6f, 0.23f, 1.05f));

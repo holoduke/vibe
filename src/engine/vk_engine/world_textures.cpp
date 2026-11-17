@@ -620,9 +620,9 @@ void VulkanEngine::load_foliage_textures() {
             ++loaded;
         }
     }
-    for (int which = 0; which < 2; ++which) {
-        const int slot = which == 0 ? kTexTimber : kTexGrave;
-        const std::string p = resolve(which == 0 ? "timber.png" : "../church/grave_stone.png");
+    for (int which = 0; which < 3; ++which) {
+        const int slot = which == 0 ? kTexTimber : which == 1 ? kTexGrave : kTexGlass;
+        const std::string p = resolve(which == 0 ? "timber.png" : which == 1 ? "../church/grave_stone.png" : "../church/stained_glass.png");
         if (p.empty()) continue;
         int w = 0, h = 0, c = 0;
         if (unsigned char* px = stbi_load(p.c_str(), &w, &h, &c, 4)) {
@@ -1183,6 +1183,7 @@ void VulkanEngine::bake_terrain_materials() {
         { TM_GRASS, kTexPlant,     "foliage/plant_placeholder" },
         { TM_DIRT,  kTexSoldier,   "character/placeholder" },
         { TM_ROCK,  kTexGrave,     "church/grave_placeholder" },
+        { TM_ROCK,  kTexGlass,     "church/glass_placeholder" },
     };
     // CPU generation of all materials in parallel (pure functions of
     // kind + size); uploads stay on this thread (queue owner).
