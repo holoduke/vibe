@@ -1315,6 +1315,7 @@ private:
     float weather_state_ = 0.0f, weather_target_ = 0.0f, weather_timer_ = 0.0f;
     bool  weather_init_ = false;
     float env_rain_ = 0.0f;           // rain intensity 0..1
+    double cloud_travel_ = 0.0, cloud_travel_t_ = -1.0;   // metres the wind has carried the clouds; time of the last step
     float env_snow_ = 0.0f;           // snow lying on the ground 0..1
     float env_snowfall_ = 0.0f;       // snow falling 0..1
     // Weather as independent amounts (environment.cpp); a weather type is a target for all of them.

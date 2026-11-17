@@ -406,9 +406,10 @@ void VulkanEngine::dispatch_clouds(VkCommandBuffer cmd) {
     glm::vec3 sun(std::sin(y) * std::cos(p), std::sin(p), std::cos(y) * std::cos(p));
     CloudPC pc{};
     pc.inv_vp = fv.inv_vp;
-    pc.eye = glm::vec4(fv.eye_pos, static_cast<float>(glfwGetTime()));
+    // eye.w x params.z = metres the wind has carried the clouds (added up in descriptors.cpp).
+    pc.eye = glm::vec4(fv.eye_pos, float(cloud_travel_));
     pc.params = glm::vec4(glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), std::max(0.0f, rt_.cloud_density),
-                          rt_.cloud_speed,
+                          1.0f,
                           (env_applied_ ? env_base_.atmosphere_intensity * env_cloud_k_ : rt_.atmosphere_intensity) * 3.14159265f *
                           // Night: clouds are lit by the moon and a dark sky only - less than half
                           // of what the sky model alone gave them (they glowed pale).

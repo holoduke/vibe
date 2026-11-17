@@ -820,8 +820,14 @@ void VulkanEngine::update_scene_ubo() {
     // The cloud layer for the cloud-shadow function (scene_ubo.glsl): the
     // same numbers clouds.comp renders with, incl. its wind offset.
     {
-        const float ct = static_cast<float>(glfwGetTime());
-        const glm::vec2 wind = glm::vec2(1.0f, 0.35f) * (rt_.cloud_speed * ct * 0.6f);
+        // How far the wind has carried the clouds: wind speed ADDED UP over
+        // time. (Was speed x time: when the weather changed the wind speed, the
+        // whole sky jumped by hours of travel - the clouds raced during a change.)
+        const double ct = glfwGetTime();
+        if (cloud_travel_t_ >= 0.0) cloud_travel_ += double(rt_.cloud_speed) * std::min(ct - cloud_travel_t_, 0.25);
+        else cloud_travel_ = double(rt_.cloud_speed) * ct;
+        cloud_travel_t_ = ct;
+        const glm::vec2 wind = glm::vec2(1.0f, 0.35f) * (float(cloud_travel_) * 0.6f);
         cloud_a_ = glm::vec4(glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), glm::clamp(rt_.cloud_scale, 0.3f, 4.0f),
                              glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f), glm::clamp(rt_.cloud_tower_m, 300.0f, 12000.0f));
         cloud_b_ = glm::vec4(wind, std::max(0.0f, rt_.cloud_density), 0.0f);
