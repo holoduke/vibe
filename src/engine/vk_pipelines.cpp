@@ -147,9 +147,13 @@ VkPipeline build_graphics_pipeline(VkDevice device, const GraphicsPipelineConfig
     for (uint32_t ai = 0; ai < resolved_color_count; ++ai) {
         VkPipelineColorBlendAttachmentState& blend = blends[ai];
         bool alpha_blend = cfg.alpha_blend_color0_only && ai == 0;
-        blend.blendEnable = (cfg.additive_blend || alpha_blend || cfg.premultiplied_blend ||
-                             cfg.dst_alpha_add_blend) ? VK_TRUE : VK_FALSE;
-        if (cfg.dst_alpha_add_blend) {
+        // (the sky fill's blend is for the colour only; its motion-vector attachment is a plain write)
+        const bool dst_add = cfg.dst_alpha_add_blend && ai == 0;
+        blend.blendEnable = ((!cfg.dst_alpha_add_blend && (cfg.additive_blend || alpha_blend || cfg.premultiplied_blend)) ||
+                             dst_add) ? VK_TRUE : VK_FALSE;
+        if (cfg.dst_alpha_add_blend && !dst_add) {
+            // no blending
+        } else if (dst_add) {
             blend.srcColorBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;
             blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
             blend.colorBlendOp        = VK_BLEND_OP_ADD;

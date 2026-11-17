@@ -715,11 +715,19 @@ float uw_caustic(vec2 uv, float t) {
 // colour), alpha untouched. Adds (real sky - placeholder) so the scene
 // colour holds the finished sky and DLSS upscales it with the geometry -
 // no post-upscale reconstruction at silhouettes (the dark rim).
+layout(location = 1) out vec2 outSkyMotion;
 void main() {
     float d = texelFetch(history_depth, ivec2(gl_FragCoord.xy), 0).r;
     if (d < 0.99999) discard;
     vec2 uv = gl_FragCoord.xy * pc.viewport.zw;
     vec3 dir = view_ray(uv);
+    // Where this piece of sky was on screen last frame (the camera turned):
+    // last frame's view-projection applied to the direction (frame.cpp packs
+    // its columns 0..2 into three fields this variant does not use).
+    {
+        vec4 pclip = pc.bloom_params * dir.x + pc.sharpen_params * dir.y + pc.brush_indicator * dir.z;
+        outSkyMotion = pclip.w > 1e-6 ? uv - (pclip.xy / pclip.w * 0.5 + 0.5) : vec2(0.0);
+    }
     vec3 sky_rad = (pc.atmo.x > 0.5) ? atmo_sky(dir) : sample_sky(dir);
     if (pc.atmo.x > 0.5) {
         vec4 cl = textureLod(u_clouds, uv, 0.0);

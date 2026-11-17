@@ -876,14 +876,19 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         vkinit::transition_image(cmd, scene_color_image_,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        vkinit::transition_image(cmd, motion_vec_image_,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         auto sc_att = vkinit::color_attachment_info(scene_color_view_, nullptr,
                                                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        const VkRenderingAttachmentInfo sky_atts[2] = {
+            sc_att, vkinit::color_attachment_info(motion_vec_view_, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) };
         VkRenderingInfo ri{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .pNext = nullptr, .flags = 0,
             .renderArea = { {0, 0}, render_extent_ },
             .layerCount = 1, .viewMask = 0,
-            .colorAttachmentCount = 1, .pColorAttachments = &sc_att,
+            .colorAttachmentCount = 2, .pColorAttachments = sky_atts,
             .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
         };
         vkCmdBeginRendering(cmd, &ri);
@@ -907,6 +912,21 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         sp.sky_color = glm::vec4(last_sky_rgb_, 1.0f);
         sp.flare_params2 = glm::vec4(0.0f, 0.0f, 0.0f, skybox_.hdr ? 1.0f : 0.0f);
         sp.inv_view_proj = last_inv_view_proj_;
+        // Sky motion: last frame's view-projection (columns 0..2: a direction has w = 0),
+        // with the jitter difference folded in like every other motion vector.
+        // Carried in three fields the sky-fill shader does not use otherwise.
+        {
+            glm::mat4 P(0.0f);
+            if (prev_view_proj_valid_) {
+                glm::mat4 T(1.0f);
+                if (rt_.fsr2_enabled) {
+                    const glm::vec2 jd = -(current_frame_view_.jitter - prev_jitter_) * 0.5f;
+                    T[3][0] = 2.0f * jd.x; T[3][1] = 2.0f * jd.y;
+                }
+                P = T * prev_view_proj_;
+            }
+            sp.bloom_params = P[0]; sp.sharpen_params = P[1]; sp.brush_indicator = P[2];
+        }
         sp.atmo = glm::vec4((rt_.sky_mode == 1 && atmo_pipeline_) ? 1.0f : 0.0f,
                             std::max(0.0f, rt_.atmosphere_intensity),
                             6360.0f + std::max(current_frame_view_.eye_pos.y, 1.0f) * 0.001f,
@@ -916,6 +936,9 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRendering(cmd);
         vkinit::transition_image(cmd, scene_color_image_,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkinit::transition_image(cmd, motion_vec_image_,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         prof_mark(cmd, "sky_fill");

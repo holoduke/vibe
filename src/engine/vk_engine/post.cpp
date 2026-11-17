@@ -102,6 +102,10 @@ void VulkanEngine::init_compose() {
         vkpipe::GraphicsPipelineConfig scfg = ccfg;
         scfg.frag = sky_fill_frag_module_;
         scfg.color_format = scene_color_format_;
+        // + the motion vectors of the sky pixels (the camera's turn): without them
+        // the upscaler and frame generation treat the sky as standing still and
+        // the clouds trail behind when looking around.
+        scfg.color_formats = { scene_color_format_, motion_vec_format_ };
         scfg.dst_alpha_add_blend = true;
         sky_fill_pipeline_ = vkpipe::build_graphics_pipeline(device_, scfg);
     }
