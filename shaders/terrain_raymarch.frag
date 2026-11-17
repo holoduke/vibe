@@ -2176,11 +2176,37 @@ void main() {
     }
 
     vec3 mate = getMaterial(pos, nor) * rm_det_tint;
+    // The lake bed seen directly (camera under water): the same stones as
+    // the bed seen through the surface from above (water branch, bed_h).
+    float bed_sub = 0.0;
+    if (scene.water_params.x > 0.5 && pos.y < scene.water_params.y - 0.02) {
+        bed_sub = smoothstep(0.02, 0.12, scene.water_params.y - pos.y);
+        float bfp = max(t, 0.05) * 2.0 * scene.viewport.w;      // ~metres per pixel
+        float bwA = smoothstep(2.0, 5.0, 0.22 / bfp) * bed_sub;
+        float bwB = smoothstep(2.0, 5.0, 0.075 / bfp);
+        if (bwA > 0.01) {
+            vec2  bp = pos.xz;
+            float be = max(0.004, 1.5 * bfp), bid, bk, tmp1, tmp2;
+            float bhR = bed_h(bp + vec2(be, 0.0), bwA, bwB, tmp1, tmp2);
+            float bhU = bed_h(bp + vec2(0.0, be), bwA, bwB, tmp1, tmp2);
+            float bhC = bed_h(bp, bwA, bwB, bid, bk);
+            nor = normalize(nor + vec3(bhC - bhR, 0.0, bhC - bhU) / be * 0.9);
+            float crev = smoothstep(0.0, 0.045, bhC) * smoothstep(0.0, 0.45, bk);
+            float gl = max(dot(mate, vec3(0.3, 0.5, 0.2)), 0.03);
+            vec3 sc = gl * mix(vec3(1.35, 1.15, 1.05), vec3(1.05, 1.0, 0.95), fract(bid * 5.3)) *
+                      mix(0.55, 1.45, fract(bid * 23.1));
+            sc = mix(sc, gl * vec3(1.75, 1.20, 1.05), step(0.70, fract(bid * 3.1)));     // pink-brown
+            sc = mix(sc, gl * vec3(0.55, 0.55, 0.60), step(0.86, fract(bid * 9.7)));     // dark
+            sc = mix(sc, gl * vec3(2.20, 2.10, 1.95), step(0.92, fract(bid * 17.9)));    // pale
+            sc *= mix(0.85, 1.15, noise2(bp * 90.0 + bid * 40.0));
+            mate = mix(mate, mix(mate * 0.45, sc, smoothstep(0.0, 0.2, bk)), bwA) * mix(1.0, mix(0.10, 1.0, crev), bwA);
+        }
+    }
     // Pebbles: each stone its own colour (greys, tans, a few dark and a few
     // pale ones), darker round its rim where it sits in the soil.
     float peb_cover = 0.0;
     if (t < 26.0) {
-        float pw = (1.0 - smoothstep(10.0, 26.0, t)) * (1.0 - plateauWeight(pos.xz));
+        float pw = (1.0 - smoothstep(10.0, 26.0, t)) * (1.0 - plateauWeight(pos.xz)) * (1.0 - bed_sub);   // the bed has its own stones
         if (pw > 0.01 && peb0_h > 0.0) {
             float id = peb0_id, k = peb0_k;
             // Brightness relative to the soil they lie on (the ground palette
