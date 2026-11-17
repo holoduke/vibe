@@ -171,7 +171,14 @@ FetchContent_Declare(enet
     GIT_SHALLOW TRUE)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
-FetchContent_MakeAvailable(glfw glm vk_bootstrap vma Catch2 JoltPhysics imgui tinygltf tinyexr miniaudio fastnoiselite enet)
+# meshoptimizer - index / vertex order for the GPU, simplification, meshlets (MIT).
+# Used by src/engine/mesh_opt.h; the base for cluster LOD work.
+FetchContent_Declare(meshoptimizer
+    GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+    GIT_TAG v1.0
+    GIT_SHALLOW TRUE)
+
+FetchContent_MakeAvailable(glfw glm vk_bootstrap vma Catch2 JoltPhysics imgui tinygltf tinyexr miniaudio fastnoiselite enet meshoptimizer)
 
 # AMD FidelityFX-FSR2 — vendored as a git submodule under
 # external/FidelityFX-FSR2 (MIT license; LICENSE.txt preserved). Use as-is
@@ -371,6 +378,7 @@ target_link_libraries(qlike_engine PUBLIC
     imgui
     tinyexr
     enet
+    meshoptimizer
     ws2_32
     winmm
     iphlpapi

@@ -42,6 +42,8 @@ layout(location = 8) out vec4 vPrevClip;
 layout(location = 9) out vec3 vShellBase;
 layout(location = 10) flat out vec4 vVegInfo;
 
+invariant gl_Position;      // the depth pre-pass and the colour pass must agree to the bit (colour pass tests EQUAL)
+
 void main() {
     uint  ve = visible[gl_InstanceIndex];
     VegInstance I = inst[ve & 0x7FFFFFFFu];

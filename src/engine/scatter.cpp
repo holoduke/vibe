@@ -4,6 +4,7 @@
 #include "engine/road.h"
 #include "engine/terrain.h"
 #include "engine/log.h"
+#include <meshoptimizer.h>
 #include "engine/lsystem.h"
 
 #include <glm/geometric.hpp>
@@ -133,13 +134,43 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
             s.plant_mesh[sp] = create_mesh_from_data(device, alloc, queue, queue_family,
                                                      pv.data(), uint32_t(pv.size()),
                                                      pi.data(), uint32_t(pi.size()));
+            // Levels of detail. A simplified copy keeps the shape and the
+            // per-part colouring (the uv carries the part id and the sway
+            // weight, so it is an attribute the simplifier must respect).
+            auto simplified = [&](const std::vector<Vertex>& v, const std::vector<uint32_t>& idx, float ratio, uint32_t& tris_out) {
+                Mesh m{};
+                tris_out = 0;
+                if (v.empty() || idx.size() < 36) return m;
+                std::vector<uint32_t> out(idx.size());
+                const size_t target = std::max<size_t>(12, size_t(float(idx.size()) * ratio) / 3 * 3);
+                const float w[2] = { 2.0f, 0.5f };
+                float err = 0.0f;
+                size_t n = meshopt_simplifyWithAttributes(out.data(), idx.data(), idx.size(), &v[0].position.x, v.size(), sizeof(Vertex),
+                                                          &v[0].uv.x, sizeof(Vertex), w, 2, nullptr, target, 0.12f, 0, &err);
+                // Thin, loose geometry (blades, petals) often cannot be collapsed that far: then by clustering.
+                if (n > size_t(float(idx.size()) * std::min(0.9f, ratio * 1.7f)))
+                    n = meshopt_simplifySloppy(out.data(), idx.data(), idx.size(), &v[0].position.x, v.size(), sizeof(Vertex),
+                                               nullptr, target, 0.20f, &err);
+                if (n < 3 || n >= idx.size()) return m;
+                out.resize(n);
+                std::vector<Vertex> ov(v.size());
+                const size_t nv = meshopt_optimizeVertexFetch(ov.data(), out.data(), out.size(), v.data(), v.size(), sizeof(Vertex));
+                tris_out = uint32_t(n / 3);
+                return create_mesh_from_data(device, alloc, queue, queue_family, ov.data(), uint32_t(nv), out.data(), uint32_t(out.size()));
+            };
+            uint32_t t1 = 0, t2 = 0;
             if (sp == 16) {
                 std::vector<Vertex> fv; std::vector<uint32_t> fi;
                 build_water_lily(fv, fi, true);
                 s.plant_mesh_far[sp] = create_mesh_from_data(device, alloc, queue, queue_family,
                                                              fv.data(), uint32_t(fv.size()), fi.data(), uint32_t(fi.size()));
-                log::infof("[scatter] water lily mesh: %u tris, far %u tris", uint32_t(pi.size() / 3), uint32_t(fi.size() / 3));
+                t1 = uint32_t(fi.size() / 3);
+                s.plant_mesh_far2[sp] = simplified(fv, fi, 0.45f, t2);
+            } else if (!std::getenv("QLIKE_NO_PLANT_LOD")) {
+                s.plant_mesh_far[sp] = simplified(pv, pi, 0.32f, t1);
+                s.plant_mesh_far2[sp] = simplified(pv, pi, 0.11f, t2);
             }
+            log::infof("[scatter] species %d mesh: %u tris, far %u, far2 %u", sp, uint32_t(pi.size() / 3), t1, t2);
         }
         std::vector<ScatterInstance> per[ScatterSet::kPlantSpecies];
         const float ext = std::min(params.half_extent * 1.3f, 280.0f);
@@ -496,6 +527,8 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 s.plant_cpu = all;
             }
         }
+        for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp)
+            log::infof("[scatter] species %d: %u instances x %u tris", sp, s.plant_count[sp], s.plant_mesh[sp].index_count / 3);
         log::infof("[scatter] plants: %u ferns, %u daisies, %u poppies, %u bluebells, %u cornflowers, %u buttercups, %u lupins, %u reeds",
                    s.plant_count[0], s.plant_count[1], s.plant_count[2], s.plant_count[3],
                    s.plant_count[4], s.plant_count[5], s.plant_count[6], s.plant_count[7]);
@@ -544,6 +577,7 @@ void destroy_scatter(VmaAllocator alloc, ScatterSet& s) {
     destroy_mesh(alloc, s.rock_mesh);
     for (auto& m : s.plant_mesh) if (m.vertex_buffer) destroy_mesh(alloc, m);
     for (auto& m : s.plant_mesh_far) if (m.vertex_buffer) destroy_mesh(alloc, m);
+    for (auto& m : s.plant_mesh_far2) if (m.vertex_buffer) destroy_mesh(alloc, m);
     if (s.plant_buffer) {
         vmaDestroyBuffer(alloc, s.plant_buffer, s.plant_alloc);
         s.plant_buffer = VK_NULL_HANDLE;

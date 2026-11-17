@@ -17,6 +17,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include <meshoptimizer.h>
 #include "engine/log.h"
 #include "engine/vk_initializers.h"
 #include "engine/vk_pipelines.h"
@@ -113,8 +114,31 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
             veg_lod_ranges_.push_back({ uint32_t(verts.size()), uint32_t(m.verts.size()),
                                         uint32_t(idx.size()), uint32_t(m.idx.size()),
                                         m.card_index_start, m.card_cell });
-            for (const auto& v : m.verts) verts.push_back({ v.p, v.n, glm::vec2(v.u, v.v) });
-            idx.insert(idx.end(), m.idx.begin(), m.idx.end());
+            // Triangle and vertex order for the GPU (meshoptimizer): triangles
+            // that share vertices follow each other, vertices lie in the order
+            // they are first used. Same mesh, fewer vertex-shader runs and
+            // cache misses - these meshes are drawn thousands of times, twice.
+            std::vector<uint32_t> oi = m.idx;
+            std::vector<uint32_t> remap(m.verts.size());
+            for (size_t k = 0; k < remap.size(); ++k) remap[k] = uint32_t(k);
+            if (!m.verts.empty() && oi.size() >= 3) {
+                // (the leaf cards are a second range that must stay behind the opaque part)
+                const size_t split = (m.card_index_start != 0xFFFFFFFFu && m.card_index_start < oi.size()) ? m.card_index_start : oi.size();
+                if (split >= 3) meshopt_optimizeVertexCache(oi.data(), m.idx.data(), split, m.verts.size());
+                if (oi.size() - split >= 3) meshopt_optimizeVertexCache(oi.data() + split, m.idx.data() + split, oi.size() - split, m.verts.size());
+                meshopt_optimizeVertexFetchRemap(remap.data(), oi.data(), oi.size(), m.verts.size());
+                for (uint32_t& i : oi) i = remap[i];
+            }
+            {
+                const size_t vb = verts.size();
+                verts.resize(vb + m.verts.size());
+                for (size_t k = 0; k < m.verts.size(); ++k) {
+                    const auto& v = m.verts[k];
+                    const uint32_t dst = remap[k] == ~0u ? uint32_t(k) : remap[k];      // (unused vertices keep a slot)
+                    verts[vb + dst] = { v.p, v.n, glm::vec2(v.u, v.v) };
+                }
+            }
+            idx.insert(idx.end(), oi.begin(), oi.end());
             if (l < kVegLods) tris_lod[l] += m.idx.size() / 3;
         }
     }
@@ -248,6 +272,11 @@ void VulkanEngine::init_vegetation_pipelines() {
     veg_color_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
     if (frag_gbuf_module_) {
         auto g = cfg; g.frag = frag_gbuf_module_;
+        // The depth pre-pass has already laid down exactly these surfaces (same
+        // vertex shader, `invariant gl_Position`): draw only the pixels that
+        // ARE them. Before, every cut-out leaf pixel and every pixel of a
+        // fading LOD ran the whole material shader up to its discard.
+        if (!std::getenv("QLIKE_VEG_NO_EQ")) { g.depth_compare = VK_COMPARE_OP_EQUAL; g.depth_write = false; }
         veg_gbuf_pipeline_ = vkpipe::build_graphics_pipeline(device_, g);
     }
     auto d = cfg;
@@ -338,8 +367,23 @@ void VulkanEngine::draw_vegetation(VkCommandBuffer cmd, bool depth_only) {
     pc.tex_params = glm::vec4(-1.0f, -1.0f, 1.0f, 0.0f);
     pc.grass_params = glm::vec4(1.0f, 1.0f, 1.0f, -1.0f);   // veg draw, mesh mode, triplanar
     vkCmdPushConstants(cmd, veg_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
-    vkCmdDrawIndexedIndirect(cmd, veg_ind_buf_, 0, uint32_t(veg_cmd_template_.size()),
-                             sizeof(VkDrawIndexedIndirectCommand));
+    // Near detail levels first, then the next, ...: the level follows the
+    // distance, so this is roughly front to back - what is drawn first hides
+    // what comes after and the depth test rejects it before its (cut-out)
+    // fragment shader runs. (The commands lie archetype by archetype, one per
+    // level: a stride of kVegDrawLods picks one level of every archetype.)
+    {
+        const uint32_t n_arch = uint32_t(veg_cmd_template_.size()) / uint32_t(kVegDrawLods);
+        const bool by_level = !std::getenv("QLIKE_VEG_NO_ORDER");
+        if (by_level) {
+            for (int l = 0; l < kVegDrawLods; ++l)
+                vkCmdDrawIndexedIndirect(cmd, veg_ind_buf_, VkDeviceSize(l) * sizeof(VkDrawIndexedIndirectCommand), n_arch,
+                                         uint32_t(kVegDrawLods) * sizeof(VkDrawIndexedIndirectCommand));
+        } else {
+            vkCmdDrawIndexedIndirect(cmd, veg_ind_buf_, 0, uint32_t(veg_cmd_template_.size()),
+                                     sizeof(VkDrawIndexedIndirectCommand));
+        }
+    }
     // Restore set 0 on the world layout for the callers' following draws.
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1,
                             &scene_desc_set_, 0, nullptr);

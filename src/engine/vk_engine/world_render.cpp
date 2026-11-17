@@ -978,23 +978,24 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
                 vkCmdBindIndexBuffer(cmd, scatter_.plant_mesh[sp].index_buffer, 0,
                                      VK_INDEX_TYPE_UINT32);
                 const float plant_d = ppc.grass_params.x;
-                const Mesh& far_mesh = scatter_.plant_mesh_far[sp];
-                if (!far_mesh.vertex_buffer) {
-                    scatter_draw_cells(cmd, scatter_.plant_mesh[sp].index_count, scatter_.plant_cells[sp],
-                                       [&](const ScatterCell& c) { return cell_in(c, plant_d); });
-                } else {
-                    // Two levels of detail, chosen per 32 m cell by its nearest point.
-                    auto cell_near = [&](const ScatterCell& c) {
-                        const glm::vec3 q = glm::clamp(eye_c, c.mn, c.mx);
-                        return glm::dot(q - eye_c, q - eye_c) < ScatterSet::kPlantFarLod * ScatterSet::kPlantFarLod;
-                    };
-                    scatter_draw_cells(cmd, scatter_.plant_mesh[sp].index_count, scatter_.plant_cells[sp],
-                                       [&](const ScatterCell& c) { return cell_near(c) && cell_in(c, plant_d); });
-                    VkBuffer fb[2] = { far_mesh.vertex_buffer, scatter_.plant_buffer };
-                    vkCmdBindVertexBuffers(cmd, 0, 2, fb, po);
-                    vkCmdBindIndexBuffer(cmd, far_mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
-                    scatter_draw_cells(cmd, far_mesh.index_count, scatter_.plant_cells[sp],
-                                       [&](const ScatterCell& c) { return !cell_near(c) && cell_in(c, plant_d); });
+                // Up to three levels of detail, chosen per 32 m cell by its nearest point.
+                const Mesh* lods[3] = { &scatter_.plant_mesh[sp], &scatter_.plant_mesh_far[sp], &scatter_.plant_mesh_far2[sp] };
+                if (!lods[1]->vertex_buffer) lods[1] = lods[0];
+                if (!lods[2]->vertex_buffer) lods[2] = lods[1];
+                auto band = [&](const ScatterCell& c) {
+                    const glm::vec3 q = glm::clamp(eye_c, c.mn, c.mx);
+                    const float d2 = glm::dot(q - eye_c, q - eye_c);
+                    return d2 < ScatterSet::kPlantFarLod * ScatterSet::kPlantFarLod ? 0
+                         : (d2 < ScatterSet::kPlantFarLod2 * ScatterSet::kPlantFarLod2 ? 1 : 2);
+                };
+                for (int l = 0; l < 3; ++l) {
+                    if (l > 0) {
+                        VkBuffer fb[2] = { lods[l]->vertex_buffer, scatter_.plant_buffer };
+                        vkCmdBindVertexBuffers(cmd, 0, 2, fb, po);
+                        vkCmdBindIndexBuffer(cmd, lods[l]->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+                    }
+                    scatter_draw_cells(cmd, lods[l]->index_count, scatter_.plant_cells[sp],
+                                       [&](const ScatterCell& c) { return band(c) == l && cell_in(c, plant_d); });
                 }
             }
         }

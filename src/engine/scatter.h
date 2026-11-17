@@ -51,8 +51,13 @@ struct ScatterSet {
     // grass tuft (a clump of long blades; uv.x = 8 +- 0.4 across the blade)
     static constexpr int kPlantSpecies = 17;   // 16 = water lilies
     Mesh          plant_mesh[kPlantSpecies]{};
-    Mesh          plant_mesh_far[kPlantSpecies]{};   // optional low-detail mesh for distant cells (water lilies)
-    static constexpr float kPlantFarLod = 22.0f;     // cells further than this use plant_mesh_far
+    // Levels of detail for distant cells, made automatically (meshoptimizer
+    // simplification; the water lily's first one is hand-built): about a
+    // third of the triangles beyond kPlantFarLod, about a tenth beyond kPlantFarLod2.
+    Mesh          plant_mesh_far[kPlantSpecies]{};
+    Mesh          plant_mesh_far2[kPlantSpecies]{};
+    static constexpr float kPlantFarLod  = 22.0f;
+    static constexpr float kPlantFarLod2 = 48.0f;
     uint32_t      plant_first[kPlantSpecies]{};
     uint32_t      plant_count[kPlantSpecies]{};
     VkBuffer      plant_buffer = VK_NULL_HANDLE;
