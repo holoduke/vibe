@@ -257,13 +257,6 @@ std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts, glm::ivec2
             sp.emplace_back(p, 0.0f);
         }
         for (const auto& p : sp) out.push_back(p);
-        {   // The turn at the end is a small hook, not an exact reversal: the
-            // shader builds the paving direction from the bisector of two
-            // neighbouring segments, which is zero (-> NaN, a black patch)
-            // when they point exactly opposite ways.
-            const glm::vec3 d = glm::normalize(glm::vec3(sp[size_t(spur_n - 1)] - sp[size_t(spur_n - 2)]));
-            out.emplace_back(glm::vec3(sp[size_t(spur_n - 1)]) + glm::vec3(-d.z, 0.0f, d.x) * 0.6f, 0.0f);
-        }
         for (int k = spur_n - 2; k >= 0; --k) out.push_back(sp[size_t(k)]);
         out.emplace_back(road.pts[size_t(road.spur_b)], 0.0f);  // the junction again
         if (spur_seg) *spur_seg = glm::ivec2(seg0, static_cast<int>(out.size()) - 1);

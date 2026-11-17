@@ -310,12 +310,22 @@ vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
     for (int i = 0; i < 63; ++i) {
         if (i + 1 >= rn) break;
         vec2 a = scene.road_pts[i].xz, b = scene.road_pts[i + 1].xz;
-        vec2 ta = normalize(b - scene.road_pts[max(i - 1, 0)].xz);
-        vec2 tb = normalize(scene.road_pts[min(i + 2, rn - 1)].xz - a);
+        // The side road comes back along its own points: only its outward
+        // half lays the paving rows (the way back would mirror them).
+        int sp_tip = sp0 + (sp1 - sp0) / 2;
+        if (i >= sp_tip && i < sp1) continue;
+        vec2 sd = normalize(b - a);
+        // At the dead end the neighbouring points coincide (the polyline
+        // turns straight back): there the segment's own direction is used,
+        // and the last segment carries on past its end to cover the tip.
+        vec2 ta_r = b - scene.road_pts[max(i - 1, 0)].xz;
+        vec2 tb_r = scene.road_pts[min(i + 2, rn - 1)].xz - a;
+        bool dead_end = dot(tb_r, tb_r) < 1e-4;
+        vec2 ta = dot(ta_r, ta_r) < 1e-4 ? sd : normalize(ta_r);
+        vec2 tb = dead_end ? sd : normalize(tb_r);
         float da = dot(q - a, ta), db = dot(q - b, tb);
         if (da < 0.0 && i > 0) continue;
-        if (db > 0.0 && i + 2 < rn) continue;
-        vec2 sd = normalize(b - a);
+        if (db > 0.0 && i + 2 < rn && !dead_end) continue;
         float lat = sd.x * (q - a).y - sd.y * (q - a).x;
         float f = da / max(da - db, 1e-4);
         bool spur = i >= sp0 && i < sp1;
@@ -327,7 +337,7 @@ vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
         if (abs(lat) < abs(best_lat)) {
             best_lat = lat;
             r_along = mix(scene.road_pts[i].w, scene.road_pts[i + 1].w, f);
-            r_dir = normalize(mix(ta, tb, clamp(f, 0.0, 1.0)));
+            r_dir = normalize(mix(ta, tb, clamp(f, 0.0, 1.0)) + sd * 1e-3);
         }
     }
     if (abs(main_lat) < hw + 0.35) { best_lat = main_lat; r_along = main_along; r_dir = main_dir; }
