@@ -555,7 +555,9 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         // props (which already wrote depth earlier in this pass) still
         // occlude correctly. Misses (sky) discard, leaving compose's
         // sky pass to fill those pixels.
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrain_raymarch_pipeline_);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          (env_snow_ * 255.0f < 1.0f && terrain_raymarch_summer_pipeline_ && !std::getenv("QLIKE_NO_SUMMER_SHADER"))
+                              ? terrain_raymarch_summer_pipeline_ : terrain_raymarch_pipeline_);
         PushConstants pc{};
         pc.mvp = vp;
         // Reuse cached inverse from FrameView (was glm::inverse(vp) each

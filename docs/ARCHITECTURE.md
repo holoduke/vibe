@@ -149,3 +149,10 @@ with their camera matrix (`mp_draw_`).
 
 Off for automated runs (`--frames`, `--screenshot`) unless `QLIKE_NET=1`; `QLIKE_NO_NET=1` turns it
 off entirely. Two instances on one PC work (the second takes the next game port).
+
+## Levels of detail and shader builds
+
+- **Trees / bushes / rocks** (`vegetation.cpp`, `veg_cull.comp`): GPU-driven - every instance is frustum- and Hi-Z-culled and given one of 4 mesh levels (or an impostor) on the GPU; drawn with indirect draws, near levels first. The colour pass tests depth EQUAL against the pre-pass.
+- **Small plants** (`scatter.cpp`): 32 m cells, culled on the CPU (frustum, distance, walls, hills). Each species has three meshes: full, ~32 % (beyond 22 m) and ~11 % (beyond 48 m), made at load time with meshoptimizer (`simplified` in `build_scatter`). `QLIKE_NO_PLANT_LOD=1` turns them off.
+- **meshoptimizer** (FetchContent) is available engine-wide: simplification, index / vertex ordering, meshlets. `clusterlod.h` from the same project is the starting point for Nanite-style cluster LOD if that is built.
+- **terrain_raymarch.frag** is compiled three ways: normal (with winter: snow layer, footprints, ice), `QLIKE_SUMMER` (no winter code; bound while there is no snow) and `QLIKE_WATER`.

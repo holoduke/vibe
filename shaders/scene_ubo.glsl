@@ -97,7 +97,11 @@ layout(set = 0, binding = 0) uniform SceneUBO {
 
 // Weather on surfaces (packed in ripple_info.z by descriptors.cpp).
 float scene_wet()  { return fract(scene.ripple_info.z); }
+#ifdef QLIKE_SUMMER
+float scene_snow() { return 0.0; }       // the no-snow build of a shader: all winter code folds away
+#else
 float scene_snow() { return floor(scene.ripple_info.z) / 255.0; }
+#endif
 // Snow lying on a surface: on what faces up, patchy while it is still thin.
 float snow_cover(vec3 n, vec3 wp) {
     float s = scene_snow();

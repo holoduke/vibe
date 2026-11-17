@@ -270,6 +270,15 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
 
     terrain_raymarch_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
     {
+        // No snow, no winter code: a build of the same shader without it (0.2 - 0.4 ms).
+        terrain_raymarch_summer_module_ = vkpipe::load_shader_module(device_, sd + "/terrain_raymarch_summer.frag.spv");
+        if (terrain_raymarch_summer_module_) {
+            vkpipe::GraphicsPipelineConfig su = cfg;
+            su.frag = terrain_raymarch_summer_module_;
+            terrain_raymarch_summer_pipeline_ = vkpipe::build_graphics_pipeline(device_, su);
+        }
+    }
+    {
         vkpipe::GraphicsPipelineConfig lr = cfg;
         lr.color_formats = { scene_color_format_, motion_vec_format_ };
         lr.enable_vrs = false;
@@ -287,6 +296,14 @@ void VulkanEngine::destroy_terrain_raymarch_pipeline() {
     if (terrain_raymarch_pipeline_) {
         vkDestroyPipeline(device_, terrain_raymarch_pipeline_, nullptr);
         terrain_raymarch_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (terrain_raymarch_summer_pipeline_) {
+        vkDestroyPipeline(device_, terrain_raymarch_summer_pipeline_, nullptr);
+        terrain_raymarch_summer_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (terrain_raymarch_summer_module_) {
+        vkDestroyShaderModule(device_, terrain_raymarch_summer_module_, nullptr);
+        terrain_raymarch_summer_module_ = VK_NULL_HANDLE;
     }
     if (terrain_raymarch_vert_module_) {
         vkDestroyShaderModule(device_, terrain_raymarch_vert_module_, nullptr);

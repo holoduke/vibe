@@ -499,6 +499,8 @@ private:
     // it composites with rasterised cubes / castle / dyn-props.
     // Toggled by rt_.terrain_raymarch_enabled.
     VkPipeline      terrain_raymarch_pipeline_   = VK_NULL_HANDLE;
+    VkPipeline      terrain_raymarch_summer_pipeline_ = VK_NULL_HANDLE;   // the same without winter code: bound while there is no snow
+    VkShaderModule  terrain_raymarch_summer_module_ = VK_NULL_HANDLE;
     // Low-res variant: colour + motion only (the low-res pass has 2
     // attachments), no VRS (the VRS image is laid out for full res).
     VkPipeline      terrain_raymarch_lr_pipeline_ = VK_NULL_HANDLE;

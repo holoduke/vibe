@@ -542,6 +542,19 @@ add_custom_command(
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${SKY_FILL_SPV})
 
+# Ray-marched terrain without the winter code (snow layer, footprints, ice):
+# what is bound whenever there is no snow. The same source with QLIKE_SUMMER.
+set(TR_SUMMER_SPV "${SHADER_OUTPUT_DIR}/terrain_raymarch_summer.frag.spv")
+add_custom_command(
+    OUTPUT ${TR_SUMMER_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DQLIKE_SUMMER=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_SUMMER_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader terrain_raymarch_summer.frag (no winter code)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${TR_SUMMER_SPV})
+
 # Water surface pass: same source as the ray-marched terrain, water branch.
 set(WATER_SPV "${SHADER_OUTPUT_DIR}/water.frag.spv")
 add_custom_command(
