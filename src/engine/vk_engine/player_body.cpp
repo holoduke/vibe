@@ -344,7 +344,7 @@ void VulkanEngine::update_player_body(float dt) {
     // ---- arms ----
     // What the hands hold decides where they go (view space, metres).
     static const glm::vec3 kGunR = env_vec3("QLIKE_BODY_RH", glm::vec3(0.165f, -0.300f, -0.120f));
-    static const glm::vec3 kGunL = env_vec3("QLIKE_BODY_LH", glm::vec3(0.160f, -0.250f, -0.430f));
+    static const glm::vec3 kGunL = env_vec3("QLIKE_BODY_LH", glm::vec3(0.178f, -0.243f, -0.430f));
     const float bob_x = 0.006f * std::sin(body_phase_) * body_move_;
     const float bob_y = -0.005f * (0.5f - 0.5f * std::cos(2.0f * body_phase_)) * body_move_;
     for (int side = 0; side < 2; ++side) {
@@ -388,9 +388,9 @@ void VulkanEngine::update_player_body(float dt) {
         } else if (!flashlight_on_ && weapon_ == 0 && side == 0) {
             // Left hand under the fore-end.
             grip = view_pt(kGunL + glm::vec3(bob_x, bob_y, body_recoil_));
-            a1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LA", glm::vec3(0.45f, 0.25f, -1.0f))));
-            n1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LN", glm::vec3(1.0f, 0.15f, 0.35f))));
-            // Fingers wrapped right round the vertical fore-grip.
+            a1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LA", glm::vec3(0.95f, 0.20f, -0.35f))));
+            n1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LN", glm::vec3(0.05f, 1.0f, 0.15f))));
+            // Palm up under the fore-end, fingers wrapped up its far side, thumb up the near side.
             curl[0] = 1.05f; curl[1] = 1.30f; curl[2] = 0.85f;
             grip_thumb = true;
         } else if (!flashlight_on_ && weapon_ == 1 && side == 1) {
