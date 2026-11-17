@@ -1213,6 +1213,9 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     // scale for that hit lookup.
     for (const auto& g : castle_meshes_) {
         if (!g.blas_addr) continue;
+        // Self-lit parts (stained glass, candle flames, lantern glass) let light
+        // through: the sun shines in through the chapel windows.
+        if (g.emissive.a > 0.5f) continue;
         const glm::mat4 I(1.0f);
         glm::vec4 tex = tex_on
             ? glm::vec4(static_cast<float>(g.tex_albedo),

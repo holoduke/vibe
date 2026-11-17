@@ -411,8 +411,8 @@ void VulkanEngine::update_scene_ubo() {
     // Candles in the chapel burn day and night: two warm lights (altar,
     // nave) take the last two lantern slots while the player is near.
     if (church_placed_ && glm::distance(player_.eye_position(), church_pos_) < 70.0f) {
-        data.lamp_lights[7] = glm::vec4(church_pos_ + glm::vec3(3.0f, 2.1f, 0.0f), 1.6f);
-        data.lamp_lights[6] = glm::vec4(church_pos_ + glm::vec3(-0.6f, 2.5f, 0.0f), 1.2f);
+        data.lamp_lights[7] = glm::vec4(church_pos_ + glm::vec3(3.0f, 2.1f, 0.0f), 0.45f);
+        data.lamp_lights[6] = glm::vec4(church_pos_ + glm::vec3(-0.6f, 2.5f, 0.0f), 0.30f);
     }
     float pitch = glm::radians(rt_.sun_pitch_deg);
     float yaw   = glm::radians(rt_.sun_yaw_deg);
