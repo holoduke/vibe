@@ -48,7 +48,7 @@ float Road::distance(float x, float z, float* out_h) const {
     return std::sqrt(best);
 }
 
-Road make_castle_road(const Heightmap& hm, float water_level, float gate_h) {
+Road make_castle_road(const Heightmap& hm, float water_level, float gate_h, const glm::vec2* spur_to) {
     Road r;
     // Hand-placed through the terrain: out of the north gate (+Z), west
     // along the land strip between the two lakes, then south-east down
@@ -73,6 +73,28 @@ Road make_castle_road(const Heightmap& hm, float water_level, float gate_h) {
         }
     }
     xz.push_back(ctrl[n - 1]);
+
+    // Side road: out from the nearest centreline point to `spur_to` and back
+    // along the same points (one polyline keeps every consumer - carving,
+    // grass, plants, the shader paving - unchanged).
+    if (spur_to) {
+        size_t jn = 0; float best = 1e18f;
+        for (size_t i = 0; i < xz.size(); ++i) {
+            const float d = glm::length(xz[i] - *spur_to);
+            if (d < best) { best = d; jn = i; }
+        }
+        const glm::vec2 a = xz[jn], b = *spur_to;
+        const int steps = (std::max)(2, static_cast<int>(glm::length(b - a) / 1.5f));
+        std::vector<glm::vec2> out;
+        for (int k = 1; k <= steps; ++k) out.push_back(a + (b - a) * (float(k) / float(steps)));
+        std::vector<glm::vec2> ins(out);
+        for (int k = steps - 2; k >= 0; --k) ins.push_back(out[size_t(k)]);
+        ins.push_back(a);
+        xz.insert(xz.begin() + static_cast<long long>(jn) + 1, ins.begin(), ins.end());
+        r.spur_a = static_cast<int>(jn);
+        r.spur_tip = static_cast<int>(jn) + steps;
+        r.spur_b = static_cast<int>(jn) + 2 * steps;
+    }
 
     // Level the surface: terrain under the centreline, Gaussian-smoothed
     // over ~+-12 m, kept above the lake, grade-limited to 9 %, and pinned
@@ -111,6 +133,11 @@ Road make_castle_road(const Heightmap& hm, float water_level, float gate_h) {
         }
     }
 
+    if (r.spur_a >= 0)
+        for (int k = 1; r.spur_tip + k <= r.spur_b; ++k) {
+            const float hh = 0.5f * (h[size_t(r.spur_tip - k)] + h[size_t(r.spur_tip + k)]);
+            h[size_t(r.spur_tip - k)] = hh; h[size_t(r.spur_tip + k)] = hh;
+        }
     r.pts.resize(m);
     glm::vec2 lo(1e9f), hi(-1e9f);
     for (size_t i = 0; i < m; ++i) {
@@ -182,8 +209,59 @@ void clear_grass_mask(const Road& road, std::vector<uint8_t>& mask, int dim,
 std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts) {
     std::vector<glm::vec4> out;
     if (road.empty() || max_pts < 2) return out;
+    if (road.spur_a >= 0 && road.spur_b < static_cast<int>(road.pts.size())) {
+        // Main road before / after the junction re-sampled evenly; the side
+        // road with the SAME points out and back, so the two passes lie
+        // exactly on each other.
+        auto piece = [&](int i0, int i1, int count, bool skip_first) {
+            std::vector<float> s(size_t(i1 - i0 + 1), 0.0f);
+            for (int i = i0 + 1; i <= i1; ++i)
+                s[size_t(i - i0)] = s[size_t(i - i0 - 1)] + glm::length(glm::vec2(road.pts[size_t(i)].x - road.pts[size_t(i - 1)].x,
+                                                                                    road.pts[size_t(i)].z - road.pts[size_t(i - 1)].z));
+            size_t j = 0;
+            for (int k = skip_first ? 1 : 0; k < count; ++k) {
+                const float target = s.back() * float(k) / float(count - 1);
+                while (j + 2 < s.size() && s[j + 1] < target) ++j;
+                const float seg = (std::max)(s[j + 1] - s[j], 1e-6f);
+                const float t = std::clamp((target - s[j]) / seg, 0.0f, 1.0f);
+                out.emplace_back(road.pts[size_t(i0) + j] + (road.pts[size_t(i0) + j + 1] - road.pts[size_t(i0) + j]) * t, 0.0f);
+            }
+        };
+        const int last = static_cast<int>(road.pts.size()) - 1;
+        const int spur_n = 6;                                   // points along the side road (excl. the junction)
+        const int main_n = max_pts - 2 * spur_n;
+        const float la = float(road.spur_a), lb = float(last - road.spur_b);
+        int na = (std::max)(2, static_cast<int>(std::round(float(main_n) * la / (std::max)(la + lb, 1.0f))));
+        na = (std::min)(na, main_n - 2);
+        piece(0, road.spur_a, na, false);                       // ends exactly on the junction
+        std::vector<glm::vec4> sp;
+        for (int k = 1; k <= spur_n; ++k) {
+            const float fi = float(road.spur_a) + float(road.spur_tip - road.spur_a) * float(k) / float(spur_n);
+            const int i = static_cast<int>(fi); const float t = fi - float(i);
+            const glm::vec3 p = road.pts[size_t(i)] + (road.pts[size_t((std::min)(i + 1, road.spur_tip))] - road.pts[size_t(i)]) * t;
+            sp.emplace_back(p, 0.0f);
+        }
+        for (const auto& p : sp) out.push_back(p);
+        {   // The turn at the end is a small hook, not an exact reversal: the
+            // shader builds the paving direction from the bisector of two
+            // neighbouring segments, which is zero (-> NaN, a black patch)
+            // when they point exactly opposite ways.
+            const glm::vec3 d = glm::normalize(glm::vec3(sp[size_t(spur_n - 1)] - sp[size_t(spur_n - 2)]));
+            out.emplace_back(glm::vec3(sp[size_t(spur_n - 1)]) + glm::vec3(-d.z, 0.0f, d.x) * 0.6f, 0.0f);
+        }
+        for (int k = spur_n - 2; k >= 0; --k) out.push_back(sp[size_t(k)]);
+        out.emplace_back(road.pts[size_t(road.spur_b)], 0.0f);  // the junction again
+        piece(road.spur_b, last, main_n - na, true);
+        float acc = 0.0f;
+        for (size_t k = 0; k < out.size(); ++k) {
+            if (k > 0) acc += glm::length(glm::vec2(out[k].x - out[k - 1].x, out[k].z - out[k - 1].z));
+            out[k].w = acc;
+        }
+        return out;
+    }
     const size_t m = road.pts.size();
     if (static_cast<int>(m) <= max_pts) {
+
         float acc = 0.0f;
         for (size_t k = 0; k < m; ++k) {
             if (k > 0) acc += glm::length(glm::vec2(road.pts[k].x - road.pts[k - 1].x,

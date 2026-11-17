@@ -29,6 +29,10 @@ struct Road {
     float shoulder   = 1.8f;     // dirt verge past the paving (m)
     float blend      = 5.0f;     // terrain cut/fill falloff past the verge (m)
     glm::vec2 bb_min{0.0f}, bb_max{0.0f};   // XZ bounds incl. all margins
+    // Side road (to the chapel): the centreline leaves the main road at
+    // pts[spur_a], runs out to pts[spur_tip] and comes back along exactly
+    // the same points to pts[spur_b] (= the junction again). -1 = none.
+    int spur_a = -1, spur_tip = -1, spur_b = -1;
 
     bool empty() const { return pts.size() < 2; }
     // XZ distance to the centreline. Also returns the road height at the
@@ -39,7 +43,10 @@ struct Road {
 // Builds the castle road over the current heights. `water_level` keeps
 // the surface above the lake on the land bridge; `gate_h` is the castle
 // floor height the road starts at.
-Road make_castle_road(const Heightmap& hm, float water_level, float gate_h);
+// `spur_to`: optional end point of a side road that branches off the
+// nearest point of the main road.
+Road make_castle_road(const Heightmap& hm, float water_level, float gate_h,
+                      const glm::vec2* spur_to = nullptr);
 
 // Cut/fill the heightmap to the road surface with a smooth falloff.
 void carve_heights(const Road& road, Heightmap& hm);

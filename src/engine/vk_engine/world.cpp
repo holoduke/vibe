@@ -237,7 +237,10 @@ void VulkanEngine::init_world() {
         // Castle road: levelled spline from the gate into the valley.
         // Carved into the SOURCE heights here so raster, BLAS, Jolt, the
         // shadow/aux bakes and grass all agree with the shader paving.
-        castle_road_ = make_castle_road(hm, rt_.water_level, hp.plateau_height + 0.05f);
+        // (with a side road to the chapel door: the chapel stands at
+        // (42.7, 118.8), its door faces -x)
+        const glm::vec2 chapel_door(35.2f, 118.8f);
+        castle_road_ = make_castle_road(hm, rt_.water_level, hp.plateau_height + 0.05f, &chapel_door);
         carve_heights(castle_road_, hm);
         log::infof("[road] %zu centreline points carved", castle_road_.pts.size());
         // Chapel site: a level pad cut into the SOURCE heights (so the drawn
