@@ -873,7 +873,9 @@ void VulkanEngine::run(const RunOptions& opts) {
                 {
                     const float wl = rt_.water_level;
                     const float feet0 = player_.position.y - 0.9f;
-                    const bool open_w = !fly_mode_ && water_at(player_.position.x, player_.position.z);
+                    // Winter: the lake is frozen - no wading or swimming, the ice carries (below).
+                    const bool frozen = env_snow_ > 0.6f;
+                    const bool open_w = !frozen && !fly_mode_ && water_at(player_.position.x, player_.position.z);
                     const float sub = open_w ? glm::clamp((wl - feet0) / 1.8f, 0.0f, 1.0f) : 0.0f;
                     const bool was_swim = player_swimming_;
                     player_swimming_ = open_w && sub > (was_swim ? 0.52f : 0.64f);
@@ -941,6 +943,15 @@ void VulkanEngine::run(const RunOptions& opts) {
                 game::Player ref_player = player_;
                 { CPU_SCOPE("+player");
                 game::update_player(player_, pin, tick_aabbs_, kFixedDt, tick_static_count_); }
+                // Frozen lake: the ice is a floor at the water level.
+                if (env_snow_ > 0.6f && !fly_mode_ && rt_.water_enabled &&
+                    player_.position.y - 0.9f < rt_.water_level + 0.02f &&
+                    water_at(player_.position.x, player_.position.z)) {
+                    player_.position.y = rt_.water_level + 0.92f;
+                    if (player_.velocity.y < 0.0f) player_.velocity.y = 0.0f;
+                    player_.on_ground = true;
+                    player_.air_jumps_left = game::Player::kAirJumps;
+                }
                 if (kCheckBroad) {
                     static std::vector<collision::AABB> full;
                     static uint64_t ticks = 0, bad = 0;

@@ -787,6 +787,12 @@ void main() {
         // Splash rings bend the surface normal.
         vec3 rip_w = water_ripples(wpos.xz);
         wnor = normalize(vec3(wnor.x - rip_w.x, wnor.y, wnor.z - rip_w.y));
+        // Winter: the lake freezes - no waves, a nearly flat sheet with a faint ripple in the surface.
+        float ice_k = smoothstep(0.35, 0.75, scene_snow());
+        if (ice_k > 0.001) {
+            vec3 n_ice = normalize(vec3((noise2(wpos.xz * 1.7) - 0.5) * 0.05, 1.0, (noise2(wpos.xz * 1.7 + 31.0) - 0.5) * 0.05));
+            wnor = normalize(mix(wnor, n_ice, ice_k));
+        }
         vec3 sunDirW = scene.sun_direction.xyz;
         // Camera below the surface: the water is seen from underneath.
         // Inside Snell's window (within ~48.6 deg of straight up) the sky
@@ -1417,6 +1423,11 @@ void main() {
         // it follows the light level (dark at night, dull under overcast).
         baseTint *= pow(clamp(scene.sun_color.a * 0.4, 0.0, 1.0), 0.6);
         vec3 col_w = mix(baseTint, reflCol, fres_eff * (1.0 - 0.7 * foam_cover));
+        if (ice_k > 0.001) {
+            vec3 ia = ice_albedo(wpos.xz, rd, wnor, max(scene.water_params.y - terrain_y, 0.0));
+            vec3 il = ia * (scene.sun_color.rgb * scene.sun_color.a * max(sunDirW.y, 0.0) * water_lit * 0.9 + scene.sky_color.rgb * 0.55);
+            col_w = mix(col_w, mix(il, reflCol, fres_eff * 0.55), ice_k);
+        }
         col_w += scene.sun_color.rgb * scene.sun_color.a * spec *
                   0.8 * water_lit;
         // Subtle darkening of the surface tint when in shadow.

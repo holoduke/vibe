@@ -170,3 +170,52 @@ float foot_depth(vec2 p) {
     }
     return d;
 }
+
+// ---- Lake ice (winter) --------------------------------------------------
+// Fake depth as in the "parallax ice" material shaders (Paragon's ice,
+// the Godot CC0 "parallax ice for fake depth"): a frosted surface layer,
+// and under it layers of fracture planes looked up where the line of sight
+// - bent a little by the surface normal - reaches each depth. Here the
+// layers are procedural (cell-border cracks), four deep.
+float ice_cracks(vec2 p) {                 // 1 on a crack, 0 away from it
+    vec2 ip = floor(p), fp = fract(p);
+    float d1 = 8.0, d2 = 8.0;
+    for (int j = -1; j <= 1; ++j)
+        for (int i = -1; i <= 1; ++i) {
+            vec2 g = vec2(float(i), float(j));
+            vec2 o = vec2(hash21(ip + g), hash21(ip + g + 17.3));
+            float d = length(g + o - fp);
+            if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+        }
+    return 1.0 - smoothstep(0.0, 0.028, d2 - d1);
+}
+vec3 ice_albedo(vec2 wp, vec3 rd, vec3 n, float water_depth) {
+    vec2 shift = (rd.xz - n.xz * 0.35) / max(-rd.y, 0.22);        // metres sideways per metre of depth
+    // The body of the ice: clear and dark over deep water, milky in the shallows.
+    vec3 col = mix(vec3(0.30, 0.50, 0.58), vec3(0.035, 0.11, 0.17), smoothstep(0.2, 2.5, water_depth));
+    // Fracture planes, deepest first (each layer hides part of the one below).
+    for (int i = 3; i >= 0; --i) {
+        float dpt = 0.05 + 0.13 * float(i);
+        vec2  q = wp + shift * dpt;
+        q += (vec2(noise2(q * 0.55 + 3.0), noise2(q * 0.55 + 41.0)) - 0.5) * 1.1;          // cracks wander, they are not ruled lines
+        float c = ice_cracks(q * (0.42 + 0.17 * float(i)) + 9.7 * float(i));
+        c = max(c, 0.5 * ice_cracks(q * 2.3 + 4.0 * float(i)) * smoothstep(0.58, 0.70, noise2(q * 0.4 + float(i))));   // fine crazing in places
+        col = mix(col, mix(vec3(0.80, 0.93, 1.0), vec3(0.30, 0.55, 0.70), float(i) / 3.0), c * exp(-dpt * 4.5) * 0.75);
+    }
+    // Air bubbles frozen in, a little way down.
+    {
+        vec2 q = (wp + shift * 0.09) * 14.0;
+        vec2 ip = floor(q);
+        float h = hash21(ip);
+        vec2 o = vec2(h, hash21(ip + 5.1));
+        float bub = (1.0 - smoothstep(0.05, 0.16 * h + 0.06, length(fract(q) - o))) * step(0.72, hash21(ip + 9.3)) *
+                    smoothstep(0.45, 0.7, noise2(wp * 0.35 + 3.0));
+        col = mix(col, vec3(0.85, 0.95, 1.0), bub * 0.7);
+    }
+    // The surface: frost and scuffs, and wind-blown snow lying on it.
+    float frost = noise2(wp * 2.7) * 0.5 + noise2(wp * 9.0) * 0.3 + noise2(wp * 0.33) * 0.2;
+    col = mix(col, vec3(0.62, 0.78, 0.86), smoothstep(0.45, 0.85, frost) * 0.45);
+    float snow = smoothstep(0.52, 0.66, noise2(wp * 0.21 + 11.0) * 0.7 + noise2(wp * 1.3) * 0.3);
+    col = mix(col, vec3(0.90, 0.93, 0.97), snow * 0.9);
+    return col;
+}
