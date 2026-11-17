@@ -669,8 +669,8 @@ void main() {
     if (is_mesh_draw && pc.grass_params.z > 0.5 && albedo_idx_raw >= 0 &&
         scene.spom_params.x > 0.01) {
         int   hix   = height_idx_for_albedo(albedo_idx_raw);
-        float fadeP = 1.0 - smoothstep(30.0, 65.0, distance(vWorldPos, scene.camera_pos.xyz));
-        if (hix >= 0 && fadeP > 0.01) {
+        float fadeP = 1.0 - smoothstep(26.0, 50.0, distance(vWorldPos, scene.camera_pos.xyz));
+        if (hix >= 0 && fadeP > 0.06) {
             vec3 an = abs(N);
             vec3 Tp, Bp, Fp;
             if (an.x >= an.y && an.x >= an.z)  { Tp = vec3(0, 0, 1); Bp = vec3(0, 1, 0); Fp = vec3(sign(N.x), 0, 0); }

@@ -70,8 +70,8 @@
                 br_Dm = min(br_Dm, 0.3 * min(min(face_size.x, face_size.y),
                                              face_size.z));
                 br_Dm *= max(0.0, scene.spom_params.x) *
-                         (1.0 - smoothstep(35.0, 70.0, br_dist));
-                if (br_Dm > 0.002) {
+                         (1.0 - smoothstep(28.0, 52.0, br_dist));
+                if (br_Dm > 0.010) {     // (under a centimetre of relief is sub-pixel at the distances where it fades: skip the march and its probes)
                     vec3  ro = vWorldPos;
                     vec3  rd = normalize(vWorldPos - scene.camera_pos.xyz);
                     int   br_ef = axis * 2 + (spom_face_n[axis] > 0.0 ? 1 : 0);
@@ -92,7 +92,7 @@
                     float lod = textureQueryLod(u_height[br_h], spom_uv0).x;
                     // More steps at grazing angles (long march, thin
                     // features) - fewer head-on.
-                    int   kSteps = int(mix(48.0, 16.0, cosn));
+                    int   kSteps = max(8, int(mix(48.0, 16.0, cosn) * mix(1.0, 0.5, smoothstep(12.0, 40.0, br_dist))));   // fewer steps with distance
                     float dt = 0.0;
                     // Start offset dithered per pixel: the fixed layers of a
                     // linear march show as bands on walls seen at a slant.
@@ -210,7 +210,7 @@
                                         g_nb_asp   = (g_nb_h == 0 || g_nb_h == 2) ? vec2(0.5, 1.0) : vec2(1.0);
                                         g_nb_dm    = clamp(0.05 / br_nb_scale, 0.06, 0.3) *
                                                      max(0.0, scene.spom_params.x) *
-                                                     (1.0 - smoothstep(35.0, 70.0, br_dist));
+                                                     (1.0 - smoothstep(28.0, 52.0, br_dist));
                                         g_nb_dm    = min(g_nb_dm, 0.15);
                                     }
                                 }
@@ -621,8 +621,8 @@
             // pom_shade(). The old forward path got them from RT rays fired
             // out of the displaced crevice; deferred shades the flat face.
             {
-                float fadeB = 1.0 - smoothstep(30.0, 65.0, distance(vWorldPos, scene.camera_pos.xyz));
-                if (fadeB > 0.01 && scene.spom_params.x > 0.01 && !br_nb_hit) {
+                float fadeB = 1.0 - smoothstep(26.0, 50.0, distance(vWorldPos, scene.camera_pos.xyz));
+                if (fadeB > 0.06 && scene.spom_params.x > 0.01 && !br_nb_hit) {
                     int  hb = clamp(spom_h_idx, 0, 5);
                     vec3 Lt = vec3(dot(L, spom_T), dot(L, spom_B), dot(L, spom_face_n));
                     if (hb == 0 || hb == 2) Lt.x *= 0.5;   // 2:1 brick texture aspect (spom_uv)
@@ -724,8 +724,8 @@
             vec3  m_Ng = N;              // surface normal before the normal map
             {
                 int   hix   = height_idx_for_albedo(albedo_idx_raw);
-                float fadeP = 1.0 - smoothstep(30.0, 65.0, distance(vWorldPos, scene.camera_pos.xyz));
-                if (hix >= 0 && fadeP > 0.01 && scene.spom_params.x > 0.01) {
+                float fadeP = 1.0 - smoothstep(26.0, 50.0, distance(vWorldPos, scene.camera_pos.xyz));
+                if (hix >= 0 && fadeP > 0.06 && scene.spom_params.x > 0.01) {
                     vec3 Tn = normalize(Tm), Bn = normalize(Bm);
                     vec3 Vw = normalize(scene.camera_pos.xyz - vWorldPos);
                     vec3 Vt = vec3(dot(Vw, Tn), dot(Vw, Bn), dot(Vw, N));
