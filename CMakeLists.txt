@@ -315,6 +315,7 @@ add_library(qlike_engine STATIC
     src/engine/vk_engine/flashlight.cpp
     src/engine/vk_engine/player_body.cpp
     src/engine/net/net.cpp
+    src/engine/cluster_lod.cpp
     src/engine/vk_engine/multiplayer.cpp
     src/engine/vk_engine/ui_gamehud.cpp
     src/engine/cpu_prof.cpp
@@ -384,6 +385,7 @@ target_link_libraries(qlike_engine PUBLIC
     iphlpapi
 )
 target_include_directories(qlike_engine PRIVATE ${enet_SOURCE_DIR}/include)
+target_include_directories(qlike_engine PRIVATE ${meshoptimizer_SOURCE_DIR}/demo)   # clusterlod.h
 
 # FSR2 — link only if the submodule was processed above.
 if(TARGET ffx_fsr2_api_x64)

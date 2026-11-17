@@ -35,6 +35,7 @@
 #include "game/level.h"
 #include "game/player.h"
 #include "engine/net/net.h"   // LAN multiplayer session (plain data + Session)
+#include "engine/cluster_lod.h"
 
 struct ImFont;      // Dear ImGui (HUD fonts)
 
@@ -1767,6 +1768,8 @@ private:
     struct VegLodRange { uint32_t first_vertex, vertex_count, first_index, index_count;
                          uint32_t card_start = 0xFFFFFFFFu; int card_cell = 0; };
     std::vector<VegLodRange>  veg_lod_ranges_;
+    // Cluster hierarchies (engine/cluster_lod.h) of the rock archetypes, by archetype (empty = none).
+    std::vector<ClusterMesh>  veg_cluster_meshes_;
     std::vector<VkDrawIndexedIndirectCommand> veg_cmd_template_;
     Mesh          veg_mesh_{};
     uint32_t      veg_count_ = 0, veg_vis_capacity_ = 0;

@@ -101,6 +101,18 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
             imp.idx = { 0, 1, 2, 0, 2, 3 };
             veg_has_imp_[a] = 1;
         }
+        // Rocks: also as a cluster hierarchy (seamless detail per part of the rock).
+        if (veg_cluster_meshes_.size() != veg_arch_.size()) veg_cluster_meshes_.assign(veg_arch_.size(), ClusterMesh{});
+        if (veg_arch_[a].species == 3 && !std::getenv("QLIKE_NO_CLUSTERS")) {
+            const auto& src = veg_arch_[a].lods[0];
+            std::vector<Vertex> cv(src.verts.size());
+            for (size_t k = 0; k < cv.size(); ++k) cv[k] = { src.verts[k].p, src.verts[k].n, glm::vec2(src.verts[k].u, src.verts[k].v) };
+            veg_cluster_meshes_[a] = build_cluster_mesh(cv.data(), cv.size(), src.idx.data(), src.idx.size());
+            const ClusterMesh& cm = veg_cluster_meshes_[a];
+            if (!cm.clusters.empty())
+                log::infof("[cluster] rock archetype %zu: %u tris -> %zu clusters in %d levels (coarsest %u tris)",
+                           a, cm.base_tris, cm.clusters.size(), cm.levels, cm.coarsest_tris);
+        }
         for (int l = 0; l < kVegDrawLods; ++l) {
             const auto& m = (l < kVegLods) ? veg_arch_[a].lods[l] : imp;
             VkDrawIndexedIndirectCommand c{};
