@@ -259,8 +259,8 @@ def candle(cx, cy, z, hgt=0.22, r=0.018):
     wax.append(cyl('wax', cx, cy, z, z + hgt, r, r * 0.9))
     # Flame: a small teardrop.
     fz = z + hgt + 0.012
-    ring = [(cx + 0.011 * math.cos(2 * math.pi * k / 8), cy + 0.011 * math.sin(2 * math.pi * k / 8), fz + 0.018) for k in range(8)]
-    v = ring + [(cx, cy, fz), (cx, cy, fz + 0.065)]
+    ring = [(cx + 0.017 * math.cos(2 * math.pi * k / 8), cy + 0.017 * math.sin(2 * math.pi * k / 8), fz + 0.028) for k in range(8)]
+    v = ring + [(cx, cy, fz), (cx, cy, fz + 0.10)]
     f = [(k, (k + 1) % 8, 9) for k in range(8)] + [((k + 1) % 8, k, 8) for k in range(8)]
     flame.append(obj_from('flame', v, f))
 def stand(cx, cy, hgt):

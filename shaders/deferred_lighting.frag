@@ -1560,11 +1560,14 @@ void main() {
         vec2 lseed = vec2(float(scene.rt_flags.w & 31)) * vec2(17.13, 9.71);
         for (int i = 0; i < 8; ++i) {
             float li = scene.lamp_lights[i].w;
+            // w < 0: a candle - a small flame, short reach (3.2 m).
+            bool candle = li < 0.0;
+            li = abs(li);
             if (li < 1e-3) continue;
             vec3 lpos = scene.lamp_lights[i].xyz;
             vec3 to = lpos - world_pos;
             float d = length(to);
-            const float kLampR = 13.0;
+            float kLampR = candle ? 3.2 : 13.0;
             if (d >= kLampR) continue;
             vec3 ld = to / max(d, 1e-3);
             float pndl = max(dot(N, ld), 0.0);
@@ -1573,9 +1576,9 @@ void main() {
             vec3 jit = vec3(hash12(gl_FragCoord.xy + lseed + vec2(31.0 + float(i) * 7.0, 5.0)),
                             hash12(gl_FragCoord.xy + lseed + vec2(57.0 + float(i) * 7.0, 11.0)),
                             hash12(gl_FragCoord.xy + lseed + vec2(83.0 + float(i) * 7.0, 23.0))) - 0.5;
-            vec3 tj = lpos + jit * 0.34 - world_pos;
+            vec3 tj = lpos + jit * (candle ? 0.05 : 0.34) - world_pos;
             float dj = length(tj);
-            if (any_hit_m(wp_safe + N * 0.06, tj / max(dj, 1e-3), max(dj - 0.45, 0.05), 0x01u)) continue;
+            if (any_hit_m(wp_safe + N * 0.06, tj / max(dj, 1e-3), max(dj - (candle ? 0.10 : 0.45), 0.05), 0x01u)) continue;
             vec3 Hl = normalize(ld + Vv);
             vec3 Fl = f_schlick(F0, clamp(dot(Vv, Hl), 0.0, 1.0));
             vec3 sl = d_ggx(clamp(dot(N, Hl), 0.0, 1.0), a_r) *

@@ -179,7 +179,7 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
                 pc.color = glm::vec4(tex_on ? g.tint : g.fallback, 1.0f);
                 // Self-lit parts (lantern glass) glow faintly by day, fully at night.
                 pc.emissive = g.emissive;
-                if (g.emissive.a > 0.5f) {
+                if (g.emissive.a > 0.5f && g.emissive.r < 3.5f) {       // (flames burn at full strength by day too)
                     const float night = 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
                     pc.emissive = glm::vec4(glm::vec3(g.emissive) * glm::mix(0.12f, 1.0f, night), g.emissive.a);
                     pc.color = glm::vec4(glm::vec3(pc.color) * glm::mix(0.45f, 1.0f, night), 1.0f);

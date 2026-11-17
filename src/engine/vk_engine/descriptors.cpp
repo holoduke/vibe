@@ -408,11 +408,22 @@ void VulkanEngine::update_scene_ubo() {
             lamp_map_slot_ = -1;
         }
     }
-    // Candles in the chapel burn day and night: two warm lights (altar,
-    // nave) take the last two lantern slots while the player is near.
-    if (church_placed_ && glm::distance(player_.eye_position(), church_pos_) < 70.0f) {
-        data.lamp_lights[7] = glm::vec4(church_pos_ + glm::vec3(3.0f, 2.1f, 0.0f), 0.45f);
-        data.lamp_lights[6] = glm::vec4(church_pos_ + glm::vec3(-0.6f, 2.5f, 0.0f), 0.30f);
+    // Candles in the chapel burn day and night. Each is a small light AT its
+    // flame with a short reach (negative intensity = candle, see
+    // deferred_lighting.frag). Inside, all eight candles take the lantern
+    // slots; from outside only the four by the windows / door axis do.
+    if (church_placed_) {
+        const float dc = glm::distance(player_.eye_position(), church_pos_ + glm::vec3(0.0f, 1.5f, 0.0f));
+        if (dc < 70.0f) {
+            const glm::vec3 c[8] = {
+                { 3.4f, 2.13f, 0.55f }, { 3.4f, 2.13f, -0.55f },          // altar
+                { 2.75f, 2.08f, 1.25f }, { 2.75f, 2.08f, -1.25f },        // tall stands
+                { -1.3f, 2.53f, 2.3f }, { -1.3f, 2.53f, -2.3f },          // wall brackets
+                { 1.3f, 2.53f, 2.3f }, { 1.3f, 2.53f, -2.3f },
+            };
+            const int first = dc < 9.0f ? 0 : 4;
+            for (int i = first; i < 8; ++i) data.lamp_lights[i] = glm::vec4(church_pos_ + c[i], -1.5f);
+        }
     }
     float pitch = glm::radians(rt_.sun_pitch_deg);
     float yaw   = glm::radians(rt_.sun_yaw_deg);
