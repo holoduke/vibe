@@ -144,7 +144,12 @@ float sample_cloud(vec3 p, bool detail) {
 
     // 1. Weather: coverage. The coverage setting (and the weather system
     // behind it) slides the whole field from clear to overcast.
-    vec2 wp = (p.xz + wind.xz * 0.6) / (kWeatherCell * size);
+    // (The cloud field drifts as one body: the weather pattern used to move at
+    // 0.6 of the wind while the shapes moved at full speed, so every cloud
+    // kept re-forming at the same rate whatever its distance - far clouds
+    // seemed to move as fast as near ones. Now distance alone sets how fast
+    // a cloud crosses the sky.)
+    vec2 wp = (p.xz + wind.xz) / (kWeatherCell * size);
     float wn = hvalue(wp) * 0.7 + hvalue(wp * 2.17 + 13.0) * 0.3;
     float cov = clamp(pc.params.x, 0.0, 1.0);
     float map_cov = smoothstep(0.2, 0.8, clamp(smoothstep(0.2, 0.8, wn) + (cov - 0.5) * 1.5, 0.0, 1.0));
@@ -157,7 +162,7 @@ float sample_cloud(vec3 p, bool detail) {
     if (hp > 1.0) return 0.0;
 
     // 2. Base shape (wind also carries it slowly downward: the layer boils).
-    vec3 nc = (p + wind + vec3(0.0, -0.12 * pc.params.z * pc.eye.w, 0.0)) / (kShapePeriod * size);
+    vec3 nc = (p + wind + vec3(0.0, -0.025 * pc.params.z * pc.eye.w, 0.0)) / (kShapePeriod * size);
     float base = textureLod(u_shape, nc, 0.0).r;
 
     // 3. Vertical shaping and coverage (original defaults: shapeBase 0.2,
