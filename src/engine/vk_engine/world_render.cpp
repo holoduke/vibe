@@ -896,10 +896,66 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         // Per-cell frustum + distance culling (was: every instance in the
         // world, every frame). Vertex shader still fades by distance.
         const glm::vec3 eye_c = current_frame_view_.eye_pos;
+        // Hidden cells (plants behind a castle wall or behind a hill) are not
+        // drawn at all - they used to cost ~2 ms while standing in the courtyard.
+        //  - wall: ONE solid box that blocks the sight lines to all 8 corners
+        //    of the cell hides the whole cell (both are convex: exact);
+        //  - hill: the sight lines to the cell's top corners and top centre
+        //    all pass at least 1 m under the terrain somewhere on the way.
+        struct Occ { glm::vec3 mn, mx; };
+        static std::vector<Occ> occ;
+        occ.clear();
+        for (size_t i = 0; i < world_.brushes.size() && i < world_.aabbs.size(); ++i) {
+            if (world_.brushes[i].full_emissive) continue;
+            const auto& a = world_.aabbs[i];              // the tight solid box (render_aabbs are inflated)
+            const glm::vec3 e = a.max - a.min;
+            if (std::max(e.x, e.z) < 3.0f || e.y < 2.0f || std::min(e.x, e.z) < 0.5f) continue;   // only real walls
+            if (!aabb_visible(frustum, a.min, a.max)) continue;
+            // Shrunk: the relief can carve the visible surface in a little.
+            const glm::vec3 mn = a.min + glm::vec3(0.2f), mx = a.max - glm::vec3(0.2f, 0.0f, 0.2f);
+            if (all(greaterThan(eye_c, a.min - glm::vec3(0.5f))) && all(lessThan(eye_c, a.max + glm::vec3(0.5f)))) continue;
+            occ.push_back({ mn, mx });
+        }
+        const bool occl_on = !std::getenv("QLIKE_NO_SCATTER_OCCL");
+        auto seg_hits = [&](const Occ& o, const glm::vec3& p) {
+            const glm::vec3 d = p - eye_c;
+            float t0 = 0.0f, t1 = 1.0f;
+            for (int k = 0; k < 3; ++k) {
+                if (std::abs(d[k]) < 1e-6f) { if (eye_c[k] < o.mn[k] || eye_c[k] > o.mx[k]) return false; continue; }
+                float a0 = (o.mn[k] - eye_c[k]) / d[k], a1 = (o.mx[k] - eye_c[k]) / d[k];
+                if (a0 > a1) std::swap(a0, a1);
+                t0 = std::max(t0, a0); t1 = std::min(t1, a1);
+                if (t0 > t1) return false;
+            }
+            return true;
+        };
+        auto cell_hidden = [&](const ScatterCell& c) {
+            if (!occl_on) return false;
+            if (all(greaterThan(eye_c, c.mn - glm::vec3(2.0f))) && all(lessThan(eye_c, c.mx + glm::vec3(2.0f)))) return false;
+            for (const Occ& o : occ) {
+                bool all_blocked = true;
+                for (int k = 0; k < 8 && all_blocked; ++k)
+                    all_blocked = seg_hits(o, glm::vec3(k & 1 ? c.mx.x : c.mn.x, k & 2 ? c.mx.y : c.mn.y, k & 4 ? c.mx.z : c.mn.z));
+                if (all_blocked) return true;
+            }
+            const glm::vec3 tops[5] = { { c.mn.x, c.mx.y, c.mn.z }, { c.mx.x, c.mx.y, c.mn.z }, { c.mn.x, c.mx.y, c.mx.z },
+                                        { c.mx.x, c.mx.y, c.mx.z }, { 0.5f * (c.mn.x + c.mx.x), c.mx.y, 0.5f * (c.mn.z + c.mx.z) } };
+            for (const glm::vec3& p : tops) {
+                const glm::vec3 d = p - eye_c;
+                const float len = glm::length(d);
+                bool blocked = false;
+                for (float s = 4.0f; s < len - 4.0f && !blocked; s += 3.0f) {
+                    const glm::vec3 q = eye_c + d * (s / len);
+                    blocked = sample_terrain_height(q.x, q.z) > q.y + 1.0f;
+                }
+                if (!blocked) return false;
+            }
+            return true;
+        };
         auto cell_in = [&](const ScatterCell& c, float max_d) {
             glm::vec3 q = glm::clamp(eye_c, c.mn, c.mx);
             if (glm::dot(q - eye_c, q - eye_c) > max_d * max_d) return false;
-            return aabb_visible(frustum, c.mn, c.mx);
+            return aabb_visible(frustum, c.mn, c.mx) && !cell_hidden(c);
         };
         const float rock_d = spc.grass_params.x;
         scatter_draw_cells(cmd, scatter_.rock_mesh.index_count, scatter_.rock_cells,

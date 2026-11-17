@@ -304,9 +304,11 @@ void VulkanEngine::dispatch_fsr3(VkCommandBuffer cmd) {
                              FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
                              FFX_API_RESOURCE_USAGE_UAV);
 
-    d.jitterOffset.x = current_frame_view_.jitter.x * 0.5f *
+    // The projection jitter moves the image by -j in NDC (see dlss.cpp), so the
+    // offset FSR wants is negative. With the wrong sign FSR never converged: blurry.
+    d.jitterOffset.x = -current_frame_view_.jitter.x * 0.5f *
                        static_cast<float>(render_extent_.width);
-    d.jitterOffset.y = current_frame_view_.jitter.y * 0.5f *
+    d.jitterOffset.y = -current_frame_view_.jitter.y * 0.5f *
                        static_cast<float>(render_extent_.height);
     d.motionVectorScale.x = static_cast<float>(render_extent_.width);
     d.motionVectorScale.y = static_cast<float>(render_extent_.height);
@@ -897,9 +899,9 @@ void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
         prep.commandList = reinterpret_cast<void*>(cmd);
         prep.renderSize.width  = render_extent_.width;
         prep.renderSize.height = render_extent_.height;
-        prep.jitterOffset.x = current_frame_view_.jitter.x * 0.5f *
+        prep.jitterOffset.x = -current_frame_view_.jitter.x * 0.5f *
                               static_cast<float>(render_extent_.width);
-        prep.jitterOffset.y = current_frame_view_.jitter.y * 0.5f *
+        prep.jitterOffset.y = -current_frame_view_.jitter.y * 0.5f *
                               static_cast<float>(render_extent_.height);
         prep.motionVectorScale.x = static_cast<float>(render_extent_.width);
         prep.motionVectorScale.y = static_cast<float>(render_extent_.height);
