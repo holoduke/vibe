@@ -213,7 +213,6 @@ eave_z = top - EAVE * slope
 roof.append(slab('roof_s', (-ex, -eave_y, eave_z), (ex, -eave_y, eave_z), (ex, 0.0, ridge_z), (-ex, 0.0, ridge_z), 0.14))
 roof.append(slab('roof_n', (ex, eave_y, eave_z), (-ex, eave_y, eave_z), (-ex, 0.0, ridge_z), (ex, 0.0, ridge_z), 0.14))
 # Ridge cap.
-roof.append(box('ridge', -ex, ex, -0.10, 0.10, ridge_z - 0.06, ridge_z + 0.07))
 # Apse roof: a half cone of flat facets up to a point on the east gable.
 apex = (hx + 0.05, 0.0, PLINTH + APSE_H + 2.5)
 rim = [(x + (0.38 if x > hx else 0.0), y * (1.0 + 0.38 / APSE_R), PLINTH + APSE_H - 0.12) for x, y in ap]
@@ -233,7 +232,98 @@ sv = [(TX - flare, -flare, tz1), (TX + flare, -flare, tz1), (TX + flare, flare, 
       (TX + TW * 0.55, TW * 0.55, tz1 + 0.55), (TX - TW * 0.55, TW * 0.55, tz1 + 0.55), (TX, 0.0, sp)]
 sf = [(0, 3, 2, 1), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7), (4, 5, 8), (5, 6, 8), (6, 7, 8), (7, 4, 8)]
 roof.append(obj_from('spire', sv, sf))
-roof_ob = join(roof, 'roof')
+roof_ob = join(roof, 'roof')      # now the dark boarding UNDER the tiles
+
+# ---------------------------------------------------------------- roof tiles
+# Every tile is its own little slab: rows overlap (the lower end of a tile
+# lies on the row below), alternate rows are staggered, and no two tiles
+# are quite alike - small differences in lift, twist and position, a few
+# slipped down, a few missing (the boarding shows), three tones of clay.
+import random
+random.seed(11)
+tile_tris = {'tiles_a': [], 'tiles_b': [], 'tiles_c': []}
+
+def emit_quad(grp, q, hint, e_u, e_v, org, uo):
+    fn = (q[1] - q[0]).cross(q[3] - q[0])
+    if fn.length < 1e-9:
+        fn = (q[2] - q[1]).cross(q[3] - q[1])
+    if fn.length < 1e-9:
+        return
+    fn.normalize()
+    if fn.dot(hint) < 0.0:
+        fn = -fn
+    for tri in ((0, 1, 2), (0, 2, 3)):
+        for k in tri:
+            p = q[k]
+            tile_tris[grp].append((p.copy(), fn.copy(), ((p - org).dot(e_u) + uo[0], -(p - org).dot(e_v) + uo[1])))
+
+def tile_face(a, b, c, d, tw, expo, th):
+    a, b, c, d = Vector(a), Vector(b), Vector(c), Vector(d)
+    n = (b - a).cross(d - a).normalized()
+    if n.z < 0.0:
+        a, b, c, d = b, a, d, c
+        n = -n
+    up = ((c + d) * 0.5 - (a + b) * 0.5)
+    L = up.length
+    e_v = up.normalized(); e_u = (b - a).normalized()
+    nrows = max(1, round(L / expo))
+    ln = 1.75 * expo / L
+    def P(fx, t):
+        return a.lerp(d, t).lerp(b.lerp(c, t), fx)
+    for r in range(nrows):
+        t0 = r / nrows
+        t1 = min(1.0, t0 + ln)
+        w = (b.lerp(c, t0) - a.lerp(d, t0)).length
+        ncol = max(1, round(w / tw))
+        if r % 2 == 0 or ncol < 2:
+            bounds = [k / ncol for k in range(ncol + 1)]
+        else:
+            bounds = [0.0] + [(k + 0.5) / ncol for k in range(ncol)] + [1.0]
+        for f0, f1 in zip(bounds[:-1], bounds[1:]):
+            if f1 - f0 < 1e-4:
+                continue
+            if r > 0 and random.random() < 0.025:
+                continue                                           # a tile is gone
+            slip = (-random.uniform(0.03, 0.07) if random.random() < 0.06 else random.uniform(-0.008, 0.008)) / L
+            tw_ = random.uniform(-0.006, 0.006) / L
+            gap = 0.004 / max(w, 1e-3)
+            ta, tb = t0 + slip, min(1.0, t1 + slip)
+            lift = random.uniform(0.0, 0.007)
+            top = [P(f0 + gap, ta + tw_) + n * (2.2 * th + lift), P(f1 - gap, ta - tw_) + n * (2.2 * th + lift),
+                   P(f1 - gap, tb) + n * (0.25 * th), P(f0 + gap, tb) + n * (0.25 * th)]
+            bot = [q - n * th for q in top]
+            rr = random.random()
+            grp = 'tiles_a' if rr < 0.60 else ('tiles_b' if rr < 0.86 else 'tiles_c')
+            uo = (random.random() * 3.0, random.random() * 3.0)
+            emit_quad(grp, top, n, e_u, e_v, a, uo)
+            emit_quad(grp, [bot[0], bot[1], top[1], top[0]], -e_v, e_u, e_v, a, uo)
+            emit_quad(grp, [bot[3], bot[0], top[0], top[3]], -e_u, e_u, e_v, a, uo)
+            emit_quad(grp, [bot[1], bot[2], top[2], top[1]], e_u, e_u, e_v, a, uo)
+
+TH = 0.024
+tile_face((-ex, -eave_y, eave_z), (ex, -eave_y, eave_z), (ex, 0.0, ridge_z), (-ex, 0.0, ridge_z), 0.30, 0.25, TH)
+tile_face((ex, eave_y, eave_z), (-ex, eave_y, eave_z), (-ex, 0.0, ridge_z), (ex, 0.0, ridge_z), 0.30, 0.25, TH)
+for i in range(len(rim) - 1):
+    tile_face(rim[i], rim[i + 1], apex, apex, 0.26, 0.22, TH)
+for q in ((0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)):
+    tile_face(sv[q[0]], sv[q[1]], sv[q[2]], sv[q[3]], 0.17, 0.14, 0.016)
+for q in ((4, 5), (5, 6), (6, 7), (7, 4)):
+    tile_face(sv[q[0]], sv[q[1]], sv[8], sv[8], 0.15, 0.15, 0.016)
+# Ridge: a row of overlapping cap tiles (an upturned V each).
+x = -ex
+while x < ex:
+    ln_ = 0.42
+    z0 = ridge_z + 0.035 + random.uniform(0.0, 0.01)
+    lift0, lift1 = 0.03, 0.0                        # each cap lies on the next
+    uo = (random.random() * 3.0, random.random() * 3.0)
+    grp = 'tiles_a' if random.random() < 0.7 else 'tiles_b'
+    for sy in (-1, 1):
+        q = [Vector((x, 0.0, z0 + lift0)), Vector((x + ln_, 0.0, z0 + lift1)),
+             Vector((x + ln_, sy * 0.17, z0 + lift1 - 0.14)), Vector((x, sy * 0.17, z0 + lift0 - 0.14))]
+        emit_quad(grp, q, Vector((0.0, sy * 0.6, 0.8)), Vector((1, 0, 0)), Vector((0, 0, 1)), Vector((x, 0, 0)), uo)
+        emit_quad(grp, [q[0], q[3], q[3] - Vector((0, 0, 0.03)), q[0] - Vector((0, 0, 0.03))], Vector((-1, 0, 0)),
+                  Vector((0, 1, 0)), Vector((0, 0, 1)), Vector((x, 0, 0)), uo)
+    x += 0.36
 
 # ---------------------------------------------------------------- timber turret (posts, rails), cross
 for sx in (-1, 1):
@@ -302,5 +392,10 @@ os.makedirs(out_dir, exist_ok=True)
 with open(os.path.join(out_dir, 'church.mesh'), 'w') as f:
     for ob in (walls, trim_ob, roof_ob, wood_ob, iron_ob, glass_ob):
         export(ob, f)
+    for grp, tris in tile_tris.items():
+        f.write('mesh %s %d\n' % (grp, len(tris) // 3))
+        for p, n, uv in tris:
+            f.write('%.4f %.4f %.4f %.3f %.3f %.3f %.4f %.4f\n' % (p.x, p.z, -p.y, n.x, n.z, -n.y, uv[0], uv[1]))
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out_dir, 'church.blend'))
+print('TILES', {k: len(v) // 3 for k, v in tile_tris.items()})
 print('CHURCH OK', [(o.name, len(o.data.polygons)) for o in (walls, roof_ob, wood_ob, iron_ob, glass_ob)])

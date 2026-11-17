@@ -670,8 +670,13 @@ bool append_church(Level& lv, glm::vec3 base) {
         if (nm == "stone" || nm == "trim") {
             // Walls: shallower relief than the castle (they are half as thick).
             // Trim (steps, plinth, buttresses): small parts, nearly flat.
-            m.relief = nm == "trim" ? 0.10f : 0.40f; m.tex_albedo = kBrick; m.tex_normal = kBrick; m.tint = glm::vec3(1.0f, 0.96f, 0.90f); m.fallback = glm::vec3(0.5f, 0.47f, 0.42f); tile = 1.0f / 0.22f; }
-        else if (nm == "roof")  { m.tex_albedo = kRoof;  m.tex_normal = kRoof;  m.tint = glm::vec3(0.62f, 0.52f, 0.50f); m.fallback = glm::vec3(0.25f, 0.16f, 0.14f); tile = 1.7f; }
+            m.relief = nm == "trim" ? 0.10f : 0.40f; m.tex_albedo = kBrick; m.tex_normal = kBrick; m.tint = glm::vec3(0.80f, 0.84f, 0.90f); m.fallback = glm::vec3(0.5f, 0.47f, 0.42f); tile = 1.0f / 0.33f; }   // smaller, greyer stones than the castle
+        // The boarding under the tiles (seen where a tile is missing, and from below the eaves).
+        else if (nm == "roof")  { m.tex_albedo = kWood;  m.tex_normal = kWood;  m.tint = glm::vec3(0.22f, 0.17f, 0.13f); m.fallback = glm::vec3(0.12f, 0.09f, 0.07f); tile = 0.55f; }
+        // Roof tiles: individually modelled, in three tones of weathered clay (lichen from the texture).
+        else if (nm == "tiles_a") { m.tex_albedo = 20; m.tex_normal = 20; m.tint = glm::vec3(1.25f, 0.62f, 0.48f); m.fallback = glm::vec3(0.45f, 0.20f, 0.15f); tile = 0.8f; }
+        else if (nm == "tiles_b") { m.tex_albedo = 20; m.tex_normal = 20; m.tint = glm::vec3(0.95f, 0.50f, 0.42f); m.fallback = glm::vec3(0.35f, 0.17f, 0.13f); tile = 0.8f; }
+        else if (nm == "tiles_c") { m.tex_albedo = 20; m.tex_normal = 20; m.tint = glm::vec3(1.05f, 0.80f, 0.55f); m.fallback = glm::vec3(0.40f, 0.28f, 0.18f); tile = 0.8f; }
         else if (nm == "wood")  { m.tex_albedo = kWood;  m.tex_normal = kWood;  m.tint = glm::vec3(0.80f, 0.66f, 0.50f); m.fallback = glm::vec3(0.35f, 0.22f, 0.12f); tile = 0.55f; }
         else if (nm == "iron")  { m.tex_albedo = kMetal; m.tex_normal = kMetal; m.tint = glm::vec3(0.16f, 0.16f, 0.17f); m.fallback = glm::vec3(0.08f, 0.08f, 0.09f); tile = 0.5f; }
         else                    { m.tint = glm::vec3(0.035f, 0.05f, 0.08f); m.fallback = m.tint; m.emissive = glm::vec3(0.030f, 0.022f, 0.010f); }
