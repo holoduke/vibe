@@ -1809,8 +1809,25 @@ private:
     // Cluster LOD of the static world meshes (castle, chapel, gravestones).
     uint32_t      scl_total_ = 0;
     bool          scl_hiz_bound_ = false, scl_ready_ = false;
-    VkBuffer      scl_index_buf_ = VK_NULL_HANDLE, scl_cluster_buf_ = VK_NULL_HANDLE, scl_meta_buf_ = VK_NULL_HANDLE, scl_cmd_buf_ = VK_NULL_HANDLE;
-    VmaAllocation scl_index_alloc_ = nullptr, scl_cluster_alloc_ = nullptr, scl_meta_alloc_ = nullptr, scl_cmd_alloc_ = nullptr;
+    struct SclPart {                                   // one clustered mesh part
+        VkBuffer      ib_coarse = VK_NULL_HANDLE, ib_full = VK_NULL_HANDLE;   // simplified levels (resident) / all levels (streamed in)
+        VmaAllocation coarse_alloc = nullptr, full_alloc = nullptr;
+        std::vector<uint32_t> coarse;                  // CPU copy of the simplified levels (prefix of the full buffer)
+        uint32_t      fine_count = 0;                  // indices of the finest level (in the stream file)
+        std::string   stream_file;
+        glm::vec3     bmin{0.0f}, bmax{0.0f};
+        float         e1max = 0.0f;                    // largest error of level 1: inside e1max x pixels-per-radian the finest level is needed
+        float         tri_px = 0.0f;                   // width of the finest triangles when first drawn (pixels)
+        int           state = 0;                       // 0 finest level not loaded, 1 loading, 2 loaded
+        std::shared_ptr<void> job;                     // background read (cluster_draw.cpp)
+    };
+    struct SclRetired { VkBuffer buf; VmaAllocation alloc; int frames; };
+    std::vector<SclPart>    scl_parts_;
+    std::vector<SclRetired> scl_retired_;
+    VkBuffer      scl_cluster_buf_ = VK_NULL_HANDLE, scl_meta_buf_ = VK_NULL_HANDLE, scl_cmd_buf_ = VK_NULL_HANDLE, scl_cmd_shadow_buf_ = VK_NULL_HANDLE;
+    VmaAllocation scl_cluster_alloc_ = nullptr, scl_meta_alloc_ = nullptr, scl_cmd_alloc_ = nullptr, scl_cmd_shadow_alloc_ = nullptr;
+    VkDescriptorSet scl_set_shadow_ = VK_NULL_HANDLE;
+    void stream_static_clusters(glm::vec3 eye, float ppr);
     VkDescriptorSetLayout scl_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool      scl_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet       scl_set_ = VK_NULL_HANDLE;

@@ -813,7 +813,11 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // dyn-props are drawn, so the alpha blend reads the castle/cube
     // colours instead of the still-cleared sky. See `render_grass_
     // raymarch` call further down.
+    // (the single-blade sprites lit themselves differently from everything
+    // around them and stood out as glowing: with the raymarched grass on they are not drawn)
+    static const bool kBladeSprites = std::getenv("QLIKE_GRASS_SPRITES") != nullptr;
     if (rt_.grass_enabled && grass_.instance_count > 0 &&
+        (kBladeSprites || !rt_.grass_raymarch_enabled) &&
         grass_pipeline_ != VK_NULL_HANDLE) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, grass_pipeline_);
         // descriptor set is the same scene set, already bound at the

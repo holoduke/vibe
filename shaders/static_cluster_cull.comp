@@ -10,7 +10,7 @@ layout(local_size_x = 64) in;
 
 struct Cluster { vec4 bounds; vec4 self; vec4 parent; float self_error; float parent_error; uint first_index; uint index_count; };
 layout(std430, set = 0, binding = 0) readonly buffer Clusters { Cluster cl[]; };
-layout(std430, set = 0, binding = 1) readonly buffer Meta     { uvec2 meta[]; };   // per cluster: part, first command slot of the part
+layout(std430, set = 0, binding = 1) readonly buffer Meta     { uvec4 meta[]; };   // per cluster: part, first command slot of the part, level (0 = finest)
 layout(std430, set = 0, binding = 2) buffer Commands          { uint cmd[]; };     // [0..63] counts per part; commands (5 uints) from [64]
 layout(set = 0, binding = 3) uniform sampler2D u_hiz;
 
@@ -20,6 +20,7 @@ layout(push_constant) uniform PC {
     vec4  params;     // .x cluster count, .y error threshold (pixels), .z occlusion on (0/1)
     mat4  prev_vp;
     vec4  hiz;        // .xy pyramid level-0 size, .z mip count
+    uvec4 loaded;     // bit per part: its finest level is on the GPU (streaming)
 } pc;
 
 bool occluded(vec3 c, float r, float d) {
@@ -50,7 +51,12 @@ void main() {
         e_self = C.self_error / max(distance(C.self.xyz, pc.cam.xyz) - C.self.w, 0.05) * pc.cam.w;
     if (C.parent_error < 1e29)
         e_parent = C.parent_error / max(distance(C.parent.xyz, pc.cam.xyz) - C.parent.w, 0.05) * pc.cam.w;
-    if (!(e_self <= pc.params.y && e_parent > pc.params.y)) return;
+    uvec4 m = meta[j];
+    // Streaming: while a part's finest level is not loaded, level 1 stands in for it.
+    bool fine_in = ((pc.loaded[m.x >> 5] >> (m.x & 31u)) & 1u) != 0u;
+    if (m.z == 0u && !fine_in) return;
+    bool stand_in = m.z == 1u && !fine_in;
+    if (!((e_self <= pc.params.y || stand_in) && e_parent > pc.params.y)) return;
 
     vec3 bw = C.bounds.xyz; float br = C.bounds.w;
     for (int p = 0; p < 6; ++p)
@@ -60,7 +66,6 @@ void main() {
     // so nothing is dropped while walking through a doorway)
     if (pc.params.z > 0.5 && bd > br + 12.0 && occluded(bw, br, bd)) return;
 
-    uvec2 m = meta[j];
     uint n = atomicAdd(cmd[m.x], 1u);
     uint o = 64u + (m.y + n) * 5u;
     cmd[o]      = C.index_count;

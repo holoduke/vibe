@@ -235,13 +235,13 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                     wz > params.road->bb_min.y && wz < params.road->bb_max.y &&
                     params.road->distance(wx, wz) < params.road->half_width + params.road->shoulder + 1.0f) continue;
                 float h = h_at(wx, wz);
-                if (h < params.water_level - 0.35f || h > params.water_level + 0.9f) continue;
+                if (h < params.water_level - 0.35f || h > params.water_level + 0.30f) continue;   // at the waterline only (they stood as lone bright fans in the low meadows up to 0.9 m above it)
                 if (n_y_at(wx, wz) < 0.72f) continue;
                 // Beds, not a uniform fringe: low-frequency patches plus density
                 // falling off with height above the water.
                 float bed = hash31(glm::vec3(std::floor(wx * 0.11f), 31.0f, std::floor(wz * 0.11f))) * 0.6f +
                             hash31(glm::vec3(std::floor(wx * 0.37f), 37.0f, std::floor(wz * 0.37f))) * 0.4f;
-                float wet = 1.0f - glm::smoothstep(params.water_level + 0.1f, params.water_level + 0.9f, h);
+                float wet = 1.0f - glm::smoothstep(params.water_level + 0.05f, params.water_level + 0.30f, h);
                 if (bed < 0.42f || u01(rng) > wet * glm::clamp(params.flower_density, 0.0f, 2.0f)) continue;
                 ScatterInstance si{};
                 si.pos_scale = glm::vec4(wx, h - 0.03f, wz, 0.75f + 0.55f * u01(rng));
@@ -409,9 +409,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 auto tseed = [&trs](uint32_t k, uint32_t salt) {
                     trs = ((k + 1u) * 2654435761u) ^ salt; trs ^= trs >> 15; trs *= 0x2C1B3C6Du; trs ^= trs >> 12; trs |= 1u;
                 };
-                // The automatic tufts are OFF: single long clumps standing in the meadow read as glowing
-                // (lit without the shading of the grass around them). Tufts painted in the editor stay.
-                static const bool kAutoTufts = std::getenv("QLIKE_AUTO_TUFTS") != nullptr;
+                static const bool kAutoTufts = std::getenv("QLIKE_NO_TUFTS") == nullptr;
                 for (int i = 0; kAutoTufts && i < ttries && tufts < 120000; ++i) {
                     tseed(uint32_t(i), 0x7F4A7C15u);
                     const float wx = (tu() * 2.0f - 1.0f) * ext;

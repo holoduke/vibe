@@ -65,6 +65,7 @@ ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const u
             g.index_count = uint32_t(c.index_count);
             out.indices.insert(out.indices.end(), c.indices, c.indices + c.index_count);
             out.clusters.push_back(g);
+            out.depth.push_back(uint8_t(std::min(group.depth, 255)));
             tris_at_depth[size_t(group.depth)] += uint32_t(c.index_count / 3);
         }
         return gid;
@@ -92,7 +93,7 @@ uint64_t fnv1a(const void* data, size_t n, uint64_t h) {
     for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ull; }
     return h;
 }
-constexpr uint32_t kCacheVersion = 3;      // bump when the builder or ClusterGpu changes
+constexpr uint32_t kCacheVersion = 4;      // bump when the builder or ClusterGpu changes
 }  // namespace
 
 ClusterMesh build_cluster_mesh_cached(const Vertex* verts, size_t vertex_count, const uint32_t* indices, size_t index_count,
@@ -110,9 +111,10 @@ ClusterMesh build_cluster_mesh_cached(const Vertex* verts, size_t vertex_count, 
         ClusterMesh m;
         bool ok = std::fread(&hd, sizeof(hd), 1, fp) == 1 && hd.version == kCacheVersion && hd.clusters < (1u << 24) && hd.indices < (1u << 28);
         if (ok) {
-            m.clusters.resize(hd.clusters); m.indices.resize(hd.indices);
+            m.clusters.resize(hd.clusters); m.indices.resize(hd.indices); m.depth.resize(hd.clusters);
             ok = std::fread(m.clusters.data(), sizeof(ClusterGpu), hd.clusters, fp) == hd.clusters &&
-                 std::fread(m.indices.data(), sizeof(uint32_t), hd.indices, fp) == hd.indices;
+                 std::fread(m.indices.data(), sizeof(uint32_t), hd.indices, fp) == hd.indices &&
+                 std::fread(m.depth.data(), 1, hd.clusters, fp) == hd.clusters;
             m.levels = hd.levels; m.base_tris = hd.base_tris; m.coarsest_tris = hd.coarsest_tris;
         }
         std::fclose(fp);
@@ -127,6 +129,7 @@ ClusterMesh build_cluster_mesh_cached(const Vertex* verts, size_t vertex_count, 
         std::fwrite(&hd, sizeof(hd), 1, fp);
         std::fwrite(m.clusters.data(), sizeof(ClusterGpu), m.clusters.size(), fp);
         std::fwrite(m.indices.data(), sizeof(uint32_t), m.indices.size(), fp);
+        std::fwrite(m.depth.data(), 1, m.depth.size(), fp);
         std::fclose(fp);
     }
     return m;

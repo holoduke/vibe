@@ -215,6 +215,8 @@ void VulkanEngine::cull_plants(VkCommandBuffer cmd) {
 // Returns false when the GPU list is not available this frame (CPU cells then).
 bool VulkanEngine::draw_plants_gpu(VkCommandBuffer cmd, int sp) {
     if (!pg_drawn_) return false;
+    // QLIKE_SKIP_SP=<bit mask>: leave species out (to see which plant is which).
+    { static const char* sk = std::getenv("QLIKE_SKIP_SP"); if (sk && ((std::atoi(sk) >> sp) & 1)) return true; }
     const Mesh* lods[kLevels] = { &scatter_.plant_mesh[sp], &scatter_.plant_mesh_far[sp], &scatter_.plant_mesh_far2[sp] };
     if (!lods[1]->vertex_buffer) lods[1] = lods[0];
     if (!lods[2]->vertex_buffer) lods[2] = lods[1];

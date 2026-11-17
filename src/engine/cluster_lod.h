@@ -35,6 +35,7 @@ struct ClusterGpu {
 struct ClusterMesh {
     std::vector<ClusterGpu> clusters;
     std::vector<uint32_t>   indices;       // all clusters' triangles, back to back (refer to the source vertices)
+    std::vector<uint8_t>    depth;         // per cluster: its level (0 = the original triangles)
     int      levels = 0;
     uint32_t base_tris = 0;                // triangles of the finest level
     uint32_t coarsest_tris = 0;            // triangles of the coarsest level
