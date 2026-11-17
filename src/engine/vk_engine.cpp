@@ -874,7 +874,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                     const float wl = rt_.water_level;
                     const float feet0 = player_.position.y - 0.9f;
                     // Winter: the lake is frozen - no wading or swimming, the ice carries (below).
-                    const bool frozen = env_snow_ > 0.6f;
+                    const bool frozen = season_w_[3] > 0.6f;
                     const bool open_w = !frozen && !fly_mode_ && water_at(player_.position.x, player_.position.z);
                     const float sub = open_w ? glm::clamp((wl - feet0) / 1.8f, 0.0f, 1.0f) : 0.0f;
                     const bool was_swim = player_swimming_;
@@ -944,7 +944,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                 { CPU_SCOPE("+player");
                 game::update_player(player_, pin, tick_aabbs_, kFixedDt, tick_static_count_); }
                 // Frozen lake: the ice is a floor at the water level.
-                if (env_snow_ > 0.6f && !fly_mode_ && rt_.water_enabled &&
+                if (season_w_[3] > 0.6f && !fly_mode_ && rt_.water_enabled &&
                     player_.position.y - 0.9f < rt_.water_level + 0.02f &&
                     water_at(player_.position.x, player_.position.z)) {
                     player_.position.y = rt_.water_level + 0.92f;

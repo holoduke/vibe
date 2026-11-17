@@ -788,7 +788,7 @@ void main() {
         vec3 rip_w = water_ripples(wpos.xz);
         wnor = normalize(vec3(wnor.x - rip_w.x, wnor.y, wnor.z - rip_w.y));
         // Winter: the lake freezes - no waves, a nearly flat sheet with a faint ripple in the surface.
-        float ice_k = smoothstep(0.35, 0.75, g_snow);
+        float ice_k = smoothstep(0.35, 0.75, scene.season.w);     // the lake freezes in winter (not from a snow shower in another season)
         if (ice_k > 0.001) {
             vec3 n_ice = normalize(vec3((noise2(wpos.xz * 1.7) - 0.5) * 0.05, 1.0, (noise2(wpos.xz * 1.7 + 31.0) - 0.5) * 0.05));
             wnor = normalize(mix(wnor, n_ice, ice_k));

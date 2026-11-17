@@ -220,6 +220,7 @@ void VulkanEngine::mp_sync_world(float dt) {
         net::WorldState w{};
         w.weather_on = rt_.weather_enabled; w.day_night = rt_.day_night_enabled;
         w.preset = int8_t(rt_.weather_preset); w.manual = rt_.weather_manual;
+        w.season = int8_t(rt_.season); w.transition_s = rt_.weather_transition_s;
         w.time_of_day = rt_.time_of_day; w.day_len_min = rt_.day_length_minutes; w.change_min = rt_.weather_change_minutes;
         const float* t = &wx_tgt_.cover; const float* c = &wx_cur_.cover;
         for (int i = 0; i < 9; ++i) { w.tgt[i] = t[i]; w.cur[i] = c[i]; }
@@ -227,6 +228,7 @@ void VulkanEngine::mp_sync_world(float dt) {
     };
     auto same_choice = [](const net::WorldState& a, const net::WorldState& b) {
         return a.weather_on == b.weather_on && a.day_night == b.day_night && a.preset == b.preset && a.manual == b.manual &&
+               a.season == b.season && a.transition_s == b.transition_s &&
                a.day_len_min == b.day_len_min && a.change_min == b.change_min;
     };
     const bool host = net_->role() == net::Role::Host, client = net_->role() == net::Role::Client;
@@ -238,6 +240,7 @@ void VulkanEngine::mp_sync_world(float dt) {
         rt_.weather_enabled = in.weather_on != 0; rt_.day_night_enabled = in.day_night != 0;
         if (rt_.weather_preset != in.preset) wx_last_preset_ = -2;      // start that type (and its clock turn) here too
         rt_.weather_preset = in.preset; rt_.weather_manual = in.manual;
+        rt_.season = in.season; rt_.weather_transition_s = in.transition_s;
         rt_.day_length_minutes = in.day_len_min; rt_.weather_change_minutes = in.change_min;
         if (client) {
             // The clock: follow the host unless a weather type is turning it right now (both turn it the same way).

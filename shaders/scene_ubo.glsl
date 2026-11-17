@@ -93,7 +93,25 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   cloud_a;          // the cloud layer, as clouds.comp sees it: x coverage, y size, z base altitude (m), w tallest (m)
     vec4   cloud_b;          // xy = wind offset of the weather field (m), z = density
     vec4   footprints[32];   // prints in the snow: xy = world xz, z = heading (player yaw), w = depth 0..1 (0 = unused)
+    vec4   season;           // how much of each season shows: x spring, y summer, z autumn, w winter
 } scene;
+
+// Leaves through the year. `wp`: world position (each tree turns its own
+// colour and at its own pace in autumn). Returns the leaf colour to use.
+vec3 season_leaf(vec3 col, vec3 wp) {
+    float sp = scene.season.x, au = scene.season.z;
+    if (sp + au < 0.004) return col;
+    float lum = dot(col, vec3(0.3, 0.5, 0.2));
+    // Spring: young leaves - lighter, yellower green.
+    col = mix(col, lum * vec3(1.05, 1.42, 0.62), sp * 0.55);
+    // Autumn: per tree (5 m cells) yellow, orange or rust; some turn early, some late.
+    vec2 cell = floor(wp.xz / 5.0);
+    float h1 = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
+    float h2 = fract(sin(dot(cell, vec2(39.3468, 11.135))) * 24634.6345);
+    vec3 tone = h1 < 0.40 ? vec3(2.05, 1.45, 0.32) : (h1 < 0.75 ? vec3(2.15, 0.98, 0.26) : vec3(1.75, 0.55, 0.24));
+    float turned = smoothstep(h2 * 0.55, h2 * 0.55 + 0.45, au);
+    return mix(col, lum * tone, turned * 0.85);
+}
 
 // Weather on surfaces (packed in ripple_info.z by descriptors.cpp).
 float scene_wet()  { return fract(scene.ripple_info.z); }

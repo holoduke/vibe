@@ -1356,6 +1356,10 @@ private:
     static constexpr int kWxPresetCount = 11;
     static const WxPreset kWxPresets[kWxPresetCount];
     Wx    wx_cur_{}, wx_tgt_{};
+    // Seasons: how much of each is showing (they cross-fade over the transition time).
+    float season_w_[4] = { 0.0f, 1.0f, 0.0f, 0.0f };   // spring, summer, autumn, winter
+    bool  season_init_ = false;
+    float wx_clock_rate_ = 2.0f;      // game hours per second while a weather type turns the clock
     Wx    mp_host_tgt_{};             // multiplayer client: the weather target the host decided
     int   wx_last_preset_ = -1;
     float wx_clock_target_ = -1.0f;   // hour the clock is being turned to (-1 = not)

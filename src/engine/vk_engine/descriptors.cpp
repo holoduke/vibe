@@ -839,6 +839,7 @@ void VulkanEngine::update_scene_ubo() {
         data.ripples[i] = i < water_ripples_.size()
             ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);
     for (int i = 0; i < 32; ++i) data.footprints[i] = footprints_[i];
+    data.season = glm::vec4(season_w_[0], season_w_[1], season_w_[2], season_w_[3]);
     data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_rain_,
                                    std::min(env_wet_, 0.99f) + std::floor(glm::clamp(env_snow_, 0.0f, 1.0f) * 255.0f),   // fract = wet, whole = snow (scene_ubo.glsl)
                                    0.0f);
@@ -901,6 +902,26 @@ void VulkanEngine::update_scene_ubo() {
             data.fx_light_col[i] = i < n ? glm::vec4(cands[i].col, cands[i].shadow) : glm::vec4(0.0f);
         }
         data.ripple_info.w = float(n);
+    }
+    // Seasons: the grass and the green of the ground. Spring is a fresher,
+    // lighter green; autumn dries toward straw and ochre.
+    {
+        const float sp = season_w_[0], au = season_w_[2];
+        if (sp + au > 0.004f) {
+            auto tint = [&](glm::vec4& c, glm::vec3 spring_k, glm::vec3 autumn_k) {
+                glm::vec3 v(c);
+                const float lum = glm::dot(v, glm::vec3(0.3f, 0.5f, 0.2f));
+                v = glm::mix(v, lum * spring_k, sp * 0.5f);
+                v = glm::mix(v, lum * autumn_k, au * 0.6f);
+                c = glm::vec4(v, c.w);
+            };
+            const glm::vec3 kSpring(0.95f, 1.40f, 0.60f), kAutumn(1.55f, 1.25f, 0.55f);
+            tint(data.grass_color_top, kSpring, kAutumn);
+            tint(data.grass_color_bottom, kSpring, kAutumn);
+            tint(data.grass_color_ground, kSpring, kAutumn);
+            tint(data.grass_color_ground_far, kSpring, kAutumn);
+            tint(data.rm_ground_green, kSpring, kAutumn);
+        }
     }
     // Wet ground is darker and a little more saturated.
     if (env_wet_ > 0.001f) {

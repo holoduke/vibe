@@ -93,12 +93,12 @@ const VulkanEngine::WxPreset VulkanEngine::kWxPresets[VulkanEngine::kWxPresetCou
     { "Dry thunder",   { 0.97f, 1.00f, 0.00f, 1.0f, 0.80f, 0.10f, 0.0f, 0.0f, 0.0f }, -1.0f },
     { "Night thunder", { 1.00f, 1.00f, 0.80f, 1.0f, 0.90f, 0.30f, 0.0f, 0.0f, 0.0f }, 23.5f },
     { "Pitch black",   { 1.00f, 1.00f, 0.00f, 0.0f, 0.20f, 0.20f, 0.0f, 0.0f, 1.0f },  1.0f },
-    { "Winter white",  { 0.88f, 0.70f, 0.00f, 0.0f, 0.25f, 0.35f, 1.0f, 1.0f, 0.0f }, -1.0f },
+    { "Snow",          { 0.92f, 0.80f, 0.00f, 0.0f, 0.25f, 0.35f, 0.0f, 1.0f, 0.0f }, -1.0f },
 };
 
 const char* VulkanEngine::weather_name() const {
     const Wx& c = wx_cur_;
-    if (c.snow > 0.5f || c.snowfall > 0.5f) return "winter";
+    if (c.snowfall > 0.3f) return "snow";
     if (c.dark > 0.5f) return "pitch black";
     if (c.thunder > 0.5f) return c.rain > 0.2f ? "thunderstorm" : "dry thunderstorm";
     if (c.rain > 0.2f) return "rain";
@@ -138,14 +138,19 @@ void VulkanEngine::apply_environment(float dt) {
     // changes by itself) is a target for all of them; the current values
     // glide there, so any type turns into any other.
     if (rt_.weather_enabled) {
-        float swing = 22.0f;                      // seconds for a picked type to move in
+        float swing = glm::clamp(rt_.weather_transition_s, 1.0f, 300.0f);   // seconds for a picked type to move in (a setting)
         if (rt_.weather_preset >= 0) {
             const int pi = std::min(rt_.weather_preset, kWxPresetCount - 1);
             wx_tgt_ = kWxPresets[pi].wx;
             if (pi != wx_last_preset_) {
                 wx_last_preset_ = pi;
                 // Types that mean a time of day (night thunder, pitch black, sunny ...): turn the clock there.
-                if (kWxPresets[pi].hour >= 0.0f) { wx_clock_target_ = kWxPresets[pi].hour; rt_.day_night_enabled = true; }
+                if (kWxPresets[pi].hour >= 0.0f) {
+                    wx_clock_target_ = kWxPresets[pi].hour; rt_.day_night_enabled = true;
+                    // (the clock gets there in the transition time too)
+                    const float dist = std::abs(std::fmod(wx_clock_target_ - rt_.time_of_day + 36.0f, 24.0f) - 12.0f);
+                    wx_clock_rate_ = std::max(dist / swing, 0.02f);
+                }
                 else wx_clock_target_ = -1.0f;
                 log::infof("[weather] type: %s", kWxPresets[pi].name);
             }
@@ -196,29 +201,56 @@ void VulkanEngine::apply_environment(float dt) {
         ease(wx_cur_.thunder, wx_tgt_.thunder * (weather_init_ ? glm::smoothstep(0.5f, 0.9f, wx_cur_.overcast) : 1.0f), 1.0f);
         ease(wx_cur_.wind, wx_tgt_.wind, 1.0f);
         ease(wx_cur_.fog, wx_tgt_.fog, 1.0f);
-        ease(wx_cur_.snow, wx_tgt_.snow, 0.6f);          // the ground whitens (and thaws) slowly
+        // Snow on the ground is what the snowfall leaves: it builds up while it
+        // snows and stays after - for good in winter, some minutes in spring
+        // and autumn, briefly in summer.
+        {
+            const float melt_s = 30.0f * season_w_[1] + 150.0f * (season_w_[0] + season_w_[2]) + 1.0e6f * season_w_[3];
+            if (wx_cur_.snowfall > 0.05f) wx_cur_.snow += dt / std::max(swing * 1.5f, 6.0f) * wx_cur_.snowfall;
+            else                          wx_cur_.snow -= dt / std::max(melt_s, 1.0f);
+            wx_cur_.snow = glm::clamp(wx_cur_.snow, 0.0f, 1.0f);
+        }
         ease(wx_cur_.snowfall, wx_tgt_.snowfall, 1.0f);
         ease(wx_cur_.dark, wx_tgt_.dark, 1.0f);
         weather_init_ = true;
         // Turn the clock toward the hour the type asked for (2 game hours a second, the short way round).
         if (wx_clock_target_ >= 0.0f && rt_.day_night_enabled) {
             float d = std::fmod(wx_clock_target_ - rt_.time_of_day + 36.0f, 24.0f) - 12.0f;
-            const float mv = glm::clamp(d, -2.0f * dt, 2.0f * dt);
+            const float mv = glm::clamp(d, -wx_clock_rate_ * dt, wx_clock_rate_ * dt);
             rt_.time_of_day += mv;
             if (std::abs(d) < 0.03f) wx_clock_target_ = -1.0f;
         }
     } else {
         wx_cur_ = Wx{}; wx_tgt_ = Wx{}; weather_init_ = false; weather_timer_ = 0.0f; wx_last_preset_ = -1; wx_clock_target_ = -1.0f;
     }
+    // ---------------- season ----------------
+    // The look of the land, apart from the weather: spring (fresh green),
+    // summer, autumn (the leaves turn) and winter (snow lies, the lake is
+    // frozen, and what falls is snow). A change cross-fades over the
+    // transition time.
+    {
+        const int want = glm::clamp(rt_.season, 0, 3);
+        const float st = season_init_ ? dt / glm::clamp(rt_.weather_transition_s, 1.0f, 300.0f) : 1.0f;
+        float sum = 0.0f;
+        for (int i = 0; i < 4; ++i) {
+            const float tgt = i == want ? 1.0f : 0.0f;
+            season_w_[i] += glm::clamp(tgt - season_w_[i], -st, st);
+            sum += season_w_[i];
+        }
+        if (sum > 1e-4f) for (float& w : season_w_) w /= sum;
+        season_init_ = true;
+    }
+    const float winter = season_w_[3];
     const float overcast = wx_cur_.overcast;
-    const float rain     = wx_cur_.rain;
+    // (in winter the rain comes down as snow)
+    const float rain     = wx_cur_.rain * (1.0f - winter);
     const float storm    = wx_cur_.thunder;
     const float wind_k   = wx_cur_.wind;
     // (the single 0..1 "how bad" number some displays still use)
     weather_state_ = glm::clamp(std::max({ 0.5f * overcast, rain > 0.02f ? 0.6f + 0.25f * rain : 0.0f, storm > 0.3f ? 0.9f + 0.1f * storm : 0.0f }), 0.0f, 1.0f);
     env_rain_ = rain;
-    env_snow_ = wx_cur_.snow;
-    env_snowfall_ = wx_cur_.snowfall;
+    env_snow_ = std::max(wx_cur_.snow, winter);
+    env_snowfall_ = std::max(wx_cur_.snowfall, wx_cur_.rain * winter);
     // Ground gets wet in ~20 s of rain and takes minutes to dry.
     env_wet_ += (rain > 0.02f ? (rain - env_wet_) * dt / 20.0f * (0.5f + rain) : -env_wet_ * dt / 150.0f);
     env_wet_ = glm::clamp(env_wet_, 0.0f, 1.0f);

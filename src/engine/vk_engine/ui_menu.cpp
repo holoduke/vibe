@@ -147,6 +147,25 @@ void VulkanEngine::build_menu_ui() {
         }
 
         if (ImGui::CollapsingHeader("Weather", ImGuiTreeNodeFlags_DefaultOpen)) {
+            // Season: the look of the land. Weather type: what the sky does.
+            {
+                ImGui::TextUnformatted("Season");
+                static const char* kSeason[4] = { "Spring", "Summer", "Autumn", "Winter" };
+                const float sw = (ImGui::GetContentRegionAvail().x - 3.0f * ImGui::GetStyle().ItemSpacing.x) / 4.0f;
+                for (int i = 0; i < 4; ++i) {
+                    if (i) ImGui::SameLine();
+                    const bool on = rt_.season == i;
+                    if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                    if (ImGui::Button(kSeason[i], ImVec2(sw, 0.0f))) rt_.season = i;
+                    if (on) ImGui::PopStyleColor();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Spring: fresh green. Autumn: the leaves turn. Winter: snow lies, the lake freezes, and what falls is snow.");
+                ImGui::SliderFloat("Change takes (s)", &rt_.weather_transition_s, 1.0f, 300.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How long a change of season or weather type takes, from 1 second to 5 minutes.");
+                ImGui::Spacing();
+            }
             // Weather types: pick one and the sky, light, wind, rain and
             // ground move there over about twenty seconds, from whatever it
             // is now.
@@ -165,7 +184,7 @@ void VulkanEngine::build_menu_ui() {
                     if (on) ImGui::PopStyleColor();
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Night thunder and Pitch black turn the clock to night; the Sunny types turn it to midday.");
+                    ImGui::SetTooltip("Night thunder and Pitch black turn the clock to night; the Sunny types turn it to midday. Snow leaves snow on the ground.");
                 if (rt_.weather_enabled) ImGui::Text("Now: %s%s", weather_name(), (rt_.weather_preset < 0 && rt_.weather_manual < 0.0f) ? " (changing by itself)" : "");
                 else ImGui::TextUnformatted("Now: weather off (always clear)");
             }

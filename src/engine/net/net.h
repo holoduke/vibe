@@ -64,6 +64,8 @@ struct WorldState {
     uint8_t request;           // 1 = a client asks the host to apply this
     uint8_t weather_on, day_night;
     int8_t  preset;            // weather type (-1 = none)
+    int8_t  season;            // 0 spring .. 3 winter
+    float   transition_s;      // seconds a change takes
     float   manual, time_of_day, day_len_min, change_min;
     float   tgt[9];            // weather target amounts (host -> clients)
     float   cur[9];            // weather current amounts (host -> clients)
