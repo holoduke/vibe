@@ -334,7 +334,7 @@ layout(set = 0, binding = 30) uniform sampler2D u_skyview;
 
 // Material texture arrays (same set-0 slots as cube.frag): only the castle
 // road cobbles are sampled here - the rest of this terrain is procedural.
-const int kRmTextureCount = 19;   // = cube.frag kTextureCount
+const int kRmTextureCount = 23;   // = cube.frag kTextureCount
 const int kRmMatRoad = 14;        // = cube.frag kMatRoad (PavingStones131)
 layout(set = 0, binding = 3) uniform sampler2D u_albedo[kRmTextureCount];
 layout(set = 0, binding = 4) uniform sampler2D u_normal[kRmTextureCount];
@@ -2219,6 +2219,19 @@ void main() {
     }
 
     vec3 mate = getMaterial(pos, nor) * rm_det_tint;
+    // The ground is darker where plants stand over it (leaf litter, damp soil,
+    // less sky): a little under grass, more under bushes and trees, most where
+    // both grow. Tree / bush cover is baked from the placed plants and blurred
+    // (soft outer borders); the grass term is the meadow mask.
+    {
+        vec2 vuv = pos.xz / 2048.0 + 0.5;
+        if (all(greaterThan(vuv, vec2(0.0))) && all(lessThan(vuv, vec2(1.0))) && rm_road.x < 0.99) {
+            float trees = textureLod(u_albedo[22], vuv, 1.0).r;
+            float grass = smoothstep(0.25, 0.75, grassEligibility(pos.xz, pos.y));
+            float cover = 0.09 * grass + 0.26 * trees + 0.07 * grass * trees;
+            mate *= 1.0 - cover * (1.0 - rm_road.x);
+        }
+    }
     // The lake bed seen directly (camera under water): the same stones as
     // the bed seen through the surface from above (water branch, bed_h).
     float bed_sub = 0.0;

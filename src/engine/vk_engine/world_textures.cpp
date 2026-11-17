@@ -673,6 +673,56 @@ void VulkanEngine::load_foliage_textures() {
             ++loaded;
         }
     }
+    // Vegetation cover over the ground (terrain_raymarch.frag darkens the soil
+    // by it): every placed tree and bush leaves a soft disc the size of its
+    // crown - trees fully, bushes about half - then the map is blurred so the
+    // borders are soft. 2048 x 2048 over the 2048 m world (1 m per texel).
+    if (!veg_inst_cpu_.empty()) {
+        const int N = 2048;
+        std::vector<float> cov(size_t(N) * N, 0.0f);
+        for (const VegInstance& vi : veg_inst_cpu_) {
+            const size_t a = size_t(vi.rot_arch_phase.y + 0.5f);
+            if (a >= veg_arch_.size() || vi.pos_scale.w <= 0.0f) continue;
+            const int sp = veg_arch_[a].species;
+            if (sp > 2) continue;                                   // rocks cast no litter
+            const float r = std::max(veg_arch_[a].radius * vi.pos_scale.w * (sp == 2 ? 1.25f : 0.95f), 1.0f);
+            const float k = sp == 2 ? 0.55f : 1.0f;
+            const float cx = vi.pos_scale.x + 1024.0f, cz = vi.pos_scale.z + 1024.0f;
+            const int x0 = std::max(0, int(cx - r)), x1 = std::min(N - 1, int(cx + r) + 1);
+            const int z0 = std::max(0, int(cz - r)), z1 = std::min(N - 1, int(cz + r) + 1);
+            for (int z = z0; z <= z1; ++z)
+                for (int x = x0; x <= x1; ++x) {
+                    const float dx = (float(x) + 0.5f - cx) / r, dz = (float(z) + 0.5f - cz) / r;
+                    const float d2 = dx * dx + dz * dz;
+                    if (d2 >= 1.0f) continue;
+                    const float w = (1.0f - d2) * (1.0f - d2) * k;
+                    float& c = cov[size_t(z) * N + size_t(x)];
+                    c = 1.0f - (1.0f - c) * (1.0f - w);             // overlapping crowns add up, never past 1
+                }
+        }
+        // Two box blurs of 2 m: soft outer borders.
+        std::vector<float> tmp(cov.size());
+        for (int pass = 0; pass < 2; ++pass) {
+            for (int z = 0; z < N; ++z)
+                for (int x = 0; x < N; ++x) {
+                    float sum = 0.0f;
+                    for (int k = -2; k <= 2; ++k) sum += cov[size_t(z) * N + size_t(std::clamp(x + k, 0, N - 1))];
+                    tmp[size_t(z) * N + size_t(x)] = sum * 0.2f;
+                }
+            for (int z = 0; z < N; ++z)
+                for (int x = 0; x < N; ++x) {
+                    float sum = 0.0f;
+                    for (int k = -2; k <= 2; ++k) sum += tmp[size_t(std::clamp(z + k, 0, N - 1)) * N + size_t(x)];
+                    cov[size_t(z) * N + size_t(x)] = sum * 0.2f;
+                }
+        }
+        std::vector<unsigned char> px(size_t(N) * N * 4);
+        for (size_t i = 0; i < cov.size(); ++i) {
+            const unsigned char v = static_cast<unsigned char>(std::clamp(cov[i], 0.0f, 1.0f) * 255.0f + 0.5f);
+            px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v; px[i * 4 + 3] = 255;
+        }
+        put(albedo_textures_[kTexVegShade], px.data(), N, N, VK_FORMAT_R8G8B8A8_UNORM, "veg_shade");
+    }
     if (!retired.empty()) texture_upload_batch_sync(device_, allocator_, graphics_queue_);
     for (TextureSlot& s : retired) {
         if (s.view)  vkDestroyImageView(device_, s.view, nullptr);
@@ -1184,6 +1234,7 @@ void VulkanEngine::bake_terrain_materials() {
         { TM_DIRT,  kTexSoldier,   "character/placeholder" },
         { TM_ROCK,  kTexGrave,     "church/grave_placeholder" },
         { TM_ROCK,  kTexGlass,     "church/glass_placeholder" },
+        { TM_ROCK,  kTexVegShade,  "veg_shade_placeholder" },
     };
     // CPU generation of all materials in parallel (pure functions of
     // kind + size); uploads stay on this thread (queue owner).
