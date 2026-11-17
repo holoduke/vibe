@@ -10,7 +10,11 @@ through conversation ("vibe coding"). No human has read or written the code.**
 
 ![Vibe: key art with the logo over a castle on a misty lake](docs/screenshots/keyart.png)
 
-![Daylight: castle, lake, forest and mountains](docs/screenshots/day.png)
+![Daylight: the castle in the meadow, forest and mountains behind](docs/screenshots/day.png)
+
+**Runs on NVIDIA and AMD.** Developed and tested on a GeForce RTX 4080 (DLSS 3) and a Radeon RX 9070 XT
+(FSR 3.1). It is built for fast, recent graphics cards only: everything is ray traced and ray marched,
+and there is no low-end fallback.
 
 ## What is this?
 
@@ -34,6 +38,18 @@ If you are curious whether an AI can build a non-trivial 3D engine without a hum
 source: this is one data point, with the full commit history as the log.
 
 ## Screenshots
+
+| Autumn: every tree turns at its own pace | Winter: the lake freezes (layered ice with cracks) |
+|---|---|
+| ![Autumn colours along the lake](docs/screenshots/autumn.png) | ![Frozen lake with cracks and blown snow](docs/screenshots/winter_ice.png) |
+
+| Snow with real depth, and footprints pressed into it | Thunderstorm |
+|---|---|
+| ![Footprints in the snow on the cobbled road](docs/screenshots/snow_road.png) | ![The castle in a thunderstorm](docs/screenshots/storm.png) |
+
+| Spring at the chapel | The in-game HUD |
+|---|---|
+| ![The chapel in spring](docs/screenshots/spring.png) | ![HUD with health, weapon bay and frame rate](docs/screenshots/hud.png) |
 
 | Sunrise with volumetric light | Night: moonlight, stars, lanterns |
 |---|---|
@@ -71,7 +87,12 @@ source: this is one data point, with the full commit history as the log.
 - **Raymarched procedural terrain** (FBM heightfield with a baked height map for fast skipping),
   with roads, bomb craters that turn to mud, and close-range ground relief.
 - **Raymarched SDF grass** plus GPU-driven vegetation: compute-shader culling, hi-Z occlusion,
-  LOD buckets, procedural trees, 15 species of ground plants.
+  LOD buckets, procedural trees, 16 species of ground plants (every plant culled and given a
+  level of detail on the GPU).
+- **Cluster level of detail** (Nanite-style, built with
+  [meshoptimizer](https://github.com/zeux/meshoptimizer)): rocks, the castle and the chapel are
+  cut into clusters with a seamless hierarchy; detail is picked and hidden per cluster on the
+  GPU, the sun shadows draw from the same data and the finest level is streamed in from disk.
 - **Displaced stone walls**: relief-marched castle masonry with real stone-by-stone silhouettes,
   worn corners, self-shadowing and contact shadows where walls meet the ground.
 - **Procedural pebbles**: formula-generated stones, gravel and grit that stay sharp at any
@@ -83,9 +104,16 @@ source: this is one data point, with the full commit history as the log.
 ### World simulation
 - **Day / night cycle**: the sun follows a real diurnal arc; golden hour, blue hour, moonlight,
   stars and road lanterns that light up at dusk. The clock speed is a setting.
-- **Dynamic weather**: clear, fair, overcast, rain and thunderstorms. Weather drives cloud cover,
-  fog, light colour, wind, rain streaks, rings on the water, wet ground, rain sound, lightning
-  and thunder. How often the weather turns bad is a setting.
+- **Seasons**: spring, summer, autumn (the leaves turn, tree by tree) and winter (snow lies as a
+  ray-marched layer with drifts, the lake freezes into layered ice you can walk on, feet leave
+  prints with real depth).
+- **Dynamic weather**: eleven types from clear to fog, rain, snow, dry thunder and night
+  thunderstorms. Weather drives cloud cover, fog, light colour, wind, rain or snow, rings on the
+  water, wet ground, rain pools, sound, lightning and thunder. Every change of weather or season
+  cross-fades over a configurable time (1 second to 5 minutes).
+- **LAN multiplayer**: games on the same network find each other and join by themselves (one
+  becomes the host); other players are interpolated the way Half-Life and Source do it, and the
+  weather, season and clock are shared.
 - **Water**: reflective lake with splashes and expanding ripples when shot, swimming and diving,
   and an underwater view with light absorption, caustics, light shafts and Snell's window.
 - **In-game world editor**: press E, pick trees, bushes or grass from a bar and paint them
@@ -96,8 +124,10 @@ source: this is one data point, with the full commit history as the log.
 
 ## Build and run
 
-Windows, Visual Studio 2022, Vulkan SDK 1.3 and a GPU with ray-query support
-(NVIDIA RTX 20-series or newer, AMD RX 6000-series or newer, Intel Arc).
+Windows, Visual Studio 2022, Vulkan SDK 1.3 and a **fast, recent graphics card with hardware ray
+tracing**. NVIDIA and AMD are both supported and tested (GeForce RTX 4080, Radeon RX 9070 XT); the
+upscaler and frame generation are picked automatically (DLSS on NVIDIA, FSR 3.1 on AMD). Older or
+mid-range cards will start but will not reach a playable frame rate.
 
 ```powershell
 ./build.ps1 -Config Release
@@ -117,6 +147,7 @@ are fetched by CMake. FidelityFX and the NVIDIA Streamline SDK are vendored unde
 | 1 / 2 | Laser rifle / airstrike tablet |
 | V | Free-fly camera |
 | E | World editor: 1-5 pick what to plant, left mouse paints, right mouse removes |
+| F | Flashlight (left mouse: brightness) |
 | F12 | Photo: saves a clean PNG (no HUD) to `screenshots/` |
 | Esc | Pause menu with every graphics, weather and gameplay setting |
 
@@ -134,8 +165,9 @@ judging only the result, without reading the code.
 
 **Which AI wrote it?** [Claude Code](https://claude.com/claude-code), Anthropic's coding agent.
 
-**What hardware does it need?** Windows and a GPU with Vulkan ray-query support (NVIDIA RTX
-20-series or newer, AMD RX 6000-series or newer, Intel Arc).
+**What hardware does it need?** Windows and a fast, recent graphics card with hardware ray
+tracing. It runs on both NVIDIA and AMD (tested on a GeForce RTX 4080 and a Radeon RX 9070 XT).
+It is not meant for slow or older cards.
 
 **Is it a game or an engine?** Both: a small open-world shooter sandbox (castle, lake, forest,
 jets, airstrikes) on top of a custom Vulkan engine.
@@ -182,6 +214,8 @@ from its community assets (script: `tools/character/make_soldier.py`):
 Vulkan game engine, C++ Vulkan renderer, real-time ray tracing, ray query, deferred rendering,
 DLSS 3 frame generation, DLSS ray reconstruction, FSR 3, raymarched terrain, SDF grass,
 volumetric clouds, volumetric fog, physical sky, day night cycle, dynamic weather system, rain,
+seasons, snow, ice shader, footprints in snow, LAN multiplayer, Nanite-style cluster LOD, meshoptimizer,
+NVIDIA and AMD,
 water rendering, underwater shader, GPU-driven rendering, vibe coding, AI-generated code,
 AI-written game engine, AI-made game, vibe coded game, Claude Code, LLM coding experiment,
 parallax occlusion mapping, relief mapping, procedural pebbles, open-world castle, in-game editor.

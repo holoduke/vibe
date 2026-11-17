@@ -116,7 +116,8 @@ void VulkanEngine::draw(uint32_t img_index) {
     { CPU_SCOPE("rec-shadow");  record_shadow_passes(frame); }                   // sun shadow, depth pre-pass, half-rate shadow
     { CPU_SCOPE("rec-world");   record_terrain_and_world(frame); }               // low-res raymarch terrain + world G-buffer
     { CPU_SCOPE("rec-light");   record_lighting_and_upscale(frame); }            // deferred, SVGF, TAA, sky fill, DLSS/FSR/TAAU
-    hide_ui_this_frame_ = !pending_screenshot_path_.empty();   // F12 photo: no HUD / crosshair / debug boxes
+    static const bool kNoHud = std::getenv("QLIKE_SHOT_NO_HUD") != nullptr;   // clean captures from the command line
+    hide_ui_this_frame_ = kNoHud || !pending_screenshot_path_.empty();   // F12 photo: no HUD / crosshair / debug boxes
     { CPU_SCOPE("rec-compose"); record_compose_and_ui(frame, img_index); }       // bloom, compose, ImGui -> swapchain
 
 
