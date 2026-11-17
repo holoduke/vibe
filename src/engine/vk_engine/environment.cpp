@@ -162,7 +162,10 @@ void VulkanEngine::apply_environment(float dt) {
         } else {
             wx_last_preset_ = -1;
             weather_timer_ -= dt;
-            if (weather_timer_ <= 0.0f) {
+            if (mp_host_tgt_valid_) {
+                wx_tgt_ = mp_host_tgt_;            // multiplayer client: the host picks the weather
+                weather_timer_ = 5.0f;
+            } else if (weather_timer_ <= 0.0f) {
                 const float bad = glm::clamp(rt_.weather_bad_chance, 0.0f, 1.0f);
                 const float r = frand(rng);
                 static const int kBad[4] = { 5, 5, 6, 7 }, kMid[2] = { 3, 4 }, kFair[4] = { 0, 0, 1, 2 };

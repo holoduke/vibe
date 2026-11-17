@@ -27,9 +27,10 @@ struct MsgSnapHdr { uint8_t type; uint32_t server_t; uint8_t n; };
 struct SnapEntry  { uint32_t id; uint32_t t; PlayerState s; };
 struct MsgEvent   { uint8_t type; Event e; };
 struct MsgHello   { uint8_t type; uint32_t id; char name[16]; };
+struct MsgWorld   { uint8_t type; WorldState w; };
 #pragma pack(pop)
 
-enum : uint8_t { kMsgState = 1, kMsgSnap = 2, kMsgEvent = 3, kMsgHello = 4 };
+enum : uint8_t { kMsgState = 1, kMsgSnap = 2, kMsgEvent = 3, kMsgHello = 4, kMsgWorld = 5 };
 constexpr uint8_t kVersion = 1;
 
 float lerp_angle(float a, float b, float t) {
@@ -244,6 +245,20 @@ void Session::send_event(const Event& e) {
     else if (role_ == Role::Client) d_->send(d_->server, &m, sizeof(m), true);
 }
 
+void Session::send_world(const WorldState& w) {
+    if (!d_->host) return;
+    MsgWorld m{ kMsgWorld, w };
+    if (role_ == Role::Host) { m.w.request = 0; d_->send_all(&m, sizeof(m), true); }
+    else if (role_ == Role::Client) { m.w.request = 1; d_->send(d_->server, &m, sizeof(m), true); }
+}
+
+bool Session::take_world(WorldState& out) {
+    if (!world_new_) return false;
+    world_new_ = false;
+    out = world_;
+    return true;
+}
+
 std::vector<Event> Session::take_events() {
     std::vector<Event> out;
     out.swap(events_);
@@ -312,6 +327,10 @@ void Session::update(double now, const PlayerState& local) {
                 if (m.e.kind == Event::Leave) remove_player(m.e.from);
                 events_.push_back(m.e);
                 if (role_ == Role::Host) d_->send_all(&m, sizeof(m), true, ev.peer);
+            } else if (type == kMsgWorld && len == sizeof(MsgWorld)) {
+                MsgWorld m; std::memcpy(&m, data, sizeof(m));
+                // host: only requests from clients; client: only from the host
+                if ((role_ == Role::Host && m.w.request == 1) || (ev.peer == d_->server && m.w.request == 0)) { world_ = m.w; world_new_ = true; }
             } else if (type == kMsgHello && len == sizeof(MsgHello)) {
                 MsgHello m; std::memcpy(&m, data, sizeof(m));
                 m.name[sizeof(m.name) - 1] = 0;

@@ -1213,6 +1213,11 @@ private:
     bool mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit);
     void mp_feed(const std::string& line);
     void mp_hud();
+    void mp_sync_world(float dt);                      // weather + clock: the same on every machine
+    net::WorldState mp_world_last_{};                  // what was last sent / applied (change detection)
+    bool      mp_world_init_ = false;
+    float     mp_world_timer_ = 0.0f;
+    bool      mp_host_tgt_valid_ = false;              // client: the host decides the weather that changes by itself
     void draw_remote_players(VkCommandBuffer cmd, const glm::mat4& vp);
     void init_player_body();
     void destroy_player_body();
@@ -1334,6 +1339,7 @@ private:
     static constexpr int kWxPresetCount = 11;
     static const WxPreset kWxPresets[kWxPresetCount];
     Wx    wx_cur_{}, wx_tgt_{};
+    Wx    mp_host_tgt_{};             // multiplayer client: the weather target the host decided
     int   wx_last_preset_ = -1;
     float wx_clock_target_ = -1.0f;   // hour the clock is being turned to (-1 = not)
     float env_wet_ = 0.0f;            // ground wetness 0..1

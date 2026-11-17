@@ -57,6 +57,17 @@ struct Event {
     float    b[3];             // Fire: direction
     float    v;                // Hit: damage
 };
+// Shared world state: weather + clock. A client that changes it sends a
+// request to the host; the host applies it and sends it to everybody (and
+// again once a second, so a late joiner and any drift are brought in line).
+struct WorldState {
+    uint8_t request;           // 1 = a client asks the host to apply this
+    uint8_t weather_on, day_night;
+    int8_t  preset;            // weather type (-1 = none)
+    float   manual, time_of_day, day_len_min, change_min;
+    float   tgt[9];            // weather target amounts (host -> clients)
+    float   cur[9];            // weather current amounts (host -> clients)
+};
 #pragma pack(pop)
 
 struct RemotePlayer {
@@ -89,6 +100,8 @@ public:
 
     void send_event(const Event& e);          // reliable, to everybody else
     std::vector<Event> take_events();         // events received since the last call
+    void send_world(const WorldState& w);     // host: to all clients; client: request to the host
+    bool take_world(WorldState& out);         // the newest world state received since the last call
 
     const std::vector<RemotePlayer>& players() const { return players_; }
     Role        role() const { return role_; }
@@ -105,6 +118,8 @@ private:
     std::string name_;
     std::vector<RemotePlayer> players_;
     std::vector<Event> events_;
+    WorldState world_{};
+    bool world_new_ = false;
 
     RemotePlayer& player(uint32_t id);
     void remove_player(uint32_t id);

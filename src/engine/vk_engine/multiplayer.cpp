@@ -81,6 +81,14 @@ void VulkanEngine::mp_update(float dt) {
     mp_feed_.erase(std::remove_if(mp_feed_.begin(), mp_feed_.end(), [](const MpFeed& f) { return f.ttl <= 0.0f; }), mp_feed_.end());
     mp_hurt_ = std::max(0.0f, mp_hurt_ - dt * 2.5f);
 
+    // QLIKE_TEST_WX=<seconds>:<type>: pick that weather type after that many seconds (sync tests).
+    if (static const char* tw = std::getenv("QLIKE_TEST_WX"); tw) {
+        static bool done = false;
+        float at = 0.0f; int ty = 0;
+        if (!done && std::sscanf(tw, "%f:%d", &at, &ty) == 2 && glfwGetTime() > double(at)) { done = true; rt_.weather_enabled = true; rt_.weather_preset = ty; }
+    }
+    mp_sync_world(dt);
+
     // ---- events ----
     for (const net::Event& e : net_->take_events()) {
         if (e.kind == net::Event::Fire) {
@@ -203,7 +211,66 @@ void VulkanEngine::mp_pose_avatars(float dt) {
     body_recoil_ = sv.recoil; body_dir_ = sv.dir; body_drawn_ = sv.drawn;
 }
 
+// Weather + clock are one shared state. Whoever changes it (a weather
+// button, the clock) tells the host; the host tells everybody, at once and
+// again every second. Every machine then runs the same transition from the
+// same moment (environment.cpp eases toward the same targets at the same rate).
+void VulkanEngine::mp_sync_world(float dt) {
+    auto snapshot = [&]() {
+        net::WorldState w{};
+        w.weather_on = rt_.weather_enabled; w.day_night = rt_.day_night_enabled;
+        w.preset = int8_t(rt_.weather_preset); w.manual = rt_.weather_manual;
+        w.time_of_day = rt_.time_of_day; w.day_len_min = rt_.day_length_minutes; w.change_min = rt_.weather_change_minutes;
+        const float* t = &wx_tgt_.cover; const float* c = &wx_cur_.cover;
+        for (int i = 0; i < 9; ++i) { w.tgt[i] = t[i]; w.cur[i] = c[i]; }
+        return w;
+    };
+    auto same_choice = [](const net::WorldState& a, const net::WorldState& b) {
+        return a.weather_on == b.weather_on && a.day_night == b.day_night && a.preset == b.preset && a.manual == b.manual &&
+               a.day_len_min == b.day_len_min && a.change_min == b.change_min;
+    };
+    const bool host = net_->role() == net::Role::Host, client = net_->role() == net::Role::Client;
+    if (!client) mp_host_tgt_valid_ = false;
+    // ---- incoming ----
+    net::WorldState in{};
+    if (net_->take_world(in)) {
+        const bool choice_changed = !mp_world_init_ || !same_choice(in, mp_world_last_);
+        rt_.weather_enabled = in.weather_on != 0; rt_.day_night_enabled = in.day_night != 0;
+        if (rt_.weather_preset != in.preset) wx_last_preset_ = -2;      // start that type (and its clock turn) here too
+        rt_.weather_preset = in.preset; rt_.weather_manual = in.manual;
+        rt_.day_length_minutes = in.day_len_min; rt_.weather_change_minutes = in.change_min;
+        if (client) {
+            // The clock: follow the host unless a weather type is turning it right now (both turn it the same way).
+            const float d = std::fmod(in.time_of_day - rt_.time_of_day + 36.0f, 24.0f) - 12.0f;
+            if (wx_clock_target_ < 0.0f && !choice_changed && std::abs(d) > 0.01f) rt_.time_of_day = in.time_of_day;
+            float* t = &mp_host_tgt_.cover; float* c = &wx_cur_.cover;
+            float worst = 0.0f;
+            for (int i = 0; i < 9; ++i) { t[i] = in.tgt[i]; worst = std::max(worst, std::abs(c[i] - in.cur[i])); }
+            mp_host_tgt_valid_ = true;
+            if (worst > 0.12f && !choice_changed) for (int i = 0; i < 9; ++i) c[i] = in.cur[i];     // joined late or drifted: take the sky of the host
+        } else {
+            rt_.time_of_day = in.time_of_day;      // host: a request (the clock set by hand included)
+        }
+        mp_world_last_ = snapshot();
+        mp_world_init_ = true;
+        if (host) { net_->send_world(mp_world_last_); mp_world_timer_ = 1.0f; }    // pass the request on now
+        return;
+    }
+    // ---- outgoing ----
+    const net::WorldState now_w = snapshot();
+    // (the clock was set by hand: more than it can have moved by itself)
+    const float moved = std::abs(std::fmod(now_w.time_of_day - mp_world_last_.time_of_day + 36.0f, 24.0f) - 12.0f);
+    const bool clock_set = mp_world_init_ && wx_clock_target_ < 0.0f && moved > 0.25f;
+    const bool changed = mp_world_init_ && (!same_choice(now_w, mp_world_last_) || clock_set);
+    mp_world_timer_ -= dt;
+    if (host && (changed || mp_world_timer_ <= 0.0f)) { net_->send_world(now_w); mp_world_timer_ = 1.0f; }
+    else if (client && changed) net_->send_world(now_w);
+    mp_world_last_ = now_w;
+    mp_world_init_ = true;
+}
+
 // The local player fired (called from fire_projectile).
+
 void VulkanEngine::mp_on_local_fire(glm::vec3 origin, glm::vec3 dir) {
     if (!net_ || mp_remote_shot_) return;
     net::Event e{};
