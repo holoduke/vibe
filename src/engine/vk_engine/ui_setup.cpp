@@ -173,6 +173,24 @@ void VulkanEngine::init_imgui() {
     ii.PipelineRenderingCreateInfo = prci;
     ImGui_ImplVulkan_Init(&ii);
 
+    // HUD weapon icons (generated artwork; see ui_gamehud.cpp).
+    {
+        hud_icons_tex_ = upload_texture_from_file(device_, allocator_, graphics_queue_, graphics_queue_family_,
+                                                  "assets/hud/weapon_icons.png", VK_FORMAT_R8G8B8A8_UNORM);
+        if (hud_icons_tex_.ok) {
+            VkSamplerCreateInfo sci{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+            sci.magFilter = VK_FILTER_LINEAR; sci.minFilter = VK_FILTER_LINEAR;
+            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sci.maxLod = VK_LOD_CLAMP_NONE;
+            if (vkCreateSampler(device_, &sci, nullptr, &hud_icons_sampler_) == VK_SUCCESS)
+                hud_icons_id_ = uint64_t(ImGui_ImplVulkan_AddTexture(hud_icons_sampler_, hud_icons_tex_.view,
+                                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+        } else {
+            log::warn("[hud] assets/hud/weapon_icons.png not found: the weapon bay shows names only");
+        }
+    }
+
     imgui_initialized_ = true;
     log::info("ImGui initialized (Vulkan, dynamic rendering)");
 }
@@ -187,6 +205,9 @@ void VulkanEngine::destroy_imgui() {
     if (io.IniFilename) {
         ImGui::SaveIniSettingsToDisk(io.IniFilename);
     }
+    if (hud_icons_sampler_) { vkDestroySampler(device_, hud_icons_sampler_, nullptr); hud_icons_sampler_ = VK_NULL_HANDLE; }
+    if (hud_icons_tex_.ok) destroy_texture_2d(device_, allocator_, hud_icons_tex_);
+    hud_icons_id_ = 0;
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

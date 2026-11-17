@@ -115,28 +115,55 @@ void VulkanEngine::draw_game_hud() {
         label(ImVec2(x0 + 30.0f * s, base - 30.0f * s), kDim, sc);
     }
 
-    // ---------------- weapon slots (bottom centre) ----------------
+    // ---------------- weapon bay (bottom centre) ----------------
+    // Three tiles with the weapon's icon, its key in the corner and its name
+    // underneath; the one in the hand is larger, framed and lit in amber.
     {
         struct Slot { const char* key; const char* name; bool on; };
         const Slot slots[3] = { { "1", "LASER", !flashlight_on_ && weapon_ == 0 }, { "2", "AIRSTRIKE", !flashlight_on_ && weapon_ == 1 },
-                                { "F", "FLASHLIGHT", flashlight_on_ } };
-        const float px = 17.0f * s, pad = 12.0f * s, gap = 10.0f * s, hgt = 30.0f * s;
-        float total = 0.0f, wds[3];
-        for (int i = 0; i < 3; ++i) {
-            wds[i] = size_of(fs, px, slots[i].key).x + size_of(fs, px, slots[i].name).x + 3.0f * pad + 8.0f * s;
-            total += wds[i] + (i ? gap : 0.0f);
-        }
+                                { "F", "LIGHT", flashlight_on_ } };
+        const float tile = 78.0f * s, big = 96.0f * s, gap = 12.0f * s;
+        float total = -gap;
+        for (const Slot& sl : slots) total += (sl.on ? big : tile) + gap;
         float x = (W - total) * 0.5f;
-        const float y = base - hgt;
+        const float bottom = base - 4.0f * s;
+        const ImTextureID tex = static_cast<ImTextureID>(hud_icons_id_);
         for (int i = 0; i < 3; ++i) {
             const Slot& sl = slots[i];
-            dl->AddRectFilled(ImVec2(x, y), ImVec2(x + wds[i], y + hgt), sl.on ? IM_COL32(255, 150, 40, 235) : kPanel, 3.0f * s);
-            const float kw = size_of(fs, px, sl.key).x + pad;
-            dl->AddRectFilled(ImVec2(x, y), ImVec2(x + kw + 4.0f * s, y + hgt), sl.on ? IM_COL32(0, 0, 0, 60) : IM_COL32(255, 255, 255, 26), 3.0f * s);
-            const float ty = y + (hgt - px) * 0.5f - 1.0f * s;
-            dl->AddText(fs, px, ImVec2(x + pad * 0.5f + 2.0f * s, ty), sl.on ? IM_COL32(20, 14, 6, 255) : kAccent, sl.key);
-            dl->AddText(fs, px, ImVec2(x + kw + pad, ty), sl.on ? IM_COL32(20, 14, 6, 255) : kDim, sl.name);
-            x += wds[i] + gap;
+            const float sz = sl.on ? big : tile;
+            const ImVec2 p0(x, bottom - sz), p1(x + sz, bottom);
+            const float cut = 12.0f * s;                      // cut corner, top right
+            const ImVec2 pts[5] = { p0, ImVec2(p1.x - cut, p0.y), ImVec2(p1.x, p0.y + cut), p1, ImVec2(p0.x, p1.y) };
+            dl->AddConvexPolyFilled(pts, 5, sl.on ? IM_COL32(40, 26, 10, 215) : kPanel);
+            if (sl.on) {
+                dl->AddPolyline(pts, 5, kAccent, ImDrawFlags_Closed, 2.5f * s);
+                dl->AddRectFilled(ImVec2(p0.x, p1.y + 4.0f * s), ImVec2(p1.x, p1.y + 8.0f * s), kAccent);
+            } else {
+                dl->AddPolyline(pts, 5, IM_COL32(255, 255, 255, 40), ImDrawFlags_Closed, 1.2f * s);
+            }
+            const float pad = sz * 0.10f;
+            if (hud_icons_id_) {
+                const ImVec2 uv0(float(i) / 3.0f, 0.0f), uv1(float(i + 1) / 3.0f, 1.0f);
+                dl->AddImage(tex, ImVec2(p0.x + pad + 2.0f * s, p0.y + pad + 2.0f * s), ImVec2(p1.x - pad + 2.0f * s, p1.y - pad + 2.0f * s),
+                             uv0, uv1, IM_COL32(0, 0, 0, sl.on ? 150 : 90));                                    // drop shadow
+                dl->AddImage(tex, ImVec2(p0.x + pad, p0.y + pad), ImVec2(p1.x - pad, p1.y - pad), uv0, uv1,
+                             sl.on ? IM_COL32(255, 190, 90, 255) : IM_COL32(210, 216, 225, 150));
+            } else {
+                const ImVec2 ns = size_of(fs, 15.0f * s, sl.name);
+                dl->AddText(fs, 15.0f * s, ImVec2(p0.x + (sz - ns.x) * 0.5f, p0.y + sz * 0.42f), sl.on ? kAccent : kDim, sl.name);
+            }
+            // key badge
+            const float kpx = 16.0f * s;
+            const ImVec2 ks = size_of(fs, kpx, sl.key);
+            dl->AddRectFilled(p0, ImVec2(p0.x + ks.x + 10.0f * s, p0.y + kpx + 5.0f * s), sl.on ? kAccent : IM_COL32(255, 255, 255, 34));
+            dl->AddText(fs, kpx, ImVec2(p0.x + 5.0f * s, p0.y + 1.5f * s), sl.on ? IM_COL32(20, 14, 6, 255) : kDim, sl.key);
+            // name of the weapon in the hand, above its tile
+            if (sl.on) {
+                float lw = 0.0f; char one[2] = { 0, 0 };
+                for (const char* c = sl.name; *c; ++c) { one[0] = *c; lw += size_of(fs, 17.0f * s, one).x + 2.2f * s; }
+                label(ImVec2(p0.x + (sz - lw) * 0.5f, p0.y - 24.0f * s), kAccent, sl.name);
+            }
+            x += sz + gap;
         }
     }
 

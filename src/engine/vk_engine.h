@@ -1218,6 +1218,11 @@ private:
     void draw_game_hud();                              // ui_gamehud.cpp
     ::ImFont* font_hud_ = nullptr;                // HUD fonts (null: the default font)
     ::ImFont* font_hud_big_ = nullptr;
+    // Weapon icons for the HUD bay: assets/hud/weapon_icons.png, three 256 px
+    // cells (laser, airstrike, flashlight), white with alpha - tinted when drawn.
+    Texture2D   hud_icons_tex_{};
+    VkSampler   hud_icons_sampler_ = VK_NULL_HANDLE;
+    uint64_t    hud_icons_id_ = 0;                     // ImTextureID (0 = not loaded)
     void mp_sync_world(float dt);                      // weather + clock: the same on every machine
     net::WorldState mp_world_last_{};                  // what was last sent / applied (change detection)
     bool      mp_world_init_ = false;
