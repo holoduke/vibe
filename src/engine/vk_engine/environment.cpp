@@ -436,6 +436,53 @@ void VulkanEngine::apply_environment(float dt) {
     env_wind_scale_ = glm::mix(1.0f, 2.4f, wind_k);
 
     tick_rain_audio(rain);
+    update_footprints(dt);
+}
+
+// Footprints in the snow. Every stride of a player walking on snowy ground
+// leaves a print (left, right, ...); the terrain shader presses them into
+// the snow (terrain_raymarch.frag). Falling snow fills them in again.
+void VulkanEngine::add_footprint(glm::vec3 pos, float yaw, bool left) {
+    const glm::vec2 right(std::cos(yaw), std::sin(yaw));
+    const glm::vec2 p = glm::vec2(pos.x, pos.z) + right * (left ? -0.11f : 0.11f);
+    footprints_[foot_next_] = glm::vec4(p, yaw, 1.0f);
+    foot_next_ = (foot_next_ + 1) % 32;
+}
+
+void VulkanEngine::update_footprints(float dt) {
+    if (env_snow_ < 0.05f) {                           // thawed: gone
+        for (auto& f : footprints_) f.w = 0.0f;
+        foot_last_ = glm::vec3(1e9f);
+        return;
+    }
+    if (env_snowfall_ > 0.05f)
+        for (auto& f : footprints_) f.w = std::max(0.0f, f.w - dt * env_snowfall_ / 240.0f);
+    if (env_snow_ < 0.3f) return;
+    // QLIKE_TEST_FOOTPRINTS=1: a trail of prints straight ahead of the player (captures).
+    if (static bool done = false; !done && std::getenv("QLIKE_TEST_FOOTPRINTS")) {
+        done = true;
+        const glm::vec3 f(std::sin(player_.yaw), 0.0f, -std::cos(player_.yaw));
+        for (int i = 0; i < 12; ++i) add_footprint(player_.position + f * (1.2f + 0.7f * float(i)), player_.yaw, (i & 1) != 0);
+    }
+    auto step = [&](glm::vec3 pos, glm::vec3 vel, float yaw, bool grounded, glm::vec3& last, bool& left) {
+        if (!grounded) return;
+        const glm::vec2 d(pos.x - last.x, pos.z - last.z);
+        const float speed = glm::length(glm::vec2(vel.x, vel.z));
+        const float stride = glm::clamp(0.45f + 0.09f * speed, 0.55f, 1.25f);
+        if (glm::dot(d, d) < stride * stride) return;
+        if (glm::dot(d, d) > 25.0f) { last = pos; return; }      // teleport / first time: no print
+        // Heading = the way the feet travel, not where the head looks.
+        const float heading = speed > 0.3f ? std::atan2(vel.x, -vel.z) : yaw;
+        add_footprint(pos, heading, left);
+        left = !left;
+        last = pos;
+    };
+    step(player_.position, player_.velocity, player_.yaw, player_.on_ground && !player_swimming_, foot_last_, foot_left_);
+    for (auto& a : mp_avatars_) {
+        if (!a.id) continue;
+        step(glm::vec3(a.st.px, a.st.py, a.st.pz), glm::vec3(a.st.vx, a.st.vy, a.st.vz), a.st.yaw,
+             (a.st.flags & 1) && !(a.st.flags & 2), a.foot_last, a.foot_left);
+    }
 }
 
 // Rain bed: an 8 s recording with a Hann envelope baked in, played by two

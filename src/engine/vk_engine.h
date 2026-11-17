@@ -1191,6 +1191,8 @@ private:
         glm::vec2     dir{0.0f, -1.0f};
         float         phase = 0.0f, move = 0.0f, air = 0.0f, recoil_t = 0.0f, muzzle_t = 0.0f;
         bool          drawn = false, fresh_pose = true;
+        glm::vec3     foot_last{1e9f};                 // footprints in the snow
+        bool          foot_left = false;
         net::PlayerState st{};                         // interpolated state this frame
     };
     struct MpFeed { std::string text; float ttl; };
@@ -1318,6 +1320,13 @@ private:
     double cloud_travel_ = 0.0, cloud_travel_t_ = -1.0;   // metres the wind has carried the clouds; time of the last step
     float env_snow_ = 0.0f;           // snow lying on the ground 0..1
     float env_snowfall_ = 0.0f;       // snow falling 0..1
+    // Footprints in the snow: a ring of the last 32 (the local player and, in multiplayer, the others).
+    glm::vec4 footprints_[32]{};      // xy = world xz, z = heading, w = depth 0..1
+    int       foot_next_ = 0;
+    glm::vec3 foot_last_{1e9f};
+    bool      foot_left_ = false;
+    void update_footprints(float dt);
+    void add_footprint(glm::vec3 pos, float yaw, bool left);
     // Weather as independent amounts (environment.cpp); a weather type is a target for all of them.
     struct Wx { float cover = 0.05f, overcast = 0.0f, rain = 0.0f, thunder = 0.0f, wind = 0.1f, fog = 0.0f,
                       snow = 0.0f, snowfall = 0.0f, dark = 0.0f; };

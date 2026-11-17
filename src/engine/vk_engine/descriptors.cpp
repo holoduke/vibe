@@ -838,6 +838,7 @@ void VulkanEngine::update_scene_ubo() {
     for (size_t i = 0; i < 16; ++i)
         data.ripples[i] = i < water_ripples_.size()
             ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);
+    for (int i = 0; i < 32; ++i) data.footprints[i] = footprints_[i];
     data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_rain_,
                                    std::min(env_wet_, 0.99f) + std::floor(glm::clamp(env_snow_, 0.0f, 1.0f) * 255.0f),   // fract = wet, whole = snow (scene_ubo.glsl)
                                    0.0f);

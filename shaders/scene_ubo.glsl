@@ -92,6 +92,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   lamp_info;        // x = bit mask: lantern i has a small-plant shadow map
     vec4   cloud_a;          // the cloud layer, as clouds.comp sees it: x coverage, y size, z base altitude (m), w tallest (m)
     vec4   cloud_b;          // xy = wind offset of the weather field (m), z = density
+    vec4   footprints[32];   // prints in the snow: xy = world xz, z = heading (player yaw), w = depth 0..1 (0 = unused)
 } scene;
 
 // Weather on surfaces (packed in ripple_info.z by descriptors.cpp).

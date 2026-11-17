@@ -45,7 +45,8 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 7408 (flash_vp, the flashlight's small-plant shadow map).
 //     → 7424 (lamp_info, lantern small-plant shadow maps).
 //     → 7456 (cloud_a / cloud_b: cloud shadows follow the real clouds).
-static_assert(sizeof(SceneUBO) == 7456, "scene ubo layout");
+//     → 7968 (footprints[32]: prints in the snow).
+static_assert(sizeof(SceneUBO) == 7968, "scene ubo layout");
 
 RtFuncs g_rt;
 

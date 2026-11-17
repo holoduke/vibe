@@ -134,3 +134,24 @@ float rm_pebbles_march(vec2 wp, float t) {
     g_peb_mode = m;
     return h;
 }
+
+// Depth (m) of the deepest footprint at world xz `p` (scene.footprints):
+// a sole - the ball of the foot and a heel - pressed 7 cm into the snow.
+float foot_depth(vec2 p) {
+    float d = 0.0;
+    for (int i = 0; i < 32; ++i) {
+        vec4 f = scene.footprints[i];
+        if (f.w <= 0.0) continue;
+        vec2 q = p - f.xy;
+        if (dot(q, q) > 0.06) continue;
+        float c = cos(f.z), s = sin(f.z);
+        float lx = c * q.x + s * q.y;              // across the foot
+        float lz = s * q.x - c * q.y;              // along it (toes forward)
+        float ball = (length(vec2(lx / 0.058, (lz - 0.055) / 0.105)) - 1.0) * 0.058;
+        float heel = length(vec2(lx, lz + 0.105)) - 0.047;
+        float k = 0.03, h = clamp(0.5 + 0.5 * (heel - ball) / k, 0.0, 1.0);
+        float sdf = mix(heel, ball, h) - k * h * (1.0 - h);          // smooth union
+        d = max(d, f.w * 0.07 * smoothstep(0.012, -0.014, sdf));
+    }
+    return d;
+}
