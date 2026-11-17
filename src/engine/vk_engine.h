@@ -34,6 +34,7 @@
 #include "engine/vk_engine/settings_types.h"  // RtSettings / GameSettings
 #include "game/level.h"
 #include "game/player.h"
+#include "engine/net/net.h"   // LAN multiplayer session (plain data + Session)
 
 namespace qlike {
 
@@ -874,6 +875,7 @@ private:
         // barrel->centerline join produced a visible corner in the line.
         glm::vec3 trail_prev{0.0f};
         glm::vec3 trail_offset{0.0f};  // barrel tip minus muzzle spawn
+        bool      remote = false;      // another player's shot (multiplayer): looks only, no hit decisions
     };
     std::vector<Projectile> projectiles_;
     void fire_projectile(glm::vec3 origin, glm::vec3 direction);
@@ -1177,6 +1179,39 @@ private:
     float         body_phase_ = 0.0f, body_move_ = 0.0f, body_air_ = 0.0f, body_recoil_ = 0.0f;
     glm::vec2     body_dir_{0.0f, -1.0f};
     bool          body_drawn_ = false;
+
+    // ---- LAN multiplayer (vk_engine/multiplayer.cpp, engine/net) ----
+    struct MpAvatar {                                  // another player, as drawn here
+        uint32_t      id = 0;                          // 0 = free slot
+        VkBuffer      vbuf[kFrameOverlap]{};           // their skinned soldier
+        VmaAllocation valloc[kFrameOverlap]{};
+        void*         mapped[kFrameOverlap]{};
+        glm::mat4     model{1.0f}, prev_model{1.0f}, view_inv{1.0f};
+        glm::vec3     eye{0.0f}, root{0.0f};
+        glm::vec2     dir{0.0f, -1.0f};
+        float         phase = 0.0f, move = 0.0f, air = 0.0f, recoil_t = 0.0f, muzzle_t = 0.0f;
+        bool          drawn = false, fresh_pose = true;
+        net::PlayerState st{};                         // interpolated state this frame
+    };
+    struct MpFeed { std::string text; float ttl; };
+    net::Session* net_ = nullptr;                      // null = multiplayer off
+    std::array<MpAvatar, net::kMaxPlayers> mp_avatars_{};
+    std::vector<MpFeed> mp_feed_;
+    const MpAvatar* mp_draw_ = nullptr;                // set while a remote player's body + gun are drawn
+    Vertex*   mp_pose_dst_ = nullptr;                  // set while a remote player's body is posed
+    bool      mp_remote_shot_ = false;                 // fire_projectile is replaying someone else's shot
+    glm::vec3 mp_spawn_{0.0f};
+    float     mp_health_ = 100.0f, mp_hurt_ = 0.0f, mp_hitmark_ = 0.0f;
+    int       mp_kills_ = 0;
+    void mp_init();
+    void mp_shutdown();
+    void mp_update(float dt);                          // network + events (main loop)
+    void mp_pose_avatars(float dt);                    // after the local body was posed (frame.cpp)
+    void mp_on_local_fire(glm::vec3 origin, glm::vec3 dir);
+    bool mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit);
+    void mp_feed(const std::string& line);
+    void mp_hud();
+    void draw_remote_players(VkCommandBuffer cmd, const glm::mat4& vp);
     void init_player_body();
     void destroy_player_body();
     int  body_bone(const char* name) const;

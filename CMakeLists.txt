@@ -164,7 +164,14 @@ FetchContent_Declare(fastnoiselite
     GIT_TAG v1.1.1
     GIT_SHALLOW TRUE)
 
-FetchContent_MakeAvailable(glfw glm vk_bootstrap vma Catch2 JoltPhysics imgui tinygltf tinyexr miniaudio fastnoiselite)
+# ENet - reliable UDP for games (MIT). LAN multiplayer transport (src/engine/net).
+FetchContent_Declare(enet
+    GIT_REPOSITORY https://github.com/lsalzman/enet.git
+    GIT_TAG v1.3.18
+    GIT_SHALLOW TRUE)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
+FetchContent_MakeAvailable(glfw glm vk_bootstrap vma Catch2 JoltPhysics imgui tinygltf tinyexr miniaudio fastnoiselite enet)
 
 # AMD FidelityFX-FSR2 — vendored as a git submodule under
 # external/FidelityFX-FSR2 (MIT license; LICENSE.txt preserved). Use as-is
@@ -300,6 +307,8 @@ add_library(qlike_engine STATIC
     src/engine/vk_engine/veg_zones.cpp
     src/engine/vk_engine/flashlight.cpp
     src/engine/vk_engine/player_body.cpp
+    src/engine/net/net.cpp
+    src/engine/vk_engine/multiplayer.cpp
     src/engine/cpu_prof.cpp
     src/engine/jobs.cpp
     src/engine/vk_engine/dlss.cpp
@@ -360,7 +369,12 @@ target_link_libraries(qlike_engine PUBLIC
     Jolt
     imgui
     tinyexr
+    enet
+    ws2_32
+    winmm
+    iphlpapi
 )
+target_include_directories(qlike_engine PRIVATE ${enet_SOURCE_DIR}/include)
 
 # FSR2 — link only if the submodule was processed above.
 if(TARGET ffx_fsr2_api_x64)

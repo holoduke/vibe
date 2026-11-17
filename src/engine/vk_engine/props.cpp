@@ -1031,8 +1031,17 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp,
     glm::mat4 recoil_offset = glm::translate(glm::mat4(1.0f),
                                              glm::vec3(0.0f, 0.0f, kick));
     glm::mat4 view_inv_recoil = view_inv * recoil_offset;
-    body_recoil_ = kick;
+    if (!mp_draw_) body_recoil_ = kick;
     draw_player_body(cmd, vp);
+    if (mp_draw_) {
+        // The soldier mesh has no head (first person): a simple head and helmet for the others.
+        const glm::mat4 hb = view_inv * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.09f));
+        draw_part(cube_mesh_, hb * glm::scale(glm::mat4(1.0f), glm::vec3(0.17f, 0.22f, 0.20f)),
+                  glm::vec4(0.62f, 0.47f, 0.38f, 1.0f), glm::vec3(0.0f), false);
+        draw_part(cube_mesh_, hb * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.075f, 0.01f)) *
+                              glm::scale(glm::mat4(1.0f), glm::vec3(0.22f, 0.13f, 0.25f)),
+                  glm::vec4(0.16f, 0.20f, 0.12f, 1.0f), glm::vec3(0.0f), false);
+    }
 
     if (flashlight_on_) {              // the flashlight replaces the weapon in the hand
         draw_flashlight_model(cmd, vp);

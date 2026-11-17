@@ -1138,6 +1138,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // fv.inv_view is cached in compute_frame_view (was a per-frame
     // glm::inverse(fv.view) here -- a full 4x4 mat inverse is ~80 fmuls).
     prof_mark(cmd, "w_grass_rm");
+    draw_remote_players(cmd, vp);          // multiplayer: the other players, with their guns
     draw_viewmodel(cmd, vp, fv.inv_view);
     prof_mark(cmd, "w_viewmodel");
 

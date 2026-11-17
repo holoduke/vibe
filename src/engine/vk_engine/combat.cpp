@@ -113,9 +113,12 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
         dir * speed + player_.velocity, std::max(0.1f, game_.bullet_mass));
     if (id == 0) return;
 
-    muzzle_flash_timer_ = kMuzzleFlashDuration;
-    recoil_timer_       = kRecoilDuration;
-    if (audio_) {
+    mp_on_local_fire(origin, direction);   // multiplayer: tell the others (no-op for a replayed remote shot)
+    if (!mp_remote_shot_) {                // (a remote shot: their avatar kicks, the sound comes from there)
+        muzzle_flash_timer_ = kMuzzleFlashDuration;
+        recoil_timer_       = kRecoilDuration;
+    }
+    if (audio_ && !mp_remote_shot_) {
         // Shot is "local" — happens at the camera, mostly bypasses 3D
         // attenuation. Light pitch jitter so rapid fire doesn't sound
         // mechanical.
@@ -159,6 +162,7 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
         p.trail_prev   = barrel;
         p.trail_offset = barrel - spawn;
     }
+    p.remote = mp_remote_shot_;
     projectiles_.push_back(p);
 }
 
@@ -216,6 +220,14 @@ void VulkanEngine::update_projectiles(float dt) {
                 glm::vec3 bp = glm::vec3(m[3]);
                 glm::vec3 b_prev = bp;       // default: no swept test on first frame
                 if (!std::isnan(it->prev_pos.x)) b_prev = it->prev_pos;
+                // Multiplayer: did this bolt of ours pass through another player?
+                if (net_ && !it->remote) {
+                    glm::vec3 mp_hit;
+                    if (mp_bolt_hits(std::isnan(it->prev_pos.x) ? it->spawn_origin : it->prev_pos, bp, mp_hit)) {
+                        spawn_hit_particles(mp_hit, -it->initial_dir, it->initial_dir);
+                        drop = true;
+                    }
+                }
                 // Pre-compute segment midpoint + half-length for the
                 // cheap sphere-vs-sphere distance gate below.
                 const glm::vec3 seg_mid = 0.5f * (bp + b_prev);

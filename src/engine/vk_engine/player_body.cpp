@@ -224,7 +224,7 @@ void VulkanEngine::body_ik(int a, int b, int c, glm::vec3 target, glm::vec3 pole
 // is known (the body rides on the interpolated camera, like the flashlight).
 void VulkanEngine::update_player_body(float dt) {
     body_drawn_ = false;
-    if (body_bones_.empty() || !game_.player_body) return;
+    if (body_bones_.empty() || (!game_.player_body && !mp_pose_dst_)) return;
     CPU_SCOPE("player body");
     dt = glm::clamp(dt, 0.0f, 0.05f);
     const float tnow = static_cast<float>(glfwGetTime());
@@ -507,23 +507,28 @@ void VulkanEngine::update_player_body(float dt) {
         }
     }
     const uint32_t slot = frame_number_ % kFrameOverlap;
-    if (body_vmapped_[slot]) {
-        std::memcpy(body_vmapped_[slot], body_skinned_.data(), nv * sizeof(Vertex));
+    void* dst = mp_pose_dst_ ? static_cast<void*>(mp_pose_dst_) : body_vmapped_[slot];     // a remote player's buffer (multiplayer.cpp)
+    if (dst) {
+        std::memcpy(dst, body_skinned_.data(), nv * sizeof(Vertex));
         body_drawn_ = true;
     }
 }
 
 void VulkanEngine::draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp) {
-    if (!body_drawn_) return;
+    if (!mp_draw_ && !body_drawn_) return;
     const uint32_t slot = frame_number_ % kFrameOverlap;
     VkDeviceSize off = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &body_vbuf_[slot], &off);
+    vkCmdBindVertexBuffers(cmd, 0, 1, mp_draw_ ? &mp_draw_->vbuf[slot] : &body_vbuf_[slot], &off);
     vkCmdBindIndexBuffer(cmd, body_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
     PushConstants pc{};
-    pc.mvp = vp * body_model_;
-    pc.model = body_model_;
+    const glm::mat4 bm = mp_draw_ ? mp_draw_->model : body_model_;
+    pc.mvp = vp * bm;
+    pc.model = bm;
     pc.prev_mvp = pc.mvp;                  // rides on the camera: no motion vectors
-    if (rt_.fsr2_enabled) {
+    if (mp_draw_) {
+        // Another player: a real object in the world, with real motion.
+        if (prev_view_proj_valid_) pc.prev_mvp = prev_view_proj_ * mp_draw_->prev_model;
+    } else if (rt_.fsr2_enabled) {
         glm::mat4 J(1.0f);
         const glm::vec2 dj = current_frame_view_.jitter - prev_jitter_;
         J[3][0] = dj.x;

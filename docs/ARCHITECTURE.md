@@ -53,6 +53,8 @@ Everything is in `namespace qlike`. Runtime files live in the project root:
 | Castle meshes, props, doors, lanterns, flags | `castle_mesh.cpp`, `props.cpp`, `world.cpp`, `world_textures.cpp` |
 | Combat: gun, projectiles, airstrike, jets, AA | `combat.cpp`, `aa.cpp`, `fx.cpp` |
 | Player body (soldier, hands, walk cycle) | `player_body.cpp`, `flashlight.cpp` |
+| LAN multiplayer: discovery, host election, snapshots, interpolation | `src/engine/net/net.h`, `net.cpp` (ENet; no engine types) |
+| Multiplayer game side: other players (avatars), their shots, hits, health, HUD | `multiplayer.cpp` |
 | Water effects (splashes, ripples) | `water_fx.cpp` |
 | UI | `ui_setup.cpp`, `ui_hud.cpp` (HUD, crosshair), `ui_menu.cpp` (pause menu) |
 | Settings: load / save / presets / types | `settings.cpp`, `settings_types.h` |
@@ -129,3 +131,20 @@ its local variables and are not self-contained.
 - Shader includes are named `<owner>_<topic>.glsl`.
 - Internal names keep the old `qlike` / `QLIKE_` prefix (namespace, test
   hooks, the `qlike_engine` library); the product name is Vibe.
+
+## Multiplayer (LAN)
+
+Model and rules are described at the top of `src/engine/net/net.h`. In short: every instance
+broadcasts a beacon (UDP 47777); the lowest id hosts (ENet, UDP 47778+), the rest join; when the
+host leaves, the others elect again. Each client simulates its own player and sends its state 30x
+a second; the host relays snapshots at 60 Hz; other players are drawn 100 ms in the past,
+interpolated. Shots / hits / deaths are reliable events; a hit is decided on the shooter's machine
+against the avatar as drawn there (`mp_bolt_hits`).
+
+Other players reuse the local soldier pose solver: `mp_pose_avatars` swaps their state into
+`player_` / the body animation members, runs `update_player_body` into their own vertex buffer
+(`mp_pose_dst_`), and restores. `draw_remote_players` draws body + gun through `draw_viewmodel`
+with their camera matrix (`mp_draw_`).
+
+Off for automated runs (`--frames`, `--screenshot`) unless `QLIKE_NET=1`; `QLIKE_NO_NET=1` turns it
+off entirely. Two instances on one PC work (the second takes the next game port).

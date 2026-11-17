@@ -374,6 +374,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                opts_.screenshot_after_frames);
 
     bool headless = opts_.max_frames > 0 || !opts_.screenshot_path.empty();
+    mp_init();
     bool autodemo = opts_.autodemo_seconds > 0.0f;
     if (!headless) window_->set_cursor_captured(true);
     if (autodemo) {
@@ -739,6 +740,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         if (fire_cooldown_ > 0.0f) fire_cooldown_ -= frame_dt;
         if (muzzle_flash_timer_ > 0.0f) muzzle_flash_timer_ -= frame_dt;
         if (recoil_timer_       > 0.0f) recoil_timer_       -= frame_dt;
+        mp_update(frame_dt);               // LAN multiplayer: network, other players' shots, hits
         if (state_ == State::Playing && (window_->cursor_captured() ||
                                            std::getenv("QLIKE_TEST_FIRE"))) {
             // Raymarch terrain reads FBM directly in the shader — sculpting
@@ -1273,6 +1275,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
             build_hud_ui();
+            mp_hud();
             build_menu_ui();
             ImGui::Render();
         }
@@ -1392,6 +1395,7 @@ void VulkanEngine::run(const RunOptions& opts) {
     // Skip the wait if we already know the device is dead — otherwise we
     // hang in vkDeviceWaitIdle for several seconds before shutdown can run.
     if (device_ && !device_lost_) vkDeviceWaitIdle(device_);
+    mp_shutdown();
 }
 
 void VulkanEngine::shutdown() {
