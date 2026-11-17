@@ -1,5 +1,7 @@
 #include "game/level.h"
 
+#include <cstdio>
+#include <string>
 #include <glm/vec2.hpp>
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
@@ -646,6 +648,56 @@ void append_outpost_tower(Level& lv, glm::vec3 base, int style, uint32_t seed) {
     for (const auto& a : cols) lv.aabbs.push_back(a);
 }
 
+
+// ---------------------------------------------------------------------
+// The chapel. Geometry comes from Blender (tools/church/make_church.py ->
+// assets/church/church.mesh): blocks of "mesh <name> <triangles>" followed
+// by 3 lines per triangle: px py pz  nx ny nz  u v  (game axes, metres; uv
+// in metres along the surface). Each block becomes one LevelMesh with the
+// game's own materials: castle masonry (with stone relief), roof tiles,
+// timber, iron, and dark glass that glows faintly at night.
+// ---------------------------------------------------------------------
+bool append_church(Level& lv, glm::vec3 base) {
+    FILE* fp = std::fopen("assets/church/church.mesh", "r");
+    if (!fp) return false;
+    constexpr int kBrick = 1, kRoof = 13, kWood = 17, kMetal = 3;
+    char name[32];
+    int tris = 0;
+    while (std::fscanf(fp, " mesh %31s %d", name, &tris) == 2) {
+        LevelMesh m;
+        float tile = 1.0f;
+        const std::string nm(name);
+        if (nm == "stone")      { m.tex_albedo = kBrick; m.tex_normal = kBrick; m.tint = glm::vec3(1.0f, 0.96f, 0.90f); m.fallback = glm::vec3(0.5f, 0.47f, 0.42f); tile = 1.0f / 0.22f; }
+        else if (nm == "roof")  { m.tex_albedo = kRoof;  m.tex_normal = kRoof;  m.tint = glm::vec3(0.62f, 0.52f, 0.50f); m.fallback = glm::vec3(0.25f, 0.16f, 0.14f); tile = 1.7f; }
+        else if (nm == "wood")  { m.tex_albedo = kWood;  m.tex_normal = kWood;  m.tint = glm::vec3(0.80f, 0.66f, 0.50f); m.fallback = glm::vec3(0.35f, 0.22f, 0.12f); tile = 0.55f; }
+        else if (nm == "iron")  { m.tex_albedo = kMetal; m.tex_normal = kMetal; m.tint = glm::vec3(0.16f, 0.16f, 0.17f); m.fallback = glm::vec3(0.08f, 0.08f, 0.09f); tile = 0.5f; }
+        else                    { m.tint = glm::vec3(0.035f, 0.05f, 0.08f); m.fallback = m.tint; m.emissive = glm::vec3(0.030f, 0.022f, 0.010f); }
+        for (int t = 0; t < tris; ++t) {
+            LevelVertex v[3];
+            for (auto& q : v) {
+                if (std::fscanf(fp, "%f %f %f %f %f %f %f %f", &q.p.x, &q.p.y, &q.p.z, &q.n.x, &q.n.y, &q.n.z, &q.u, &q.v) != 8) { std::fclose(fp); return false; }
+                q.p += base;
+                q.u /= tile; q.v /= tile;
+            }
+            // Front faces: cross(b - a, c - a) must point along the normal.
+            const glm::vec3 g = glm::cross(v[1].p - v[0].p, v[2].p - v[0].p);
+            const bool flip = glm::dot(g, v[0].n + v[1].n + v[2].n) < 0.0f;
+            const uint32_t b0 = uint32_t(m.verts.size());
+            mesh_push(m, v[0]); mesh_push(m, v[1]); mesh_push(m, v[2]);
+            if (flip) m.idx.insert(m.idx.end(), { b0, b0 + 2, b0 + 1 });
+            else      m.idx.insert(m.idx.end(), { b0, b0 + 1, b0 + 2 });
+        }
+        if (!m.idx.empty()) lv.meshes.push_back(std::move(m));
+    }
+    std::fclose(fp);
+    // Player colliders (the chapel is closed): nave, apse, door step.
+    auto col = [&](glm::vec3 lo, glm::vec3 hi) { lv.aabbs.push_back({ base + lo, base + hi }); };
+    col(glm::vec3(-4.62f, -1.2f, -3.12f), glm::vec3(4.62f, 7.6f, 3.12f));
+    col(glm::vec3(4.4f, -1.2f, -2.3f), glm::vec3(6.6f, 4.0f, 2.3f));
+    col(glm::vec3(6.6f, -1.2f, -1.3f), glm::vec3(7.2f, 4.0f, 1.3f));
+    col(glm::vec3(-5.35f, -1.2f, -1.05f), glm::vec3(-4.6f, 0.23f, 1.05f));
+    return true;
+}
 
 // ---------------------------------------------------------------------
 // Road lamp post: a hewn timber post with a braced arm and a hanging iron

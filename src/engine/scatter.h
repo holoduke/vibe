@@ -14,6 +14,7 @@
 #include <glm/vec4.hpp>
 
 #include <cstdint>
+#include <cmath>
 #include <vector>
 
 namespace qlike {
@@ -83,6 +84,13 @@ struct ScatterParams {
     float snow_band_h   = 110.0f;   // density tapers off into snow
     // Castle keep-out (same as grass).
     glm::vec2 keep_out_xz = glm::vec2(14.0f, 14.0f);
+    // More places nothing grows (buildings): x0, z0, x1, z1 in world metres.
+    std::vector<glm::vec4> keep_rects;
+    bool blocked(float x, float z) const {
+        if (std::abs(x) < keep_out_xz.x && std::abs(z) < keep_out_xz.y) return true;
+        for (const auto& r : keep_rects) if (x > r.x && x < r.z && z > r.y && z < r.w) return true;
+        return false;
+    }
     // Optional extra keep-out (the castle road). Null = none.
     const struct Road* road = nullptr;
     // Painted vegetation (veg_paint.h): its grass layer overrides the grass

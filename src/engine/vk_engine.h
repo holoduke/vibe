@@ -1667,6 +1667,8 @@ private:
     void tick_sam(float dt);
     glm::mat4 sam_missile_model(glm::vec3 pos, glm::vec3 dir) const;
     struct AaRound { glm::vec3 pos{0.0f}, prev{0.0f}, vel{0.0f}; float t = 0.0f; bool dead = false; };
+    glm::vec3 church_pos_{0.0f};           // chapel site (world.cpp); y = pad height, valid when church_placed_
+    bool      church_placed_ = false;
     std::vector<glm::vec3> outposts_;    // outpost tower base points (world.cpp)
     std::vector<AaVehicle> aa_;
     std::vector<AaRound>   aa_rounds_;

@@ -240,6 +240,36 @@ void VulkanEngine::init_world() {
         castle_road_ = make_castle_road(hm, rt_.water_level, hp.plateau_height + 0.05f);
         carve_heights(castle_road_, hm);
         log::infof("[road] %zu centreline points carved", castle_road_.pts.size());
+        // Chapel site: a level pad cut into the SOURCE heights (so the drawn
+        // ground, physics and plants all agree), easing back into the slope
+        // over 9 m.
+        {
+            const glm::vec2 c(42.7f, 118.8f);
+            const glm::vec2 half(9.0f, 5.5f);               // level area (church + a walk round it)
+            const float blend = 9.0f;
+            float sum = 0.0f; int cnt = 0;
+            for (float dz = -3.0f; dz <= 3.0f; dz += 1.5f)
+                for (float dx = -4.5f; dx <= 4.5f; dx += 1.5f) { sum += hm.sample_world(c.x + dx, c.y + dz); ++cnt; }
+            const float pad = sum / float(cnt);
+            const int Wv = hm.width();
+            for (int z = 0; z < Wv; ++z) {
+                const float wz = hm.origin_z + float(z) * hm.cell;
+                const float ez = std::abs(wz - c.y) - half.y;
+                if (ez > blend) continue;
+                for (int x = 0; x < Wv; ++x) {
+                    const float wx = hm.origin_x + float(x) * hm.cell;
+                    const float ex = std::abs(wx - c.x) - half.x;
+                    if (ex > blend) continue;
+                    const float d = glm::length(glm::vec2(std::max(ex, 0.0f), std::max(ez, 0.0f)));
+                    const float w = 1.0f - glm::smoothstep(0.0f, blend, d);
+                    float& hv = hm.heights[size_t(z) * Wv + x];
+                    hv = glm::mix(hv, pad, w);
+                }
+            }
+            church_pos_ = glm::vec3(c.x, pad, c.y);
+            log::infof("[church] pad at (%.1f, %.2f, %.1f), road %.1f m away", c.x, pad, c.y,
+                       castle_road_.empty() ? -1.0f : castle_road_.distance(c.x, c.y));
+        }
         // Cache for collision + Phase 4 sculpt access.
         terrain_data_.dim = hm.dim;
         terrain_data_.cell = hm.cell;
@@ -371,6 +401,8 @@ void VulkanEngine::init_world() {
                 log::infof("[outpost] tower style %d at (%.0f, %.1f, %.0f)", st, cd.p.x, cd.p.y, cd.p.z);
             }
         }
+        church_placed_ = game::append_church(world_, church_pos_);
+        if (!church_placed_) log::warnf("[church] assets/church/church.mesh missing - no chapel");
         // Lamp posts along the castle road: one about every 50 m, on a
         // random side, arm over the verge toward the paving.
         if (!castle_road_.empty()) {

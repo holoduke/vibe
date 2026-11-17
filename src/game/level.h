@@ -86,6 +86,11 @@ Level make_arena(float radius = 30.0f, float wall_height = 8.0f);
 // style 0 watchtower, 1 beacon, 2 ruin, 3 two-storey keep. Adds its mesh
 // parts and player colliders to the level.
 void append_outpost_tower(Level& lv, glm::vec3 base, int style, uint32_t seed);
+// The little stone chapel (assets/church/church.mesh, built in Blender by
+// tools/church/make_church.py). `base` = ground point under its centre; the
+// long axis runs along world x, the door faces -x. Returns false if the
+// mesh file is missing.
+bool append_church(Level& lv, glm::vec3 base);
 // Timber lamp post with a hanging lantern; returns the lantern's centre.
 glm::vec3 append_lamp_post(Level& lv, glm::vec3 base, glm::vec3 arm_dir, uint32_t seed);
 

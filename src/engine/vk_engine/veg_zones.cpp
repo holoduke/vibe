@@ -181,6 +181,8 @@ WorldPropParams VulkanEngine::veg_place_params() const {
     wp.rock_band_lo = rt_.terrain_h_dirt_rock_start;
     for (const auto& a : aa_) wp.keep_out.push_back(glm::vec3(a.pos.x, a.pos.z, 9.0f));
     for (const auto& o : outposts_) wp.keep_out.push_back(glm::vec3(o.x, o.z, 10.0f));
+    if (church_placed_)
+        for (float dx : { -5.0f, 0.0f, 5.0f }) wp.keep_out.push_back(glm::vec3(church_pos_.x + dx, church_pos_.z, 8.5f));
     for (const auto& l : lamp_lights_) wp.keep_out.push_back(glm::vec3(l.x, l.z, 2.5f));
     if (!paint_.empty()) wp.paint = &paint_;
     return wp;
@@ -322,6 +324,7 @@ void VulkanEngine::build_scatter_from(const Heightmap& hm) {
     sp.rock_band_h = rt_.terrain_h_dirt_rock_start;
     sp.snow_band_h = rt_.terrain_h_rock_snow_start;
     sp.road = &castle_road_;
+    if (church_placed_) sp.keep_rects.push_back(glm::vec4(church_pos_.x - 6.2f, church_pos_.z - 3.9f, church_pos_.x + 8.0f, church_pos_.z + 3.9f));
     sp.rm_params = &terrain_hp_;   // offsets onto the raymarched surface
     if (!paint_.empty()) sp.paint = &paint_;
     scatter_ = build_scatter(device_, allocator_, graphics_queue_, graphics_queue_family_, hm, sp);

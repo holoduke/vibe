@@ -49,8 +49,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                     int(inst.size()) < params.max_instances; ++i) {
         float wx = (u01(rng) * 2.0f - 1.0f) * params.half_extent;
         float wz = (u01(rng) * 2.0f - 1.0f) * params.half_extent;
-        if (std::abs(wx) < params.keep_out_xz.x &&
-            std::abs(wz) < params.keep_out_xz.y) continue;
+        if (params.blocked(wx, wz)) continue;
         if (params.road && wx > params.road->bb_min.x && wx < params.road->bb_max.x &&
             wz > params.road->bb_min.y && wz < params.road->bb_max.y &&
             params.road->distance(wx, wz) + 1.6f * road_edge_jitter(wx, wz) <
@@ -140,7 +139,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
         for (int i = 0; i < 420000; ++i) {
             float wx = (u01(rng) * 2.0f - 1.0f) * ext;
             float wz = (u01(rng) * 2.0f - 1.0f) * ext;
-            if (std::abs(wx) < params.keep_out_xz.x && std::abs(wz) < params.keep_out_xz.y) continue;
+            if (params.blocked(wx, wz)) continue;
             if (params.road && wx > params.road->bb_min.x && wx < params.road->bb_max.x &&
                 wz > params.road->bb_min.y && wz < params.road->bb_max.y &&
                 params.road->distance(wx, wz) + road_edge_jitter(wx, wz) < params.road->half_width + 0.4f) continue;
@@ -193,7 +192,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
             for (int i = 0; i < 600000 && reeds < 9000; ++i) {
                 float wx = (u01(rng) * 2.0f - 1.0f) * ext;
                 float wz = (u01(rng) * 2.0f - 1.0f) * ext;
-                if (std::abs(wx) < params.keep_out_xz.x && std::abs(wz) < params.keep_out_xz.y) continue;
+                if (params.blocked(wx, wz)) continue;
                 if (params.road && wx > params.road->bb_min.x && wx < params.road->bb_max.x &&
                     wz > params.road->bb_min.y && wz < params.road->bb_max.y &&
                     params.road->distance(wx, wz) < params.road->half_width + params.road->shoulder + 1.0f) continue;
@@ -293,7 +292,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
             for (int i = 0; i < tries; ++i) {
                 const float wx = (u01(rng) * 2.0f - 1.0f) * ext;
                 const float wz = (u01(rng) * 2.0f - 1.0f) * ext;
-                if (std::abs(wx) < params.keep_out_xz.x && std::abs(wz) < params.keep_out_xz.y) continue;
+                if (params.blocked(wx, wz)) continue;
                 float road_d = 1e9f;
                 if (params.road && wx > params.road->bb_min.x - 4.0f && wx < params.road->bb_max.x + 4.0f &&
                     wz > params.road->bb_min.y - 4.0f && wz < params.road->bb_max.y + 4.0f)
@@ -377,7 +376,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                     const float wx = (tu() * 2.0f - 1.0f) * ext;
                     const float wz = (tu() * 2.0f - 1.0f) * ext;
                     if (params.paint && params.paint->at(kPaintGrass, wx, wz)) continue;   // painted: second pass
-                    if (std::abs(wx) < params.keep_out_xz.x && std::abs(wz) < params.keep_out_xz.y) continue;
+                    if (params.blocked(wx, wz)) continue;
                     if (params.road && wx > params.road->bb_min.x - 4.0f && wx < params.road->bb_max.x + 4.0f &&
                         wz > params.road->bb_min.y - 4.0f && wz < params.road->bb_max.y + 4.0f &&
                         params.road->distance(wx, wz) + road_edge_jitter(wx, wz) - params.road->half_width < 0.7f) continue;

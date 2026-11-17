@@ -659,6 +659,19 @@ void VulkanEngine::init_grass_mask_texture() {
     load_grass_mask();
     // Keep the road paving + verge clear of blades.
     clear_grass_mask(castle_road_, grass_mask_data_, dim, kWorldSide);
+    // No lawn under the chapel (the blades would stand up through its floor).
+    if (church_placed_) {
+        const float cell = kWorldSide / float(dim);
+        for (int mz = 0; mz < dim; ++mz) {
+            const float wz = (float(mz) + 0.5f) * cell - 0.5f * kWorldSide;
+            if (std::abs(wz - church_pos_.z) > 4.2f) continue;
+            for (int mx = 0; mx < dim; ++mx) {
+                const float wx = (float(mx) + 0.5f) * cell - 0.5f * kWorldSide;
+                if (wx < church_pos_.x - 6.6f || wx > church_pos_.x + 8.4f) continue;
+                grass_mask_data_[(size_t(mz) * size_t(dim) + size_t(mx)) * 2] = 0;
+            }
+        }
+    }
 
     // Upload as a sampled RG8 image.
     VkImageCreateInfo ici{};
