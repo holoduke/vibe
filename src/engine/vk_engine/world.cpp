@@ -413,6 +413,8 @@ void VulkanEngine::init_world() {
             const auto& P = castle_road_.pts;
             float acc = 0.0f, next = 26.0f;
             for (size_t i = 1; i + 1 < P.size(); ++i) {
+                // (the side road to the chapel doubles back on itself: no posts along it)
+                if (castle_road_.spur_a >= 0 && int(i) > castle_road_.spur_a && int(i) <= castle_road_.spur_b) continue;
                 acc += glm::length(glm::vec2(P[i].x - P[i - 1].x, P[i].z - P[i - 1].z));
                 if (acc < next) continue;
                 next = acc + frand_range(lr, 42.0f, 58.0f);
@@ -427,6 +429,11 @@ void VulkanEngine::init_world() {
                                                               0xC0FFEEu + uint32_t(i) * 131u));
                 log::infof("[lamp] post at (%.1f, %.1f, %.1f)", x, y, z);
             }
+        }
+        // One lantern by the chapel door, its arm over the path.
+        if (church_placed_) {
+            const float x = church_pos_.x - 6.4f, z = church_pos_.z + 3.2f;
+            lamp_lights_.push_back(game::append_lamp_post(world_, glm::vec3(x, hm.sample_world(x, z), z), glm::vec3(0.0f, 0.0f, -1.0f), 0xC4A9E1u));
         }
         // Procedural trees, bushes, rock formations: GPU-instanced with LOD
 

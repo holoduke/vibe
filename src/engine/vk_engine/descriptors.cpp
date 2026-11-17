@@ -938,18 +938,20 @@ void VulkanEngine::update_scene_ubo() {
         // built once and never refreshed).
         static std::vector<glm::vec4> road_gpu;
         static size_t road_sig = 0;
+        static glm::ivec2 road_spur(0);
         size_t sig = castle_road_.pts.size();
         if (!castle_road_.pts.empty()) {
             const glm::vec3 a = castle_road_.pts.front(), b = castle_road_.pts.back();
             sig = sig * 1000003u ^ std::hash<float>{}(a.x + 7.0f * a.z) ^ (std::hash<float>{}(b.x - 3.0f * b.z) << 1);
         }
         if (sig != road_sig) {
-            road_gpu = castle_road_.empty() ? std::vector<glm::vec4>{} : road_gpu_points(castle_road_, 64);
+            road_gpu = castle_road_.empty() ? std::vector<glm::vec4>{} : road_gpu_points(castle_road_, 64, &road_spur);
             road_sig = sig;
         }
         const int n = static_cast<int>(std::min<size_t>(road_gpu.size(), 64));
+        // .w: the side road's segments (first * 128 + one-past-last; 0 = none).
         data.road_info = glm::vec4(static_cast<float>(n), castle_road_.half_width,
-                                   castle_road_.shoulder, 0.0f);
+                                   castle_road_.shoulder, float(road_spur.x * 128 + road_spur.y));
         data.road_bbox = glm::vec4(castle_road_.bb_min, castle_road_.bb_max);
         for (int i = 0; i < n; ++i) data.road_pts[i] = road_gpu[size_t(i)];
     }

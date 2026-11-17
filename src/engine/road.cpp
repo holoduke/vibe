@@ -219,8 +219,9 @@ void clear_grass_mask(const Road& road, std::vector<uint8_t>& mask, int dim,
     }
 }
 
-std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts) {
+std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts, glm::ivec2* spur_seg) {
     std::vector<glm::vec4> out;
+    if (spur_seg) *spur_seg = glm::ivec2(0);
     if (road.empty() || max_pts < 2) return out;
     if (road.spur_a >= 0 && road.spur_b < static_cast<int>(road.pts.size())) {
         // Main road before / after the junction re-sampled evenly; the side
@@ -247,6 +248,7 @@ std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts) {
         int na = (std::max)(2, static_cast<int>(std::round(float(main_n) * la / (std::max)(la + lb, 1.0f))));
         na = (std::min)(na, main_n - 2);
         piece(0, road.spur_a, na, false);                       // ends exactly on the junction
+        const int seg0 = static_cast<int>(out.size()) - 1;
         std::vector<glm::vec4> sp;
         for (int k = 1; k <= spur_n; ++k) {
             const float fi = float(road.spur_a) + float(road.spur_tip - road.spur_a) * float(k) / float(spur_n);
@@ -264,6 +266,7 @@ std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts) {
         }
         for (int k = spur_n - 2; k >= 0; --k) out.push_back(sp[size_t(k)]);
         out.emplace_back(road.pts[size_t(road.spur_b)], 0.0f);  // the junction again
+        if (spur_seg) *spur_seg = glm::ivec2(seg0, static_cast<int>(out.size()) - 1);
         piece(road.spur_b, last, main_n - na, true);
         float acc = 0.0f;
         for (size_t k = 0; k < out.size(); ++k) {

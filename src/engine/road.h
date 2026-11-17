@@ -14,6 +14,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
+#include <glm/ext/vector_int2.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -65,6 +66,8 @@ float road_edge_jitter(float x, float z);
 
 // Polyline for the shader: (x, y, z, 0) per point, at most `max_pts`
 // (re-sampled evenly along the length if the road has more).
-std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts);
+// `spur_seg` (optional): first and one-past-last segment index of the side
+// road within the returned polyline (0, 0 = none).
+std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts, glm::ivec2* spur_seg = nullptr);
 
 } // namespace qlike

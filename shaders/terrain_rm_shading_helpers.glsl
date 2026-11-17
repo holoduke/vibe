@@ -301,7 +301,12 @@ vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
     float rd = sqrt(best);
     float hw = scene.road_info.y, vw = scene.road_info.z;
     if (rd > hw + vw + 1.5) return vec2(0.0);
+    // The main road runs straight through a junction: wherever a pixel lies
+    // on the main road's paving, the main road's rows are used; the side
+    // road's paving only starts at the main road's edge.
+    int sp0 = int(scene.road_info.w + 0.5) / 128, sp1 = int(scene.road_info.w + 0.5) % 128;
     float best_lat = 1e9, r_along = 0.0;
+    float main_lat = 1e9, main_along = 0.0; vec2 main_dir = vec2(0.0, 1.0);
     for (int i = 0; i < 63; ++i) {
         if (i + 1 >= rn) break;
         vec2 a = scene.road_pts[i].xz, b = scene.road_pts[i + 1].xz;
@@ -312,13 +317,20 @@ vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
         if (db > 0.0 && i + 2 < rn) continue;
         vec2 sd = normalize(b - a);
         float lat = sd.x * (q - a).y - sd.y * (q - a).x;
+        float f = da / max(da - db, 1e-4);
+        bool spur = i >= sp0 && i < sp1;
+        if (!spur && abs(lat) < abs(main_lat)) {
+            main_lat = lat;
+            main_along = mix(scene.road_pts[i].w, scene.road_pts[i + 1].w, f);
+            main_dir = normalize(mix(ta, tb, clamp(f, 0.0, 1.0)));
+        }
         if (abs(lat) < abs(best_lat)) {
             best_lat = lat;
-            float f = da / max(da - db, 1e-4);
             r_along = mix(scene.road_pts[i].w, scene.road_pts[i + 1].w, f);
             r_dir = normalize(mix(ta, tb, clamp(f, 0.0, 1.0)));
         }
     }
+    if (abs(main_lat) < hw + 0.35) { best_lat = main_lat; r_along = main_along; r_dir = main_dir; }
     float g_tile = max(scene.spom_params.z, 0.25);
     if (best_lat < 1e8) road_uv = vec2(best_lat, r_along) / g_tile;
     float jit = (noise2(q * 1.7) - 0.5) * 0.45 + (noise2(q * 0.31 + 17.0) - 0.5) * 0.6;
