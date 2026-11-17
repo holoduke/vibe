@@ -80,14 +80,33 @@ float VulkanEngine::cloud_shadow_at(glm::vec3 wp) const {
     return 1.0f - k * glm::clamp(opac, 0.0f, 1.0f);
 }
 
+// Weather types: cover, overcast, rain, thunder, wind, fog, snow on the
+// ground, snowfall, darkness; and the hour the type implies (-1 = any).
+const VulkanEngine::WxPreset VulkanEngine::kWxPresets[VulkanEngine::kWxPresetCount] = {
+    { "Clear",         { 0.05f, 0.00f, 0.00f, 0.0f, 0.10f, 0.00f, 0.0f, 0.0f, 0.0f }, -1.0f },
+    { "Sunny, cloudy", { 0.45f, 0.12f, 0.00f, 0.0f, 0.25f, 0.00f, 0.0f, 0.0f, 0.0f }, 13.0f },
+    { "Sunny, windy",  { 0.22f, 0.05f, 0.00f, 0.0f, 1.00f, 0.00f, 0.0f, 0.0f, 0.0f }, 13.0f },
+    { "Overcast",      { 0.90f, 0.85f, 0.00f, 0.0f, 0.35f, 0.15f, 0.0f, 0.0f, 0.0f }, -1.0f },
+    { "Fog",           { 0.70f, 0.60f, 0.00f, 0.0f, 0.05f, 1.00f, 0.0f, 0.0f, 0.0f }, -1.0f },
+    { "Rain",          { 0.97f, 1.00f, 0.65f, 0.0f, 0.45f, 0.35f, 0.0f, 0.0f, 0.0f }, -1.0f },
+    { "Stormy",        { 1.00f, 1.00f, 1.00f, 1.0f, 1.00f, 0.50f, 0.0f, 0.0f, 0.0f }, -1.0f },
+    { "Dry thunder",   { 0.97f, 1.00f, 0.00f, 1.0f, 0.80f, 0.10f, 0.0f, 0.0f, 0.0f }, -1.0f },
+    { "Night thunder", { 1.00f, 1.00f, 0.80f, 1.0f, 0.90f, 0.30f, 0.0f, 0.0f, 0.0f }, 23.5f },
+    { "Pitch black",   { 1.00f, 1.00f, 0.00f, 0.0f, 0.20f, 0.20f, 0.0f, 0.0f, 1.0f },  1.0f },
+    { "Winter white",  { 0.88f, 0.70f, 0.00f, 0.0f, 0.25f, 0.35f, 1.0f, 1.0f, 0.0f }, -1.0f },
+};
+
 const char* VulkanEngine::weather_name() const {
-    const float w = weather_state_;
-    if (w < 0.25f) return "clear";
-    if (w < 0.53f) return "cloudy";
-    if (w < 0.67f) return "stormy";
-    if (w < 0.81f) return "rainy";
-    if (w < 0.94f) return "heavy storm";
-    return "lightning storm";
+    const Wx& c = wx_cur_;
+    if (c.snow > 0.5f || c.snowfall > 0.5f) return "winter";
+    if (c.dark > 0.5f) return "pitch black";
+    if (c.thunder > 0.5f) return c.rain > 0.2f ? "thunderstorm" : "dry thunderstorm";
+    if (c.rain > 0.2f) return "rain";
+    if (c.fog > 0.5f) return "fog";
+    if (c.overcast > 0.5f) return "overcast";
+    if (c.wind > 0.7f) return "windy";
+    if (c.cover > 0.3f) return "partly cloudy";
+    return "clear";
 }
 
 void VulkanEngine::apply_environment(float dt) {
@@ -95,7 +114,7 @@ void VulkanEngine::apply_environment(float dt) {
     // Back to the user's own values first; everything below derives from them.
     if (env_applied_) { env_swap_base(); env_applied_ = false; }
     if (!want) {
-        env_night_ = -1.0f; env_rain_ = 0.0f; env_wet_ = std::max(0.0f, env_wet_ - dt / 60.0f);
+        env_night_ = -1.0f; env_rain_ = 0.0f; env_snow_ = 0.0f; env_snowfall_ = 0.0f; env_wet_ = std::max(0.0f, env_wet_ - dt / 60.0f);
         env_golden_ = 1.0f; env_sun_elev_ = -1000.0f; env_sky_real_ = false;
         env_lightning_ = 0.0f; env_cloud_k_ = 1.0f; env_cloud_direct_ = 1.0f; env_cloud_shadow_k_ = 0.72f;
         tick_rain_audio(0.0f);
@@ -113,37 +132,90 @@ void VulkanEngine::apply_environment(float dt) {
     uint32_t& rng = spacejet_rng_state_;
 
     // ---------------- weather state ----------------
-    float w = 0.0f;
+    // The weather is a handful of independent amounts (cloud cover, how grey
+    // the deck is, rain, thunder, wind, fog, snow, darkness). A weather TYPE
+    // (kWxPresets: the buttons in the menu, or a random pick when the weather
+    // changes by itself) is a target for all of them; the current values
+    // glide there, so any type turns into any other.
     if (rt_.weather_enabled) {
-        if (rt_.weather_manual >= 0.0f) {
-            weather_target_ = glm::clamp(rt_.weather_manual, 0.0f, 1.0f);
+        float swing = 22.0f;                      // seconds for a picked type to move in
+        if (rt_.weather_preset >= 0) {
+            const int pi = std::min(rt_.weather_preset, kWxPresetCount - 1);
+            wx_tgt_ = kWxPresets[pi].wx;
+            if (pi != wx_last_preset_) {
+                wx_last_preset_ = pi;
+                // Types that mean a time of day (night thunder, pitch black, sunny ...): turn the clock there.
+                if (kWxPresets[pi].hour >= 0.0f) { wx_clock_target_ = kWxPresets[pi].hour; rt_.day_night_enabled = true; }
+                else wx_clock_target_ = -1.0f;
+                log::infof("[weather] type: %s", kWxPresets[pi].name);
+            }
+        } else if (rt_.weather_manual >= 0.0f) {
+            // The old single slider: 0 clear .. 1 thunderstorm.
+            const float m = glm::clamp(rt_.weather_manual, 0.0f, 1.0f);
+            wx_tgt_ = Wx{};
+            wx_tgt_.cover = glm::smoothstep(0.0f, 0.72f, m);
+            wx_tgt_.overcast = glm::smoothstep(0.25f, 0.70f, m);
+            wx_tgt_.rain = glm::smoothstep(0.55f, 0.85f, m);
+            wx_tgt_.thunder = glm::smoothstep(0.85f, 1.0f, m);
+            wx_tgt_.wind = m;
+            wx_last_preset_ = -1;
         } else {
+            wx_last_preset_ = -1;
             weather_timer_ -= dt;
             if (weather_timer_ <= 0.0f) {
                 const float bad = glm::clamp(rt_.weather_bad_chance, 0.0f, 1.0f);
                 const float r = frand(rng);
-                if (r < bad)                              weather_target_ = frand_range(rng, 0.60f, 1.0f);   // rain .. storm
-                else if (r < bad + (1.0f - bad) * 0.35f)  weather_target_ = frand_range(rng, 0.30f, 0.52f);  // cloudy
-                else                                      weather_target_ = frand_range(rng, 0.0f, 0.22f);   // clear
+                static const int kBad[4] = { 5, 5, 6, 7 }, kMid[2] = { 3, 4 }, kFair[4] = { 0, 0, 1, 2 };
+                int pick;
+                if (r < bad)                              pick = kBad[int(frand(rng) * 3.99f)];     // rain, storm, dry thunder
+                else if (r < bad + (1.0f - bad) * 0.30f)  pick = kMid[frand(rng) < 0.75f ? 0 : 1];  // overcast, fog
+                else                                      pick = kFair[int(frand(rng) * 3.99f)];    // clear, some cloud, windy
+                wx_tgt_ = kWxPresets[pick].wx;
                 weather_timer_ = std::max(0.2f, rt_.weather_change_minutes) * 60.0f * frand_range(rng, 0.6f, 1.4f);
-                log::infof("[weather] next: %.2f (in %.0f s until the change after)", weather_target_, weather_timer_);
+                log::infof("[weather] next: %s (for %.0f s)", kWxPresets[pick].name, weather_timer_);
             }
+            // A front takes about a quarter of the change interval to move in.
+            swing = std::max(0.2f, rt_.weather_change_minutes) * 60.0f * 0.25f;
         }
-        // A front takes about a quarter of the change interval to move in
-        // (a forced value moves in over ~20 s).
-        const float swing = rt_.weather_manual >= 0.0f
-            ? 20.0f : std::max(0.2f, rt_.weather_change_minutes) * 60.0f * 0.25f;
-        const float step = dt / swing;
-        weather_state_ += glm::clamp(weather_target_ - weather_state_, -step, step);
-        if (!weather_init_) { weather_state_ = weather_target_; weather_init_ = true; }
-        w = weather_state_;
+        // Rain needs a thick dark deck, whatever was asked for.
+        const float wet_tgt = std::max(wx_tgt_.rain, wx_tgt_.snowfall * 0.8f);
+        wx_tgt_.cover = std::max(wx_tgt_.cover, 0.97f * glm::smoothstep(0.0f, 0.2f, wet_tgt));
+        wx_tgt_.overcast = std::max(wx_tgt_.overcast, glm::smoothstep(0.0f, 0.2f, wx_tgt_.rain));
+        const float step = weather_init_ ? dt / swing : 1.0f;
+        auto ease = [&](float& c, float t, float rate) { c += glm::clamp(t - c, -step * rate, step * rate); };
+        // Clouds come first and leave last: rain only starts under a closed
+        // deck, and the deck only opens once the rain has stopped.
+        const float deck = glm::smoothstep(0.75f, 0.93f, wx_cur_.cover) * glm::smoothstep(0.6f, 0.9f, wx_cur_.overcast);
+        const bool raining = wx_cur_.rain > 0.03f;
+        ease(wx_cur_.cover, raining ? std::max(wx_tgt_.cover, 0.97f) : wx_tgt_.cover, 1.6f);
+        ease(wx_cur_.overcast, raining ? std::max(wx_tgt_.overcast, 1.0f) : wx_tgt_.overcast, 1.6f);
+        ease(wx_cur_.rain, wx_tgt_.rain * (weather_init_ ? deck : 1.0f), 1.3f);
+        ease(wx_cur_.thunder, wx_tgt_.thunder * (weather_init_ ? glm::smoothstep(0.5f, 0.9f, wx_cur_.overcast) : 1.0f), 1.0f);
+        ease(wx_cur_.wind, wx_tgt_.wind, 1.0f);
+        ease(wx_cur_.fog, wx_tgt_.fog, 1.0f);
+        ease(wx_cur_.snow, wx_tgt_.snow, 0.6f);          // the ground whitens (and thaws) slowly
+        ease(wx_cur_.snowfall, wx_tgt_.snowfall, 1.0f);
+        ease(wx_cur_.dark, wx_tgt_.dark, 1.0f);
+        weather_init_ = true;
+        // Turn the clock toward the hour the type asked for (2 game hours a second, the short way round).
+        if (wx_clock_target_ >= 0.0f && rt_.day_night_enabled) {
+            float d = std::fmod(wx_clock_target_ - rt_.time_of_day + 36.0f, 24.0f) - 12.0f;
+            const float mv = glm::clamp(d, -2.0f * dt, 2.0f * dt);
+            rt_.time_of_day += mv;
+            if (std::abs(d) < 0.03f) wx_clock_target_ = -1.0f;
+        }
     } else {
-        weather_state_ = 0.0f; weather_init_ = false; weather_timer_ = 0.0f;
+        wx_cur_ = Wx{}; wx_tgt_ = Wx{}; weather_init_ = false; weather_timer_ = 0.0f; wx_last_preset_ = -1; wx_clock_target_ = -1.0f;
     }
-    const float overcast = glm::smoothstep(0.25f, 0.70f, w);
-    const float rain     = glm::smoothstep(0.55f, 0.85f, w);
-    const float storm    = glm::smoothstep(0.85f, 1.00f, w);
+    const float overcast = wx_cur_.overcast;
+    const float rain     = wx_cur_.rain;
+    const float storm    = wx_cur_.thunder;
+    const float wind_k   = wx_cur_.wind;
+    // (the single 0..1 "how bad" number some displays still use)
+    weather_state_ = glm::clamp(std::max({ 0.5f * overcast, rain > 0.02f ? 0.6f + 0.25f * rain : 0.0f, storm > 0.3f ? 0.9f + 0.1f * storm : 0.0f }), 0.0f, 1.0f);
     env_rain_ = rain;
+    env_snow_ = wx_cur_.snow;
+    env_snowfall_ = wx_cur_.snowfall;
     // Ground gets wet in ~20 s of rain and takes minutes to dry.
     env_wet_ += (rain > 0.02f ? (rain - env_wet_) * dt / 20.0f * (0.5f + rain) : -env_wet_ * dt / 150.0f);
     env_wet_ = glm::clamp(env_wet_, 0.0f, 1.0f);
@@ -322,6 +394,9 @@ void VulkanEngine::apply_environment(float dt) {
     // ---------------- write the driven settings ----------------
     // Clouds hide the sun: direct light drops to a tenth under full overcast
     // and loses its colour; the sky dome's light turns grey and dimmer.
+    // ("pitch black" takes nearly all light away)
+    const float dark_k = 1.0f - 0.985f * wx_cur_.dark;
+    sun_k *= dark_k; sky_k *= dark_k; amb_k *= dark_k;
     const float cloud_sun = glm::mix(1.0f, 0.22f, overcast * overcast);
     const float direct = std::max(sun_k * cloud_sun, 0.0003f);
     const float lum = glm::dot(light_col, glm::vec3(0.2126f, 0.7152f, 0.0722f));
@@ -332,7 +407,8 @@ void VulkanEngine::apply_environment(float dt) {
     rt_.auto_golden_hour = golden;
     // The sky's brightness is LUT x sun intensity x atmosphere intensity:
     // undo the direct-light dimming there and apply the sky's own factor.
-    const float sky_dim = glm::mix(1.0f, 0.62f, overcast) * (1.0f + 5.0f * env_lightning_);
+    // (a rain deck is darker still)
+    const float sky_dim = glm::mix(1.0f, 0.62f, overcast) * glm::mix(1.0f, 0.72f, rain) * (1.0f + 5.0f * env_lightning_);
     // The cloud pass takes its light level directly (not times the sun intensity).
     env_cloud_k_ = sky_k * sky_dim;
     // Under a closed deck the light is uniformly dim: no shadow pattern.
@@ -350,13 +426,14 @@ void VulkanEngine::apply_environment(float dt) {
         rt_.sky_color += glm::vec3(0.78f, 0.86f, 1.0f) * (2.4f * fl * std::max(sky_lum, 0.35f));
         env_amb_k_ = std::max(env_amb_k_, std::min(1.0f, 0.9f * fl));
     }
-    rt_.cloud_coverage = glm::mix(std::min(base.cloud_coverage, 0.30f), 0.97f, glm::smoothstep(0.0f, 0.72f, w));
+    rt_.cloud_coverage = glm::mix(std::min(base.cloud_coverage, 0.30f), 0.97f, wx_cur_.cover);
     if (!rt_.weather_enabled) rt_.cloud_coverage = base.cloud_coverage;
-    rt_.cloud_density = base.cloud_density * glm::mix(1.0f, 2.4f, overcast);
-    rt_.cloud_speed = base.cloud_speed * glm::mix(1.0f, 3.2f, w);
-    rt_.fog_density = base.fog_density * (1.0f + 0.6f * overcast + 2.0f * rain);
-    rt_.grass_wind = base.grass_wind * glm::mix(1.0f, 2.6f, w);
-    env_wind_scale_ = glm::mix(1.0f, 2.4f, w);
+    // Rain clouds are thicker than a dry overcast.
+    rt_.cloud_density = base.cloud_density * glm::mix(1.0f, 2.4f, overcast) * (1.0f + 0.6f * rain);
+    rt_.cloud_speed = base.cloud_speed * glm::mix(1.0f, 3.2f, wind_k);
+    rt_.fog_density = base.fog_density * (1.0f + 0.6f * overcast + 2.0f * rain + 6.0f * wx_cur_.fog + 1.5f * wx_cur_.snowfall);
+    rt_.grass_wind = base.grass_wind * glm::mix(1.0f, 2.6f, wind_k);
+    env_wind_scale_ = glm::mix(1.0f, 2.4f, wind_k);
 
     tick_rain_audio(rain);
 }

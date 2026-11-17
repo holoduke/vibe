@@ -461,6 +461,12 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
             col = mix(col, mud, bowl);
         }
     }
+    // Winter: snow on everything that faces up (not on the lake bed).
+    {
+        float sc = snow_cover(nor, pos);
+        if (scene.water_params.x > 0.5 && pos.y < scene.water_params.y) sc = 0.0;
+        col = mix(col, vec3(0.86, 0.89, 0.93), sc);
+    }
     return col;
 }
 

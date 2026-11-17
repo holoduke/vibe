@@ -94,6 +94,18 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   cloud_b;          // xy = wind offset of the weather field (m), z = density
 } scene;
 
+// Weather on surfaces (packed in ripple_info.z by descriptors.cpp).
+float scene_wet()  { return fract(scene.ripple_info.z); }
+float scene_snow() { return floor(scene.ripple_info.z) / 255.0; }
+// Snow lying on a surface: on what faces up, patchy while it is still thin.
+float snow_cover(vec3 n, vec3 wp) {
+    float s = scene_snow();
+    if (s < 0.004) return 0.0;
+    float pn = fract(sin(dot(floor(wp.xz * 3.0), vec2(12.9898, 78.233))) * 43758.5453) * 0.25
+             + 0.75 * (0.5 + 0.5 * sin(wp.x * 0.9) * sin(wp.z * 1.1 + 1.3));
+    return smoothstep(0.25, 0.75, n.y) * smoothstep(pn * 0.8, pn * 0.8 + 0.25, s * 1.05);
+}
+
 // Light from muzzle flashes and tracer rounds: each is a sphere of light
 // that fades to nothing at its radius. This sums the ones WITHOUT shadows
 // (fx_light_col.a = 0); the shadow-casting ones (laser bolts, gun flashes)

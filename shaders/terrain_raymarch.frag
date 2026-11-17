@@ -2581,7 +2581,7 @@ void main() {
                 col = mix(col, sandc * blin + gi_indirect * 0.5, beach);
             }
         }
-        float wet = max(scene.ripple_info.z, shore);
+        float wet = max(scene_wet(), shore);
         float pd = distance(pos, ro);
         if (wet > 0.01 && pd < 400.0) {
             float flatn = smoothstep(0.80, 0.95, nor.y);            // (was 0.90..0.985: almost no ground qualified)

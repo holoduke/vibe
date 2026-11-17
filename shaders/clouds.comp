@@ -245,6 +245,8 @@ void render(ivec2 px) {
     vec3 sun_l = sun_t * pc.light_col.rgb * pc.params.w * pc.params2.z;   // z: direct-light factor (dusk, overcast)
     // Ambient: sky radiance toward the zenith (unit-sun LUT * intensity).
     vec3 amb = textureLod(u_skyview, skyview_uv(1.2, 0.0), 0.0).rgb * pc.params.w * 1.6;
+    // An overcast or rain deck is lit from above through cloud: grey, not the blue of open sky.
+    amb = mix(amb, vec3(dot(amb, vec3(0.2126, 0.7152, 0.0722))) * vec3(1.02, 1.0, 0.98), 0.9 * clamp(pc.light_col.a, 0.0, 1.0));
     // What far clouds fade into: the sky in this direction.
     float elev = asin(clamp(rd.y, -1.0, 1.0));
     float az = 0.0;

@@ -417,7 +417,7 @@ void VulkanEngine::dispatch_clouds(VkCommandBuffer cmd) {
                            env_cloud_direct_, glm::clamp(rt_.cloud_scale, 0.3f, 4.0f));
     pc.params3 = glm::vec4(glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f), glm::clamp(rt_.cloud_tower_m, 300.0f, 12000.0f),
                            glm::clamp(rt_.cloud_softness, 0.01f, 1.0f), glm::clamp(rt_.cloud_erosion, 0.0f, 1.0f));
-    pc.light_col = glm::vec4(rt_.sun_color, 0.0f);
+    pc.light_col = glm::vec4(rt_.sun_color, wx_cur_.overcast);   // w: how grey the deck is (rain clouds are grey, not sky-blue)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_pipeline_layout_, 0, 1, &cloud_set_, 0, nullptr);
     auto barrier = [&]() {

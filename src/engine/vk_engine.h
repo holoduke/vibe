@@ -1315,6 +1315,17 @@ private:
     float weather_state_ = 0.0f, weather_target_ = 0.0f, weather_timer_ = 0.0f;
     bool  weather_init_ = false;
     float env_rain_ = 0.0f;           // rain intensity 0..1
+    float env_snow_ = 0.0f;           // snow lying on the ground 0..1
+    float env_snowfall_ = 0.0f;       // snow falling 0..1
+    // Weather as independent amounts (environment.cpp); a weather type is a target for all of them.
+    struct Wx { float cover = 0.05f, overcast = 0.0f, rain = 0.0f, thunder = 0.0f, wind = 0.1f, fog = 0.0f,
+                      snow = 0.0f, snowfall = 0.0f, dark = 0.0f; };
+    struct WxPreset { const char* name; Wx wx; float hour; };
+    static constexpr int kWxPresetCount = 11;
+    static const WxPreset kWxPresets[kWxPresetCount];
+    Wx    wx_cur_{}, wx_tgt_{};
+    int   wx_last_preset_ = -1;
+    float wx_clock_target_ = -1.0f;   // hour the clock is being turned to (-1 = not)
     float env_wet_ = 0.0f;            // ground wetness 0..1
     // Cloud layer as last sent to the shaders (for the CPU copy of the
     // cloud-shadow function: sun glare when a cloud passes in front).

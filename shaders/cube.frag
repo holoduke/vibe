@@ -976,8 +976,8 @@ void main() {
         // Rain on the courtyard paving: the stone darkens as it gets wet and
         // pools of water gather in patches - flat, dark mirrors.
         float rain_pool = 0.0, rain_wet = 0.0;
-        if (!is_terrain_pre && !is_mesh_draw && albedo_idx_raw == 5 && N.y > 0.85 && scene.ripple_info.z > 0.02) {
-            rain_wet = scene.ripple_info.z;
+        if (!is_terrain_pre && !is_mesh_draw && albedo_idx_raw == 5 && N.y > 0.85 && scene_wet() > 0.02) {
+            rain_wet = scene_wet();
             float pn = br_noise(vec3(vWorldPos.xz * 0.42, 3.0)) * 0.65 + br_noise(vec3(vWorldPos.xz * 1.5, 9.0)) * 0.35;
             float thr = 0.66 - 0.30 * rain_wet;
             rain_pool = smoothstep(thr, thr + 0.05, pn) * smoothstep(0.2, 0.6, rain_wet);

@@ -389,12 +389,18 @@ void main() {
     // trapped) and much smoother (a film of water). Mostly on faces the
     // rain can reach; leaves just get glossier.
     {
-        float wet = scene.ripple_info.z;
+        float wet = scene_wet();
         if (wet > 0.01) {
             float up = mix(0.35, 1.0, smoothstep(-0.2, 0.6, N.y));
             float wk = wet * up;
             if (!leafy && metallic < 0.5) albedo *= mix(1.0, 0.58, wk);
             roughness = mix(roughness, min(roughness, 0.16), wk * 0.85);
+        }
+        // Winter: snow on what faces up - roofs, wall tops, branches, stones.
+        float sc = snow_cover(N, world_pos);
+        if (sc > 0.001) {
+            albedo = mix(albedo, vec3(0.86, 0.89, 0.93), sc * (leafy ? 0.75 : 1.0));
+            roughness = mix(roughness, 0.8, sc);
         }
     }
 

@@ -286,6 +286,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("weather_bad_chance", s.rt_.weather_bad_chance);
     f("weather_change_minutes", s.rt_.weather_change_minutes);
     f("weather_manual", s.rt_.weather_manual);
+    f("weather_preset", s.rt_.weather_preset);
     f("moon_brightness", s.rt_.moon_brightness);
     f("moon_phase", s.rt_.moon_phase);
     f("moon_phases", s.rt_.moon_phases);

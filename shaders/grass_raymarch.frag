@@ -697,6 +697,8 @@ void main() {
     vec3 grassCol = mix(scene.grass_color_bottom.rgb,
                         scene.grass_color_top.rgb, h_t);
     grassCol *= 1.0 - clump;
+    // Winter: snow lies on the grass, thickest on the tips.
+    grassCol = mix(grassCol, vec3(0.86, 0.89, 0.93), scene_snow() * mix(0.45, 0.92, h_t));
 
     // Shoreline tint — UI sliders (rt_.grass_shore_color/strength/
     // distance). Cheap: 1 sub + 1 smoothstep + 1 mix per visible
