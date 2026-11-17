@@ -107,7 +107,7 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
             const auto& src = veg_arch_[a].lods[0];
             std::vector<Vertex> cv(src.verts.size());
             for (size_t k = 0; k < cv.size(); ++k) cv[k] = { src.verts[k].p, src.verts[k].n, glm::vec2(src.verts[k].u, src.verts[k].v) };
-            veg_cluster_meshes_[a] = build_cluster_mesh(cv.data(), cv.size(), src.idx.data(), src.idx.size());
+            veg_cluster_meshes_[a] = build_cluster_mesh_cached(cv.data(), cv.size(), src.idx.data(), src.idx.size());
             const ClusterMesh& cm = veg_cluster_meshes_[a];
             if (!cm.clusters.empty())
                 log::infof("[cluster] rock archetype %zu: %u tris -> %zu clusters in %d levels (coarsest %u tris)",

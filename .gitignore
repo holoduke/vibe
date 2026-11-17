@@ -85,3 +85,5 @@ vibe_settings.cfg.tmp
 
 # F12 photos (copy the good ones to docs/screenshots/)
 screenshots/
+
+cache/

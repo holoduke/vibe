@@ -129,6 +129,16 @@ void VulkanEngine::init_cluster_draw() {
 
 // The depth pyramid (re-made when the window size changes: vegetation.cpp calls this again).
 void VulkanEngine::write_cluster_hiz_binding() {
+    if (scl_set_ && veg_hiz_view_ && veg_hiz_sampler_) {
+        VkDescriptorImageInfo si{ veg_hiz_sampler_, veg_hiz_view_, VK_IMAGE_LAYOUT_GENERAL };
+        VkWriteDescriptorSet sw{};
+        sw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        sw.dstSet = scl_set_; sw.dstBinding = 3; sw.descriptorCount = 1;
+        sw.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sw.pImageInfo = &si;
+        vkUpdateDescriptorSets(device_, 1, &sw, 0, nullptr);
+        scl_hiz_bound_ = true;
+    }
     if (!cl_set_ || !veg_hiz_view_ || !veg_hiz_sampler_) return;
     VkDescriptorImageInfo ii{ veg_hiz_sampler_, veg_hiz_view_, VK_IMAGE_LAYOUT_GENERAL };
     VkWriteDescriptorSet w{};
@@ -201,6 +211,152 @@ void VulkanEngine::draw_clusters(VkCommandBuffer cmd) {
     vkCmdBindVertexBuffers(cmd, 0, 1, &cl_mesh_.vertex_buffer, &off);
     vkCmdBindIndexBuffer(cmd, cl_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexedIndirectCount(cmd, cl_cmd_buf_, 16, cl_cmd_buf_, 0, cl_cmd_cap_, sizeof(VkDrawIndexedIndirectCommand));
+}
+
+// ---------------------------------------------------------------------
+// Static world meshes (castle, chapel, gravestones) as clusters.
+// ---------------------------------------------------------------------
+void VulkanEngine::init_static_clusters() {
+    if (std::getenv("QLIKE_NO_CLUSTERS") || std::getenv("QLIKE_NO_STATIC_CLUSTERS") || scl_pipeline_) return;
+    std::vector<ClusterGpu> clusters;
+    std::vector<glm::uvec2> meta;
+    std::vector<uint32_t> idx;
+    int part = 0;
+    size_t src_tris = 0;
+    size_t ci = 0;                     // castle_meshes_ holds the non-empty meshes of world_.meshes, in order
+    for (size_t mi = 0; mi < world_.meshes.size() && part < 64; ++mi) {
+        const auto& lm = world_.meshes[mi];
+        if (lm.verts.empty() || lm.idx.empty()) continue;
+        if (ci >= castle_meshes_.size()) break;
+        CastleMeshGpu& g = castle_meshes_[ci++];
+        // Dense, solid, still parts only (not the swaying trees of the level, not lamp glass / flames).
+        if (lm.idx.size() < 3 * 3000 || lm.sway || lm.full_emissive || g.mesh.index_count != lm.idx.size()) continue;
+        ClusterMesh cm = build_cluster_mesh_cached(reinterpret_cast<const Vertex*>(lm.verts.data()), lm.verts.size(),
+                                            lm.idx.data(), lm.idx.size(), lm.triplanar ? 0.0f : 0.25f);
+        if (cm.clusters.empty()) continue;
+        g.cl_part = part++;
+        g.cl_count = uint32_t(cm.clusters.size());
+        g.cl_cmd_base = uint32_t(clusters.size());
+        const uint32_t ibase = uint32_t(idx.size());
+        for (ClusterGpu c : cm.clusters) {
+            c.first_index += ibase;
+            meta.push_back(glm::uvec2(uint32_t(g.cl_part), g.cl_cmd_base));
+            clusters.push_back(c);
+        }
+        idx.insert(idx.end(), cm.indices.begin(), cm.indices.end());
+        src_tris += lm.idx.size() / 3;
+    }
+    if (clusters.empty()) return;
+    scl_total_ = uint32_t(clusters.size());
+    const VkBufferUsageFlags ssbo = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    scl_index_buf_ = cl_buffer(allocator_, sizeof(uint32_t) * idx.size(), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, scl_index_alloc_,
+                               idx.data(), sizeof(uint32_t) * idx.size());
+    scl_cluster_buf_ = cl_buffer(allocator_, sizeof(ClusterGpu) * clusters.size(), ssbo, scl_cluster_alloc_,
+                                 clusters.data(), sizeof(ClusterGpu) * clusters.size());
+    scl_meta_buf_ = cl_buffer(allocator_, sizeof(glm::uvec2) * meta.size(), ssbo, scl_meta_alloc_, meta.data(), sizeof(glm::uvec2) * meta.size());
+    scl_cmd_buf_ = cl_buffer(allocator_, 256 + VkDeviceSize(scl_total_) * sizeof(VkDrawIndexedIndirectCommand),
+                             ssbo | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, scl_cmd_alloc_, nullptr, 0);
+
+    VkDescriptorSetLayoutBinding b[4]{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        b[i].binding = i;
+        b[i].descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b[i].descriptorCount = 1;
+        b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo lci{};
+    lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    lci.bindingCount = 4; lci.pBindings = b;
+    vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &scl_set_layout_), "static cluster set layout");
+    VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 }, { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 } };
+    VkDescriptorPoolCreateInfo pci{};
+    pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pci.maxSets = 1; pci.poolSizeCount = 2; pci.pPoolSizes = ps;
+    vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &scl_pool_), "static cluster pool");
+    VkDescriptorSetAllocateInfo dai{};
+    dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dai.descriptorPool = scl_pool_; dai.descriptorSetCount = 1; dai.pSetLayouts = &scl_set_layout_;
+    vk_check(vkAllocateDescriptorSets(device_, &dai, &scl_set_), "static cluster set");
+    VkDescriptorBufferInfo bi[3] = { { scl_cluster_buf_, 0, VK_WHOLE_SIZE }, { scl_meta_buf_, 0, VK_WHOLE_SIZE }, { scl_cmd_buf_, 0, VK_WHOLE_SIZE } };
+    VkWriteDescriptorSet w[3]{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = scl_set_; w[i].dstBinding = i; w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[i].pBufferInfo = &bi[i];
+    }
+    vkUpdateDescriptorSets(device_, 3, w, 0, nullptr);
+    write_cluster_hiz_binding();
+
+    VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(glm::vec4) * 13 };
+    VkPipelineLayoutCreateInfo pli{};
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1; pli.pSetLayouts = &scl_set_layout_;
+    pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
+    vk_check(vkCreatePipelineLayout(device_, &pli, nullptr, &scl_layout_), "static cluster layout");
+    const std::string sd = QLIKE_SHADER_DIR;
+    scl_module_ = vkpipe::load_shader_module(device_, sd + "/static_cluster_cull.comp.spv");
+    VkComputePipelineCreateInfo cci{};
+    cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    cci.stage.module = scl_module_;
+    cci.stage.pName = "main";
+    cci.layout = scl_layout_;
+    vk_check(vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &cci, nullptr, &scl_pipeline_), "static cluster pipeline");
+    log::infof("[cluster] static meshes: %d parts (%zu tris) -> %u clusters, %zu triangles in all levels",
+               part, src_tris, scl_total_, idx.size() / 3);
+}
+
+void VulkanEngine::destroy_static_clusters() {
+    scl_ready_ = false;
+    if (scl_pipeline_) vkDestroyPipeline(device_, scl_pipeline_, nullptr);
+    if (scl_layout_) vkDestroyPipelineLayout(device_, scl_layout_, nullptr);
+    if (scl_module_) vkDestroyShaderModule(device_, scl_module_, nullptr);
+    if (scl_pool_) vkDestroyDescriptorPool(device_, scl_pool_, nullptr);
+    if (scl_set_layout_) vkDestroyDescriptorSetLayout(device_, scl_set_layout_, nullptr);
+    if (scl_index_buf_) vmaDestroyBuffer(allocator_, scl_index_buf_, scl_index_alloc_);
+    if (scl_cluster_buf_) vmaDestroyBuffer(allocator_, scl_cluster_buf_, scl_cluster_alloc_);
+    if (scl_meta_buf_) vmaDestroyBuffer(allocator_, scl_meta_buf_, scl_meta_alloc_);
+    if (scl_cmd_buf_) vmaDestroyBuffer(allocator_, scl_cmd_buf_, scl_cmd_alloc_);
+    scl_pipeline_ = VK_NULL_HANDLE; scl_layout_ = VK_NULL_HANDLE; scl_module_ = VK_NULL_HANDLE; scl_pool_ = VK_NULL_HANDLE;
+    scl_set_layout_ = VK_NULL_HANDLE; scl_set_ = VK_NULL_HANDLE; scl_total_ = 0; scl_hiz_bound_ = false;
+    scl_index_buf_ = scl_cluster_buf_ = scl_meta_buf_ = scl_cmd_buf_ = VK_NULL_HANDLE;
+}
+
+void VulkanEngine::cull_static_clusters(VkCommandBuffer cmd) {
+    scl_ready_ = false;
+    if (!scl_pipeline_ || !scl_hiz_bound_ || scl_total_ == 0) return;
+    const FrameView& fv = current_frame_view_;
+    vkCmdFillBuffer(cmd, scl_cmd_buf_, 0, 256, 0u);
+    VkMemoryBarrier2 mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    VkDependencyInfo dep{};
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1; dep.pMemoryBarriers = &mb;
+    vkCmdPipelineBarrier2(cmd, &dep);
+    struct { glm::vec4 planes[6]; glm::vec4 cam; glm::vec4 params; glm::mat4 prev_vp; glm::vec4 hiz; } pc{};
+    for (int i = 0; i < 6; ++i) pc.planes[i] = fv.frustum.planes[i];
+    const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(80.0f) * 0.5f));
+    pc.cam = glm::vec4(fv.eye_pos, ppr);
+    const bool occl = veg_cull_hiz_on_ && !std::getenv("QLIKE_NO_CLUSTER_OCCL");
+    pc.params = glm::vec4(float(scl_total_), 1.0f, occl ? 1.0f : 0.0f, 0.0f);
+    pc.prev_vp = veg_cull_prev_vp_;
+    pc.hiz = glm::vec4(float(veg_hiz_w_), float(veg_hiz_h_), float(veg_hiz_mips_), 0.0f);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scl_pipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scl_layout_, 0, 1, &scl_set_, 0, nullptr);
+    vkCmdPushConstants(cmd, scl_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd, (scl_total_ + 63) / 64, 1, 1);
+    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    mb.dstStageMask  = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    vkCmdPipelineBarrier2(cmd, &dep);
+    scl_ready_ = true;
 }
 
 }  // namespace qlike

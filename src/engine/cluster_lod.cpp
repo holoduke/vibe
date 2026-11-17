@@ -16,7 +16,8 @@
 
 namespace qlike {
 
-ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const uint32_t* indices, size_t index_count) {
+ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const uint32_t* indices, size_t index_count,
+                               float uv_weight) {
     ClusterMesh out;
     if (!verts || !indices || index_count < 3 * 256) return out;
 
@@ -31,9 +32,10 @@ ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const u
     // Normals guide the simplifier (keep creases); uv is not weighted (triplanar rocks).
     mesh.vertex_attributes = &verts[0].normal.x;
     mesh.vertex_attributes_stride = sizeof(Vertex);
-    static const float kWeights[3] = { 0.5f, 0.5f, 0.5f };
-    mesh.attribute_weights = kWeights;
-    mesh.attribute_count = 3;
+    // (normal and uv follow each other in Vertex)
+    const float weights[5] = { 0.5f, 0.5f, 0.5f, uv_weight, uv_weight };
+    mesh.attribute_weights = weights;
+    mesh.attribute_count = uv_weight > 0.0f ? 5 : 3;
 
     std::vector<clodBounds> groups;         // simplified bounds per group id
     int max_depth = 0;
@@ -70,6 +72,64 @@ ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const u
     out.levels = max_depth + 1;
     if (!tris_at_depth.empty()) { out.base_tris = tris_at_depth.front(); out.coarsest_tris = tris_at_depth.back(); }
     return out;
+}
+
+}  // namespace qlike
+
+// ---------------------------------------------------------------------
+// Disk cache: the hierarchy of a mesh only depends on the mesh, and building
+// it for the castle takes over a second. Keyed by a hash of the input.
+// ---------------------------------------------------------------------
+#include <cstdio>
+#include <filesystem>
+#include <string>
+
+namespace qlike {
+
+namespace {
+uint64_t fnv1a(const void* data, size_t n, uint64_t h) {
+    const unsigned char* p = static_cast<const unsigned char*>(data);
+    for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ull; }
+    return h;
+}
+constexpr uint32_t kCacheVersion = 3;      // bump when the builder or ClusterGpu changes
+}  // namespace
+
+ClusterMesh build_cluster_mesh_cached(const Vertex* verts, size_t vertex_count, const uint32_t* indices, size_t index_count,
+                                      float uv_weight) {
+    if (!verts || !indices || index_count < 3 * 256) return {};
+    uint64_t h = 1469598103934665603ull;
+    h = fnv1a(verts, vertex_count * sizeof(Vertex), h);
+    h = fnv1a(indices, index_count * sizeof(uint32_t), h);
+    h = fnv1a(&uv_weight, sizeof(uv_weight), h);
+    char name[64];
+    std::snprintf(name, sizeof(name), "cache/cluster_%016llx.bin", static_cast<unsigned long long>(h));
+    struct Header { uint32_t version, clusters, indices; int32_t levels; uint32_t base_tris, coarsest_tris; };
+    if (FILE* fp = std::fopen(name, "rb")) {
+        Header hd{};
+        ClusterMesh m;
+        bool ok = std::fread(&hd, sizeof(hd), 1, fp) == 1 && hd.version == kCacheVersion && hd.clusters < (1u << 24) && hd.indices < (1u << 28);
+        if (ok) {
+            m.clusters.resize(hd.clusters); m.indices.resize(hd.indices);
+            ok = std::fread(m.clusters.data(), sizeof(ClusterGpu), hd.clusters, fp) == hd.clusters &&
+                 std::fread(m.indices.data(), sizeof(uint32_t), hd.indices, fp) == hd.indices;
+            m.levels = hd.levels; m.base_tris = hd.base_tris; m.coarsest_tris = hd.coarsest_tris;
+        }
+        std::fclose(fp);
+        if (ok) return m;
+    }
+    ClusterMesh m = build_cluster_mesh(verts, vertex_count, indices, index_count, uv_weight);
+    if (m.clusters.empty()) return m;
+    std::error_code ec;
+    std::filesystem::create_directories("cache", ec);
+    if (FILE* fp = std::fopen(name, "wb")) {
+        Header hd{ kCacheVersion, uint32_t(m.clusters.size()), uint32_t(m.indices.size()), m.levels, m.base_tris, m.coarsest_tris };
+        std::fwrite(&hd, sizeof(hd), 1, fp);
+        std::fwrite(m.clusters.data(), sizeof(ClusterGpu), m.clusters.size(), fp);
+        std::fwrite(m.indices.data(), sizeof(uint32_t), m.indices.size(), fp);
+        std::fclose(fp);
+    }
+    return m;
 }
 
 }  // namespace qlike

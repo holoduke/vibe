@@ -139,6 +139,7 @@ void VulkanEngine::init_viewmodel() {
 void VulkanEngine::destroy_viewmodel() {
     destroy_flashlight_meshes();
     destroy_player_body();
+    destroy_static_clusters();
     for (auto& vm : viewmodel_gltf_) destroy_mesh(allocator_, vm.mesh);
     viewmodel_gltf_.clear();
     viewmodel_proc_parts_.clear();

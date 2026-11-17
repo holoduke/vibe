@@ -41,6 +41,11 @@ struct ClusterMesh {
 };
 
 // Build the hierarchy for one mesh. Empty result if the mesh is too small to be worth it.
-ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const uint32_t* indices, size_t index_count);
+// `uv_weight` > 0: the simplifier also keeps texture coordinates in place (meshes with a mapped texture).
+ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const uint32_t* indices, size_t index_count,
+                               float uv_weight = 0.0f);
+// The same, read from / written to `cache/cluster_<hash>.bin` (the hierarchy depends only on the mesh).
+ClusterMesh build_cluster_mesh_cached(const Vertex* verts, size_t vertex_count, const uint32_t* indices, size_t index_count,
+                                      float uv_weight = 0.0f);
 
 }  // namespace qlike

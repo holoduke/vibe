@@ -409,7 +409,10 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 auto tseed = [&trs](uint32_t k, uint32_t salt) {
                     trs = ((k + 1u) * 2654435761u) ^ salt; trs ^= trs >> 15; trs *= 0x2C1B3C6Du; trs ^= trs >> 12; trs |= 1u;
                 };
-                for (int i = 0; i < ttries && tufts < 120000; ++i) {
+                // The automatic tufts are OFF: single long clumps standing in the meadow read as glowing
+                // (lit without the shading of the grass around them). Tufts painted in the editor stay.
+                static const bool kAutoTufts = std::getenv("QLIKE_AUTO_TUFTS") != nullptr;
+                for (int i = 0; kAutoTufts && i < ttries && tufts < 120000; ++i) {
                     tseed(uint32_t(i), 0x7F4A7C15u);
                     const float wx = (tu() * 2.0f - 1.0f) * ext;
                     const float wz = (tu() * 2.0f - 1.0f) * ext;

@@ -1377,6 +1377,19 @@ void VulkanEngine::run(const RunOptions& opts) {
                     first_logged = true;
                     log::infof("[init] first game frame submitted %.0f ms after launch",
                                glfwGetTime() * 1000.0);
+                    {   // video memory in use (all allocations of this process, per the driver)
+                        VmaBudget bud[VK_MAX_MEMORY_HEAPS]{};
+                        vmaGetHeapBudgets(allocator_, bud);
+                        VkPhysicalDeviceMemoryProperties mp{};
+                        vkGetPhysicalDeviceMemoryProperties(physical_device_, &mp);
+                        double used = 0.0, budget = 0.0, ours = 0.0;
+                        for (uint32_t h = 0; h < mp.memoryHeapCount; ++h) {
+                            if (!(mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) continue;
+                            used += double(bud[h].usage); budget += double(bud[h].budget); ours += double(bud[h].statistics.allocationBytes);
+                        }
+                        log::infof("[vram] %.0f MB in use by the game (%.0f MB in engine allocations) of %.0f MB available",
+                                   used / 1048576.0, ours / 1048576.0, budget / 1048576.0);
+                    }
                 }
             }
             if (opts_.max_frames >= 0 &&

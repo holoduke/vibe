@@ -46,6 +46,7 @@ void VulkanEngine::init_castle_meshes() {
         total_tris += lm.idx.size() / 3;
     }
     log::infof("[castle] %zu static mesh parts, %zu tris", castle_meshes_.size(), total_tris);
+    init_static_clusters();
 }
 
 void VulkanEngine::build_castle_mesh_blas() { build_mesh_part_blas(castle_meshes_); }
@@ -159,8 +160,10 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
         // towers); the flat pre-pass depth would hide those cut-outs.
         if (depth_only && !shadow_layout && rt_.spom_strength > 0.01f &&
             (g.tex_albedo == 1 || g.tex_albedo == 4)) continue;
+        // Camera passes: the clusters picked for this frame (cull_static_clusters); the sun's view draws the whole part.
+        const bool clustered = !shadow_layout && scl_ready_ && g.cl_part >= 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &g.mesh.vertex_buffer, &off);
-        vkCmdBindIndexBuffer(cmd, g.mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindIndexBuffer(cmd, clustered ? scl_index_buf_ : g.mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
         if (shadow_layout) {
             glm::mat4 mvp = vp;   // model = identity (world-space verts)
             vkCmdPushConstants(cmd, shadow_layout, VK_SHADER_STAGE_VERTEX_BIT,
@@ -192,7 +195,11 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
             vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages,
                                0, sizeof(PushConstants), &pc);
         }
-        vkCmdDrawIndexed(cmd, g.mesh.index_count, 1, 0, 0, 0);
+        if (clustered)
+            vkCmdDrawIndexedIndirectCount(cmd, scl_cmd_buf_, 256 + VkDeviceSize(g.cl_cmd_base) * sizeof(VkDrawIndexedIndirectCommand),
+                                          scl_cmd_buf_, VkDeviceSize(g.cl_part) * 4, g.cl_count, sizeof(VkDrawIndexedIndirectCommand));
+        else
+            vkCmdDrawIndexed(cmd, g.mesh.index_count, 1, 0, 0, 0);
     }
 }
 

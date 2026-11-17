@@ -1705,6 +1705,8 @@ private:
         VkBuffer blas_buf = VK_NULL_HANDLE;
         VmaAllocation blas_alloc = nullptr;
         VkDeviceAddress blas_addr = 0;
+        int      cl_part = -1;                 // static cluster LOD (cluster_draw.cpp): part number, -1 = drawn whole
+        uint32_t cl_count = 0, cl_cmd_base = 0;
     };
     std::vector<CastleMeshGpu> castle_meshes_;
     // Anti-aircraft vehicles (vk_engine/aa.cpp, model in engine/aa_vehicle.cpp).
@@ -1804,6 +1806,20 @@ private:
     void write_plant_hiz_binding();
     void cull_plants(VkCommandBuffer cmd);
     bool draw_plants_gpu(VkCommandBuffer cmd, int species);
+    // Cluster LOD of the static world meshes (castle, chapel, gravestones).
+    uint32_t      scl_total_ = 0;
+    bool          scl_hiz_bound_ = false, scl_ready_ = false;
+    VkBuffer      scl_index_buf_ = VK_NULL_HANDLE, scl_cluster_buf_ = VK_NULL_HANDLE, scl_meta_buf_ = VK_NULL_HANDLE, scl_cmd_buf_ = VK_NULL_HANDLE;
+    VmaAllocation scl_index_alloc_ = nullptr, scl_cluster_alloc_ = nullptr, scl_meta_alloc_ = nullptr, scl_cmd_alloc_ = nullptr;
+    VkDescriptorSetLayout scl_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool      scl_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet       scl_set_ = VK_NULL_HANDLE;
+    VkPipelineLayout      scl_layout_ = VK_NULL_HANDLE;
+    VkPipeline            scl_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule        scl_module_ = VK_NULL_HANDLE;
+    void init_static_clusters();
+    void destroy_static_clusters();
+    void cull_static_clusters(VkCommandBuffer cmd);
     void init_cluster_draw();
     void destroy_cluster_draw();
     void cull_clusters(VkCommandBuffer cmd);
