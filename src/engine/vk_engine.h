@@ -703,7 +703,7 @@ private:
     // terrain PBR materials (incl. proc grass, roof, road), 15 the leaf
     // atlas, 16 bark, 17 lamp timber, 18 the small-plant atlas.
     static constexpr int kFileTextureCount   = 7;
-    static constexpr int kTerrainMatCount    = 13;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
+    static constexpr int kTerrainMatCount    = 14;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
     static constexpr int kTextureCount       = kFileTextureCount +
                                                kTerrainMatCount;   // 20
     // Albedo/normal-array indices of the baked terrain materials.
@@ -730,6 +730,7 @@ private:
     static constexpr int kTexTimber = kFileTextureCount + 10;  // 17: weathered timber (lamp posts)
     static constexpr int kTexPlant  = kFileTextureCount + 11;  // 18: small-plant atlas (leaf | petal)
     static constexpr int kTexSoldier = kFileTextureCount + 12;  // 19: the player character's texture atlas
+    static constexpr int kTexGrave   = kFileTextureCount + 13;  // 20: old gravestone (assets/church/grave_stone.png)
     struct TextureSlot {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation alloc = nullptr;

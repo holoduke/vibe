@@ -620,10 +620,13 @@ void VulkanEngine::load_foliage_textures() {
             ++loaded;
         }
     }
-    if (std::string p = resolve("timber.png"); !p.empty()) {
+    for (int which = 0; which < 2; ++which) {
+        const int slot = which == 0 ? kTexTimber : kTexGrave;
+        const std::string p = resolve(which == 0 ? "timber.png" : "../church/grave_stone.png");
+        if (p.empty()) continue;
         int w = 0, h = 0, c = 0;
         if (unsigned char* px = stbi_load(p.c_str(), &w, &h, &c, 4)) {
-            put(albedo_textures_[kTexTimber], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "foliage/timber");
+            put(albedo_textures_[slot], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "foliage/timber");
             // Height = luminance (furrows are dark), normal = its gradient.
             std::vector<float> ht(size_t(w) * size_t(h));
             for (size_t i = 0; i < ht.size(); ++i)
@@ -640,7 +643,7 @@ void VulkanEngine::load_foliage_textures() {
                     o[2] = static_cast<unsigned char>(std::clamp((il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
                     o[3] = static_cast<unsigned char>(std::clamp(H(x, y) * 255.0f, 0.0f, 255.0f));
                 }
-            put(normal_textures_[kTexTimber], nrm.data(), w, h, VK_FORMAT_R8G8B8A8_UNORM, "foliage/timber_n");
+            put(normal_textures_[slot], nrm.data(), w, h, VK_FORMAT_R8G8B8A8_UNORM, "foliage/timber_n");
             stbi_image_free(px);
             ++loaded;
         }
@@ -1179,6 +1182,7 @@ void VulkanEngine::bake_terrain_materials() {
         { TM_DIRT,  kTexTimber,    "foliage/timber_placeholder" },
         { TM_GRASS, kTexPlant,     "foliage/plant_placeholder" },
         { TM_DIRT,  kTexSoldier,   "character/placeholder" },
+        { TM_ROCK,  kTexGrave,     "church/grave_placeholder" },
     };
     // CPU generation of all materials in parallel (pure functions of
     // kind + size); uploads stay on this thread (queue owner).

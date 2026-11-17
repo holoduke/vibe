@@ -430,6 +430,10 @@ void VulkanEngine::init_world() {
                 log::infof("[lamp] post at (%.1f, %.1f, %.1f)", x, y, z);
             }
         }
+        if (church_placed_) {
+            const int n = game::append_graveyard(world_, church_pos_, [&](float x, float z) { return hm.sample_world(x, z); });
+            log::infof("[church] %d gravestones", n);
+        }
         // One lantern by the chapel door, its arm over the path.
         if (church_placed_) {
             const float x = church_pos_.x - 6.4f, z = church_pos_.z + 3.2f;

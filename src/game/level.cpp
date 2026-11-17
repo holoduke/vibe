@@ -703,6 +703,97 @@ bool append_church(Level& lv, glm::vec3 base) {
 }
 
 // ---------------------------------------------------------------------
+// The graveyard: ten stone models from Blender, placed ~26 times in loose
+// rows on the south side of the chapel. Each stands on the ground where it
+// is, turned a little and leaning as old stones do; some have sunk. All of
+// them go into one mesh (one draw) with the gravestone texture.
+// ---------------------------------------------------------------------
+int append_graveyard(Level& lv, glm::vec3 church, const std::function<float(float, float)>& ground) {
+    FILE* fp = std::fopen("assets/church/graves.mesh", "r");
+    if (!fp) return 0;
+    struct Model { std::string name; std::vector<LevelVertex> v; };
+    std::vector<Model> models;
+    char name[32]; int tris = 0;
+    while (std::fscanf(fp, " mesh %31s %d", name, &tris) == 2) {
+        Model m; m.name = name;
+        m.v.resize(size_t(tris) * 3);
+        for (auto& q : m.v)
+            if (std::fscanf(fp, "%f %f %f %f %f %f %f %f", &q.p.x, &q.p.y, &q.p.z, &q.n.x, &q.n.y, &q.n.z, &q.u, &q.v) != 8) { std::fclose(fp); return 0; }
+        models.push_back(std::move(m));
+    }
+    std::fclose(fp);
+    if (models.empty()) return 0;
+    auto find = [&](const char* n) { for (size_t i = 0; i < models.size(); ++i) if (models[i].name == n) return int(i); return 0; };
+    const int i_stump = find("stump"), i_fallen = find("fallen"), i_ledger = find("ledger");
+
+    LevelMesh mesh;
+    mesh.tex_albedo = 20; mesh.tex_normal = 20;            // engine kTexGrave
+    mesh.tint = glm::vec3(0.86f, 0.93f, 1.0f);              // cooler: grey stone, the lichen stays warm
+    mesh.fallback = glm::vec3(0.42f, 0.40f, 0.36f);
+    const float tile = 1.1f;                                // metres per texture repeat
+    uint32_t rs = 0x6A4E57u;
+    auto rnd = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
+    int placed = 0;
+    auto place = [&](int mi, float x, float z, float yaw, float lean, float lean_dir, float sink, float scale) {
+        const Model& m = models[size_t(mi)];
+        const float gy = ground(x, z) - sink;
+        // yaw about y, then lean by `lean` about a horizontal axis.
+        const float cy = std::cos(yaw), sy = std::sin(yaw);
+        const glm::vec3 ax(std::cos(lean_dir), 0.0f, std::sin(lean_dir));
+        const float cl = std::cos(lean), sl = std::sin(lean);
+        auto xf = [&](glm::vec3 p) {
+            p = glm::vec3(cy * p.x + sy * p.z, p.y, -sy * p.x + cy * p.z);
+            return p * cl + glm::cross(ax, p) * sl + ax * (glm::dot(ax, p) * (1.0f - cl));     // Rodrigues
+        };
+        const float us = rnd() * 3.0f, vs = rnd() * 3.0f;      // each stone its own patch of the texture
+        glm::vec3 lo(1e9f), hi(-1e9f);
+        for (size_t t = 0; t + 2 < m.v.size(); t += 3) {
+            LevelVertex v[3];
+            for (int k = 0; k < 3; ++k) {
+                v[k] = m.v[t + size_t(k)];
+                v[k].p = xf(v[k].p * scale) + glm::vec3(x, gy, z);
+                v[k].n = xf(v[k].n);
+                v[k].u = v[k].u * scale / tile + us; v[k].v = v[k].v * scale / tile + vs;
+                lo = glm::min(lo, v[k].p); hi = glm::max(hi, v[k].p);
+            }
+            const glm::vec3 g = glm::cross(v[1].p - v[0].p, v[2].p - v[0].p);
+            const bool flip = glm::dot(g, v[0].n + v[1].n + v[2].n) < 0.0f;
+            const uint32_t b0 = uint32_t(mesh.verts.size());
+            mesh_push(mesh, v[0]); mesh_push(mesh, v[1]); mesh_push(mesh, v[2]);
+            if (flip) mesh.idx.insert(mesh.idx.end(), { b0, b0 + 2, b0 + 1 });
+            else      mesh.idx.insert(mesh.idx.end(), { b0, b0 + 1, b0 + 2 });
+        }
+        // Collider: the part above the ground, a little slimmer than the stone.
+        lo.y = gy - 0.2f;
+        const glm::vec3 c = (lo + hi) * 0.5f, e = (hi - lo) * 0.5f * glm::vec3(0.8f, 1.0f, 0.8f);
+        if (hi.y - gy > 0.3f) lv.aabbs.push_back({ c - e, c + e });
+        ++placed;
+    };
+    // Four rows south of the chapel (its long axis runs along x; the stones
+    // face west, toward the path, as the chapel's door does).
+    const float face = -1.5708f;                  // carved face toward -x
+    for (int row = 0; row < 4; ++row) {
+        const float z = church.z + 6.3f + float(row) * 2.5f + (rnd() - 0.5f) * 0.3f;
+        for (int col = 0; col < 7; ++col) {
+            if (rnd() < 0.14f) continue;                           // gaps: graves without a stone left
+            const float x = church.x - 5.6f + float(col) * 1.95f + (rnd() - 0.5f) * 0.5f;
+            int mi = int(rnd() * float(models.size())) % int(models.size());
+            if (mi == i_fallen) mi = i_stump;                      // the fallen top only goes with its stump
+            const float yaw = face + (rnd() - 0.5f) * 0.35f;
+            const float lean = mi == i_ledger ? (rnd() - 0.5f) * 0.05f : (rnd() * rnd()) * 0.30f;
+            const float sink = mi == i_ledger ? 0.02f : rnd() * rnd() * 0.10f;
+            const float sc = 1.0f + 0.3f * rnd();
+            place(mi, x, z, yaw, lean, rnd() * 6.2832f, sink, sc);
+            if (mi == i_stump)                                     // its broken-off top lies in front of it
+                place(i_fallen, x - 0.75f * sc + (rnd() - 0.5f) * 0.2f, z + (rnd() - 0.5f) * 0.3f,
+                      yaw + (rnd() - 0.5f) * 0.9f, (rnd() - 0.5f) * 0.12f, rnd() * 6.2832f, 0.03f, sc);
+        }
+    }
+    if (!mesh.idx.empty()) lv.meshes.push_back(std::move(mesh));
+    return placed;
+}
+
+// ---------------------------------------------------------------------
 // Road lamp post: a hewn timber post with a braced arm and a hanging iron
 // lantern (world space; `base` on the ground, the arm reaches along
 // `arm_dir`, a horizontal unit vector, toward the road).

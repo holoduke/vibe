@@ -3,6 +3,7 @@
 #include <glm/vec3.hpp>
 #include <cstdint>
 #include <glm/vec4.hpp>
+#include <functional>
 #include <vector>
 
 #include "game/collision.h"
@@ -95,6 +96,10 @@ void append_outpost_tower(Level& lv, glm::vec3 base, int style, uint32_t seed);
 // long axis runs along world x, the door faces -x. Returns false if the
 // mesh file is missing.
 bool append_church(Level& lv, glm::vec3 base);
+// Old gravestones (assets/church/graves.mesh, tools/church/make_graves.py)
+// set out in rows beside the chapel. `ground(x, z)` gives the terrain
+// height. Returns how many stones were placed (0 = mesh file missing).
+int append_graveyard(Level& lv, glm::vec3 church, const std::function<float(float, float)>& ground);
 // Timber lamp post with a hanging lantern; returns the lantern's centre.
 glm::vec3 append_lamp_post(Level& lv, glm::vec3 base, glm::vec3 arm_dir, uint32_t seed);
 

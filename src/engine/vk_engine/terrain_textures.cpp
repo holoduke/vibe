@@ -671,6 +671,17 @@ void VulkanEngine::init_grass_mask_texture() {
                 grass_mask_data_[(size_t(mz) * size_t(dim) + size_t(mx)) * 2] = 0;
             }
         }
+        // The graveyard beside it is kept: short, thin turf so the stones show.
+        for (int mz = 0; mz < dim; ++mz) {
+            const float wz = (float(mz) + 0.5f) * cell - 0.5f * kWorldSide;
+            if (wz < church_pos_.z + 4.6f || wz > church_pos_.z + 15.5f) continue;
+            for (int mx = 0; mx < dim; ++mx) {
+                const float wx = (float(mx) + 0.5f) * cell - 0.5f * kWorldSide;
+                if (wx < church_pos_.x - 7.5f || wx > church_pos_.x + 8.5f) continue;
+                uint8_t& g = grass_mask_data_[(size_t(mz) * size_t(dim) + size_t(mx)) * 2];
+                g = static_cast<uint8_t>(float(g) * 0.22f);
+            }
+        }
     }
 
     // Upload as a sampled RG8 image.
