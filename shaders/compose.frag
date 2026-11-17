@@ -736,6 +736,32 @@ void main() {
     vec3 X = (pc.sky_color.w > 0.5) ? pc.sky_color.rgb : vec3(0.55, 0.72, 0.95);
     outColor = vec4(sky_rad - X, 0.0);
 }
+#elif defined(SUN_SHAFTS)
+// Sun shafts at render resolution, before the upscaler (additive). The same
+// accumulation as in the full compose below; the geometry test is exact here
+// (this pixel's own depth) and the upscaler resolves the outline over time.
+// pc.flare_params.x = frame number (the tap offset changes every frame so the
+// 24 taps average out to a smooth ray instead of a fixed grain).
+void main() {
+    float depth = texelFetch(history_depth, ivec2(gl_FragCoord.xy), 0).r;
+    if (depth >= 0.99999 || pc.sun_dir.w <= 0.001 || pc.sun_screen.z < 0.5) discard;
+    vec2  uv_here = gl_FragCoord.xy * pc.viewport.zw;
+    vec2  d_total = uv_here - pc.sun_screen.xy;
+    const int   kN     = 24;
+    const float kDecay = 0.94;
+    vec2 d_step = d_total / float(kN);
+    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + 0.61803399 * pc.flare_params.x);
+    vec2 uv_t = uv_here - d_step * jitter;
+    float w = 1.0, occ = 0.0;
+    for (int i = 0; i < kN; ++i) {
+        uv_t -= d_step;
+        if (texture(history_depth, uv_t).r >= 0.99999) occ += w;
+        w *= kDecay;
+    }
+    const float kNorm = (1.0 - 0.2272278) / (1.0 - kDecay);
+    float radial_fade = exp(-length(d_total) * 1.8);
+    outColor = vec4(pc.sun_color.rgb * pc.sun_color.a * (occ / kNorm) * radial_fade * pc.sun_dir.w, 0.0);
+}
 #else
 void main() {
     ivec2 ip = ivec2(gl_FragCoord.xy);
@@ -1052,8 +1078,13 @@ void main() {
                              shaft * radial_fade * pc.sun_dir.w;
         // Silhouette pixels (filtered depth < far but partly sky) only get
         // their geometry fraction - no bright rim against the sun.
-        vec4 sg = textureGather(history_depth, sample_uv, 0);
-        shaft_col *= dot(vec4(lessThan(sg, vec4(0.99999))), vec4(0.25));
+        // (weighted like a bilinear fetch: the depth is at render resolution,
+        // and an unweighted 2x2 count showed as stair steps one render pixel
+        // high along every outline against the sky)
+        vec4 sg = textureGather(history_depth, sample_uv, 0);   // (i0,j1)(i1,j1)(i1,j0)(i0,j0)
+        vec2 sf = fract(sample_uv * vec2(textureSize(history_depth, 0)) - 0.5);
+        vec4 sw = vec4((1.0 - sf.x) * sf.y, sf.x * sf.y, sf.x * (1.0 - sf.y), (1.0 - sf.x) * (1.0 - sf.y));
+        shaft_col *= smoothstep(0.15, 0.85, dot(vec4(lessThan(sg, vec4(0.99999))), sw));
         hdr += shaft_col;
     }
 

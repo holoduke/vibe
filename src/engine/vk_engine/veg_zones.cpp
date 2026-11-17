@@ -250,6 +250,15 @@ void VulkanEngine::finish_veg_replant(VegJobResult&& r) {
 
     // GPU side: the visible lists are laid out per archetype x LOD.
     veg_inst_cpu_ = std::move(inst);
+    // Clustered rocks go to the end of the list, as at start-up (init_vegetation_data).
+    if (cl_pipeline_) {
+        const auto mid = std::stable_partition(veg_inst_cpu_.begin(), veg_inst_cpu_.end(), [&](const VegInstance& vi) {
+            const size_t a = size_t(vi.rot_arch_phase.y + 0.5f);
+            return !(a < veg_cluster_meshes_.size() && !veg_cluster_meshes_[a].clusters.empty());
+        });
+        veg_cluster_first_ = uint32_t(mid - veg_inst_cpu_.begin());
+        veg_cluster_count_ = uint32_t(veg_inst_cpu_.end() - mid);
+    }
     std::vector<uint32_t> per_arch(veg_arch_.size(), 0);
     for (const auto& vi : veg_inst_cpu_) per_arch[size_t(vi.rot_arch_phase.y + 0.5f)]++;
     uint32_t vis_base = 0;
@@ -259,6 +268,7 @@ void VulkanEngine::finish_veg_replant(VegJobResult&& r) {
             veg_cmd_template_[ci].firstInstance = vis_base;
             vis_base += per_arch[a];
         }
+    if (cl_pipeline_) { cl_vis_base_ = vis_base; vis_base += veg_cluster_count_; }
     veg_count_ = uint32_t(veg_inst_cpu_.size());
     veg_vis_capacity_ = std::max(vis_base, 1u);
 
@@ -301,6 +311,8 @@ void VulkanEngine::finish_veg_replant(VegJobResult&& r) {
     }
     vkUpdateDescriptorSets(device_, 3, w, 0, nullptr);
     veg_rt_valid_ = false;                      // re-pick the ray-traced tree set
+    rebind_cluster_instance_buffers();          // the clustered rocks read the same (re-made) buffers
+    rebake_veg_shade();                         // the ground darkening follows the new planting
 
     log::infof("[paint] replanted: placement %.0f ms (background) + apply %.0f ms: %u instances (%d pines, %d broadleaf, %d bushes)",
                place_ms, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(),

@@ -593,6 +593,76 @@ void VulkanEngine::init_textures() {
 // bake in place (probe-and-fallback like every other asset).
 // Foliage textures (assets/foliage): the leaf / needle card atlas (RGBA,
 // alpha = coverage) and tree bark. The bark ships as albedo only; its
+// The vegetation cover map (see load_foliage_textures): 2048 x 2048 RGBA8.
+std::vector<unsigned char> VulkanEngine::bake_veg_shade_pixels() const {
+    const int N = 2048;
+    std::vector<float> cov(size_t(N) * N, 0.0f);
+    for (const VegInstance& vi : veg_inst_cpu_) {
+        const size_t a = size_t(vi.rot_arch_phase.y + 0.5f);
+        if (a >= veg_arch_.size() || vi.pos_scale.w <= 0.0f) continue;
+        const int sp = veg_arch_[a].species;
+        if (sp > 2) continue;                                   // rocks cast no litter
+        const float r = std::max(veg_arch_[a].radius * vi.pos_scale.w * (sp == 2 ? 1.25f : 0.95f), 1.0f);
+        const float k = sp == 2 ? 0.55f : 1.0f;
+        const float cx = vi.pos_scale.x + 1024.0f, cz = vi.pos_scale.z + 1024.0f;
+        const int x0 = std::max(0, int(cx - r)), x1 = std::min(N - 1, int(cx + r) + 1);
+        const int z0 = std::max(0, int(cz - r)), z1 = std::min(N - 1, int(cz + r) + 1);
+        for (int z = z0; z <= z1; ++z)
+            for (int x = x0; x <= x1; ++x) {
+                const float dx = (float(x) + 0.5f - cx) / r, dz = (float(z) + 0.5f - cz) / r;
+                const float d2 = dx * dx + dz * dz;
+                if (d2 >= 1.0f) continue;
+                const float w = (1.0f - d2) * (1.0f - d2) * k;
+                float& c = cov[size_t(z) * N + size_t(x)];
+                c = 1.0f - (1.0f - c) * (1.0f - w);             // overlapping crowns add up, never past 1
+            }
+    }
+    // Two box blurs of 2 m: soft outer borders.
+    std::vector<float> tmp(cov.size());
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int z = 0; z < N; ++z)
+            for (int x = 0; x < N; ++x) {
+                float sum = 0.0f;
+                for (int k = -2; k <= 2; ++k) sum += cov[size_t(z) * N + size_t(std::clamp(x + k, 0, N - 1))];
+                tmp[size_t(z) * N + size_t(x)] = sum * 0.2f;
+            }
+        for (int z = 0; z < N; ++z)
+            for (int x = 0; x < N; ++x) {
+                float sum = 0.0f;
+                for (int k = -2; k <= 2; ++k) sum += tmp[size_t(std::clamp(z + k, 0, N - 1)) * N + size_t(x)];
+                cov[size_t(z) * N + size_t(x)] = sum * 0.2f;
+            }
+    }
+    std::vector<unsigned char> px(size_t(N) * N * 4);
+    for (size_t i = 0; i < cov.size(); ++i) {
+        const unsigned char v = static_cast<unsigned char>(std::clamp(cov[i], 0.0f, 1.0f) * 255.0f + 0.5f);
+        px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v; px[i * 4 + 3] = 255;
+    }
+    return px;
+}
+
+// After the vegetation was re-planted (editor): bake again and swap the texture in.
+// The caller has waited for the device to be idle.
+void VulkanEngine::rebake_veg_shade() {
+    if (veg_inst_cpu_.empty() || !scene_desc_set_) return;
+    const std::vector<unsigned char> px = bake_veg_shade_pixels();
+    Texture2D t = upload_texture_from_pixels(device_, allocator_, graphics_queue_, graphics_queue_family_,
+                                             px.data(), 2048, 2048, VK_FORMAT_R8G8B8A8_UNORM, "veg_shade");
+    if (!t.ok) return;
+    texture_upload_batch_sync(device_, allocator_, graphics_queue_);
+    TextureSlot old = albedo_textures_[kTexVegShade];
+    albedo_textures_[kTexVegShade] = { t.image, t.alloc, t.view };
+    VkDescriptorImageInfo ii{ texture_sampler_, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = scene_desc_set_; w.dstBinding = 3; w.dstArrayElement = uint32_t(kTexVegShade); w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &ii;
+    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+    if (old.view) vkDestroyImageView(device_, old.view, nullptr);
+    if (old.image) vmaDestroyImage(allocator_, old.image, old.alloc);
+}
+
 // normal map (height in alpha) is derived from the luminance.
 void VulkanEngine::load_foliage_textures() {
     auto resolve = [](const std::string& tail) -> std::string {
@@ -678,50 +748,8 @@ void VulkanEngine::load_foliage_textures() {
     // crown - trees fully, bushes about half - then the map is blurred so the
     // borders are soft. 2048 x 2048 over the 2048 m world (1 m per texel).
     if (!veg_inst_cpu_.empty()) {
-        const int N = 2048;
-        std::vector<float> cov(size_t(N) * N, 0.0f);
-        for (const VegInstance& vi : veg_inst_cpu_) {
-            const size_t a = size_t(vi.rot_arch_phase.y + 0.5f);
-            if (a >= veg_arch_.size() || vi.pos_scale.w <= 0.0f) continue;
-            const int sp = veg_arch_[a].species;
-            if (sp > 2) continue;                                   // rocks cast no litter
-            const float r = std::max(veg_arch_[a].radius * vi.pos_scale.w * (sp == 2 ? 1.25f : 0.95f), 1.0f);
-            const float k = sp == 2 ? 0.55f : 1.0f;
-            const float cx = vi.pos_scale.x + 1024.0f, cz = vi.pos_scale.z + 1024.0f;
-            const int x0 = std::max(0, int(cx - r)), x1 = std::min(N - 1, int(cx + r) + 1);
-            const int z0 = std::max(0, int(cz - r)), z1 = std::min(N - 1, int(cz + r) + 1);
-            for (int z = z0; z <= z1; ++z)
-                for (int x = x0; x <= x1; ++x) {
-                    const float dx = (float(x) + 0.5f - cx) / r, dz = (float(z) + 0.5f - cz) / r;
-                    const float d2 = dx * dx + dz * dz;
-                    if (d2 >= 1.0f) continue;
-                    const float w = (1.0f - d2) * (1.0f - d2) * k;
-                    float& c = cov[size_t(z) * N + size_t(x)];
-                    c = 1.0f - (1.0f - c) * (1.0f - w);             // overlapping crowns add up, never past 1
-                }
-        }
-        // Two box blurs of 2 m: soft outer borders.
-        std::vector<float> tmp(cov.size());
-        for (int pass = 0; pass < 2; ++pass) {
-            for (int z = 0; z < N; ++z)
-                for (int x = 0; x < N; ++x) {
-                    float sum = 0.0f;
-                    for (int k = -2; k <= 2; ++k) sum += cov[size_t(z) * N + size_t(std::clamp(x + k, 0, N - 1))];
-                    tmp[size_t(z) * N + size_t(x)] = sum * 0.2f;
-                }
-            for (int z = 0; z < N; ++z)
-                for (int x = 0; x < N; ++x) {
-                    float sum = 0.0f;
-                    for (int k = -2; k <= 2; ++k) sum += tmp[size_t(std::clamp(z + k, 0, N - 1)) * N + size_t(x)];
-                    cov[size_t(z) * N + size_t(x)] = sum * 0.2f;
-                }
-        }
-        std::vector<unsigned char> px(size_t(N) * N * 4);
-        for (size_t i = 0; i < cov.size(); ++i) {
-            const unsigned char v = static_cast<unsigned char>(std::clamp(cov[i], 0.0f, 1.0f) * 255.0f + 0.5f);
-            px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v; px[i * 4 + 3] = 255;
-        }
-        put(albedo_textures_[kTexVegShade], px.data(), N, N, VK_FORMAT_R8G8B8A8_UNORM, "veg_shade");
+        const std::vector<unsigned char> px = bake_veg_shade_pixels();
+        put(albedo_textures_[kTexVegShade], px.data(), 2048, 2048, VK_FORMAT_R8G8B8A8_UNORM, "veg_shade");
     }
     if (!retired.empty()) texture_upload_batch_sync(device_, allocator_, graphics_queue_);
     for (TextureSlot& s : retired) {

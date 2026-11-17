@@ -943,6 +943,50 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         prof_mark(cmd, "sky_fill");
     }
+    // Sun shafts into the render-resolution scene colour, before the upscaler
+    // (any temporal upscaler: DLSS or FSR). See compose.frag SUN_SHAFTS.
+    sun_shafts_prepass_ran_ = false;
+    if (rt_.fsr2_enabled && sun_shafts_pipeline_ != VK_NULL_HANDLE && rt_.sun_shaft_intensity > 0.001f &&
+        !std::getenv("QLIKE_SHAFTS_LATE")) {
+        const float pitch = glm::radians(rt_.sun_pitch_deg), yaw = glm::radians(rt_.sun_yaw_deg);
+        const glm::vec3 sun = glm::normalize(glm::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)));
+        const glm::vec4 sun_clip = current_frame_view_.vp * glm::vec4(sun, 0.0f);
+        if (sun_clip.w > 0.0f) {
+            VkCommandBuffer cmd = frame.command_buffer;
+            vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            auto att = vkinit::color_attachment_info(scene_color_view_, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            VkRenderingInfo ri{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .pNext = nullptr, .flags = 0,
+                .renderArea = { {0, 0}, render_extent_ },
+                .layerCount = 1, .viewMask = 0,
+                .colorAttachmentCount = 1, .pColorAttachments = &att,
+                .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
+            };
+            vkCmdBeginRendering(cmd, &ri);
+            VkViewport vp{ 0.0f, 0.0f, float(render_extent_.width), float(render_extent_.height), 0.0f, 1.0f };
+            vkCmdSetViewport(cmd, 0, 1, &vp);
+            VkRect2D sc{ {0, 0}, render_extent_ };
+            vkCmdSetScissor(cmd, 0, 1, &sc);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sun_shafts_pipeline_);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_pipeline_layout_,
+                                    0, 1, &compose_desc_sets_[history_write_slot_], 0, nullptr);
+            ComposePC hp{};
+            const float rw = float(render_extent_.width), rh = float(render_extent_.height);
+            hp.viewport = glm::vec4(rw, rh, 1.0f / rw, 1.0f / rh);
+            hp.sun_dir = glm::vec4(sun, rt_.sun_shaft_intensity * sun_horizon_visibility(current_frame_view_.eye_pos));
+            hp.sun_color = glm::vec4(rt_.sun_color, rt_.sun_intensity * rt_.sun_glare_strength);
+            hp.sun_screen = glm::vec4(sun_clip.x / sun_clip.w * 0.5f + 0.5f, sun_clip.y / sun_clip.w * 0.5f + 0.5f, 1.0f, 0.0f);
+            hp.flare_params = glm::vec4(float(frame_number_ % 64), 0.0f, 0.0f, 0.0f);
+            vkCmdPushConstants(cmd, compose_pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(hp), &hp);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+            vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            sun_shafts_prepass_ran_ = true;
+        }
+    }
 
     // ---------- Pass 2.2: FSR2 dispatch (optional, replaces TAAU) ----------
     // When FSR2 is on, the SDK does its own temporal accumulation +
@@ -1151,7 +1195,8 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         // ... or behind a cloud: glare, shafts and flare dim with it.
         // (compose.frag looks at the cloud layer in front of the sun itself)
         const float sun_eye_vis = sun_horizon_visibility(current_frame_view_.eye_pos);
-        pc_data.sun_dir   = glm::vec4(sun, rt_.sun_shaft_intensity * sun_eye_vis);
+        // (0 when the shafts were already added before the upscaler)
+        pc_data.sun_dir   = glm::vec4(sun, sun_shafts_prepass_ran_ ? 0.0f : rt_.sun_shaft_intensity * sun_eye_vis);
         // .a scaled by sun_glare_strength so the user can dial down
         // every sun-derived compose-pass effect together: procedural
         // disc + halo, lens flare, AND sun shafts (compose.frag reads

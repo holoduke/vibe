@@ -157,6 +157,20 @@ void VulkanEngine::write_cluster_hiz_binding() {
     vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
 }
 
+// The vegetation instance / visible / fade buffers were re-made (re-plant in the editor).
+void VulkanEngine::rebind_cluster_instance_buffers() {
+    if (!cl_set_) return;
+    VkDescriptorBufferInfo bi[3] = { { veg_inst_buf_, 0, VK_WHOLE_SIZE }, { veg_vis_buf_, 0, VK_WHOLE_SIZE }, { veg_fade_buf_, 0, VK_WHOLE_SIZE } };
+    VkWriteDescriptorSet w[3]{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = cl_set_; w[i].dstBinding = i; w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[i].pBufferInfo = &bi[i];
+    }
+    vkUpdateDescriptorSets(device_, 3, w, 0, nullptr);
+}
+
 void VulkanEngine::destroy_cluster_draw() {
     if (cl_pipeline_) vkDestroyPipeline(device_, cl_pipeline_, nullptr);
     if (cl_layout_) vkDestroyPipelineLayout(device_, cl_layout_, nullptr);

@@ -532,6 +532,21 @@ add_custom_command(
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${CUBE_GBUF_TERRAIN_SPV})
 
+# Sun-shaft variant of compose.frag: the light shafts through silhouettes are
+# added to the render-resolution scene colour BEFORE the upscaler, so their
+# edges are resolved over time with everything else (after the upscaler they
+# followed the jittered low-resolution depth: shaking, blocky outlines).
+set(SUN_SHAFTS_SPV "${SHADER_OUTPUT_DIR}/sun_shafts.frag.spv")
+add_custom_command(
+    OUTPUT ${SUN_SHAFTS_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DSUN_SHAFTS=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/compose.frag -o ${SUN_SHAFTS_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/compose.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader sun_shafts.frag (compose sun-shaft variant)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${SUN_SHAFTS_SPV})
+
 # Sky-fill variant of compose.frag: writes the real sky into the render-res
 # scene colour BEFORE DLSS (exact colour/alpha alignment), so DLSS upscales
 # a finished sky instead of compose rebuilding it at silhouettes afterwards.
