@@ -752,7 +752,7 @@ void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
         const glm::vec3 c(std::cos(a) * d, 0.010f + 0.004f * grnd(), std::sin(a) * d);
         const float r = i == 0 ? 0.19f : 0.10f + 0.09f * grnd();
         const float notch = 2.0f * kPi * grnd();
-        const float gap = 0.20f + 0.16f * grnd();
+        const float gap = 0.30f + 0.22f * grnd();                 // the V-shaped cut of a lily pad
         // Tilt: most lie flat, a few ride up on a neighbour.
         const float tilt = grnd() < 0.3f ? 0.10f + 0.12f * grnd() : 0.02f * grnd();
         const float tilt_a = 2.0f * kPi * grnd();
@@ -804,18 +804,21 @@ void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
     // stamens; the first opens wide beside the central pad, the second is
     // a smaller, half-closed one further out.
     auto flower = [&](glm::vec3 fc, float sz, float open) {
-        for (int ring = 0; ring < 3; ++ring) {
-            const int n = ring == 0 ? 10 : (ring == 1 ? 8 : 6);
-            const float len = sz * (ring == 0 ? 0.085f : (ring == 1 ? 0.068f : 0.050f));
-            const float wid = sz * (ring == 0 ? 0.021f : (ring == 1 ? 0.018f : 0.014f));
-            const float rise = (ring == 0 ? 0.30f : (ring == 1 ? 0.75f : 1.5f)) / open;
+        // Four rings: the outer petals lie almost flat on the water, each
+        // ring inside stands steeper and is a little shorter - the cup of a
+        // real water lily. Petals are broad with a pointed tip.
+        for (int ring = 0; ring < 4; ++ring) {
+            const int n = ring == 0 ? 9 : (ring == 1 ? 9 : (ring == 2 ? 7 : 5));
+            const float len = sz * (ring == 0 ? 0.105f : (ring == 1 ? 0.092f : (ring == 2 ? 0.074f : 0.055f)));
+            const float wid = sz * (ring == 0 ? 0.034f : (ring == 1 ? 0.030f : (ring == 2 ? 0.024f : 0.018f)));
+            const float rise = (ring == 0 ? 0.16f : (ring == 1 ? 0.55f : (ring == 2 ? 1.15f : 2.4f))) / open;
             for (int k = 0; k < n; ++k) {
                 const float ang = 2.0f * kPi * (float(k) + 0.5f * float(ring) + 0.15f * grnd()) / float(n);
                 const glm::vec3 dir(std::cos(ang), 0.0f, std::sin(ang)), side(-dir.z, 0.0f, dir.x);
                 // Petal surface: 5 stations along, 3 across; it curves up
                 // along its length and is cupped across.
                 const uint32_t b0 = uint32_t(v.size());
-                const int st = 5;
+                const int st = 7;
                 for (int s2 = 0; s2 < st; ++s2) {
                     const float t = float(s2) / float(st - 1);
                     const float up_a = std::atan(rise) * (0.55f + 0.75f * t);          // steeper toward the tip
@@ -823,7 +826,8 @@ void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
                     const glm::vec3 mid = fc + dir * (sz * 0.010f) + (dir * std::cos(std::atan(rise) * 0.8f) +
                                           glm::vec3(0.0f, std::sin(std::atan(rise) * 0.8f), 0.0f)) * (len * t) +
                                           glm::vec3(0.0f, len * 0.18f * t * t, 0.0f);
-                    const float hw = wid * std::pow(std::sin(kPi * std::pow(std::min(t + 0.04f, 1.0f), 0.8f)), 0.7f) * (t > 0.98f ? 0.05f : 1.0f);
+                    // Lance shape: widest a third of the way out, drawn to a point.
+                    const float hw = wid * std::pow(std::sin(kPi * std::pow(std::min(t * 0.97f + 0.03f, 1.0f), 0.62f)), 0.85f) * (1.0f - 0.25f * t);
                     const glm::vec3 nrm0 = glm::normalize(glm::cross(side, along));
                     for (int u2 = -1; u2 <= 1; ++u2) {
                         const float uu = float(u2);
@@ -854,8 +858,8 @@ void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
                     { sz * 0.010f, sz * 0.016f }, { 0.0f, sz * 0.020f } }, 8, 2.0f);
         stem(fc, 0.0055f, 2.0f * kPi * grnd());
     };
-    flower(glm::vec3(0.15f, 0.035f, -0.12f), 1.0f, 1.0f);
-    flower(glm::vec3(-0.30f, 0.045f, 0.24f), 0.7f, 0.55f);
+    flower(glm::vec3(0.15f, 0.030f, -0.12f), 1.25f, 1.0f);
+    flower(glm::vec3(-0.30f, 0.040f, 0.24f), 0.85f, 0.55f);
 }
 
 // Sort instances by 32 m ground cell and emit one contiguous range per

@@ -230,8 +230,17 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                         const float wx = gx + std::cos(a) * d, wz = gz + std::sin(a) * d;
                         const float h = h_at(wx, wz);
                         if (h > params.water_level - 0.10f || h < params.water_level - 1.15f) continue;
+                        // The whole raft must float: no pad may lie on the
+                        // shore or poke into the bank (a raft reaches ~0.6 m x scale).
+                        const float sc = 0.8f + 0.7f * u01(rng);
+                        bool afloat = true;
+                        for (int q = 0; q < 8 && afloat; ++q) {
+                            const float qa = float(q) * 0.7853982f;
+                            if (h_at(wx + std::cos(qa) * 0.72f * sc, wz + std::sin(qa) * 0.72f * sc) > params.water_level - 0.06f) afloat = false;
+                        }
+                        if (!afloat) continue;
                         ScatterInstance si{};
-                        si.pos_scale = glm::vec4(wx, params.water_level, wz, 0.8f + 0.7f * u01(rng));
+                        si.pos_scale = glm::vec4(wx, params.water_level, wz, sc);
                         // Flower colour; a raft without a flower is marked by a
                         // dark tint (the shader hides its petals).
                         glm::vec3 col = pink ? glm::vec3(0.92f, 0.55f, 0.66f) : glm::vec3(0.95f, 0.94f, 0.88f);

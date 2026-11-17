@@ -127,13 +127,26 @@ void main() {
             top = mix(top, vec3(0.20, 0.16, 0.05), smoothstep(0.90, 1.0, pr) * 0.75);
             top = mix(top, vec3(0.12, 0.10, 0.03), step(0.93, mott) * smoothstep(0.5, 1.0, pr) * 0.6);   // blemishes
             vec3 under = mix(vec3(0.22, 0.07, 0.10), vec3(0.34, 0.20, 0.16), veins);
+            // The flowers shade the pads under them (soft contact shadow),
+            // and each pad darkens a little toward where the next one
+            // overlaps it.
+            if (!(vColor.r < 0.05 && vColor.g < 0.05 && vColor.b < 0.05)) {
+                float f1 = length(vObj.xz - vec2(0.15, -0.12)), f2 = length(vObj.xz - vec2(-0.30, 0.24));
+                top *= mix(0.42, 1.0, smoothstep(0.03, 0.17, f1)) * mix(0.50, 1.0, smoothstep(0.02, 0.12, f2));
+            }
+            top *= mix(0.80, 1.0, smoothstep(0.0, 0.25, pr));          // deeper green at the centre
             bool from_below = scene.camera_pos.y < wpos.y;
             albedo = from_below ? under : top;
         }
         if ((part == 1 || part == 2) && vColor.r < 0.05 && vColor.g < 0.05 && vColor.b < 0.05) discard;   // lily raft without a flower
         if (part == 1 && vColor.r > 0.85 && vColor.b > 0.5) {
             // Lily petals: translucent, a touch warmer toward the base.
-            albedo = vColor * mix(vec3(1.0, 0.93, 0.80), vec3(1.0), smoothstep(0.0, 0.05, wpos.y - vInst.y - 0.03 * vInst.w));
+            // Petals: warm and shaded deep in the cup, clean at the tips,
+            // the inner faces a touch darker than the lit outsides.
+            float ph = smoothstep(0.0, 0.07 * vInst.w, wpos.y - vInst.y - 0.03 * vInst.w);
+            float pr2 = min(length(vObj.xz - vec2(0.15, -0.12)) / 0.13, length(vObj.xz - vec2(-0.30, 0.24)) / 0.09);
+            albedo = vColor * mix(vec3(0.78, 0.66, 0.50), vec3(1.0), smoothstep(0.10, 0.75, pr2));
+            albedo *= mix(0.80, 1.0, ph);
         }
         if (part == 6) {
             // Mushroom stem + gills: pale cream, fibrous streaks, gills darker.
