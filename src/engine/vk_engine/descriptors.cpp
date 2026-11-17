@@ -415,14 +415,17 @@ void VulkanEngine::update_scene_ubo() {
     if (church_placed_) {
         const float dc = glm::distance(player_.eye_position(), church_pos_ + glm::vec3(0.0f, 1.5f, 0.0f));
         if (dc < 70.0f) {
-            const glm::vec3 c[8] = {
-                { 3.4f, 2.13f, 0.55f }, { 3.4f, 2.13f, -0.55f },          // altar
-                { 2.75f, 2.08f, 1.25f }, { 2.75f, 2.08f, -1.25f },        // tall stands
-                { -1.3f, 2.53f, 2.3f }, { -1.3f, 2.53f, -2.3f },          // wall brackets
-                { 1.3f, 2.53f, 2.3f }, { 1.3f, 2.53f, -2.3f },
+            // Five lights, the same from inside and outside (so nothing goes
+            // out when the player walks through the door): one between the
+            // altar candles (it also stands in for the two tall stands beside
+            // them) and one at each wall candle. They take lantern slots 3-7;
+            // the three nearest road lanterns keep theirs.
+            const glm::vec4 c[5] = {
+                { 3.25f, 2.15f, 0.0f, -2.2f },
+                { -1.3f, 2.53f, 2.3f, -1.5f }, { -1.3f, 2.53f, -2.3f, -1.5f },
+                { 1.3f, 2.53f, 2.3f, -1.5f }, { 1.3f, 2.53f, -2.3f, -1.5f },
             };
-            const int first = dc < 9.0f ? 0 : 4;
-            for (int i = first; i < 8; ++i) data.lamp_lights[i] = glm::vec4(church_pos_ + c[i], -1.5f);
+            for (int i = 0; i < 5; ++i) data.lamp_lights[3 + i] = glm::vec4(church_pos_ + glm::vec3(c[i]), c[i].w);
         }
     }
     float pitch = glm::radians(rt_.sun_pitch_deg);
