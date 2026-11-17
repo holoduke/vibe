@@ -1,6 +1,23 @@
 // terrain_rm_heightfield.glsl - part of terrain_raymarch.frag (included there, in place; not a standalone shader).
 // Terrain height (FBM + ground relief) and the ray march against it
 
+// Winter: the snow is a layer of its own on top of the ground, as in a
+// ray-marched snow scene - a bumpy sheet smoothly joined (smooth maximum) with
+// wind-blown drifts. It is part of the marched height, so it has a real
+// outline, hides the rills under it, shades and shadows itself.
+float snow_layer_h(vec2 wp) {            // metres of snow at full winter
+    float d1 = noise2(wp * 0.15 + 31.0);                 // drifts, several metres across
+    float d2 = noise2(wp * 0.50 + 7.0);                  // mounds
+    float d3 = noise2(wp * 2.6 + 3.0);                   // lumps
+    return 0.06 + 0.26 * d1 * d1 + 0.09 * d2 + 0.03 * d3;
+}
+float rm_smax(float a, float b, float k) { return log(exp(k * a) + exp(k * b)) / k; }
+float rm_snow_on(float d, vec2 wp, float h) {
+    float sn = scene_snow();
+    if (sn < 0.01 || (scene.water_params.x > 0.5 && h < scene.water_params.y + 0.05)) return d;
+    return rm_smax(d, sn * snow_layer_h(wp), 28.0);
+}
+
 float rm_ground_detail(vec2 wp, float t, float h) {
     float w = 1.0 - smoothstep(10.0, 26.0, t);
     if (w <= 0.0) return 0.0;
@@ -20,8 +37,8 @@ float rm_ground_detail(vec2 wp, float t, float h) {
     // instead of three plus a texture fetch on every near-ground step. The
     // hit point lands within ~5 cm of the full surface; the normal and the
     // shading (called without the flag) still use the full relief.
-    if (g_rm_ray_y > -1e8) return (0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
-                                   rm_pebbles_march(wp, t)) * w;
+    if (g_rm_ray_y > -1e8) return rm_snow_on(0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
+                                             rm_pebbles_march(wp, t), wp, h) * w;
     float lod = log2(max(t * 2.0 * scene.viewport.w * 0.45 * 2048.0, 1.0));
     float disp = textureLod(u_normal[9], wp * 0.45, lod).a;
     float g2 = 1.0 - smoothstep(0.0, 0.25, abs(noise2(q * 2.7 + 3.1) * 2.0 - 1.0));  // side cracks
@@ -31,7 +48,7 @@ float rm_ground_detail(vec2 wp, float t, float h) {
     // (No stones here: this full variant is also what every terrain-shadow
     // and reflection step evaluates. The normal adds them itself, the march
     // has its own cut-down version above.)
-    return d * w;
+    return rm_snow_on(d, wp, h) * w;
 }
 
 float terrainM(vec2 p) {

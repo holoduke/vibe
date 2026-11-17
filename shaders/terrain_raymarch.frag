@@ -2269,7 +2269,28 @@ void main() {
                 mate = mix(mate, vec3(0.86, 0.89, 0.93), snow_patch * road_w);
                 nor = normalize(mix(nor, normalize(nor * 0.25 + vec3(0.0, 1.0, 0.0)), snow_patch * road_w));   // snow hides the cobbles
             }
-            float snow_here = mix(snow_cover(nor, pos), snow_patch, road_w);
+            // Open ground: a clean sheet of snow. Its normal comes from the
+            // snow surface itself (the marched height, sampled a few cm
+            // apart) - none of the soil's grit, stones or cracks show
+            // through; only its own drifts and lumps shade it.
+            float open_cov = smoothstep(0.1, 0.5, sn) * (1.0 - road_w);
+            if (open_cov > 0.01) {
+                vec3 n_s = nor;
+                if (t < 70.0) {
+                    float se = max(0.05, t * 0.004), stpl = plateauWeight(pos.xz);
+                    float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
+                    float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
+                    n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
+                }
+                open_cov *= smoothstep(0.35, 0.7, n_s.y);
+                // Fine grain of the snow surface (it is never a mirror-smooth sheet).
+                vec2 gq = pos.xz * 38.0;
+                float grain = noise2(gq) - 0.5;
+                n_s = normalize(n_s + vec3(grain, 0.0, noise2(gq + 17.0) - 0.5) * 0.10 * (1.0 - smoothstep(4.0, 22.0, t)));
+                mate = mix(mate, vec3(0.90, 0.93, 0.97), open_cov);
+                nor = normalize(mix(nor, n_s, open_cov));
+            }
+            float snow_here = mix(open_cov, snow_patch, road_w);
             if (t < 30.0 && snow_here > 0.3) {
                 // Any print within reach of this pixel?
                 float nearest = 1e9;
