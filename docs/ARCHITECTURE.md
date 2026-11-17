@@ -81,6 +81,7 @@ its local variables and are not self-contained.
 | Change | File(s) |
 |---|---|
 | Castle layout, wall sizes, stairs, tower colliders | `src/game/level.cpp` |
+| The chapel (shape) | `tools/church/make_church.py` (run in Blender, writes `assets/church/church.mesh`); its materials + colliders: `append_church` in `level.cpp`; its site + ground pad: `world.cpp` (search `[church]`) |
 | Stone relief on straight walls (depth, corners, edges) | `shaders/cube_wall_relief.glsl` (helpers), `shaders/cube_main_surfaces.glsl` (the march); which faces count as open: `compute_brush_face_masks` in `world_render.cpp` |
 | Round towers' stonework | `shaders/cube_main_surfaces.glsl` (static-mesh branch) |
 | Tree look (crown shading, leaf cards) | `shaders/cube.frag` (foliage block after the includes); tree shapes: `world_props_meshes.inl`; where trees stand: `world_props.cpp` |
