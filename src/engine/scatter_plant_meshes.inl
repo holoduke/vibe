@@ -731,7 +731,11 @@ void build_mushrooms(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
 //   petal  part 1 (instance colour), flower centre part 2, stems part 0.
 // Pads are real surfaces: 4 rings x 28 segments, gently domed, the rim
 // wavy and here and there curled up or dipping under; some pads tilt.
-void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
+// `far_lod`: the same raft with a tenth of the triangles (coarser pads and
+// petals, no stems or stamens) - drawn beyond ~22 m, where the rest is
+// smaller than a pixel. The random numbers are drawn the same way in both,
+// so the two shapes coincide.
+void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix, bool far_lod = false) {
     g_seed = 0x11117u;
     const float kPi = 3.14159265f;
     auto tri = [&](uint32_t a, uint32_t b, uint32_t c) { ix.insert(ix.end(), { a, b, c }); };
@@ -743,7 +747,7 @@ void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
             const float t = float(k) / 7.0f;
             path.push_back(top + glm::vec3(0.0f, -1.30f * t, 0.0f) + drift * (std::sin(t * kPi * 0.9f) * (1.0f - 0.3f * t)));
         }
-        plant_tube(v, ix, path, r, r * 1.5f, 5, 0.0f, 0.0f);
+        if (!far_lod) plant_tube(v, ix, path, r, r * 1.5f, 5, 0.0f, 0.0f);
     };
     const int pads = 7;
     for (int i = 0; i < pads; ++i) {
@@ -759,7 +763,7 @@ void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
         const float curl_a = 2.0f * kPi * grnd();                  // where the rim curls up
         const float curl = grnd() < 0.5f ? 0.035f + 0.05f * grnd() : 0.008f;
         const float dip_a = curl_a + 2.2f + grnd();                // and where it dips under
-        const int seg = 28, rings = 4;
+        const int seg = far_lod ? 8 : 28, rings = far_lod ? 1 : 4;
         auto P = [&](float rr01, float ang) {
             const float wav = 1.0f + 0.05f * std::sin(ang * 5.0f + float(i)) + 0.025f * std::sin(ang * 11.0f);
             const float rr = r * rr01 * (rr01 > 0.7f ? wav : 1.0f);
@@ -818,7 +822,7 @@ void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
                 // Petal surface: 5 stations along, 3 across; it curves up
                 // along its length and is cupped across.
                 const uint32_t b0 = uint32_t(v.size());
-                const int st = 7;
+                const int st = far_lod ? 2 : 7;
                 for (int s2 = 0; s2 < st; ++s2) {
                     const float t = float(s2) / float(st - 1);
                     const float up_a = std::atan(rise) * (0.55f + 0.75f * t);          // steeper toward the tip
@@ -843,7 +847,7 @@ void build_water_lily(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
             }
         }
         // Stamens: a crown of short golden filaments, and the centre.
-        for (int k = 0; k < 14; ++k) {
+        for (int k = 0; k < (far_lod ? 0 : 14); ++k) {
             const float ang = 2.0f * kPi * float(k) / 14.0f;
             const glm::vec3 dir(std::cos(ang), 0.0f, std::sin(ang));
             const glm::vec3 b = fc + dir * (sz * 0.006f) + glm::vec3(0.0f, sz * 0.006f, 0.0f);

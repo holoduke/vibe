@@ -419,10 +419,10 @@ void VulkanEngine::build_veg_blas() {
         vk_check(g_rt.create_as(device_, &ci, nullptr, &B.as), "veg blas");
         bgi.dstAccelerationStructure = B.as;
         VmaAllocation salloc = nullptr;
-        VkBuffer scratch = make_buffer(allocator_, sizes.buildScratchSize,
+        VkBuffer scratch = make_buffer(allocator_, sizes.buildScratchSize + kAsScratchPad,
                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                        false, salloc, nullptr);
-        bgi.scratchData.deviceAddress = buffer_device_address(device_, scratch);
+        bgi.scratchData.deviceAddress = scratch_device_address(device_, scratch);
         vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
             VkAccelerationStructureBuildRangeInfoKHR range{};
             (void)range;

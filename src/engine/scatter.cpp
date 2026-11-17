@@ -133,6 +133,13 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
             s.plant_mesh[sp] = create_mesh_from_data(device, alloc, queue, queue_family,
                                                      pv.data(), uint32_t(pv.size()),
                                                      pi.data(), uint32_t(pi.size()));
+            if (sp == 16) {
+                std::vector<Vertex> fv; std::vector<uint32_t> fi;
+                build_water_lily(fv, fi, true);
+                s.plant_mesh_far[sp] = create_mesh_from_data(device, alloc, queue, queue_family,
+                                                             fv.data(), uint32_t(fv.size()), fi.data(), uint32_t(fi.size()));
+                log::infof("[scatter] water lily mesh: %u tris, far %u tris", uint32_t(pi.size() / 3), uint32_t(fi.size() / 3));
+            }
         }
         std::vector<ScatterInstance> per[ScatterSet::kPlantSpecies];
         const float ext = std::min(params.half_extent * 1.3f, 280.0f);
@@ -536,6 +543,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
 void destroy_scatter(VmaAllocator alloc, ScatterSet& s) {
     destroy_mesh(alloc, s.rock_mesh);
     for (auto& m : s.plant_mesh) if (m.vertex_buffer) destroy_mesh(alloc, m);
+    for (auto& m : s.plant_mesh_far) if (m.vertex_buffer) destroy_mesh(alloc, m);
     if (s.plant_buffer) {
         vmaDestroyBuffer(alloc, s.plant_buffer, s.plant_alloc);
         s.plant_buffer = VK_NULL_HANDLE;

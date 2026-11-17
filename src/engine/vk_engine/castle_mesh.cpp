@@ -114,7 +114,7 @@ void VulkanEngine::build_mesh_part_blas(std::vector<CastleMeshGpu>& parts) {
         {
             VkBufferCreateInfo bci{};
             bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bci.size = sizes.buildScratchSize;
+            bci.size = sizes.buildScratchSize + kAsScratchPad;
             bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
             bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -124,7 +124,7 @@ void VulkanEngine::build_mesh_part_blas(std::vector<CastleMeshGpu>& parts) {
                                      &scratch_alloc, nullptr),
                      "castle mesh blas scratch");
         }
-        bgi.scratchData.deviceAddress = buffer_device_address(device_, scratch);
+        bgi.scratchData.deviceAddress = scratch_device_address(device_, scratch);
         vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_,
                                 [&](VkCommandBuffer cb) {
             VkAccelerationStructureBuildRangeInfoKHR range{};

@@ -459,6 +459,13 @@ float    frand_range(uint32_t& s, float a, float b);
 
 // ---- Buffer / acceleration-structure address lookups ----
 VkDeviceAddress buffer_device_address(VkDevice device, VkBuffer buffer);
+// Acceleration-structure scratch memory must start on a multiple of the
+// GPU's scratch alignment (AMD: a fault / device lost when it does not).
+// Scratch buffers are made kAsScratchPad bytes larger and the address rounded up.
+constexpr VkDeviceSize kAsScratchPad = 256;
+inline VkDeviceAddress scratch_device_address(VkDevice device, VkBuffer buffer) {
+    return (buffer_device_address(device, buffer) + (kAsScratchPad - 1)) & ~VkDeviceAddress(kAsScratchPad - 1);
+}
 VkDeviceAddress as_device_address(VkDevice device, VkAccelerationStructureKHR as);
 
 // ---- Descriptor wiring ----

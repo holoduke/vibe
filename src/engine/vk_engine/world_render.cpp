@@ -922,8 +922,24 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
                 vkCmdBindIndexBuffer(cmd, scatter_.plant_mesh[sp].index_buffer, 0,
                                      VK_INDEX_TYPE_UINT32);
                 const float plant_d = ppc.grass_params.x;
-                scatter_draw_cells(cmd, scatter_.plant_mesh[sp].index_count, scatter_.plant_cells[sp],
-                                   [&](const ScatterCell& c) { return cell_in(c, plant_d); });
+                const Mesh& far_mesh = scatter_.plant_mesh_far[sp];
+                if (!far_mesh.vertex_buffer) {
+                    scatter_draw_cells(cmd, scatter_.plant_mesh[sp].index_count, scatter_.plant_cells[sp],
+                                       [&](const ScatterCell& c) { return cell_in(c, plant_d); });
+                } else {
+                    // Two levels of detail, chosen per 32 m cell by its nearest point.
+                    auto cell_near = [&](const ScatterCell& c) {
+                        const glm::vec3 q = glm::clamp(eye_c, c.mn, c.mx);
+                        return glm::dot(q - eye_c, q - eye_c) < ScatterSet::kPlantFarLod * ScatterSet::kPlantFarLod;
+                    };
+                    scatter_draw_cells(cmd, scatter_.plant_mesh[sp].index_count, scatter_.plant_cells[sp],
+                                       [&](const ScatterCell& c) { return cell_near(c) && cell_in(c, plant_d); });
+                    VkBuffer fb[2] = { far_mesh.vertex_buffer, scatter_.plant_buffer };
+                    vkCmdBindVertexBuffers(cmd, 0, 2, fb, po);
+                    vkCmdBindIndexBuffer(cmd, far_mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+                    scatter_draw_cells(cmd, far_mesh.index_count, scatter_.plant_cells[sp],
+                                       [&](const ScatterCell& c) { return !cell_near(c) && cell_in(c, plant_d); });
+                }
             }
         }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());

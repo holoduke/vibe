@@ -114,7 +114,7 @@ void VulkanEngine::init_rt() {
             VkBufferCreateInfo bci{
                 .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                 .pNext = nullptr, .flags = 0,
-                .size = sizes.buildScratchSize,
+                .size = sizes.buildScratchSize + kAsScratchPad,
                 .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -126,7 +126,7 @@ void VulkanEngine::init_rt() {
                                      &scratch, &scratch_alloc, nullptr),
                      "blas scratch");
         }
-        bgi.scratchData.deviceAddress = buffer_device_address(device_, scratch);
+        bgi.scratchData.deviceAddress = scratch_device_address(device_, scratch);
 
         vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_,
                                 [&](VkCommandBuffer cb) {
@@ -358,9 +358,9 @@ void VulkanEngine::init_rt() {
     {
         // Scratch must hold whichever of {build, update} is bigger — the same
         // buffer is reused for both modes in rebuild_tlas().
-        VkDeviceSize scratch_size = tlas_sizes.buildScratchSize;
+        VkDeviceSize scratch_size = tlas_sizes.buildScratchSize + kAsScratchPad;
         if (tlas_sizes.updateScratchSize > scratch_size) {
-            scratch_size = tlas_sizes.updateScratchSize;
+            scratch_size = tlas_sizes.updateScratchSize + kAsScratchPad;
         }
         VkBufferCreateInfo bci{
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -383,7 +383,7 @@ void VulkanEngine::init_rt() {
         vk_check(vmaCreateBuffer(allocator_, &bci, &aci,
                                  &tlas_scratch_buffer_, &tlas_scratch_alloc_, nullptr),
                  "tlas scratch");
-        tlas_scratch_address_ = buffer_device_address(device_, tlas_scratch_buffer_);
+        tlas_scratch_address_ = scratch_device_address(device_, tlas_scratch_buffer_);
     }
 
     rt_initialized_ = true;
@@ -432,12 +432,12 @@ void VulkanEngine::record_terrain_blas_refit(VkCommandBuffer cb, VkBuffer* scrat
     g_rt.get_as_build_sizes(device_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &bgi, &prim_count, &sizes);
     VkBufferCreateInfo bci{};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bci.size = std::max<VkDeviceSize>(sizes.updateScratchSize, 256);
+    bci.size = std::max<VkDeviceSize>(sizes.updateScratchSize, 256) + kAsScratchPad;
     bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     vk_check(vmaCreateBuffer(allocator_, &bci, &aci, scratch, scratch_alloc, nullptr), "terrain refit scratch");
-    bgi.scratchData.deviceAddress = buffer_device_address(device_, *scratch);
+    bgi.scratchData.deviceAddress = scratch_device_address(device_, *scratch);
     VkAccelerationStructureBuildRangeInfoKHR range{};
     range.primitiveCount = prim_count;
     const VkAccelerationStructureBuildRangeInfoKHR* p_range = &range;
@@ -645,7 +645,7 @@ void VulkanEngine::bake_merged_static_blas() {
         VkBufferCreateInfo bci{
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
-            .size = sizes.buildScratchSize,
+            .size = sizes.buildScratchSize + kAsScratchPad,
             .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -657,7 +657,7 @@ void VulkanEngine::bake_merged_static_blas() {
                                  &scratch, &scratch_alloc, nullptr),
                  "merged static blas scratch");
     }
-    bgi.scratchData.deviceAddress = buffer_device_address(device_, scratch);
+    bgi.scratchData.deviceAddress = scratch_device_address(device_, scratch);
 
     // Single-shot query pool to read back the post-build compacted size.
     VkQueryPoolCreateInfo qpci{};

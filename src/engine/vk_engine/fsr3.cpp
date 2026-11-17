@@ -289,7 +289,8 @@ void VulkanEngine::dispatch_fsr3(VkCommandBuffer cmd) {
     d.depth = make_resource(depth_image_,
                             render_extent_.width, render_extent_.height,
                             vk_to_ffx_format(depth_format_),
-                            FFX_API_RESOURCE_STATE_COMPUTE_READ);
+                            FFX_API_RESOURCE_STATE_COMPUTE_READ,
+                            FFX_API_RESOURCE_USAGE_DEPTHTARGET);   // a DEPTH image: FSR must view it with the depth aspect (as a colour view it is invalid - AMD lost the device)
     d.motionVectors = make_resource(motion_vec_image_,
                                     render_extent_.width, render_extent_.height,
                                     vk_to_ffx_format(motion_vec_format_),
@@ -911,7 +912,8 @@ void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
         prep.depth = make_resource(depth_image_,
                                    render_extent_.width, render_extent_.height,
                                    vk_to_ffx_format(depth_format_),
-                                   FFX_API_RESOURCE_STATE_COMPUTE_READ);
+                                   FFX_API_RESOURCE_STATE_COMPUTE_READ,
+                            FFX_API_RESOURCE_USAGE_DEPTHTARGET);   // a DEPTH image: FSR must view it with the depth aspect (as a colour view it is invalid - AMD lost the device)
         prep.motionVectors = make_resource(motion_vec_image_,
                                            render_extent_.width, render_extent_.height,
                                            vk_to_ffx_format(motion_vec_format_),

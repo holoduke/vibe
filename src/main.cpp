@@ -80,7 +80,8 @@ int main(int argc, char** argv) {
     int rc = 0;
     try {
         qlike::VulkanEngine engine;
-        engine.init();
+        try { engine.init(); }
+        catch (...) { engine.dump_device_fault_public(); throw; }      // which GPU fault killed the start?
         engine.run(args.opts);
         engine.shutdown();
     } catch (const std::exception& e) {

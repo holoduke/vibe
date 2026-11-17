@@ -2739,6 +2739,9 @@ private:
     PFN_vkAntiLagUpdateAMD anti_lag_fn_ = nullptr;
     void anti_lag_mark(bool present_stage);
     void dump_device_fault();
+public:
+    void dump_device_fault_public() { dump_device_fault(); }   // main.cpp: after a failed init
+private:
     // Most-recent TLAS instance count from rebuild_tlas. Surfaced in the
     // per-second telemetry log so we can correlate device-lost events with
     // RT scene size.
