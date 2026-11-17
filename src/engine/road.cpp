@@ -74,28 +74,6 @@ Road make_castle_road(const Heightmap& hm, float water_level, float gate_h, cons
     }
     xz.push_back(ctrl[n - 1]);
 
-    // Side road: out from the nearest centreline point to `spur_to` and back
-    // along the same points (one polyline keeps every consumer - carving,
-    // grass, plants, the shader paving - unchanged).
-    if (spur_to) {
-        size_t jn = 0; float best = 1e18f;
-        for (size_t i = 0; i < xz.size(); ++i) {
-            const float d = glm::length(xz[i] - *spur_to);
-            if (d < best) { best = d; jn = i; }
-        }
-        const glm::vec2 a = xz[jn], b = *spur_to;
-        const int steps = (std::max)(2, static_cast<int>(glm::length(b - a) / 1.5f));
-        std::vector<glm::vec2> out;
-        for (int k = 1; k <= steps; ++k) out.push_back(a + (b - a) * (float(k) / float(steps)));
-        std::vector<glm::vec2> ins(out);
-        for (int k = steps - 2; k >= 0; --k) ins.push_back(out[size_t(k)]);
-        ins.push_back(a);
-        xz.insert(xz.begin() + static_cast<long long>(jn) + 1, ins.begin(), ins.end());
-        r.spur_a = static_cast<int>(jn);
-        r.spur_tip = static_cast<int>(jn) + steps;
-        r.spur_b = static_cast<int>(jn) + 2 * steps;
-    }
-
     // Level the surface: terrain under the centreline, Gaussian-smoothed
     // over ~+-12 m, kept above the lake, grade-limited to 9 %, and pinned
     // to the castle floor height for the first few metres.
@@ -133,17 +111,52 @@ Road make_castle_road(const Heightmap& hm, float water_level, float gate_h, cons
         }
     }
 
-    if (r.spur_a >= 0)
-        for (int k = 1; r.spur_tip + k <= r.spur_b; ++k) {
-            const float hh = 0.5f * (h[size_t(r.spur_tip - k)] + h[size_t(r.spur_tip + k)]);
-            h[size_t(r.spur_tip - k)] = hh; h[size_t(r.spur_tip + k)] = hh;
-        }
     r.pts.resize(m);
     glm::vec2 lo(1e9f), hi(-1e9f);
     for (size_t i = 0; i < m; ++i) {
         r.pts[i] = glm::vec3(xz[i].x, h[i], xz[i].y);
         lo = glm::min(lo, xz[i]);
         hi = glm::max(hi, xz[i]);
+    }
+    // Side road: out from the nearest centreline point to `spur_to` and back
+    // along the same points (one polyline keeps every consumer - carving,
+    // grass, plants, the shader paving - unchanged). The main road is
+    // levelled on its own above; the side road starts at exactly the
+    // junction's height and climbs or falls from there at no more than 10 %.
+    if (spur_to) {
+        size_t jn = 0; float best = 1e18f;
+        for (size_t i = 0; i < m; ++i) {
+            const float d = glm::length(xz[i] - *spur_to);
+            if (d < best) { best = d; jn = i; }
+        }
+        const glm::vec2 a = xz[jn], b = *spur_to;
+        const int steps = (std::max)(2, static_cast<int>(glm::length(b - a) / 1.5f));
+        const float ds = glm::length(b - a) / float(steps);
+        std::vector<glm::vec2> sx(static_cast<size_t>(steps));
+        std::vector<float> sr(static_cast<size_t>(steps)), sh(static_cast<size_t>(steps));
+        for (int k = 0; k < steps; ++k) {
+            sx[size_t(k)] = a + (b - a) * (float(k + 1) / float(steps));
+            sr[size_t(k)] = hm.sample_world(sx[size_t(k)].x, sx[size_t(k)].y);
+        }
+        for (int k = 0; k < steps; ++k) {              // smooth the ground under it (+-6 m)
+            float acc = 0.0f; int cnt = 0;
+            for (int j = (std::max)(0, k - 4); j <= (std::min)(steps - 1, k + 4); ++j) { acc += sr[size_t(j)]; ++cnt; }
+            sh[size_t(k)] = acc / float(cnt);
+        }
+        float prev = h[jn];
+        for (int k = 0; k < steps; ++k) {
+            sh[size_t(k)] = std::clamp(sh[size_t(k)], prev - 0.10f * ds, prev + 0.10f * ds);
+            prev = sh[size_t(k)];
+        }
+        std::vector<glm::vec3> ins;
+        for (int k = 0; k < steps; ++k) ins.emplace_back(sx[size_t(k)].x, sh[size_t(k)], sx[size_t(k)].y);
+        for (int k = steps - 2; k >= 0; --k) ins.emplace_back(sx[size_t(k)].x, sh[size_t(k)], sx[size_t(k)].y);
+        ins.emplace_back(a.x, h[jn], a.y);
+        r.pts.insert(r.pts.begin() + static_cast<long long>(jn) + 1, ins.begin(), ins.end());
+        r.spur_a = static_cast<int>(jn);
+        r.spur_tip = static_cast<int>(jn) + steps;
+        r.spur_b = static_cast<int>(jn) + 2 * steps;
+        lo = glm::min(lo, b); hi = glm::max(hi, b);
     }
     const float margin = r.half_width + r.shoulder + 27.0f;   // max carve blend
     r.bb_min = lo - glm::vec2(margin);
