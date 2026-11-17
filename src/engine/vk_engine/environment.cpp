@@ -234,6 +234,7 @@ void VulkanEngine::apply_environment(float dt) {
     env_night_ = -1.0f;
     float golden_k = 1.0f;         // how much of the warm low-sun tint applies
     bool  sky_real = false;        // the sky is lit by the real sun (below the horizon) while the land light is the glow
+    bool  sky_model_night = false; // the night branch ran this frame (it steers env_sky_ease_)
     float sky_e = 0.0f, sky_yaw = 0.0f;
     env_sun_elev_ = -1000.0f;
     if (rt_.day_night_enabled) {
@@ -298,7 +299,22 @@ void VulkanEngine::apply_environment(float dt) {
             // Eased over a second so the fill light does not pop.
             // (the moon takes over as the light only once dusk is well under way:
             // until then the sky keeps its sunset)
-            const bool moon_is_light = moon_sky > 0.02f && moon_sky >= 0.5f * 0.8f * twi && twi < 0.45f;
+            // What lights the sky - the sun under the horizon (dusk / dawn glow)
+            // or the moon / night - are two different sky models, and going
+            // from one to the other used to happen within a frame: the sky
+            // dropped to near black and came back in another colour. Now the
+            // sky is dimmed down first (4 s), the model changes while it is
+            // dark, and it is brought up again (6 s).
+            const bool want_moon = moon_sky > 0.02f && moon_sky >= 0.5f * 0.8f * twi && twi < 0.45f;
+            if (!env_sky_init_) { env_moon_light_ = want_moon; env_sky_ease_ = 1.0f; }
+            if (want_moon != env_moon_light_) {
+                env_sky_ease_ -= dt / 4.0f;
+                if (env_sky_ease_ <= 0.0f) { env_sky_ease_ = 0.0f; env_moon_light_ = want_moon; }
+            } else {
+                env_sky_ease_ = std::min(1.0f, env_sky_ease_ + dt / 6.0f);
+            }
+            sky_model_night = true;
+            const bool moon_is_light = env_moon_light_;
             const float vis_now = moon_is_light ? sun_horizon_visibility(player_.eye_position()) : 1.0f;
             env_moon_vis_ += (vis_now - env_moon_vis_) * glm::clamp(dt * 1.5f, 0.0f, 1.0f);
             const float moon_gnd = moon_sky * cloud_tr * glm::mix(0.10f, 1.0f, env_moon_vis_);
@@ -348,9 +364,9 @@ void VulkanEngine::apply_environment(float dt) {
 
     // A change of what lights the sky (sun under the horizon <-> moon / night
     // glow) swaps the whole sky model: fade the new one in over a few seconds.
-    if (sky_real != env_sky_real_) { env_sky_real_ = sky_real; env_sky_ease_ = env_sky_init_ ? 0.0f : 1.0f; }
+    env_sky_real_ = sky_real;
     env_sky_init_ = true;
-    env_sky_ease_ = std::min(1.0f, env_sky_ease_ + dt / 5.0f);
+    if (!sky_model_night) env_sky_ease_ = std::min(1.0f, env_sky_ease_ + dt / 6.0f);     // by day: nothing to hide
     sky_k *= glm::mix(0.15f, 1.0f, glm::smoothstep(0.0f, 1.0f, env_sky_ease_));
     env_sky_pitch_ = std::max(sky_e, -14.0f);
     env_sky_yaw_ = sky_yaw;

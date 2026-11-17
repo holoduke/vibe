@@ -1367,6 +1367,7 @@ private:
     float env_golden_ = 1.0f, env_sun_elev_ = -1000.0f;
     bool  env_sky_real_ = false, env_sky_init_ = false;
     float env_sky_pitch_ = 0.0f, env_sky_yaw_ = 0.0f, env_sky_ease_ = 1.0f;
+    bool  env_moon_light_ = false;     // the night sky model in use: moon (true) or the glow of the sun under the horizon
     float env_amb_k_ = 1.0f;          // night fill-light factor (1 by day and on a clear full-moon night)
     float env_moon_vis_ = 1.0f;       // moon not hidden by terrain from the player (eased 0..1)
     float env_moon_ = 1.0f;           // moonlight in the sky right now, 0..1 (phase, height, setting)
