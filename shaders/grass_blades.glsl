@@ -30,6 +30,13 @@ float gs_map(vec3 p, float gy) {
     const float kPi2 = 6.28318530718;
     vec3 lp = p; lp.y -= gy;
     if (lp.y > 0.9) return lp.y - 0.6;
+    // Gusts: the same travelling wave as grass_raymarch.frag (keep in sync).
+    {
+        float gt = scene.grass_rm_params.z;
+        vec2  gw = sin(gt * 1.6 + p.xz * 0.30 - cos(gt * 0.45 - p.xz * 0.13));
+        float gh = clamp(lp.y / 0.75, 0.0, 1.0);
+        lp.xz -= (gw * 0.65 + vec2(0.35, 0.20)) * (scene.grass_rm_params.y * 0.22 * gh * gh);
+    }
     vec2 cellId = floor((lp.xz + 0.5 * kPeriod) / kPeriod);
     lp.xz = mod(lp.xz + 0.5 * kPeriod, kPeriod) - 0.5 * kPeriod;
     float bh = clamp(scene.grass_rm_params.x, 0.05, 3.0) * 0.36;

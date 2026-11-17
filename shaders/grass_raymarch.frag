@@ -349,6 +349,16 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     const float kPeriod = 0.17;        // ~35 blades per m²
     vec3 lp = p;
     lp.y -= terrainY;                  // ground-relative
+    // Gusts (the wind of "Grass Scene #1" by Yusef28, shadertoy 7stSzf): the
+    // space the blades stand in is bent by a travelling wave, more the higher
+    // above the ground - so the blades of a patch lean together and waves
+    // roll across the meadow. (Each blade's own small sway is added below.)
+    {
+        float gt = pc.color.z;
+        vec2  gw = sin(gt * 1.6 + p.xz * 0.30 - cos(gt * 0.45 - p.xz * 0.13));
+        float gh = clamp(lp.y / (1.75 * clamp(pc.grass_params.w, 0.05, 3.0) * 0.36), 0.0, 1.0);
+        lp.xz -= (gw * 0.65 + vec2(0.35, 0.20)) * (pc.color.y * 0.22 * gh * gh);
+    }
     lp.xz = opRepeat(lp.xz, vec2(kPeriod), cellId);
 
     // Altitude + water gates — match terrain_raymarch.frag's
