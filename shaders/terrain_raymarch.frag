@@ -558,6 +558,7 @@ vec3 sample_sky(vec3 dir) {
 #include "terrain_rm_shading_helpers.glsl"   // Normal, terrain / grass shadows, road weights, ground material, reflection marches
 #include "terrain_rm_water.glsl"   // Water: flow, normals, foam pattern, ripples
 void main() {
+    foot_bounds_init();      // footprints in the snow (winter)
 #ifndef QLIKE_WATER
     // Ray reconstruction: vWNear / vWFar were computed in the vert
     // shader (pc.model × ndc-near / ndc-far) and interpolated. Per
@@ -1670,7 +1671,9 @@ void main() {
             t_s += clamp(-f0 / df, -lim, lim) * 0.9;
         }
         t_s = max(t_s, 0.05);
-        t = mix(t, t_s, clamp(rm_road.x + rm_road.y * 0.5, 0.0, 1.0));
+        // (not where snow lies on the paving: that surface is the marched one)
+        float road_snow = scene_snow() < 0.01 ? 0.0 : snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, scene_snow());
+        t = mix(t, t_s, clamp(rm_road.x + rm_road.y * 0.5, 0.0, 1.0) * (1.0 - smoothstep(0.02, 0.25, road_snow)));
         pos = ro + t * rd;
         rm_road = roadWeights(pos.xz, rm_road_uv, rm_road_dir);
     }
@@ -1810,6 +1813,32 @@ void main() {
     }
     vec3 sunDir = scene.sun_direction.xyz;
 
+    // Winter: a clean sheet of snow. Its normal comes from the snow surface
+    // itself (the marched height, sampled a few cm apart) - none of the
+    // soil's grit or the cobbles' relief shows through; only its own drifts,
+    // lumps and the prints pressed into it shade it. Before the lighting.
+    float snow_cov = 0.0;
+    {
+        float sn = scene_snow();
+        if (sn > 0.01 && !(scene.water_params.x > 0.5 && pos.y < scene.water_params.y)) {
+            float road_w = clamp(rm_road.x, 0.0, 1.0);
+            snow_cov = mix(smoothstep(0.1, 0.5, sn), snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, sn), road_w);
+            if (snow_cov > 0.01) {
+                vec3 n_s = nor;
+                if (t < 70.0) {
+                    float se = max(0.02, t * 0.004), stpl = plateauWeight(pos.xz);
+                    float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
+                    float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
+                    n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
+                }
+                snow_cov *= smoothstep(0.35, 0.7, n_s.y);
+                // Fine grain of the snow surface (it is never a mirror-smooth sheet).
+                vec2 gq = pos.xz * 38.0;
+                n_s = normalize(n_s + vec3(noise2(gq) - 0.5, 0.0, noise2(gq + 17.0) - 0.5) * 0.10 * (1.0 - smoothstep(4.0, 22.0, t)));
+                nor = normalize(mix(nor, n_s, snow_cov));
+            }
+        }
+    }
     float dif = clamp(dot(nor, sunDir), 0.0, 1.0);
 
     // Match cube.frag's terrain contrast power on n_dot_l. Without
@@ -2109,7 +2138,7 @@ void main() {
     }
     float shadow = max(dyn_shadow, self_shadow);
 
-    float sha = (1.0 - shadow) * rm_road_vis * sun_horizon_lit(u_sun_horizon, pos);
+    float sha = (1.0 - shadow) * mix(rm_road_vis, 1.0, scene_snow() < 0.01 ? 0.0 : snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, scene_snow())) * sun_horizon_lit(u_sun_horizon, pos);
 
     // RT ambient occlusion against castle / boxes / dyn-props
     // (mask 0x02 — terrain BLAS skipped). Mirrors cube.frag's RTAO
@@ -2263,67 +2292,28 @@ void main() {
         float sn = scene_snow();
         if (sn > 0.01 && !(scene.water_params.x > 0.5 && pos.y < scene.water_params.y)) {
             float road_w = clamp(rm_road.x, 0.0, 1.0);
-            float pn = noise2(pos.xz * 0.8 + 4.0) * 0.55 + noise2(pos.xz * 2.7 + 11.0) * 0.30 + noise2(pos.xz * 9.0) * 0.15;
-            float snow_patch = smoothstep(0.40, 0.56, pn) * smoothstep(0.15, 0.6, sn) * smoothstep(0.4, 0.8, nor.y);
-            if (road_w > 0.001) {
-                mate = mix(mate, vec3(0.86, 0.89, 0.93), snow_patch * road_w);
-                nor = normalize(mix(nor, normalize(nor * 0.25 + vec3(0.0, 1.0, 0.0)), snow_patch * road_w));   // snow hides the cobbles
-            }
-            // Open ground: a clean sheet of snow. Its normal comes from the
-            // snow surface itself (the marched height, sampled a few cm
-            // apart) - none of the soil's grit, stones or cracks show
-            // through; only its own drifts and lumps shade it.
-            float open_cov = smoothstep(0.1, 0.5, sn) * (1.0 - road_w);
-            if (open_cov > 0.01) {
-                vec3 n_s = nor;
-                if (t < 70.0) {
-                    float se = max(0.05, t * 0.004), stpl = plateauWeight(pos.xz);
-                    float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
-                    float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
-                    n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
-                }
-                open_cov *= smoothstep(0.35, 0.7, n_s.y);
-                // Fine grain of the snow surface (it is never a mirror-smooth sheet).
-                vec2 gq = pos.xz * 38.0;
-                float grain = noise2(gq) - 0.5;
-                n_s = normalize(n_s + vec3(grain, 0.0, noise2(gq + 17.0) - 0.5) * 0.10 * (1.0 - smoothstep(4.0, 22.0, t)));
-                mate = mix(mate, vec3(0.90, 0.93, 0.97), open_cov);
-                nor = normalize(mix(nor, n_s, open_cov));
-            }
-            float snow_here = mix(open_cov, snow_patch, road_w);
-            if (t < 30.0 && snow_here > 0.3) {
-                // Any print within reach of this pixel?
-                float nearest = 1e9;
-                for (int i = 0; i < 32; ++i) {
-                    if (scene.footprints[i].w <= 0.0) continue;
-                    vec2 q = pos.xz - scene.footprints[i].xy;
-                    nearest = min(nearest, dot(q, q));
-                }
-                if (nearest < 0.20) {
-                    float fw = smoothstep(0.3, 0.6, snow_here) * (1.0 - smoothstep(18.0, 30.0, t));
-                    vec2 vxz = rd.xz / max(-rd.y, 0.25);
-                    vec2 pp = pos.xz;
-                    for (int k = 0; k < 3; ++k) pp = pos.xz + vxz * foot_depth(pp) * fw;
-                    float dC = foot_depth(pp) * fw;
-                    if (dC > 0.0005 || foot_depth(pp + vec2(0.02, 0.0)) + foot_depth(pp + vec2(0.0, 0.02)) > 0.0) {
-                        const float fe = 0.012;
-                        float dR = foot_depth(pp + vec2(fe, 0.0)) * fw, dU = foot_depth(pp + vec2(0.0, fe)) * fw;
-                        nor = normalize(nor + vec3(dR - dC, 0.0, dU - dC) / fe * 1.5);
-                        // Shade inside the print: is the snow toward the sun higher than the line to the sun?
-                        float shade = 0.0;
-                        vec3 sd3 = scene.sun_direction.xyz;
-                        if (sd3.y > 0.02 && dC > 0.004) {
-                            vec2 sdir = normalize(sd3.xz + vec2(1e-5));
-                            float rise = sd3.y / max(length(sd3.xz), 1e-3);
-                            for (int k = 1; k <= 3; ++k) {
-                                float x = 0.022 * float(k);
-                                shade = max(shade, smoothstep(0.0, 0.01, (dC - foot_depth(pp + sdir * x) * fw) - x * rise));
-                            }
+            float snow_patch = snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, sn);
+            float cover = snow_cov;        // (set before the lighting, with the snow's own normal)
+            if (cover > 0.01) {
+                mate = mix(mate, vec3(0.90, 0.93, 0.97), cover);
+                // Footprints: the print itself is in the marched surface; here
+                // the pressed snow of its floor (denser, bluer) and the shade
+                // the low sun leaves inside it.
+                float dC = t < 30.0 ? foot_depth(pos.xz) : 0.0;
+                if (dC > 0.002) {
+                    float shade = 0.0;
+                    vec3 sd3 = scene.sun_direction.xyz;
+                    if (sd3.y > 0.02) {
+                        vec2 sdir = normalize(sd3.xz + vec2(1e-5));
+                        float rise = sd3.y / max(length(sd3.xz), 1e-3);
+                        for (int k = 1; k <= 4; ++k) {
+                            float x = 0.025 * float(k);
+                            shade = max(shade, smoothstep(0.0, 0.012, (dC - foot_depth(pos.xz + sdir * x)) - x * rise));
                         }
-                        float inside = smoothstep(0.0, 0.03, dC);
-                        mate = mix(mate, mate * vec3(0.60, 0.70, 0.90), inside);      // pressed snow: denser, bluer
-                        mate *= mix(1.0, 0.45, shade);
                     }
+                    float inside = smoothstep(0.0, 0.05, dC) * cover;
+                    mate = mix(mate, mate * vec3(0.66, 0.76, 0.93), inside);
+                    mate *= mix(1.0, 0.5, shade * cover);
                 }
             }
         }

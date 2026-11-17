@@ -471,8 +471,10 @@ void VulkanEngine::update_footprints(float dt) {
         const float stride = glm::clamp(0.45f + 0.09f * speed, 0.55f, 1.25f);
         if (glm::dot(d, d) < stride * stride) return;
         if (glm::dot(d, d) > 25.0f) { last = pos; return; }      // teleport / first time: no print
-        // Heading = the way the feet travel, not where the head looks.
-        const float heading = speed > 0.3f ? std::atan2(vel.x, -vel.z) : yaw;
+        // Heading = the way this stride went (from the last print to here),
+        // not where the head looks and not the momentary velocity.
+        (void)yaw;
+        const float heading = std::atan2(d.x, -d.y);
         add_footprint(pos, heading, left);
         left = !left;
         last = pos;

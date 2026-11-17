@@ -136,9 +136,24 @@ float rm_pebbles_march(vec2 wp, float t) {
 }
 
 // Depth (m) of the deepest footprint at world xz `p` (scene.footprints):
-// a sole - the ball of the foot and a heel - pressed 7 cm into the snow.
+// a sole - the ball of the foot and a heel - pressed up to 12 cm into the snow.
+vec2  g_foot_c = vec2(0.0);      // bounding circle of all prints (foot_bounds_init)
+float g_foot_r2 = -1.0;          // < 0: no prints
+void foot_bounds_init() {
+    g_foot_r2 = -1.0;
+    if (scene_snow() < 0.05) return;
+    vec2 c = vec2(0.0); float n = 0.0;
+    for (int i = 0; i < 32; ++i) if (scene.footprints[i].w > 0.0) { c += scene.footprints[i].xy; n += 1.0; }
+    if (n < 0.5) return;
+    c /= n;
+    float r2 = 0.0;
+    for (int i = 0; i < 32; ++i) if (scene.footprints[i].w > 0.0) { vec2 q = scene.footprints[i].xy - c; r2 = max(r2, dot(q, q)); }
+    g_foot_c = c;
+    g_foot_r2 = (sqrt(r2) + 0.35) * (sqrt(r2) + 0.35);
+}
 float foot_depth(vec2 p) {
     float d = 0.0;
+    if (g_foot_r2 < 0.0 || dot(p - g_foot_c, p - g_foot_c) > g_foot_r2) return 0.0;
     for (int i = 0; i < 32; ++i) {
         vec4 f = scene.footprints[i];
         if (f.w <= 0.0) continue;
@@ -151,7 +166,7 @@ float foot_depth(vec2 p) {
         float heel = length(vec2(lx, lz + 0.105)) - 0.047;
         float k = 0.03, h = clamp(0.5 + 0.5 * (heel - ball) / k, 0.0, 1.0);
         float sdf = mix(heel, ball, h) - k * h * (1.0 - h);          // smooth union
-        d = max(d, f.w * 0.07 * smoothstep(0.012, -0.014, sdf));
+        d = max(d, f.w * 0.12 * smoothstep(0.014, -0.020, sdf));
     }
     return d;
 }

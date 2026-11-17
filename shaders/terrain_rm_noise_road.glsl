@@ -181,3 +181,9 @@ float rm_road_dist_thr(vec2 q, float thr) {
 }
 float g_rm_ray_y = -1e9;   // see terrainM_lod
 
+
+// Winter: where snow lies on the paving (0..1; irregular patches).
+float snow_road_patch(vec2 wp) {
+    float pn = noise2(wp * 0.8 + 4.0) * 0.55 + noise2(wp * 2.7 + 11.0) * 0.30 + noise2(wp * 9.0) * 0.15;
+    return smoothstep(0.40, 0.56, pn);
+}

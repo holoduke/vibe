@@ -12,22 +12,33 @@ float snow_layer_h(vec2 wp) {            // metres of snow at full winter
     return 0.06 + 0.26 * d1 * d1 + 0.09 * d2 + 0.03 * d3;
 }
 float rm_smax(float a, float b, float k) { return log(exp(k * a) + exp(k * b)) / k; }
-float rm_snow_on(float d, vec2 wp, float h) {
+// Ground relief `d` (already 0 on the paving) with the snow on top.
+// `road_keep`: 0 on the paving, 1 off it. On the paving the snow lies in
+// patches a few cm thick; feet press prints into the snow.
+float rm_snow_on(float d, vec2 wp, float h, float road_keep) {
     float sn = scene_snow();
     if (sn < 0.01 || (scene.water_params.x > 0.5 && h < scene.water_params.y + 0.05)) return d;
-    return rm_smax(d, sn * snow_layer_h(wp), 28.0);
+    float open_h = rm_smax(d, sn * snow_layer_h(wp), 28.0);
+    float road_h = 0.0;
+    if (road_keep < 0.999)
+        road_h = snow_road_patch(wp) * smoothstep(0.15, 0.6, sn) * (0.05 + 0.06 * noise2(wp * 1.7 + 5.0));
+    float sh = mix(road_h, open_h, road_keep);
+    float fd = foot_depth(wp);
+    if (fd > 0.0) sh -= min(fd, max(sh - d, 0.0) * 0.9);     // never deeper than the snow is
+    return sh;
 }
 
 float rm_ground_detail(vec2 wp, float t, float h) {
     float w = 1.0 - smoothstep(10.0, 26.0, t);
     if (w <= 0.0) return 0.0;
     // Not on the road: the paving is flat (crouching on it showed the
-    // rills as noise in the cobbles).
+    // rills as noise in the cobbles). In winter the snow still lies on it.
+    float road_keep = 1.0;
     {
         float keep = scene.road_info.y;
         float rdist = rm_road_dist_thr(wp, keep + 0.9);                 // paving only; the dirt verge keeps its relief
-        w *= smoothstep(keep + 0.1, keep + 0.9, rdist);
-        if (w <= 0.0) return 0.0;
+        road_keep = smoothstep(keep + 0.1, keep + 0.9, rdist);
+        if (road_keep <= 0.0) return scene_snow() < 0.01 ? 0.0 : rm_snow_on(0.0, wp, h, 0.0) * w;
     }
     float wn = noise2(wp * 0.21);                      // one noise warps both axes
     vec2  q  = wp * 0.55 + vec2(wn, 1.0 - wn) * 1.7;
@@ -37,8 +48,8 @@ float rm_ground_detail(vec2 wp, float t, float h) {
     // instead of three plus a texture fetch on every near-ground step. The
     // hit point lands within ~5 cm of the full surface; the normal and the
     // shading (called without the flag) still use the full relief.
-    if (g_rm_ray_y > -1e8) return rm_snow_on(0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
-                                             rm_pebbles_march(wp, t), wp, h) * w;
+    if (g_rm_ray_y > -1e8) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
+                                              rm_pebbles_march(wp, t)) * road_keep, wp, h, road_keep) * w;
     float lod = log2(max(t * 2.0 * scene.viewport.w * 0.45 * 2048.0, 1.0));
     float disp = textureLod(u_normal[9], wp * 0.45, lod).a;
     float g2 = 1.0 - smoothstep(0.0, 0.25, abs(noise2(q * 2.7 + 3.1) * 2.0 - 1.0));  // side cracks
@@ -48,7 +59,7 @@ float rm_ground_detail(vec2 wp, float t, float h) {
     // (No stones here: this full variant is also what every terrain-shadow
     // and reflection step evaluates. The normal adds them itself, the march
     // has its own cut-down version above.)
-    return rm_snow_on(d, wp, h) * w;
+    return rm_snow_on(d * road_keep, wp, h, road_keep) * w;
 }
 
 float terrainM(vec2 p) {
