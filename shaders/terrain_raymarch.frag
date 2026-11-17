@@ -1655,9 +1655,19 @@ void main() {
         float graze = 1.0 - smoothstep(0.02, 0.15, -rd.y);
         int   n_it  = 4 + int(graze * 4.0);
         float lim   = 1.5;
+        // Newton steps on height-above-road along the ray. The rate at
+        // which the ray closes on the surface is measured (two height
+        // samples), not assumed to be the ray's own fall: on a road that
+        // climbs or drops the old "/ -rd.y" was far off - and had the wrong
+        // sign when looking up a hill - which left bands of smeared, dark
+        // paving wherever the slope changed.
         for (int i = 0; i < n_it; ++i) {
-            vec3 ps = ro + t_s * rd;
-            t_s += clamp((ps.y - meshHeight(ps.xz)) / -rd.y, -lim, lim) * 0.85;
+            vec3  ps = ro + t_s * rd;
+            float f0 = ps.y - meshHeight(ps.xz);
+            vec3  p1 = ps + rd * 0.3;
+            float df = ((p1.y - meshHeight(p1.xz)) - f0) / 0.3;
+            df = min(df, -0.01);                       // the ray must be closing on the ground
+            t_s += clamp(-f0 / df, -lim, lim) * 0.9;
         }
         t_s = max(t_s, 0.05);
         t = mix(t, t_s, clamp(rm_road.x + rm_road.y * 0.5, 0.0, 1.0));
