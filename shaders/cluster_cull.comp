@@ -1,0 +1,79 @@
+#version 460
+// Cluster LOD selection (engine/cluster_lod.h, vk_engine/cluster_draw.cpp).
+//
+// One thread per clustered instance (the rocks): frustum / distance cull the
+// instance, then test every cluster of its mesh on its own - a cluster is
+// drawn when its own error is small enough on screen while the error of the
+// coarser version above it is not. Each drawn cluster becomes one indexed
+// draw command (drawn with vkCmdDrawIndexedIndirectCount).
+layout(local_size_x = 64) in;
+
+struct VegInstance { vec4 pos_scale; vec4 rot_arch_phase; };
+struct Cluster { vec4 self; vec4 parent; float self_error; float parent_error; uint first_index; uint index_count; };
+
+layout(std430, set = 0, binding = 0) readonly buffer Instances { VegInstance inst[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer Visible  { uint visible[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer Fade     { float fade[]; };
+layout(std430, set = 0, binding = 3) readonly buffer ArchInfo  { vec4 arch[]; };     // radius, half height, -, species
+layout(std430, set = 0, binding = 4) readonly buffer Clusters  { Cluster cl[]; };
+layout(std430, set = 0, binding = 5) readonly buffer Table     { uvec4 tab[]; };     // per archetype: first cluster, count, index base, vertex base
+layout(std430, set = 0, binding = 6) buffer Commands           { uint cmd[]; };      // [0] = count; commands (5 uints each) from [4]
+
+layout(push_constant) uniform PC {
+    vec4  planes[6];
+    vec4  cam;        // .xyz eye, .w pixels per radian
+    uvec4 range;      // .x first instance, .y instance count, .z first visible slot, .w command capacity
+    vec4  params;     // .x max distance, .y error threshold (pixels)
+} pc;
+
+void main() {
+    uint k = gl_GlobalInvocationID.x;
+    if (k >= pc.range.y) return;
+    uint i = pc.range.x + k;
+    VegInstance I = inst[i];
+    float s = I.pos_scale.w;
+    if (s <= 0.0) return;                              // destroyed by a blast
+    uint a = uint(I.rot_arch_phase.y + 0.5);
+    float ysq = I.rot_arch_phase.w > 0.0 ? I.rot_arch_phase.w : 1.0;
+    vec4 ai = arch[a];
+    vec3 c = I.pos_scale.xyz + vec3(0.0, ai.y * s * ysq, 0.0);
+    float r = ai.x * s * max(ysq, 1.0) + 0.6;
+    for (int p = 0; p < 6; ++p)
+        if (dot(pc.planes[p].xyz, c) + pc.planes[p].w < -r) return;
+    if (distance(c, pc.cam.xyz) > pc.params.x + r) return;
+
+    uint slot = pc.range.z + k;                        // veg.vert finds the instance through this slot
+    visible[slot] = i;
+    fade[slot] = 1023.0;                               // full detail, no cross-fade
+
+    uvec4 t = tab[a];
+    float cs = cos(I.rot_arch_phase.x), sn = sin(I.rot_arch_phase.x);
+    float smax = s * max(ysq, 1.0);
+    for (uint j = 0u; j < t.y; ++j) {
+        Cluster C = cl[t.x + j];
+        // Error of a sphere on screen, in pixels (the same sphere gives the same
+        // number for every cluster that shares it - that is what makes the cut seamless).
+        float e_self = 0.0, e_parent = 1e30;
+        if (C.self_error > 0.0) {
+            vec3 lp = C.self.xyz * vec3(s, s * ysq, s);
+            vec3 wp = vec3(cs * lp.x - sn * lp.z, lp.y, sn * lp.x + cs * lp.z) + I.pos_scale.xyz;
+            e_self = C.self_error * smax / max(distance(wp, pc.cam.xyz) - C.self.w * smax, 0.05) * pc.cam.w;
+        }
+        if (C.parent_error < 1e29) {
+            vec3 lp = C.parent.xyz * vec3(s, s * ysq, s);
+            vec3 wp = vec3(cs * lp.x - sn * lp.z, lp.y, sn * lp.x + cs * lp.z) + I.pos_scale.xyz;
+            e_parent = C.parent_error * smax / max(distance(wp, pc.cam.xyz) - C.parent.w * smax, 0.05) * pc.cam.w;
+        }
+        if (e_self <= pc.params.y && e_parent > pc.params.y) {
+            uint n = atomicAdd(cmd[0], 1u);
+            if (n < pc.range.w) {
+                uint o = 4u + n * 5u;
+                cmd[o]      = C.index_count;
+                cmd[o + 1u] = 1u;
+                cmd[o + 2u] = t.z + C.first_index;
+                cmd[o + 3u] = t.w;                     // vertex offset
+                cmd[o + 4u] = slot;                    // first instance
+            }
+        }
+    }
+}

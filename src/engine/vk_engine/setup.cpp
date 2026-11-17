@@ -129,6 +129,7 @@ void VulkanEngine::init_vulkan() {
     VkPhysicalDeviceVulkan12Features f12{};
     f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     f12.bufferDeviceAddress = VK_TRUE;
+    f12.drawIndirectCount = VK_TRUE;   // cluster LOD: one indirect draw with a GPU-written count
     f12.descriptorIndexing = VK_TRUE;
     f12.shaderFloat16 = VK_TRUE;   // some shaders declare Float16
     f12.timelineSemaphore = VK_TRUE;   // frames in flight: gfx -> next TLAS build

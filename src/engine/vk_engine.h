@@ -1770,6 +1770,23 @@ private:
     std::vector<VegLodRange>  veg_lod_ranges_;
     // Cluster hierarchies (engine/cluster_lod.h) of the rock archetypes, by archetype (empty = none).
     std::vector<ClusterMesh>  veg_cluster_meshes_;
+    // Cluster drawing (vk_engine/cluster_draw.cpp). The clustered instances
+    // are the last veg_cluster_count_ of the instance buffer.
+    uint32_t      veg_cluster_first_ = 0, veg_cluster_count_ = 0;
+    uint32_t      cl_vis_base_ = 0, cl_cmd_cap_ = 0;
+    Mesh          cl_mesh_{};
+    VkBuffer      cl_cluster_buf_ = VK_NULL_HANDLE, cl_table_buf_ = VK_NULL_HANDLE, cl_cmd_buf_ = VK_NULL_HANDLE;
+    VmaAllocation cl_cluster_alloc_ = nullptr, cl_table_alloc_ = nullptr, cl_cmd_alloc_ = nullptr;
+    VkDescriptorSetLayout cl_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool      cl_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet       cl_set_ = VK_NULL_HANDLE;
+    VkPipelineLayout      cl_layout_ = VK_NULL_HANDLE;
+    VkPipeline            cl_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule        cl_module_ = VK_NULL_HANDLE;
+    void init_cluster_draw();
+    void destroy_cluster_draw();
+    void cull_clusters(VkCommandBuffer cmd);
+    void draw_clusters(VkCommandBuffer cmd);
     std::vector<VkDrawIndexedIndirectCommand> veg_cmd_template_;
     Mesh          veg_mesh_{};
     uint32_t      veg_count_ = 0, veg_vis_capacity_ = 0;

@@ -157,6 +157,22 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
     veg_mesh_ = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_,
                                       verts.data(), uint32_t(verts.size()),
                                       idx.data(), uint32_t(idx.size()));
+    // Clustered archetypes (rocks with a cluster hierarchy): their instances
+    // go to the end of the list - the ordinary cull pass stops before them,
+    // cluster_cull.comp handles them. Each gets a slot of its own in the
+    // visible list (veg.vert reads the instance through it).
+    {
+        auto clustered = [&](const VegInstance& vi) {
+            const size_t a = size_t(vi.rot_arch_phase.y + 0.5f);
+            return a < veg_cluster_meshes_.size() && !veg_cluster_meshes_[a].clusters.empty();
+        };
+        const auto mid = std::stable_partition(veg_inst_cpu_.begin(), veg_inst_cpu_.end(),
+                                               [&](const VegInstance& vi) { return !clustered(vi); });
+        veg_cluster_first_ = uint32_t(mid - veg_inst_cpu_.begin());
+        veg_cluster_count_ = uint32_t(veg_inst_cpu_.end() - mid);
+        cl_vis_base_ = vis_base;
+        vis_base += veg_cluster_count_;
+    }
     veg_count_ = uint32_t(veg_inst_cpu_.size());
     veg_vis_capacity_ = std::max(vis_base, 1u);
 
@@ -189,6 +205,7 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
     veg_arch_buf_ = make_buffer(allocator_, sizeof(glm::vec4) * ainfo.size(), ssbo, true, veg_arch_alloc_, &mp);
     if (mp) std::memcpy(mp, ainfo.data(), sizeof(glm::vec4) * ainfo.size());
     vmaFlushAllocation(allocator_, veg_arch_alloc_, 0, VK_WHOLE_SIZE);
+    init_cluster_draw();
 
     // Descriptor set (set 1): instances, visible list, indirect, arch info.
     VkDescriptorSetLayoutBinding b[6]{};
@@ -331,7 +348,8 @@ void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
     // to it), not the internal render resolution.
     const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(80.0f) * 0.5f));
     pc.cam = glm::vec4(fv.eye_pos, ppr);
-    pc.params = glm::vec4(float(veg_count_), 1450.0f, std::max(0.25f, rt_.veg_lod_bias),
+    const uint32_t regular = veg_cluster_count_ ? veg_cluster_first_ : veg_count_;     // (clustered rocks: cull_clusters)
+    pc.params = glm::vec4(float(regular), 1450.0f, std::max(0.25f, rt_.veg_lod_bias),
                           (veg_hiz_ready_ && !std::getenv("QLIKE_NO_HIZ")) ? 1.0f : 0.0f);
     {
         // Camera cut (teleport, respawn, big snap turn): last frame's Hi-Z
@@ -349,7 +367,7 @@ void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, veg_cull_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, veg_cull_layout_, 1, 1, &veg_set_, 0, nullptr);
     vkCmdPushConstants(cmd, veg_cull_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (veg_count_ + 127) / 128, 1, 1);
+    vkCmdDispatch(cmd, (regular + 127) / 128, 1, 1);
     veg_prev_vp_ = fv.vp;          // next frame's Hi-Z = this frame's prepass
 
     mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -396,6 +414,7 @@ void VulkanEngine::draw_vegetation(VkCommandBuffer cmd, bool depth_only) {
                                      sizeof(VkDrawIndexedIndirectCommand));
         }
     }
+    draw_clusters(cmd);     // the rocks, as clusters (same pipeline and sets)
     // Restore set 0 on the world layout for the callers' following draws.
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1,
                             &scene_desc_set_, 0, nullptr);
@@ -515,6 +534,7 @@ void VulkanEngine::destroy_vegetation() {
     kill(veg_vis_buf_, veg_vis_alloc_);
     kill(veg_ind_buf_, veg_ind_alloc_);
     kill(veg_arch_buf_, veg_arch_alloc_);
+    destroy_cluster_draw();
     if (veg_mesh_.vertex_buffer) destroy_mesh(allocator_, veg_mesh_);
 }
 

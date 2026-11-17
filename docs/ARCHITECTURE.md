@@ -156,3 +156,14 @@ off entirely. Two instances on one PC work (the second takes the next game port)
 - **Small plants** (`scatter.cpp`): 32 m cells, culled on the CPU (frustum, distance, walls, hills). Each species has three meshes: full, ~32 % (beyond 22 m) and ~11 % (beyond 48 m), made at load time with meshoptimizer (`simplified` in `build_scatter`). `QLIKE_NO_PLANT_LOD=1` turns them off.
 - **meshoptimizer** (FetchContent) is available engine-wide: simplification, index / vertex ordering, meshlets. `clusterlod.h` from the same project is the starting point for Nanite-style cluster LOD if that is built.
 - **terrain_raymarch.frag** is compiled three ways: normal (with winter: snow layer, footprints, ice), `QLIKE_SUMMER` (no winter code; bound while there is no snow) and `QLIKE_WATER`.
+
+## Cluster LOD (Nanite-style) - rocks
+
+- `src/engine/cluster_lod.h/.cpp`: builds a cluster hierarchy for a mesh with meshoptimizer's `clusterlod.h` (clusters of <=128 triangles, simplified level by level; each cluster carries its own and its parent group's error sphere).
+- `vk_engine/cluster_draw.cpp` + `shaders/cluster_cull.comp`: every frame, one compute thread per clustered instance culls it and tests each cluster (drawn when its error is under one pixel while its parent's is not), writing one draw command per cluster; `draw_clusters` issues them with `vkCmdDrawIndexedIndirectCount` through the vegetation pipelines.
+- Clustered today: the Blender-baked rock archetypes of the vegetation system (their instances are sorted to the end of the instance buffer; `veg_cluster_first_` / `veg_cluster_count_`). `QLIKE_NO_CLUSTERS=1` draws them with the old discrete levels.
+- To cluster another mesh type: build a `ClusterMesh`, add it to the cluster / table buffers in `init_cluster_draw`, and give its instances slots like the rocks. Not yet done: per-cluster frustum and occlusion culling, ray-tracing structures from clusters.
+
+## Leaving the planet - what exists and what does not (2026-11)
+
+Tested by putting the camera at 2 km, 30 km and 400 km. The world is a flat 2 km terrain tile plus a 1.5 km ray-marched range under a sky dome: at 2 km only cloud and haze are left, at 30 km a flat grey, at 400 km stars and no planet. Needed before flight to orbit: (1) a planet body - a sphere with its own far-field surface shading that the near terrain blends into; (2) depth range - the projection is 0.05 .. 1500 m (also hard-coded in fsr3.cpp / dlss.cpp and several shaders) and has to become reversed-Z with a far plane at infinity; (3) positions relative to the camera (floats run out of precision at planet scale); (4) terrain on a sphere with distance levels. Already in place: the atmosphere and clouds are computed for a planet of real radius with the camera's altitude, the day/night and moon model is astronomical, and GPU-driven instances / cluster LOD scale with distance.
