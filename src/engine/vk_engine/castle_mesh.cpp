@@ -40,6 +40,7 @@ void VulkanEngine::init_castle_meshes() {
         g.triplanar = lm.triplanar;
         g.sway = lm.sway;
         g.uv_scale = lm.uv_scale;
+        g.relief = lm.relief;
         g.emissive = glm::vec4(lm.emissive, lm.full_emissive ? 1.0f : 0.0f);
         castle_meshes_.push_back(g);
         total_tris += lm.idx.size() / 3;
@@ -171,7 +172,8 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
             pc.prev_mvp = prev_vp;
             // Static-mesh mode flag (see file header).
             // .y = wind sway (uv = weight, phase), .z = world triplanar.
-            pc.grass_params = glm::vec4(0.0f, g.sway ? 1.0f : 0.0f,
+            // .x <= 0: relief reduction (0 = full depth, -1 = flat).
+            pc.grass_params = glm::vec4(glm::clamp(g.relief, 0.0f, 1.0f) - 1.0f, g.sway ? 1.0f : 0.0f,
                                         g.triplanar ? 1.0f : 0.0f, -1.0f);
             if (!depth_only) {
                 pc.color = glm::vec4(tex_on ? g.tint : g.fallback, 1.0f);

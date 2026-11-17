@@ -1621,6 +1621,7 @@ private:
         glm::vec3 bmin{0.0f}, bmax{0.0f};
         bool triplanar = false, sway = false;
         float uv_scale = 1.0f;
+        float relief = 1.0f;
         glm::vec4 emissive{0.0f};     // rgb, a = 1 full-emissive
         VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
         VkBuffer blas_buf = VK_NULL_HANDLE;

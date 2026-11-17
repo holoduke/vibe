@@ -137,7 +137,8 @@ def gable_wall(name, x):
 REC = 0.22   # how deep windows / the door sit in the wall
 win_x = (-2.6, 0.0, 2.6)
 stone = []
-stone.append(box('plinth', -hx - 0.12, hx + 0.12, -hy - 0.12, hy + 0.12, BASE, PLINTH))
+trim = []
+trim.append(box('plinth', -hx - 0.12, hx + 0.12, -hy - 0.12, hy + 0.12, BASE, PLINTH))
 # Each wall is cut on its own (a clean solid), then everything is joined.
 for sy, (y0, y1) in ((-1, (-hy, -hy + T)), (1, (hy - T, hy))):
     wall = box('wall', -hx, hx, y0, y1, PLINTH, top)
@@ -161,19 +162,20 @@ boolean(apse, arch_cutter('cut', (hx + APSE_R - REC * 0.5 + 0.02, 0.0, PLINTH + 
 stone.append(apse)
 grow = 0.12
 ap_pl = [(x + (grow if x > hx else 0.0) * (1 if x > hx else 0), y * (1.0 + grow / APSE_R)) for x, y in ap_ccw]
-stone.append(prism('apse_plinth', ap_pl, BASE, PLINTH))
+trim.append(prism('apse_plinth', ap_pl, BASE, PLINTH))
 # Buttresses at the four nave corners.
 for sx in (-1, 1):
     for sy in (-1, 1):
-        stone.append(box('buttress', sx * hx - 0.30, sx * hx + 0.30, sy * hy - 0.30, sy * hy + 0.30, BASE, PLINTH + 2.6))
+        trim.append(box('buttress', sx * hx - 0.30, sx * hx + 0.30, sy * hy - 0.30, sy * hy + 0.30, BASE, PLINTH + 2.6))
 # Door step.
-stone.append(box('step', -hx - 0.85, -hx - 0.10, -1.05, 1.05, BASE, PLINTH - 0.22))
-stone.append(box('step2', -hx - 0.50, -hx - 0.10, -0.90, 0.90, BASE, PLINTH - 0.02))
+trim.append(box('step', -hx - 0.85, -hx - 0.10, -1.05, 1.05, BASE, PLINTH - 0.22))
+trim.append(box('step2', -hx - 0.50, -hx - 0.10, -0.90, 0.90, BASE, PLINTH - 0.02))
 walls = join(stone, 'stone')
 bm = bmesh.new(); bm.from_mesh(walls.data)
 bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5); bm.to_mesh(walls.data); bm.free()
 
 bevel(walls, 0.035)
+trim_ob = join(trim, 'trim'); bevel(trim_ob, 0.03)
 
 # ---------------------------------------------------------------- glass + door (sit in the recesses)
 glass, wood, iron = [], [], []
@@ -298,7 +300,7 @@ def export(ob, f):
 out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'assets', 'church')
 os.makedirs(out_dir, exist_ok=True)
 with open(os.path.join(out_dir, 'church.mesh'), 'w') as f:
-    for ob in (walls, roof_ob, wood_ob, iron_ob, glass_ob):
+    for ob in (walls, trim_ob, roof_ob, wood_ob, iron_ob, glass_ob):
         export(ob, f)
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out_dir, 'church.blend'))
 print('CHURCH OK', [(o.name, len(o.data.polygons)) for o in (walls, roof_ob, wood_ob, iron_ob, glass_ob)])

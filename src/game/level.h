@@ -58,6 +58,10 @@ struct LevelMesh {
     bool  triplanar = false;
     bool  sway      = false;
     float uv_scale  = 1.0f;
+    // Depth of the stone relief on this mesh: 1 = as the texture gives it
+    // (~20 cm on castle masonry), less for thin or small parts (steps,
+    // plinths), 0 = flat.
+    float relief    = 1.0f;
 };
 
 struct Level {

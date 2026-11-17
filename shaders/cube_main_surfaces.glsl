@@ -742,6 +742,7 @@
                         // Marching deeper than that dragged the texture into
                         // long streaks where the tower curves away.
                         hs *= mix(1.0, smoothstep(0.0, 0.45, m_ground), m_gfade);
+                        hs *= 1.0 + clamp(pc.grass_params.x, -1.0, 0.0);      // per-mesh relief depth (LevelMesh::relief)
                         // Seen at a flat slant (where a tower curves away) the
                         // shift gets long and drags the stones into streaks:
                         // ease the relief out there.
