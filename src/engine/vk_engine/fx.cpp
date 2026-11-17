@@ -769,17 +769,24 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             float conv  = std::max(0.0f, 1.0f - flown / 12.0f);
             glm::vec3 head = pos + dir * pr.half_length + pr.trail_offset * conv;
             glm::vec3 barrel = pr.spawn_origin + pr.trail_offset;
-            float len = std::min(1.6f * pr.half_length / kProjectileHalf, glm::dot(head - barrel, dir));   // (was 3 m)
+            // Motion-blurred streak: as long as the bolt flies in about a
+            // hundredth of a second (so a fast bolt reads as a streak, not a
+            // dot that jumps), shorter at high fire rates, never longer than
+            // what it has flown since the barrel.
+            const float want = glm::clamp(vl * 0.011f, 1.2f, 26.0f) * (pr.half_length / kProjectileHalf);
+            float len = std::min(want, glm::dot(head - barrel, dir));
             if (len < 0.02f) continue;
             glm::vec3 tail = head - dir * len;
-            // Fade in with distance from the eye: the first metres of the
-            // bolt sit right in front of the camera, where an additive glow
-            // covers a big screen area and bloomed the gun to white.
+            glm::vec3 mid  = head - dir * (len * 0.35f);
+            // The streak only becomes visible some way out from the gun (it
+            // used to start 1.5 m from the eye and flare over the barrel).
             auto near_k = [&](glm::vec3 p) {
-                return glm::smoothstep(1.5f, 7.0f, glm::distance(p, eye));
+                return glm::smoothstep(7.0f, 20.0f, glm::distance(p, eye));
             };
-            glow.strip({ tail, head }, { min_w(tail, 0.03f, 1.4f), min_w(head, 0.04f, 1.4f) },
-                       { 0.0f, near_k(head) }, glm::vec3(1.0f, 0.25f, 0.75f));
+            // Gradient: bright head, fading to nothing along the tail.
+            glow.strip({ tail, mid, head },
+                       { min_w(tail, 0.015f, 1.0f), min_w(mid, 0.03f, 1.3f), min_w(head, 0.04f, 1.4f) },
+                       { 0.0f, 0.30f * near_k(mid), near_k(head) }, glm::vec3(1.0f, 0.25f, 0.75f));
         }
     }
     // Anti-aircraft tracers: red glowing streaks (~15 m) + muzzle flashes.
