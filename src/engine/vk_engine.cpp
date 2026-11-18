@@ -922,10 +922,16 @@ void VulkanEngine::run(const RunOptions& opts) {
                     if (pin.left)  wish -= rgt;
                     if (pin.jump)  wish.y += 1.0f;
                     if (pin.crawl) wish.y -= 1.0f;
-                    const float speed = pin.sprint ? 120.0f : 40.0f;   // walking is 8 m/s
+                    // The higher above the ground, the faster: 40 m/s low down, kilometres
+                    // a second on the way to orbit (so the planet can be left in a minute).
+                    const float alt_fly = player_.position.y - sample_terrain_height(player_.position.x, player_.position.z);
+                    const float speed = (pin.sprint ? 120.0f : 40.0f) * glm::clamp(alt_fly / 60.0f, 1.0f, 2000.0f);   // walking is 8 m/s
                     const glm::vec3 target = glm::dot(wish, wish) > 1e-6f ? glm::normalize(wish) * speed : glm::vec3(0.0f);
                     player_.velocity += (target - player_.velocity) * std::min(1.0f, 8.0f * kFixedDt);
                     player_.position += player_.velocity * kFixedDt;
+                    // The ceiling, for now: 1000 km. Above that ordinary coordinates lose
+                    // too much precision (camera-relative rendering is the next step for going further).
+                    if (player_.position.y > 1.0e6f) { player_.position.y = 1.0e6f; player_.velocity.y = std::min(player_.velocity.y, 0.0f); }
                     // Never below the ground.
                     const float gmin = sample_terrain_height(player_.position.x, player_.position.z) + 0.95f;
                     if (player_.position.y < gmin) { player_.position.y = gmin; player_.velocity.y = std::max(player_.velocity.y, 0.0f); }

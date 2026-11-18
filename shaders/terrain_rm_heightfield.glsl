@@ -306,6 +306,10 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
         t = (ro.y - maxH) / (-rd.y);
     }
     float t_limit = (t_max > 0.0) ? min(t_max, 1500.0) : 1500.0;
+    // From high up (flying out) the landscape starts beyond the range of this march:
+    // nothing to hit. (Without this the first sample, hundreds of km away, "hit" on
+    // float precision and the whole view filled with fogged ground.)
+    if (t > t_limit) return -1.0;
     // Phase 5 — blue-noise jittered start offset. Per-pixel hash-based
     // sub-step shift breaks up the per-fragment march alignment, so
     // contour banding from a too-aggressive step factor disperses into

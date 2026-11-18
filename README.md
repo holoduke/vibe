@@ -51,9 +51,9 @@ source: this is one data point, with the full commit history as the log.
 |---|---|
 | ![Winter at the lake](docs/screenshots/winter.png) | ![The chapel in spring](docs/screenshots/spring.png) |
 
-| The in-game HUD |
-|---|
-| ![HUD with health, weapon bay and frame rate](docs/screenshots/hud.png) |
+| The in-game HUD | Fly out (V): the planet from 1000 km |
+|---|---|
+| ![HUD with health, weapon bay and frame rate](docs/screenshots/hud.png) | ![The planet seen from orbit](docs/screenshots/orbit.png) |
 
 | Sunrise with volumetric light | Night: moonlight, stars, lanterns |
 |---|---|

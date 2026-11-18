@@ -170,6 +170,18 @@ off entirely. Two instances on one PC work (the second takes the next game port)
 - Clustered rocks: the Blender-baked rock archetypes of the vegetation system (their instances are sorted to the end of the instance buffer; `veg_cluster_first_` / `veg_cluster_count_`). `QLIKE_NO_CLUSTERS=1` draws them with the old discrete levels.
 - To cluster another mesh type: build a `ClusterMesh`, add it to the cluster / table buffers in `init_cluster_draw`, and give its instances slots like the rocks. Not yet done: per-cluster frustum and occlusion culling, ray-tracing structures from clusters.
 
-## Leaving the planet - what exists and what does not (2026-11)
+## Leaving the planet (state: 2026-11-18)
 
-Tested by putting the camera at 2 km, 30 km and 400 km. The world is a flat 2 km terrain tile plus a 1.5 km ray-marched range under a sky dome: at 2 km only cloud and haze are left, at 30 km a flat grey, at 400 km stars and no planet. Needed before flight to orbit: (1) a planet body - a sphere with its own far-field surface shading that the near terrain blends into; (2) depth range - the projection is 0.05 .. 1500 m (also hard-coded in fsr3.cpp / dlss.cpp and several shaders) and has to become reversed-Z with a far plane at infinity; (3) positions relative to the camera (floats run out of precision at planet scale); (4) terrain on a sphere with distance levels. Already in place: the atmosphere and clouds are computed for a planet of real radius with the camera's altitude, the day/night and moon model is astronomical, and GPU-driven instances / cluster LOD scale with distance.
+**Rule: nothing below 1 km altitude may change.** Every piece here is gated by the camera's height.
+
+What exists:
+- **Flight**: free-fly (V) speeds up with height above the ground (x altitude / 60 m, up to 2000x), ceiling 1000 km (`vk_engine.cpp`, fly block).
+- **The planet as a far field** (`compose.frag` `planet_surface`, used by `atmo_sky` in the sky-fill and compose passes): view rays that leave the local landscape and meet the planet's sphere (radius 6360 km, the atmosphere model's) are shaded as land / sea / snow / weather systems with day and night; fades in between 1 and 6 km. Above the atmosphere (40 - 110 km) the sky-view LUT is replaced by black space, a veil over the day side and a limb glow.
+- **Directions at height**: above 2 km the sky passes get the inverse of projection x rotation only (`frame.cpp`), because the full inverse view-projection loses the view directions in float rounding.
+- **Local systems step aside**: the terrain march returns at once when the landscape lies beyond its 1500 m range (`terrain_rm_heightfield.glsl`); the water plane is not drawn beyond 2.5 km from above 1 km; the local cloud layer fades out over 3 km above its top.
+
+What is still missing (in the order to build):
+1. **The middle distance**: between about 1.5 km (end of the terrain march) and the far field there is no real terrain - from 2 to 20 km up the ground is a smooth far-field colour. Needs terrain on the sphere with distance levels (the local tile as the finest level).
+2. **Camera-relative rendering**: positions are plain floats; above ~1000 km (and for anything drawn near the camera at height) precision runs out. Render relative to the camera, keep world positions in doubles on the CPU.
+3. **Depth range**: the projection is 0.05 .. 1500 m (also in `fsr3.cpp`, `dlss.cpp`, several shaders). Move to reversed-Z with the far plane at infinity before anything real is drawn far away.
+4. Other planets / a moon as bodies, and gravity that points at the planet's centre.

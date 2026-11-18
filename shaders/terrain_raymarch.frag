@@ -596,6 +596,9 @@ void main() {
         float tw = (water_y - ro.y) / rd.y;
         if (tw > 0.0) t_water_plane = tw;
     }
+    // From high up (flying out): the water plane is the local lake, not an ocean to
+    // the horizon - beyond the landscape the planet itself is drawn (compose.frag).
+    if (ro.y - water_y > 1000.0 && t_water_plane > 2500.0) t_water_plane = -1.0;
 #else /* QLIKE_WATER */
     // Distance to the water plane is just |vWPos - camera|. Replaces the
     // analytic ray-vs-plane intersection (which was algebraically equal

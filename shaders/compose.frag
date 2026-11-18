@@ -74,6 +74,80 @@ vec3 atmo_sun_illum() {
     return pc.sun_color.rgb * pc.sun_color.a * pc.atmo.y * 3.14159265;
 }
 // Sky radiance from the sky-view LUT + a transmittance-tinted sun disc.
+// ---- The planet, seen from high up -----------------------------------
+// Below about a kilometre nothing here is used (the sky is exactly what it
+// was). Above it, a view ray that leaves the local landscape and meets the
+// planet's sphere is shaded as the planet's surface: land, sea, snow and
+// cloudless day / night, under the same physical atmosphere (the sky-view
+// LUT already holds the light scattered in on the way down; the
+// transmittance LUT gives how much of the surface comes through).
+// This is the far field only - the landscape you walk on is still the
+// 2 km tile; see docs/ARCHITECTURE.md "Leaving the planet".
+float pl_hash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float pl_noise(vec3 x) {
+    vec3 i = floor(x), f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(pl_hash(i), pl_hash(i + vec3(1, 0, 0)), f.x), mix(pl_hash(i + vec3(0, 1, 0)), pl_hash(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(pl_hash(i + vec3(0, 0, 1)), pl_hash(i + vec3(1, 0, 1)), f.x), mix(pl_hash(i + vec3(0, 1, 1)), pl_hash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+float pl_fbm(vec3 p) {
+    float a = 0.5, s = 0.0;
+    for (int i = 0; i < 6; ++i) { s += a * pl_noise(p); p = p * 2.03 + 11.7; a *= 0.5; }
+    return s;
+}
+// Returns the planet's contribution in rgb and how much it replaces the sky's below-horizon colour in a.
+vec4 planet_surface(vec3 dir, vec3 sun) {
+    const float Rg = 6360.0;                                   // km
+    float r = pc.atmo.z;                                       // camera distance from the planet centre (km)
+    float alt = r - Rg;
+    float k = smoothstep(1.0, 6.0, alt);
+    if (k <= 0.0 || dir.y >= 0.0) return vec4(0.0);
+    // Ray from (0, r, 0) against the sphere.
+    float b = r * dir.y;
+    float disc = b * b - (r * r - Rg * Rg);
+    if (disc < 0.0) return vec4(0.0);
+    float t = -b - sqrt(disc);
+    if (t <= 0.0) return vec4(0.0);
+    vec3 P = vec3(0.0, r, 0.0) + dir * t;                      // on the sphere, km
+    vec3 N = P / Rg;
+    // The map: continents from noise on the sphere; the place we stand on is land.
+    vec3 q = N * 3.2 + vec3(1.7, 0.0, 4.1);
+    float cont = pl_fbm(q) * 0.62 + pl_fbm(N * 15.0 + 2.0) * 0.28 + pl_fbm(N * 70.0) * 0.10;
+    float home = exp(-dot(P.xz, P.xz) / (900.0 * 900.0));        // the place we stand on is land (not a peak: its height stays the map's)
+    float land = smoothstep(0.50, 0.54, cont + 0.35 * home);
+    float high = smoothstep(0.58, 0.78, cont);
+    float lat = abs(N.z);                                      // a pole along z: ice caps
+    float detail = pl_fbm(N * 60.0);
+    vec3 forest = mix(vec3(0.045, 0.085, 0.030), vec3(0.090, 0.110, 0.045), detail);
+    vec3 dry    = vec3(0.21, 0.17, 0.10);
+    vec3 rock   = vec3(0.16, 0.15, 0.14);
+    // Country-sized and field-sized variation (visible from an aircraft's height).
+    float region = pl_fbm(P * 0.045 + 3.0), field = pl_fbm(P * 0.55 + 9.0);
+    forest *= 0.70 + 0.75 * field;
+    vec3 col = mix(forest, dry * (0.75 + 0.5 * field), smoothstep(0.42, 0.70, 0.5 * pl_noise(N * 9.0 + 3.0) + 0.5 * region) * (1.0 - high));
+    col = mix(col, rock, high * 0.8);
+    float snow = max(smoothstep(0.70, 0.86, cont + 0.25 * detail), smoothstep(0.80, 0.90, lat + 0.08 * detail));
+    col = mix(col, vec3(0.80, 0.83, 0.88), snow);
+    vec3 sea = mix(vec3(0.010, 0.035, 0.075), vec3(0.020, 0.075, 0.110), smoothstep(0.38, 0.50, cont));
+    col = mix(sea, col, land);
+    // Weather systems: broad swirls of cloud over it.
+    float cl = smoothstep(0.56, 0.76, pl_fbm(N * 7.0 + vec3(0.0, 0.0, 0.31 * pl_fbm(N * 3.0))) * 0.65 + pl_fbm(N * 38.0 + 5.0) * 0.35);
+    cl *= 1.0 - 0.9 * exp(-dot(P.xz, P.xz) / (350.0 * 350.0));      // fair weather over home (the local cloud layer is drawn separately)
+    col = mix(col, vec3(0.86), cl * 0.8);
+    // Sunlight on the ground, through the atmosphere above that spot.
+    float ndl = dot(N, sun);
+    vec3 t_sun = textureLod(u_atmo_trans, trans_uv(Rg + 0.02, clamp(ndl, -0.15, 1.0)), 0.0).rgb;
+    vec3 lit = col * (t_sun * max(ndl, 0.0) * 0.026 + 0.0004) * atmo_sun_illum();
+    // Sea glint.
+    vec3 hv = normalize(sun - dir);
+    lit += (1.0 - land) * (1.0 - cl) * t_sun * pow(max(dot(N, hv), 0.0), 220.0) * 0.05 * atmo_sun_illum();
+    // What of it reaches the eye: T(eye -> ground) = T(ground -> space, back along the ray) / T(eye -> space, the same way).
+    vec3 t_g = textureLod(u_atmo_trans, trans_uv(Rg + 0.02, max(dot(N, -dir), 0.02)), 0.0).rgb;
+    vec3 t_c = textureLod(u_atmo_trans, trans_uv(r, max(-dir.y, 0.02)), 0.0).rgb;
+    vec3 T = clamp(t_g / max(t_c, vec3(1e-4)), 0.0, 1.0);
+    return vec4(lit * T, k);
+}
+
 vec3 atmo_sky(vec3 dir) {
     vec3 sun = normalize(pc.sun_dir.xyz);
     float elev = asin(clamp(dir.y, -1.0, 1.0));
@@ -91,6 +165,34 @@ vec3 atmo_sky(vec3 dir) {
         L += ts * disc * 60.0;
     }
     vec3 sky = L * atmo_sun_illum();
+    // From high up: the planet below (0 at ground level - nothing changes there).
+    vec4 pl = planet_surface(dir, sun);
+    // Above the atmosphere the sky-view LUT no longer applies (it is made for a
+    // camera inside the air): space is black, the air is a thin blue shell
+    // seen from outside - a veil over the day side and a glow along the limb.
+    float space = smoothstep(40.0, 110.0, pc.atmo.z - 6360.0);
+    // (rays that reach the ground get the same treatment from a few km up: the LUT's
+    // below-horizon value is a generic lit ground under haze, which hid the surface)
+    float w_hit = max(space, pl.a);
+    if (space > 0.0 || pl.a > 0.0) {
+        const float Rg = 6360.0;
+        float r = pc.atmo.z;
+        float bq = r * dir.y;
+        float d_min = sqrt(max(r * r - bq * bq, 0.0));            // closest the ray comes to the centre
+        vec3  air = vec3(0.20, 0.42, 1.0) * atmo_sun_illum();
+        vec3  veil = vec3(0.0);
+        if (pl.a > 0.0) {
+            // looking at the ground: more air toward the limb
+            vec3 Pn = normalize(vec3(0.0, r, 0.0) + dir * (-bq - sqrt(max(bq * bq - (r * r - Rg * Rg), 0.0))));
+            float slant = 1.0 / max(dot(Pn, -dir), 0.08);
+            veil = air * 0.010 * min(slant, 9.0) * smoothstep(-0.12, 0.25, dot(Pn, sun)) * (1.0 - exp(-(r - Rg) / 8.0));   // only the air below the eye
+        } else if (bq < 0.0) {
+            vec3 Pl = normalize(vec3(0.0, r, 0.0) - dir * bq);
+            veil = air * 0.11 * exp(-max(d_min - Rg, 0.0) / 14.0) * smoothstep(-0.25, 0.2, dot(Pl, sun));
+        }
+        sky = mix(sky, veil, pl.a > 0.0 ? w_hit : space);
+    }
+    if (pl.a > 0.0) sky += pl.rgb * pl.a;
     return sky;
 }
 

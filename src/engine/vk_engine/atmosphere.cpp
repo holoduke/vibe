@@ -408,7 +408,11 @@ void VulkanEngine::dispatch_clouds(VkCommandBuffer cmd) {
     pc.inv_vp = fv.inv_vp;
     // eye.w x params.z = metres the wind has carried the clouds (added up in descriptors.cpp).
     pc.eye = glm::vec4(fv.eye_pos, float(cloud_travel_));
-    pc.params = glm::vec4(glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), std::max(0.0f, rt_.cloud_density),
+    const float cl_top = glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f) + glm::clamp(rt_.cloud_tower_m, 300.0f, 12000.0f);
+    // (the local cloud layer is made to be seen from below and inside: above its top it fades out over 3 km, and the
+    // planet is drawn with its own weather systems, compose.frag planet_surface)
+    pc.params = glm::vec4(glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f) * (1.0f - glm::smoothstep(cl_top, cl_top + 3000.0f, fv.eye_pos.y)),
+                          std::max(0.0f, rt_.cloud_density) * (1.0f - glm::smoothstep(cl_top, cl_top + 3000.0f, fv.eye_pos.y)),
                           1.0f,
                           (env_applied_ ? env_base_.atmosphere_intensity * env_cloud_k_ : rt_.atmosphere_intensity) * 3.14159265f *
                           // Night: clouds are lit by the moon and a dark sky only - less than half
