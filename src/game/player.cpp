@@ -24,8 +24,11 @@ glm::vec3 Player::right() const {
 }
 
 glm::mat4 Player::view_matrix() const {
-    glm::vec3 eye = eye_position();
-    return glm::lookAt(eye, eye + forward(), glm::vec3(0.0f, 1.0f, 0.0f));
+    // In double precision: "eye + forward" in floats rounds the look direction once the eye is far
+    // from the origin (at 400 km up a float is 3 cm coarse - the view turned in steps of almost
+    // two degrees, and looking around in space was jerky).
+    const glm::dvec3 eye = glm::dvec3(eye_position());
+    return glm::mat4(glm::lookAt(eye, eye + glm::dvec3(forward()), glm::dvec3(0.0, 1.0, 0.0)));
 }
 
 void update_player(Player& p, const PlayerInput& in, const Level& world, float dt) {

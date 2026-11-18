@@ -500,7 +500,9 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
 // the real landscape stays under the camera out to tens of kilometres (the
 // planet's shaded far field in compose.frag takes over beyond it).
 float rm_far_limit(float eye_y) {
-    return clamp(1500.0 + (eye_y - 300.0) * 100.0, 1500.0, 80000.0);
+    // (and from 25 km up it draws in again: by 60 km the planet's painted far field, with
+    // its weather, has taken over - compose.frag has the same formula for the cross-fade)
+    return clamp(1500.0 + (eye_y - 300.0) * 100.0, 1500.0, 80000.0) * (1.0 - smoothstep(25000.0, 60000.0, eye_y));
 }
 // The march for that: only used above 1 km, for rays the normal march
 // cannot reach. Looking down from the air there is nothing near the eye,

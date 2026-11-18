@@ -238,7 +238,9 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     col = mix(sea, col, land);
     // Weather systems: broad swirls of cloud over it.
     float cl = smoothstep(0.56, 0.76, pl_fbm(Nf * 7.0 + vec3(0.0, 0.0, 0.31 * pl_fbm(Nf * 3.0))) * 0.65 + pl_fbm(Nf * 38.0 + 5.0) * 0.35);
-    cl *= 1.0 - 0.9 * exp(-dot(m, m) / (350.0 * 350.0));           // fair weather over home (the local cloud layer is drawn separately)
+    // (...while the local layer is what you see: from 25 km up, where the raymarched land and its
+    // clouds hand over to this far field, the painted weather lies over home as well)
+    cl *= 1.0 - 0.9 * exp(-dot(m, m) / (350.0 * 350.0)) * (1.0 - smoothstep(25.0, 60.0, alt));           // fair weather over home (the local cloud layer is drawn separately)
     col = mix(col, vec3(0.86), cl * 0.8);
     nl = normalize(mix(nl, N, cl * 0.8));
     // Sunlight on the ground, through the atmosphere above that spot.
@@ -259,6 +261,9 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     vec3 T = clamp(t_g / max(t_c, vec3(1e-4)), 0.0, 1.0);
     // (comes in with distance: the raymarched landscape in front of this has none of it, and the two must join)
     T = mix(vec3(1.0), T, smoothstep(60.0, 350.0, t));
+    // (the light lost on the way is mostly scattered back in as the blue veil, not gone: without
+    // that share the snow country was beige from orbit)
+    T = mix(T, vec3(dot(T, vec3(0.2126, 0.7152, 0.0722))), 0.65);
     // The same haze the real landscape below gets (the aerial-perspective volume, to its far end).
     // (as the raymarched landscape in front of it gets it: the volume over the first 1.5 km, then the
     // slow ground haze of terrain_raymarch.frag rm_haze_dist, toward the colour of fully hazed air)
@@ -1173,7 +1178,7 @@ void main() {
         if (!uw && pc.atmo.x > 0.5 && alt_m > 300.0 && obj_w > 0.0 && obj_depth > 0.9995) {
             vec3 pdir = view_ray(uvp);
             if (pdir.y < -1e-4) {
-                float fl = clamp(1500.0 + (alt_m - 300.0) * 100.0, 1500.0, 80000.0);
+                float fl = clamp(1500.0 + (alt_m - 300.0) * 100.0, 1500.0, 80000.0) * (1.0 - smoothstep(25000.0, 60000.0, alt_m));
                 float tp = max(alt_m - 60.0, 1.0) / (-pdir.y);
                 float wf = smoothstep(0.45 * fl, 0.92 * fl, tp);
                 if (wf > 0.0) hdr_obj = mix(hdr_obj, atmo_sky(pdir) * obj_w, wf);
