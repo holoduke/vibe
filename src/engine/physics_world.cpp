@@ -212,6 +212,7 @@ struct PhysicsWorld::Impl {
     struct BoxCell { JPH::BodyID body; std::vector<PhysicsWorld::StaticBox> boxes; };
     // Terrain heightfield (region-updatable via SetHeights for craters).
     JPH::BodyID hf_body;
+    std::thread hf_thread;            // add_static_heightfield_async
     int hf_samples = 0, hf_block = 8;
     std::map<std::pair<int, int>, BoxCell> box_cells;
     float box_cell = 128.0f;
@@ -257,7 +258,20 @@ PhysicsWorld::~PhysicsWorld() {
     global_shutdown_if_last();
 }
 
+void PhysicsWorld::add_static_heightfield_async(std::vector<float> samples, int dim,
+                                                glm::vec2 origin_xz, float cell_size) {
+    finish_async();
+    impl_->hf_thread = std::thread([this, s = std::move(samples), dim, origin_xz, cell_size]() {
+        add_static_heightfield(s.data(), dim, origin_xz, cell_size);
+    });
+}
+
+void PhysicsWorld::finish_async() {
+    if (impl_ && impl_->hf_thread.joinable()) impl_->hf_thread.join();
+}
+
 void PhysicsWorld::step(float dt) {
+    finish_async();
     if (dt <= 0.0f) return;
     constexpr float kFixed = 1.0f / 60.0f;
     int collision_steps = 1;
@@ -584,6 +598,7 @@ void PhysicsWorld::add_static_heightfield(const float* samples, int dim,
 
 void PhysicsWorld::update_heightfield_region(const float* heights, int stride,
                                              int x0, int z0, int x1, int z1) {
+    finish_async();
     if (impl_->hf_body.IsInvalid() || !heights) return;
     const int bs = impl_->hf_block, n = impl_->hf_samples;
     // SetHeights needs block-aligned start / size inside the sample grid.

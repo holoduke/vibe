@@ -4,6 +4,7 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 #include <memory>
+#include <vector>
 
 namespace qlike {
 
@@ -61,6 +62,11 @@ public:
     // sits at; `cell_size` is the world distance between adjacent samples.
     void add_static_heightfield(const float* samples, int dim,
                                 glm::vec2 origin_xz, float cell_size);
+    // The same on a worker thread (start-up: the 0.7 s build overlaps the
+    // texture loading). finish_async() waits for it; step() does too.
+    void add_static_heightfield_async(std::vector<float> samples, int dim,
+                                      glm::vec2 origin_xz, float cell_size);
+    void finish_async();
 
     // Engine-side body handle (cached BodyID). Storing this on each
     // dynamic prop / particle / projectile lets the read-only queries skip

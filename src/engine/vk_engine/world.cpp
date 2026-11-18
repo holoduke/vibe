@@ -603,8 +603,9 @@ void VulkanEngine::init_world() {
                               static_cast<size_t>(x)] = h;
             }
         }
-        physics_->add_static_heightfield(
-            jolt_heights.data(), physics_samples - 1,
+        // (on a worker: its 0.7 s overlaps the texture loading that follows; joined in init)
+        physics_->add_static_heightfield_async(
+            std::move(jolt_heights), physics_samples - 1,
             glm::vec2(terrain_data_.origin_x, terrain_data_.origin_z),
             terrain_data_.cell);
     }

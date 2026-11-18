@@ -172,6 +172,7 @@ void VulkanEngine::init() {
     init_skybox();
     init_textures();
     texture_upload_batch_flush(device_, allocator_, graphics_queue_);
+    if (physics_) physics_->finish_async();     // the terrain's collision shape, built during the texture loading
     present_loader_frame("Loading settings",      0.40f);
     load_settings();
     apply_vendor_upscaler_defaults();
