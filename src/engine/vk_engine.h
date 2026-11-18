@@ -1062,6 +1062,7 @@ private:
         float     turn_g      = 0.0f;       // current lateral load (for vapour)
         bool      bomb_dropped = false;
         bool      strike = false;           // player-called airstrike: friendly, plain bomb, one run
+        bool      strike_remote = false;    // ... called by another player (multiplayer): does not drive this player's tablet
         // Contrail: exhaust positions sampled every ~40 ms (newest last).
         struct TrailPt { glm::vec3 p; float t; float g; float smoke = 0.0f; };
         std::vector<TrailPt> trail;
@@ -1104,6 +1105,7 @@ private:
         float     phase = 0.0f;     // pendulum phase
         // Player-called airstrike bomb: heavier (bigger blast / crater).
         bool      strike = false;
+        bool      strike_remote = false;    // another player's airstrike
         float     size = 1.0f;
         // Smoke trail: positions sampled along the fall (newest last).
         struct TrailPt { glm::vec3 p; float t; };
@@ -1257,6 +1259,7 @@ private:
     void tick_airstrike(float dt, bool fire_pressed);
     bool airstrike_ground_point(glm::vec3 origin, glm::vec3 dir, glm::vec3& out) const;
     void call_airstrike(glm::vec3 target);
+    void spawn_airstrike(glm::vec3 target, glm::vec3 dir, bool remote);   // the run itself (also another player's, multiplayer)
     // Unit vector from a parachute bomb toward its canopy.
     glm::vec3 bomb_chute_axis(const Bomb& b) const;
     // Explosion instance (fx.cpp). Rendered as layered effects: flash

@@ -658,9 +658,9 @@ void VulkanEngine::tick_spacejet(float dt) {
                         b.phase = float(f.id) * 1.7f;
                         if (f.strike) {
                             b.strike = true;
+                            b.strike_remote = f.strike_remote;
                             b.size = 1.6f;
-                            airstrike_.phase = 2;
-                            airstrike_.t = 0.0f;
+                            if (!f.strike_remote) { airstrike_.phase = 2; airstrike_.t = 0.0f; }
                         }
                         if (game_.aircraft_bombs || f.strike) bombs_.push_back(b);
                         log::infof("[jets] bomb away -> (%.0f, %.0f)%s from (%.0f, %.0f, %.0f) h %.0f along %.1f speed %.0f t %.1f", f.target.x, f.target.z, f.strike ? " (airstrike)" : "", f.pos.x, f.pos.y, f.pos.z, h, along, f.speed, f.t);

@@ -1282,8 +1282,19 @@ void VulkanEngine::run(const RunOptions& opts) {
         // ticks still run with dt = 0 so everything stays drawn.
         const float sim_dt = (state_ == State::Playing) ? frame_dt : 0.0f;
         if (audio_) audio_->set_paused(state_ != State::Playing);
-        { CPU_SCOPE("jets"); tick_spacejet(sim_dt); }
-        { CPU_SCOPE("fx"); tick_fx(sim_dt); }
+        // Aircraft and bombs keep real time at any frame rate (several small
+        // steps on a slow frame instead of slowing down): in multiplayer the
+        // same airstrike must land at the same moment for everybody.
+        {
+            float rem = sim_dt;
+            for (int n = 0; n < 8; ++n) {
+                const float step = std::min(rem, 0.05f);
+                { CPU_SCOPE("jets"); tick_spacejet(step); }
+                { CPU_SCOPE("fx"); tick_fx(step); }
+                rem -= step;
+                if (rem <= 1e-5f) break;
+            }
+        }
         { CPU_SCOPE("water-fx"); tick_water_fx(sim_dt); }
         { CPU_SCOPE("aa"); tick_aa(sim_dt); }
         maybe_autosave_settings(frame_dt);

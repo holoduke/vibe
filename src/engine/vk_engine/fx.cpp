@@ -447,7 +447,7 @@ void VulkanEngine::tick_fx(float dt) {
         if (!boom && b.t > 30.0f) { boom = true; }
         if (boom) {
             spawn_explosion(at, b.size, true);
-            if (b.strike) { airstrike_.phase = 3; airstrike_.t = 0.0f; }
+            if (b.strike && !b.strike_remote) { airstrike_.phase = 3; airstrike_.t = 0.0f; }
             it = bombs_.erase(it);
         } else {
             ++it;
@@ -1320,9 +1320,24 @@ void VulkanEngine::call_airstrike(glm::vec3 target) {
     static bool flip = false; flip = !flip;
     const glm::vec3 side = glm::vec3(-los.z, 0.0f, los.x) * (flip ? 1.0f : -1.0f);
     glm::vec3 dir = glm::normalize(side * 0.906f + los * 0.423f);
-    airstrike_.target = target;
-    airstrike_.phase = 1;
-    airstrike_.t = 0.0f;
+    spawn_airstrike(target, dir, false);
+    // Multiplayer: the others see the same aircraft fly the same run.
+    if (net_) {
+        net::Event e{};
+        e.kind = net::Event::Airstrike; e.from = net_->id();
+        e.a[0] = target.x; e.a[1] = target.y; e.a[2] = target.z;
+        e.b[0] = dir.x; e.b[1] = dir.y; e.b[2] = dir.z;
+        net_->send_event(e);
+    }
+}
+
+void VulkanEngine::spawn_airstrike(glm::vec3 target, glm::vec3 dir, bool remote) {
+    auto ground_h = [&](float x, float z) { return std::max(sample_terrain_height(x, z), rt_.water_level); };
+    if (!remote) {
+        airstrike_.target = target;
+        airstrike_.phase = 1;
+        airstrike_.t = 0.0f;
+    }
     if (spacejet_meshes_.empty()) {
         // No aircraft asset: release the bomb from where the run would have.
         Bomb b{};
@@ -1331,13 +1346,14 @@ void VulkanEngine::call_airstrike(glm::vec3 target) {
         b.pos = target + glm::vec3(0.0f, h, 0.0f) - dir * (v * t_fall * 0.96f);
         b.vel = dir * v;
         b.prev_pos = b.pos;
-        b.strike = true; b.size = 1.6f;
+        b.strike = true; b.strike_remote = remote; b.size = 1.6f;
         bombs_.push_back(b);
-        airstrike_.phase = 2;
+        if (!remote) airstrike_.phase = 2;
         return;
     }
     SpacejetFlight f{};
     f.strike = true;
+    f.strike_remote = remote;
     f.mode = JetMode::BombRun;
     f.bomb_dropped = false;
     f.target = target;
@@ -1351,9 +1367,9 @@ void VulkanEngine::call_airstrike(glm::vec3 target) {
     f.sortie_max = 0;                       // one run, then egress
     f.id = ++spacejet_next_id_;
     f.prev_pos = f.pos; f.prev_fwd = f.fwd; f.prev_up = f.up;
-    airstrike_.jet_id = f.id;
+    if (!remote) airstrike_.jet_id = f.id;
     spacejet_flights_.push_back(f);
-    log::infof("[airstrike] target (%.0f, %.0f, %.0f) marked - aircraft inbound", target.x, target.y, target.z);
+    log::infof("[airstrike] target (%.0f, %.0f, %.0f) marked%s - aircraft inbound", target.x, target.y, target.z, remote ? " by another player" : "");
 }
 
 void VulkanEngine::tick_airstrike(float dt, bool fire_pressed) {

@@ -116,6 +116,9 @@ void VulkanEngine::mp_update(float dt) {
                     mp_health_ = 100.0f;
                 }
             }
+        } else if (e.kind == net::Event::Airstrike) {
+            spawn_airstrike(glm::vec3(e.a[0], e.a[1], e.a[2]), glm::normalize(glm::vec3(e.b[0], e.b[1], e.b[2]) + glm::vec3(1e-5f, 0.0f, 0.0f)), true);
+            mp_feed(net_->name_of(e.from) + " called an airstrike");
         } else if (e.kind == net::Event::Death) {
             if (e.to == net_->id()) ++mp_kills_;
             mp_feed(net_->name_of(e.to) + " killed " + net_->name_of(e.from));

@@ -49,7 +49,7 @@ struct PlayerState {
     uint8_t health;            // 0..100
 };
 struct Event {
-    enum Kind : uint8_t { Fire = 1, Hit = 2, Death = 3, Leave = 4 };
+    enum Kind : uint8_t { Fire = 1, Hit = 2, Death = 3, Leave = 4, Airstrike = 5 };   // Airstrike: a = target, b = run direction
     uint8_t  kind;
     uint32_t from;             // Fire: shooter. Hit: shooter. Death: the one who died. Leave: who left
     uint32_t to;               // Hit: victim. Death: killer
