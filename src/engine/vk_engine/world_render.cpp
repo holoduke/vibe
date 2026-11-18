@@ -103,7 +103,9 @@ VulkanEngine::FrameView VulkanEngine::compute_frame_view() {
         fv.jitter = glm::vec2(jx, jy);
     }
     fv.vp = fv.proj * fv.view;
-    fv.inv_vp = glm::inverse(fv.vp);
+    // (inverted in double precision: with the far plane out at tens of km the matrix is too
+    // ill-conditioned for a float inverse - positions rebuilt from depth wobbled from frame to frame)
+    fv.inv_vp = glm::mat4(glm::inverse(glm::dmat4(fv.proj) * glm::dmat4(fv.view)));
     // Hoisted once-per-frame: inv_view (draw_viewmodel) + frustum (3
     // render passes used to each call extract_frustum on the same vp).
     fv.inv_view = glm::inverse(fv.view);
@@ -567,7 +569,11 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         pc.mvp = vp;
         // Reuse cached inverse from FrameView (was glm::inverse(vp) each
         // time -- same matrix as fv.inv_vp computed once in compute_frame_view).
-        pc.model = fv.inv_vp;          // frag reconstructs world ray from NDC
+        // Camera-relative (rotation only): the view rays must not depend on where the
+        // camera is. With the full inverse the ray directions lost their precision
+        // with altitude (the far and near points are both ~eye + something), and the
+        // whole raymarched landscape shook from frame to frame when flying up.
+        pc.model = glm::mat4(glm::inverse(glm::dmat4(fv.proj) * glm::dmat4(glm::dmat3(fv.view))));   // frag: + camera position where it needs a point
         pc.prev_mvp = prev_vp;
         // .xy = plateau centre, .z = plateau half-extent, .w = plateau
         // height. Shader's terrainM blends FBM toward the plateau

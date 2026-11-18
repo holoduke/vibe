@@ -493,7 +493,7 @@ float cellMaxHeight(vec2 wp) {
 // from high up most of the way down is through clear air.
 float rm_haze_dist(float t) {
     float tl = t * min(1.0, 2500.0 / max(scene.camera_pos.y, 1.0));
-    return (tl > 1500.0) ? 1500.0 + (tl - 1500.0) * 0.08 : tl;
+    return (tl > 1500.0) ? 1500.0 + (tl - 1500.0) * 0.02 : tl;
 }
 float distanceFogAmount(vec3 p_world, vec3 cam) {
     float strength = scene.distance_fog_color.a;
@@ -569,7 +569,7 @@ vec3 sample_sky(vec3 dir) {
 void main() {
     foot_bounds_init();      // footprints in the snow (winter)
 #ifndef QLIKE_WATER
-    // Ray reconstruction: vWNear / vWFar were computed in the vert
+    // Ray reconstruction: vWNear / vWFar (relative to the camera) were computed in the vert
     // shader (pc.model × ndc-near / ndc-far) and interpolated. Per
     // pixel we just need the homogeneous divide + subtract + normalize
     // — the matrix multiplies that used to dominate this stub are gone.
@@ -659,6 +659,7 @@ void main() {
         float zpre = texelFetch(u_prepass_depth, ivec2(gl_FragCoord.xy), 0).r;
         if (zpre < 0.99999) {
             vec4 Pp = mix(vWNear, vWFar, zpre);
+            Pp.xyz += ro * Pp.w;                 // (vWNear / vWFar are relative to the camera)
             float t_obj = distance(Pp.xyz / Pp.w, ro) * 1.02 + 0.3;
             // Inside the castle: camera and surface both stand on the flat
             // plateau (a square, so the whole sight line does too) - the
