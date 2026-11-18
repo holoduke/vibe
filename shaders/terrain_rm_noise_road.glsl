@@ -37,44 +37,14 @@ const mat2 m2 = mat2(0.8, -0.6, 0.6, 0.8);
 const float TERRAIN_SCALE  = 0.003;
 const float TERRAIN_HEIGHT = 120.0;
 
-// The shape of the wider world. Home (the 2 km landscape and the ring of
-// white mountains around it, out to 1.5 km from the centre) is the height
-// formula as it is. Beyond that the land calms down to low hills - too low
-// for the snow line - with a high range only here and there. `a`: the
-// formula's value 0..1; returns metres. (compose.frag pl_terrain has the
-// same function for the painted far field: change both.)
-// The planet's one map of land and sea: 1 = sea, 0 = land, at map position
-// `mk` (km from home; the planet's far field uses the same function with the
-// same numbers - compose.frag pl_sea_map - so a coast seen from orbit is the
-// coast found on the way down). Continents (thousands of km), seas (hundreds),
-// bays and coves (tens). Home is always land.
-float rm_sea_map(vec2 mk) {
-    float c = noise2(mk * 0.00045 + 21.3) * 0.45 + noise2(mk * 0.0035 + 8.9) * 0.30 +
-              noise2(mk * 0.035 + 11.7) * 0.17 + noise2(mk * 0.09 + 4.2) * 0.08;
-    // Home lies well inside a continent: the land's share is raised around it (fully within
-    // ~150 km, fading out by ~700 km), so the nearest sea is a real journey away.
-    float dh = length(mk);
-    c += 0.30 * (1.0 - smoothstep(150.0, 700.0, dh));
-    return smoothstep(0.50, 0.45, c) * smoothstep(40.0, 120.0, dh);
-}
+// The shape of the world: shaders/world_map.glsl (shared with the planet's far field in
+// compose.frag). Every height the landscape formula makes passes through it.
+#define WM_NOISE(p) noise2(p)
+#include "world_map.glsl"
 #ifndef RM_WATER_LEVEL
-
 #define RM_WATER_LEVEL scene.water_params.y
 #endif
-float rm_world_h(float a, vec2 wp) {
-    float h = a * TERRAIN_HEIGHT;
-    float w = smoothstep(1500.0, 4000.0, length(wp));
-    if (w <= 0.0) return h;
-    float n = noise2(wp * 0.00008 + 7.3) * 0.65 + noise2(wp * 0.00021 + 3.1) * 0.35;
-    float amp = mix(0.42, 1.12, smoothstep(0.60, 0.78, n));      // low hills; now and then a high range
-    h = mix(h, 30.0 + (h - 30.0) * amp, w);                      // (scaled about 30 m: the lowlands stay above the water)
-    // Oceans: a layer above the generator that overrules it. Where the continent map says
-    // "sea" the ground goes down to a sea bed below the water level, whatever the hills
-    // formula wanted there - with a shelf in between, so coasts have beaches and shallows.
-    // Never within 5 km of home. (This is the place for more such areas: plains, deserts ...)
-    float sea = rm_sea_map(wp * 0.001);
-    return mix(h, RM_WATER_LEVEL - 24.0 - 14.0 * a, sea);
-}
+float rm_world_h(float a, vec2 wp) { return wm_height(a, wp, RM_WATER_LEVEL); }
 
 
 // High-frequency FBM-eroded noise used by sampleHeightDelta to paint

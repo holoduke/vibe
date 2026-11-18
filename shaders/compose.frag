@@ -118,14 +118,9 @@ vec3 pl_noised(vec2 p) {
     return vec3(a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y,
                 du * (vec2(b - a, c - a) + (a - b - c + d) * u.yx));
 }
-// The planet's one map of land and sea (terrain_rm_noise_road.glsl rm_sea_map - the same numbers).
-float pl_sea_map(vec2 mk) {
-    float c = pl_noised(mk * 0.00045 + 21.3).x * 0.45 + pl_noised(mk * 0.0035 + 8.9).x * 0.30 +
-              pl_noised(mk * 0.035 + 11.7).x * 0.17 + pl_noised(mk * 0.09 + 4.2).x * 0.08;
-    float dh = length(mk);
-    c += 0.30 * (1.0 - smoothstep(150.0, 700.0, dh));
-    return smoothstep(0.50, 0.45, c) * smoothstep(40.0, 120.0, dh);
-}
+// The shape of the world: shaders/world_map.glsl, the same text the raymarched landscape uses.
+#define WM_NOISE(p) pl_noised(p).x
+#include "world_map.glsl"
 float pl_terrain(vec2 wp, float octf) {
     vec2 p = wp * 0.003;
     float a = 0.0, b = 1.0;
@@ -145,15 +140,7 @@ float pl_terrain(vec2 wp, float octf) {
     float rest = 0.0, bb = 1.0;
     for (int i = 0; i < 6; ++i) { rest += bb * (1.0 - clamp(octf - float(i), 0.0, 1.0)); bb *= 0.5; }
     a += rest * 0.42 / (1.0 + dot(d, d));
-    // The shape of the wider world (terrain_rm_noise_road.glsl rm_world_h - keep the two the same).
-    float h = a * 120.0;
-    float w = smoothstep(1500.0, 4000.0, length(wp));
-    if (w <= 0.0) return h;
-    float n = pl_noised(wp * 0.00008 + 7.3).x * 0.65 + pl_noised(wp * 0.00021 + 3.1).x * 0.35;
-    float amp = mix(0.42, 1.12, smoothstep(0.60, 0.78, n));
-    h = mix(h, 30.0 + (h - 30.0) * amp, w);
-    float sea = pl_sea_map(wp * 0.001);                                                              // oceans
-    return mix(h, u_exposure.planet.z - 24.0 - 14.0 * a, sea);
+    return wm_height(a, wp, u_exposure.planet.z);             // the shape of the world (world_map.glsl)
 }
 vec4 atmo_aerial(vec2 uv, float d_km);
 // ---- One weather map for every view of the clouds ---------------------
@@ -226,8 +213,10 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     vec3 q = Nf * 3.2 + vec3(1.7, 0.0, 4.1);
     float cont = pl_fbm(q) * 0.62 + pl_fbm(Nf * 15.0 + 2.0) * 0.28 + pl_fbm(Nf * 70.0) * 0.10;
     float home = exp(-dot(m, m) / (900.0 * 900.0));              // the place we stand on is land (not a peak: its height stays the map's)
-    float land = 1.0 - pl_sea_map(m);                           // (the one map of land and sea; `cont` below only shapes the land's look)
-    float high = smoothstep(0.58, 0.78, cont);
+    float wm_v = wm_continent(m);                                // the world map: > 0 land, < 0 sea
+    float land = smoothstep(-0.012, 0.012, wm_v) * 1.0;         // (`cont` below only shapes the land's look)
+    land = mix(1.0, land, smoothstep(1.5, 2.6, length(m)));     // (home itself is the landscape, lakes and all)
+    float high = wm_ranges(m) * smoothstep(2.6, 6.0, length(m));    // the world map's high ranges (home's own mountains: the landscape)
     float lat = abs(Nf.z);                                     // a pole along z: ice caps
     float detail = pl_fbm(Nf * 60.0);
     vec3 forest = mix(vec3(0.045, 0.085, 0.030), vec3(0.090, 0.110, 0.045), detail);
@@ -238,9 +227,9 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     forest *= 0.70 + 0.75 * field;
     vec3 col = mix(forest, dry * (0.75 + 0.5 * field), smoothstep(0.42, 0.70, 0.5 * pl_noise(Nf * 9.0 + 3.0) + 0.5 * region) * (1.0 - high));
     col = mix(col, rock, high * 0.8);
-    float snow = max(smoothstep(0.70, 0.86, cont + 0.25 * detail), smoothstep(0.80, 0.90, lat + 0.08 * detail));
+    float snow = max(high * high * 0.55 * smoothstep(0.40, 0.80, detail + 0.3 * high), smoothstep(0.80, 0.90, lat + 0.08 * detail));   // on the ranges; and the polar caps
     col = mix(col, vec3(0.80, 0.83, 0.88), snow);
-    vec3 sea = mix(vec3(0.010, 0.035, 0.075), vec3(0.020, 0.075, 0.110), smoothstep(0.38, 0.50, cont));
+    vec3 sea = mix(vec3(0.010, 0.035, 0.075), vec3(0.030, 0.105, 0.120), smoothstep(-0.07, 0.0, wm_v));   // deep; shallows along the coast
     // The middle distance: the country around home, from the landscape's own
     // heights (out to some 50 km, and only while the view resolves them).
     vec3 nl = N;                                               // the ground's normal for the sunlight
@@ -287,7 +276,9 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
         float w_avg = w_home * (1.0 - smoothstep(0.3, 2.0, octf));
         // how much of it lies above the snow line: most of home, little of the low country beyond
         float snow_share = mix(smoothstep(160.0, 40.0, u_exposure.hl1.z) * mix(1.0, 0.18, smoothstep(1.5, 4.0, md)), 1.0, u_exposure.planet.w);
-        vec3 avg = mix(vec3(0.060, 0.075, 0.050), vec3(0.80, 0.83, 0.88), snow_share * 0.92);
+        // (the land's own colours from above, with the share of snow it has - not a flat grey: from
+        // orbit the home country stood out as a pale block against the rest of the continent)
+        vec3 avg = mix(col, vec3(0.80, 0.83, 0.88), snow_share * 0.92);
         col = mix(col, avg, w_avg);               // (the land's colour; where there is sea is the sea map's to say)
     }
     col = mix(sea, col, land);
