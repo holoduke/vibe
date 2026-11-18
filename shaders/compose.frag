@@ -118,6 +118,14 @@ vec3 pl_noised(vec2 p) {
     return vec3(a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y,
                 du * (vec2(b - a, c - a) + (a - b - c + d) * u.yx));
 }
+// The planet's one map of land and sea (terrain_rm_noise_road.glsl rm_sea_map - the same numbers).
+float pl_sea_map(vec2 mk) {
+    float c = pl_noised(mk * 0.00045 + 21.3).x * 0.45 + pl_noised(mk * 0.0035 + 8.9).x * 0.30 +
+              pl_noised(mk * 0.035 + 11.7).x * 0.17 + pl_noised(mk * 0.09 + 4.2).x * 0.08;
+    float dh = length(mk);
+    c += 0.30 * (1.0 - smoothstep(150.0, 700.0, dh));
+    return smoothstep(0.50, 0.45, c) * smoothstep(40.0, 120.0, dh);
+}
 float pl_terrain(vec2 wp, float octf) {
     vec2 p = wp * 0.003;
     float a = 0.0, b = 1.0;
@@ -144,8 +152,7 @@ float pl_terrain(vec2 wp, float octf) {
     float n = pl_noised(wp * 0.00008 + 7.3).x * 0.65 + pl_noised(wp * 0.00021 + 3.1).x * 0.35;
     float amp = mix(0.42, 1.12, smoothstep(0.60, 0.78, n));
     h = mix(h, 30.0 + (h - 30.0) * amp, w);
-    float c = pl_noised(wp * 0.000035 + 11.7).x * 0.6 + pl_noised(wp * 0.00009 + 4.2).x * 0.4;      // oceans
-    float sea = smoothstep(0.50, 0.41, c) * smoothstep(5000.0, 12000.0, length(wp));
+    float sea = pl_sea_map(wp * 0.001);                                                              // oceans
     return mix(h, u_exposure.planet.z - 24.0 - 14.0 * a, sea);
 }
 vec4 atmo_aerial(vec2 uv, float d_km);
@@ -219,7 +226,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     vec3 q = Nf * 3.2 + vec3(1.7, 0.0, 4.1);
     float cont = pl_fbm(q) * 0.62 + pl_fbm(Nf * 15.0 + 2.0) * 0.28 + pl_fbm(Nf * 70.0) * 0.10;
     float home = exp(-dot(m, m) / (900.0 * 900.0));              // the place we stand on is land (not a peak: its height stays the map's)
-    float land = smoothstep(0.50, 0.54, cont + 0.35 * home);
+    float land = 1.0 - pl_sea_map(m);                           // (the one map of land and sea; `cont` below only shapes the land's look)
     float high = smoothstep(0.58, 0.78, cont);
     float lat = abs(Nf.z);                                     // a pole along z: ice caps
     float detail = pl_fbm(Nf * 60.0);
@@ -281,8 +288,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
         // how much of it lies above the snow line: most of home, little of the low country beyond
         float snow_share = mix(smoothstep(160.0, 40.0, u_exposure.hl1.z) * mix(1.0, 0.18, smoothstep(1.5, 4.0, md)), 1.0, u_exposure.planet.w);
         vec3 avg = mix(vec3(0.060, 0.075, 0.050), vec3(0.80, 0.83, 0.88), snow_share * 0.92);
-        col = mix(col, avg, w_avg);
-        land = mix(land, 1.0, w_avg);
+        col = mix(col, avg, w_avg);               // (the land's colour; where there is sea is the sea map's to say)
     }
     col = mix(sea, col, land);
     // Weather systems: broad swirls of cloud over it.

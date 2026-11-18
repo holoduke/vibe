@@ -43,7 +43,22 @@ const float TERRAIN_HEIGHT = 120.0;
 // for the snow line - with a high range only here and there. `a`: the
 // formula's value 0..1; returns metres. (compose.frag pl_terrain has the
 // same function for the painted far field: change both.)
+// The planet's one map of land and sea: 1 = sea, 0 = land, at map position
+// `mk` (km from home; the planet's far field uses the same function with the
+// same numbers - compose.frag pl_sea_map - so a coast seen from orbit is the
+// coast found on the way down). Continents (thousands of km), seas (hundreds),
+// bays and coves (tens). Home is always land.
+float rm_sea_map(vec2 mk) {
+    float c = noise2(mk * 0.00045 + 21.3) * 0.45 + noise2(mk * 0.0035 + 8.9) * 0.30 +
+              noise2(mk * 0.035 + 11.7) * 0.17 + noise2(mk * 0.09 + 4.2) * 0.08;
+    // Home lies well inside a continent: the land's share is raised around it (fully within
+    // ~150 km, fading out by ~700 km), so the nearest sea is a real journey away.
+    float dh = length(mk);
+    c += 0.30 * (1.0 - smoothstep(150.0, 700.0, dh));
+    return smoothstep(0.50, 0.45, c) * smoothstep(40.0, 120.0, dh);
+}
 #ifndef RM_WATER_LEVEL
+
 #define RM_WATER_LEVEL scene.water_params.y
 #endif
 float rm_world_h(float a, vec2 wp) {
@@ -57,8 +72,7 @@ float rm_world_h(float a, vec2 wp) {
     // "sea" the ground goes down to a sea bed below the water level, whatever the hills
     // formula wanted there - with a shelf in between, so coasts have beaches and shallows.
     // Never within 5 km of home. (This is the place for more such areas: plains, deserts ...)
-    float c = noise2(wp * 0.000035 + 11.7) * 0.6 + noise2(wp * 0.00009 + 4.2) * 0.4;
-    float sea = smoothstep(0.50, 0.41, c) * smoothstep(5000.0, 12000.0, length(wp));
+    float sea = rm_sea_map(wp * 0.001);
     return mix(h, RM_WATER_LEVEL - 24.0 - 14.0 * a, sea);
 }
 
