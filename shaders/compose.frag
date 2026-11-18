@@ -17,6 +17,9 @@ layout(set = 0, binding = 2) uniform sampler2D u_skybox;
 // Adapted log2 scene luminance from shaders/exposure.comp.
 layout(std430, set = 0, binding = 4) readonly buffer Exposure {
     float log_avg; float valid; float cur_log; float pad;
+    vec4 planet;         // xy: the camera's place on the map (km), z: water level (m), w: snow on the ground 0..1 (written by the CPU every frame)
+    vec4 hl0;            // the landscape's height layers (m): sand->grass start, end, grass->dirt start, end
+    vec4 hl1;            // dirt->rock start, end, rock->snow start, end
 } u_exposure;
 // Mip 0 of the bloom chain (Karis-prefiltered downsample → upsample). The
 // engine runs run_bloom_chain between TAA and compose; we sample it here at
@@ -95,12 +98,51 @@ float pl_fbm(vec3 p) {
     for (int i = 0; i < 6; ++i) { s += a * pl_noise(p); p = p * 2.03 + 11.7; a *= 0.5; }
     return s;
 }
+// The landscape's own height formula (terrain_rm_heightfield.glsl terrainM,
+// without the castle plateau and the editor's sculpting), with as many
+// octaves as the view from up here resolves. This is what makes the ground
+// seen from an aircraft the same country as the one walked on: the same
+// mountains, the same lakes.
+float pl_h21(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract((p3.x + p3.y) * p3.z);
+}
+vec3 pl_noised(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);
+    float a = pl_h21(i), b = pl_h21(i + vec2(1.0, 0.0)), c = pl_h21(i + vec2(0.0, 1.0)), d = pl_h21(i + vec2(1.0, 1.0));
+    return vec3(a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y,
+                du * (vec2(b - a, c - a) + (a - b - c + d) * u.yx));
+}
+float pl_terrain(vec2 wp, float octf) {
+    vec2 p = wp * 0.003;
+    float a = 0.0, b = 1.0;
+    vec2 d = vec2(0.0);
+    for (int i = 0; i < 6; ++i) {
+        float w = clamp(octf - float(i), 0.0, 1.0);
+        if (w <= 0.0) break;
+        vec3 n = pl_noised(p);
+        d += n.yz * w;
+        a += w * b * n.x / (1.0 + dot(d, d));
+        b *= 0.5;
+        p = mat2(0.8, -0.6, 0.6, 0.8) * p * 2.0;
+    }
+    // The octaves too fine to see from here still lift the ground: add what
+    // they add on average, or the height layers (snow line, lakes) would
+    // shift with distance.
+    float rest = 0.0, bb = 1.0;
+    for (int i = 0; i < 6; ++i) { rest += bb * (1.0 - clamp(octf - float(i), 0.0, 1.0)); bb *= 0.5; }
+    a += rest * 0.42 / (1.0 + dot(d, d));
+    return a * 120.0;
+}
+vec4 atmo_aerial(vec2 uv, float d_km);
 // Returns the planet's contribution in rgb and how much it replaces the sky's below-horizon colour in a.
 vec4 planet_surface(vec3 dir, vec3 sun) {
     const float Rg = 6360.0;                                   // km
     float r = pc.atmo.z;                                       // camera distance from the planet centre (km)
     float alt = r - Rg;
-    float k = smoothstep(1.0, 6.0, alt);
+    float k = smoothstep(1.0, 2.2, alt);
     if (k <= 0.0 || dir.y >= 0.0) return vec4(0.0);
     // Ray from (0, r, 0) against the sphere.
     float b = r * dir.y;
@@ -108,36 +150,91 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     if (disc < 0.0) return vec4(0.0);
     float t = -b - sqrt(disc);
     if (t <= 0.0) return vec4(0.0);
-    vec3 P = vec3(0.0, r, 0.0) + dir * t;                      // on the sphere, km
+    vec3 P = vec3(0.0, r, 0.0) + dir * t;                      // on the sphere, km, in the camera's frame (up = y)
     vec3 N = P / Rg;
+    // The same point in the planet's own frame: the camera has travelled
+    // over the map, which is that far round the sphere. Home (the map's
+    // origin) is the planet's top; `m` is the place on the flat map (km).
+    vec2 cam = u_exposure.planet.xy;
+    float cam_d = length(cam);
+    vec3 Nf = N;
+    if (cam_d > 1e-4) {
+        vec3 ax = vec3(cam.y, 0.0, -cam.x) / cam_d;
+        float ph = cam_d / Rg;
+        Nf = N * cos(ph) + cross(ax, N) * sin(ph) + ax * dot(ax, N) * (1.0 - cos(ph));
+    }
+    float sth = length(Nf.xz);
+    float th = (Nf.y > 0.0) ? asin(min(sth, 1.0)) : 3.14159265 - asin(min(sth, 1.0));
+    vec2 m = Rg * Nf.xz * (sth > 1e-5 ? th / sth : 1.0);
+    vec3 Pf = Nf * Rg;
     // The map: continents from noise on the sphere; the place we stand on is land.
-    vec3 q = N * 3.2 + vec3(1.7, 0.0, 4.1);
-    float cont = pl_fbm(q) * 0.62 + pl_fbm(N * 15.0 + 2.0) * 0.28 + pl_fbm(N * 70.0) * 0.10;
-    float home = exp(-dot(P.xz, P.xz) / (900.0 * 900.0));        // the place we stand on is land (not a peak: its height stays the map's)
+    vec3 q = Nf * 3.2 + vec3(1.7, 0.0, 4.1);
+    float cont = pl_fbm(q) * 0.62 + pl_fbm(Nf * 15.0 + 2.0) * 0.28 + pl_fbm(Nf * 70.0) * 0.10;
+    float home = exp(-dot(m, m) / (900.0 * 900.0));              // the place we stand on is land (not a peak: its height stays the map's)
     float land = smoothstep(0.50, 0.54, cont + 0.35 * home);
     float high = smoothstep(0.58, 0.78, cont);
-    float lat = abs(N.z);                                      // a pole along z: ice caps
-    float detail = pl_fbm(N * 60.0);
+    float lat = abs(Nf.z);                                     // a pole along z: ice caps
+    float detail = pl_fbm(Nf * 60.0);
     vec3 forest = mix(vec3(0.045, 0.085, 0.030), vec3(0.090, 0.110, 0.045), detail);
     vec3 dry    = vec3(0.21, 0.17, 0.10);
     vec3 rock   = vec3(0.16, 0.15, 0.14);
     // Country-sized and field-sized variation (visible from an aircraft's height).
-    float region = pl_fbm(P * 0.045 + 3.0), field = pl_fbm(P * 0.55 + 9.0);
+    float region = pl_fbm(Pf * 0.045 + 3.0), field = pl_fbm(Pf * 0.55 + 9.0);
     forest *= 0.70 + 0.75 * field;
-    vec3 col = mix(forest, dry * (0.75 + 0.5 * field), smoothstep(0.42, 0.70, 0.5 * pl_noise(N * 9.0 + 3.0) + 0.5 * region) * (1.0 - high));
+    vec3 col = mix(forest, dry * (0.75 + 0.5 * field), smoothstep(0.42, 0.70, 0.5 * pl_noise(Nf * 9.0 + 3.0) + 0.5 * region) * (1.0 - high));
     col = mix(col, rock, high * 0.8);
     float snow = max(smoothstep(0.70, 0.86, cont + 0.25 * detail), smoothstep(0.80, 0.90, lat + 0.08 * detail));
     col = mix(col, vec3(0.80, 0.83, 0.88), snow);
     vec3 sea = mix(vec3(0.010, 0.035, 0.075), vec3(0.020, 0.075, 0.110), smoothstep(0.38, 0.50, cont));
+    // The middle distance: the country around home, from the landscape's own
+    // heights (out to some 50 km, and only while the view resolves them).
+    vec3 nl = N;                                               // the ground's normal for the sunlight
+    float md = length(m);
+    float foot = t * 1.2 / max(dot(N, -dir), 0.08);            // metres of ground under one pixel
+    float octf = clamp(log2(333.0 / max(2.0 * foot, 1e-3)) + 1.0, 0.0, 6.0);
+    float w_mid = (1.0 - smoothstep(45.0, 90.0, md)) * smoothstep(0.3, 2.0, octf);
+    if (w_mid > 0.0) {
+        vec2 wp = m * 1000.0;
+        float e = max(foot, 3.0);
+        float h0 = pl_terrain(wp, octf);
+        float hx = pl_terrain(wp + vec2(e, 0.0), octf), hz = pl_terrain(wp + vec2(0.0, e), octf);
+        vec3 tn = normalize(vec3(h0 - hx, e, h0 - hz));
+        // Away from home the country varies by region: lowlands (greener, more water) and highlands (more snow).
+        // (Nothing within 4 km of home, where the real landscape is.)
+        h0 += (pl_noise(vec3(wp * 0.00005, 7.7)) * 0.65 + pl_noise(vec3(wp * 0.00017, 2.2)) * 0.35 - 0.5) * 75.0 * smoothstep(4.0, 25.0, md);
+        float wl = u_exposure.planet.z, gsnow = u_exposure.planet.w;
+        float patchn = pl_noise(vec3(wp * 0.004, 1.3)), fine = pl_noise(vec3(wp * 0.05, 4.1));
+        // The landscape's own height layers: sand, grass (wooded), dirt, rock, snow.
+        vec4 ha = u_exposure.hl0, hb = u_exposure.hl1;
+        float hn = h0 + (fine - 0.5) * 5.0;                                                 // ragged borders
+        vec3 g = mix(vec3(0.030, 0.055, 0.026), vec3(0.070, 0.092, 0.040), patchn) * (0.75 + 0.5 * fine);
+        vec3 rockc = vec3(0.17, 0.16, 0.145) * (0.8 + 0.4 * fine);
+        vec3 mc = mix(vec3(0.30, 0.26, 0.18), g, smoothstep(ha.x, ha.y, hn));
+        mc = mix(mc, mix(g, vec3(0.16, 0.125, 0.085), 0.30), smoothstep(ha.z, ha.w, hn));    // (the dirt band is wooded too)
+        mc = mix(mc, rockc, max(smoothstep(hb.x, hb.y, hn), smoothstep(0.16, 0.40, 1.0 - tn.y)));
+        mc = mix(mc, vec3(0.80, 0.83, 0.88), smoothstep(hb.z, hb.w, hn) * smoothstep(0.45, 0.75, tn.y));
+        mc = mix(vec3(0.30, 0.26, 0.18), mc, smoothstep(wl + 0.4, wl + 2.5, h0));          // the sand at the water's edge
+        mc = mix(mc, vec3(0.80, 0.83, 0.88), gsnow * smoothstep(0.55, 0.85, tn.y));         // snow lying on it
+        float wet = 1.0 - smoothstep(wl - 0.3, wl + 0.3, h0);
+        vec3 lake = mix(vec3(0.012, 0.045, 0.060), vec3(0.62, 0.70, 0.76), smoothstep(0.5, 0.9, gsnow));   // frozen in winter
+        mc = mix(mc, lake, wet);
+        col = mix(col, mc, w_mid);
+        sea = mix(sea, lake, w_mid);
+        land = mix(land, 1.0 - wet * (1.0 - smoothstep(0.5, 0.9, gsnow)), w_mid);
+        nl = normalize(N + vec3(tn.x, 0.0, tn.z) * (w_mid * (1.0 - wet)));
+    }
     col = mix(sea, col, land);
     // Weather systems: broad swirls of cloud over it.
-    float cl = smoothstep(0.56, 0.76, pl_fbm(N * 7.0 + vec3(0.0, 0.0, 0.31 * pl_fbm(N * 3.0))) * 0.65 + pl_fbm(N * 38.0 + 5.0) * 0.35);
-    cl *= 1.0 - 0.9 * exp(-dot(P.xz, P.xz) / (350.0 * 350.0));      // fair weather over home (the local cloud layer is drawn separately)
+    float cl = smoothstep(0.56, 0.76, pl_fbm(Nf * 7.0 + vec3(0.0, 0.0, 0.31 * pl_fbm(Nf * 3.0))) * 0.65 + pl_fbm(Nf * 38.0 + 5.0) * 0.35);
+    cl *= 1.0 - 0.9 * exp(-dot(m, m) / (350.0 * 350.0));           // fair weather over home (the local cloud layer is drawn separately)
     col = mix(col, vec3(0.86), cl * 0.8);
+    nl = normalize(mix(nl, N, cl * 0.8));
     // Sunlight on the ground, through the atmosphere above that spot.
     float ndl = dot(N, sun);
     vec3 t_sun = textureLod(u_atmo_trans, trans_uv(Rg + 0.02, clamp(ndl, -0.15, 1.0)), 0.0).rgb;
-    vec3 lit = col * (t_sun * max(ndl, 0.0) * 0.026 + 0.0004) * atmo_sun_illum();
+    // (brightness: matched to the real landscape below it at aircraft height; the darker value is the look from orbit)
+    float sun_k = mix(0.15, 0.026, smoothstep(20.0, 110.0, alt));
+    vec3 lit = col * (t_sun * max(dot(nl, sun), 0.0) * sun_k + 0.0004) * atmo_sun_illum();
     // Sea glint.
     vec3 hv = normalize(sun - dir);
     lit += (1.0 - land) * (1.0 - cl) * t_sun * pow(max(dot(N, hv), 0.0), 220.0) * 0.05 * atmo_sun_illum();
@@ -145,7 +242,9 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     vec3 t_g = textureLod(u_atmo_trans, trans_uv(Rg + 0.02, max(dot(N, -dir), 0.02)), 0.0).rgb;
     vec3 t_c = textureLod(u_atmo_trans, trans_uv(r, max(-dir.y, 0.02)), 0.0).rgb;
     vec3 T = clamp(t_g / max(t_c, vec3(1e-4)), 0.0, 1.0);
-    return vec4(lit * T, k);
+    // The same haze the real landscape below gets (the aerial-perspective volume, to its far end).
+    vec4 ap = atmo_aerial(gl_FragCoord.xy * pc.viewport.zw, min(t, pc.atmo.w));
+    return vec4(lit * T * ap.a + ap.rgb * atmo_sun_illum(), k);
 }
 
 vec3 atmo_sky(vec3 dir) {

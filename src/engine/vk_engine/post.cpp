@@ -234,14 +234,14 @@ void VulkanEngine::init_exposure() {
     {
         VkBufferCreateInfo bci{};
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size = 16;
+        bci.size = 64;   // + vec4 planet (compose.frag), written every frame
         bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         vk_check(vmaCreateBuffer(allocator_, &bci, &aci, &exposure_buf_, &exposure_alloc_, nullptr),
                  "exposure buffer");
         vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
-            vkCmdFillBuffer(cb, exposure_buf_, 0, 16, 0u);   // valid = 0 -> first frame snaps
+            vkCmdFillBuffer(cb, exposure_buf_, 0, 64, 0u);   // valid = 0 -> first frame snaps
         });
     }
     {

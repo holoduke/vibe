@@ -345,6 +345,13 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     record_sun_horizon_upload(frame.command_buffer, gpu_query_slot);
     record_tlas_publish(frame.command_buffer);   // this frame's TLAS -> tlas_
     // GPU vegetation: cull + LOD-select every instance, fill indirect draws.
+    // Where the camera is on the planet's map, the water level and the snow: for the ground seen from high up (compose.frag planet_surface).
+    if (exposure_buf_) {
+        const float pl[12] = { current_frame_view_.eye_pos.x * 0.001f, current_frame_view_.eye_pos.z * 0.001f, rt_.water_level, env_snow_,
+                               rt_.terrain_h_sand_grass_start, rt_.terrain_h_sand_grass_end, rt_.terrain_h_grass_dirt_start, rt_.terrain_h_grass_dirt_end,
+                               rt_.terrain_h_dirt_rock_start, rt_.terrain_h_dirt_rock_end, rt_.terrain_h_rock_snow_start, rt_.terrain_h_rock_snow_end };
+        vkCmdUpdateBuffer(frame.command_buffer, exposure_buf_, 16, sizeof(pl), pl);
+    }
     { CPU_SCOPE("+veg-cull"); cull_vegetation(frame.command_buffer); cull_clusters(frame.command_buffer); cull_plants(frame.command_buffer); cull_static_clusters(frame.command_buffer); }
 
     // Quadtree CLOD terrain: select nodes + fill this frame's instance
