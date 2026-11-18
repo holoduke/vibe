@@ -489,7 +489,12 @@ float cellMaxHeight(vec2 wp) {
 //   cam:     camera position
 // The ground haze is tuned for the 1500 m seen from the ground. Beyond that
 // (only reached from the air, looking down through thinner air) it grows slowly.
-float rm_haze_dist(float t) { return (t > 1500.0) ? 1500.0 + (t - 1500.0) * 0.08 : t; }
+// And only the part of the ray inside the hazy air near the ground (2.5 km) counts:
+// from high up most of the way down is through clear air.
+float rm_haze_dist(float t) {
+    float tl = t * min(1.0, 2500.0 / max(scene.camera_pos.y, 1.0));
+    return (tl > 1500.0) ? 1500.0 + (tl - 1500.0) * 0.08 : tl;
+}
 float distanceFogAmount(vec3 p_world, vec3 cam) {
     float strength = scene.distance_fog_color.a;
     if (strength < 1e-3) return 0.0;
@@ -497,8 +502,7 @@ float distanceFogAmount(vec3 p_world, vec3 cam) {
     float start_d   = scene.distance_fog_params.y;
     float height_top = scene.distance_fog_params.z;
     float max_alpha  = scene.distance_fog_params.w;
-    float d_cam = length(p_world - cam);
-    if (d_cam > 1500.0) d_cam = 1500.0 + (d_cam - 1500.0) * 0.08;   // (from the air: see rm_haze_dist)
+    float d_cam = rm_haze_dist(length(p_world - cam));   // (from the air: less)
     float d_raw = max(0.0, d_cam - start_d);
     // Exp² falloff — natural-looking atmospheric fog. Cheaper than
     // Beer-Lambert with no visible difference at typical density.

@@ -227,7 +227,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     {
         float w_avg = (1.0 - smoothstep(45.0, 90.0, md)) * (1.0 - smoothstep(0.3, 2.0, octf));
         float snow_share = mix(smoothstep(160.0, 40.0, u_exposure.hl1.z), 1.0, u_exposure.planet.w);   // how much of it lies above the snow line
-        vec3 avg = mix(vec3(0.060, 0.075, 0.050), vec3(0.80, 0.83, 0.88), snow_share * 0.8);
+        vec3 avg = mix(vec3(0.060, 0.075, 0.050), vec3(0.80, 0.83, 0.88), snow_share * 0.92);
         col = mix(col, avg, w_avg);
         land = mix(land, 1.0, w_avg);
     }
@@ -241,8 +241,11 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     float ndl = dot(N, sun);
     vec3 t_sun = textureLod(u_atmo_trans, trans_uv(Rg + 0.02, clamp(ndl, -0.15, 1.0)), 0.0).rgb;
     // (brightness: matched to the real landscape below it at aircraft height; the darker value is the look from orbit)
-    float sun_k = mix(0.15, 0.026, smoothstep(20.0, 110.0, alt));
-    vec3 lit = col * (t_sun * max(dot(nl, sun), 0.0) * sun_k + 0.0004) * atmo_sun_illum();
+    // (low: exactly the engine's own sunlight on a surface, albedo x E x N.L - atmo_sun_illum() is E x pi x intensity)
+    float sun_k = mix(0.3183 / max(pc.atmo.y, 0.1), 0.026, smoothstep(20.0, 110.0, alt));
+    // (+ the sky's share of the light, as the landscape itself has it; none of it from orbit, as before)
+    float amb_k = sun_k * 0.45 * (1.0 - smoothstep(20.0, 110.0, alt)) * smoothstep(-0.10, 0.15, sun.y);
+    vec3 lit = col * (t_sun * max(dot(nl, sun), 0.0) * sun_k + amb_k + 0.0004) * atmo_sun_illum();
     // Sea glint.
     vec3 hv = normalize(sun - dir);
     lit += (1.0 - land) * (1.0 - cl) * t_sun * pow(max(dot(N, hv), 0.0), 220.0) * 0.05 * atmo_sun_illum();
@@ -255,10 +258,11 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     // slow ground haze of terrain_raymarch.frag rm_haze_dist, toward the colour of fully hazed air)
     vec2 uvh = gl_FragCoord.xy * pc.viewport.zw;
     vec4 ap = atmo_aerial(uvh, min(t, 1.5));
-    vec4 apf = atmo_aerial(uvh, pc.atmo.w);
-    vec3 hazed = apf.rgb * atmo_sun_illum() / max(1.0 - apf.a, 0.05);
-    float tm = t * 1000.0;
+    // (the haze colour of terrain_raymarch.frag: grey by day, dark at night)
+    vec3 hazed = vec3(0.55, 0.55, 0.58) * mix(0.04, 1.0, smoothstep(-0.08, 0.10, sun.y));
+    float tm = t * 1000.0 * min(1.0, 2.5 / max(alt, 0.001));         // the part of the ray in the hazy air near the ground
     vec3 ext = exp(-((tm > 1500.0) ? 1500.0 + (tm - 1500.0) * 0.08 : tm) * 0.00025 * vec3(1.0, 1.3, 2.0));
+    ext = mix(ext, vec3(1.0), smoothstep(20.0, 80.0, alt));          // from space: the veil in atmo_sky is the air
     vec3 seen = lit * T * ap.a + ap.rgb * atmo_sun_illum();
     return vec4(seen * ext + hazed * (1.0 - ext), k);
 }
