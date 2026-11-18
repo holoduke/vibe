@@ -142,7 +142,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     const float Rg = 6360.0;                                   // km
     float r = pc.atmo.z;                                       // camera distance from the planet centre (km)
     float alt = r - Rg;
-    float k = smoothstep(1.0, 2.2, alt);
+    float k = smoothstep(1.0, 1.2, alt);
     if (k <= 0.0 || dir.y >= 0.0) return vec4(0.0);
     // Ray from (0, r, 0) against the sphere.
     float b = r * dir.y;

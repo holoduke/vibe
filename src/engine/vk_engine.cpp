@@ -1280,8 +1280,10 @@ void VulkanEngine::run(const RunOptions& opts) {
         // The pause menu freezes the whole simulation (jets, bombs, AA,
         // particles, their sounds) like it already froze physics; the
         // ticks still run with dt = 0 so everything stays drawn.
-        const float sim_dt = (state_ == State::Playing) ? frame_dt : 0.0f;
-        if (audio_) audio_->set_paused(state_ != State::Playing);
+        // (In a multiplayer session with others the world is shared and does not stop for one player's menu.)
+        const bool world_runs = state_ == State::Playing || (net_ && !net_->players().empty());
+        const float sim_dt = world_runs ? frame_dt : 0.0f;
+        if (audio_) audio_->set_paused(!world_runs);
         // Aircraft and bombs keep real time at any frame rate (several small
         // steps on a slow frame instead of slowing down): in multiplayer the
         // same airstrike must land at the same moment for everybody.
