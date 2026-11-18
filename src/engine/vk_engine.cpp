@@ -131,6 +131,8 @@ void VulkanEngine::init() {
         audio_->load_clip(ClipID(int(ClipID::ExplClose1) + i), "assets/sounds/expl_close_" + std::to_string(i + 1) + ".mp3");
         audio_->load_clip(ClipID(int(ClipID::ExplFar1) + i),   "assets/sounds/expl_far_" + std::to_string(i + 1) + ".mp3");
     }
+    for (int i = 0; i < 3; ++i)
+        audio_->load_clip(ClipID(int(ClipID::Thunder1) + i), "assets/sounds/thunder_" + std::to_string(i + 1) + ".mp3");
     init_vulkan();
     init_pipeline_cache();
     init_swapchain();

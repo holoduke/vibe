@@ -681,8 +681,25 @@ void VulkanEngine::load_foliage_textures() {
         retired.push_back(slot);
         slot = { t.image, t.alloc, t.view };
     };
+    // All of them decode at once on worker threads (they were ~0.35 s of
+    // serial start-up); the uploads below take them in order.
+    struct Pre { unsigned char* px = nullptr; int w = 0, h = 0, c = 0; };
+    std::vector<std::pair<std::string, std::future<Pre>>> pre;
+    for (const char* tail : { "leaf_atlas.png", "timber.png", "../church/grave_stone.png", "../church/stained_glass.png",
+                              "plant_atlas.png", "../character/soldier_atlas.jpg", "../rocks/rocks_bake.png" }) {
+        std::string p = resolve(tail);
+        if (p.empty()) continue;
+        pre.emplace_back(p, std::async(std::launch::async, [p]() {
+            Pre r; r.px = ::stbi_load(p.c_str(), &r.w, &r.h, &r.c, 4); return r; }));
+    }
+    auto stbi_load = [&](const char* path, int* w, int* h, int* c, int req) -> unsigned char* {
+        for (auto& e : pre)
+            if (e.first == path && e.second.valid()) { Pre r = e.second.get(); *w = r.w; *h = r.h; *c = r.c; return r.px; }
+        return ::stbi_load(path, w, h, c, req);
+    };
     int loaded = 0;
     if (std::string p = resolve("leaf_atlas.png"); !p.empty()) {
+
         int w = 0, h = 0, c = 0;
         if (unsigned char* px = stbi_load(p.c_str(), &w, &h, &c, 4)) {
             put(albedo_textures_[kTexLeaf], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "foliage/leaf_atlas");

@@ -428,10 +428,13 @@ void VulkanEngine::apply_environment(float dt) {
             lightning_pos_.y = std::max(sample_terrain_height(lightning_pos_.x, lightning_pos_.z), rt_.water_level);
             if (audio_) {
                 const glm::vec3 p = player_.eye_position() + glm::vec3(std::cos(a), 0.4f, std::sin(a)) * 60.0f;
-                const int clip = int(ClipID::ExplFar1) + int(frand(rng) * 4.99f);
-                audio_->play_effect(ClipID(clip), p, glm::clamp(1.3f - dist / 1600.0f, 0.35f, 1.1f),
-                                    frand_range(rng, 0.45f, 0.62f), dist / 343.0f,
-                                    glm::mix(1400.0f, 420.0f, dist / 1400.0f));
+                // Real thunder: a clap or crackle for a near strike, the long roll for a far one;
+                // it arrives late and dull with distance.
+                const ClipID clip = dist > 700.0f ? ClipID::Thunder2
+                                                  : (frand(rng) < 0.5f ? ClipID::Thunder1 : ClipID::Thunder3);
+                audio_->play_effect(clip, p, glm::clamp(1.5f - dist / 1300.0f, 0.45f, 1.4f),
+                                    frand_range(rng, 0.88f, 1.06f), dist / 343.0f,
+                                    glm::mix(12000.0f, 900.0f, glm::clamp(dist / 1400.0f, 0.0f, 1.0f)));
             }
         }
     }
