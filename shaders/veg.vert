@@ -66,8 +66,12 @@ void main() {
         // Fewer leaves -> larger ones, so the crown keeps its cover.
         float comp = inversesqrt(max(detail, 0.03));   // leaf count ~ detail -> area kept
         vec3 origin = inPosition - inNormal;
-        Pl = origin + inNormal * (g * comp);
         float tone = fract(sin(dot(origin, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+        // Winter: the leaf trees stand bare. Every leaf lets go at its own
+        // moment as winter comes in (and they come back the same way).
+        if (arch[uint(I.rot_arch_phase.y + 0.5)].w > 0.5 && arch[uint(I.rot_arch_phase.y + 0.5)].w < 1.5)
+            g *= 1.0 - smoothstep(tone * 0.6, tone * 0.6 + 0.4, scene.season.w);
+        Pl = origin + inNormal * (g * comp);
         card_uvk = vec3(mod(corner, 2.0), floor(corner * 0.5 + 0.01), (matRaw == 7 ? 0.0 : float(matRaw - 8)) + 0.05 + 0.9 * tone);   // z = atlas cell + tone
         Nl = vec3(0.0, 1.0, 0.0);
         mat0 = 7;

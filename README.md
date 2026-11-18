@@ -47,9 +47,13 @@ source: this is one data point, with the full commit history as the log.
 |---|---|
 | ![Footprints in the snow on the cobbled road](docs/screenshots/snow_road.png) | ![The castle in a thunderstorm](docs/screenshots/storm.png) |
 
-| Spring at the chapel | The in-game HUD |
+| Winter: bare trees, snow, the frozen lake | Spring at the chapel |
 |---|---|
-| ![The chapel in spring](docs/screenshots/spring.png) | ![HUD with health, weapon bay and frame rate](docs/screenshots/hud.png) |
+| ![Winter at the lake](docs/screenshots/winter.png) | ![The chapel in spring](docs/screenshots/spring.png) |
+
+| The in-game HUD |
+|---|
+| ![HUD with health, weapon bay and frame rate](docs/screenshots/hud.png) |
 
 | Sunrise with volumetric light | Night: moonlight, stars, lanterns |
 |---|---|

@@ -84,8 +84,11 @@ void VulkanEngine::mp_update(float dt) {
     // QLIKE_TEST_WX=<seconds>:<type>: pick that weather type after that many seconds (sync tests).
     if (static const char* tw = std::getenv("QLIKE_TEST_WX"); tw) {
         static bool done = false;
-        float at = 0.0f; int ty = 0;
-        if (!done && std::sscanf(tw, "%f:%d", &at, &ty) == 2 && glfwGetTime() > double(at)) { done = true; rt_.weather_enabled = true; rt_.weather_preset = ty; }
+        float at = 0.0f; int ty = 0, se = -1;
+        if (!done && std::sscanf(tw, "%f:%d:%d", &at, &ty, &se) >= 2 && glfwGetTime() > double(at)) {
+            done = true; rt_.weather_enabled = true; rt_.weather_preset = ty;
+            if (se >= 0) rt_.season = se;            // QLIKE_TEST_WX=<seconds>:<type>:<season>
+        }
     }
     mp_sync_world(dt);
 

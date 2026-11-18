@@ -11,6 +11,7 @@
 bool leaf_card_hit(rayQueryEXT rq) {
     uint cell1 = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);
     if (cell1 == 0u) return true;
+    if (cell1 >= 100u) return false;         // a bare tree (winter): its leaf cards are not there
     vec2 b = rayQueryGetIntersectionBarycentricsEXT(rq, false);
     vec2 uv = ((rayQueryGetIntersectionPrimitiveIndexEXT(rq, false) & 1) == 0) ? vec2(b.x + b.y, b.y)
                                                                               : vec2(b.x, b.x + b.y);

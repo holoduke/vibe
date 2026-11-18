@@ -78,6 +78,10 @@
 #define QLIKE_SHADER_DIR "shaders"
 #endif
 
+// (declared here instead of including windows.h, whose macros clash with our names)
+extern "C" __declspec(dllimport) void* __stdcall GetCurrentProcess();
+extern "C" __declspec(dllimport) int __stdcall TerminateProcess(void*, unsigned int);
+
 namespace qlike {
 
 // PushConstants, SceneUBO, debug_callback, spark_blackbody, align_local_y_to,
@@ -1534,6 +1538,16 @@ void VulkanEngine::shutdown() {
     guarded("destroy_terrain_shadow_texture", [&]{ destroy_terrain_shadow_texture(); });
     guarded("destroy_sun_shadow_resources", [&]{ destroy_sun_shadow_resources(); });
     guarded("destroy_pipeline_cache", [&]{ destroy_pipeline_cache(); });
+    // Everything of ours is saved and released. What is left - tearing down the
+    // device, the instance and the upscaler SDK's plug-ins - took 7 seconds and
+    // gives nothing back that the operating system does not reclaim at once:
+    // leave now. (QLIKE_FULL_SHUTDOWN=1 runs the complete teardown, for leak checks.)
+    if (!std::getenv("QLIKE_FULL_SHUTDOWN")) {
+        log::info("Vibe shutdown (fast exit)");
+        log::close();
+        std::fflush(nullptr);
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
     guarded("destroy_readback_buffer", [&]{ destroy_readback_buffer(); });
 
     guarded("destroy_frames", [&]{

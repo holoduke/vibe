@@ -1067,8 +1067,12 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     // their TLAS records are cached and their materials uploaded once per
     // change instead of every build (~0.8 MB of upload + 7000 matrix builds).
     {
+        // (the seasons change the leaves' colour in reflections and bounce light, and in
+        // winter the leaf trees are bare: re-made when the season state moves a step)
+        const int season_sig = int(season_w_[0] * 12.0f) + 16 * int(season_w_[2] * 12.0f) + 256 * int(season_w_[3] * 12.0f);
         if (veg_tlas_cache_list_ != veg_rt_list_ || veg_tlas_cache_base_ != static_mats ||
-            veg_tlas_cache_tex_ != tex_on) {
+            veg_tlas_cache_tex_ != tex_on || veg_tlas_cache_season_ != season_sig) {
+            veg_tlas_cache_season_ = season_sig;
             veg_tlas_cache_list_ = veg_rt_list_;
             veg_tlas_cache_base_ = static_mats;
             veg_tlas_cache_tex_ = tex_on;
@@ -1093,6 +1097,21 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
                 glm::vec4 col = sp == 3 ? glm::vec4(0.40f, 0.38f, 0.35f, 1.0f)
                               : sp == 0 ? glm::vec4(0.08f, 0.17f, 0.08f, 1.0f)
                                         : glm::vec4(0.15f, 0.27f, 0.07f, 1.0f);
+                if (sp == 1 || sp == 2) {
+                    // The same colours as the leaves themselves (scene_ubo.glsl season_leaf, veg.vert's per-tree number).
+                    const float spw = season_w_[0], auw = season_w_[2];
+                    const float hs = std::sin(I.pos_scale.x * 12.9898f + I.pos_scale.z * 78.233f) * 43758.5453f;
+                    const float h1 = hs - std::floor(hs);
+                    const float h2x = h1 * 7.13f + 0.37f, h2 = h2x - std::floor(h2x);
+                    glm::vec3 c(col);
+                    const float lum = glm::dot(c, glm::vec3(0.3f, 0.5f, 0.2f));
+                    c = glm::mix(c, lum * glm::vec3(1.05f, 1.42f, 0.62f), spw * 0.55f);
+                    const glm::vec3 tone = h1 < 0.40f ? glm::vec3(2.05f, 1.45f, 0.32f)
+                                         : (h1 < 0.75f ? glm::vec3(2.15f, 0.98f, 0.26f) : glm::vec3(1.75f, 0.55f, 0.24f));
+                    c = glm::mix(c, lum * tone, glm::smoothstep(h2 * 0.55f, h2 * 0.55f + 0.45f, auw) * 0.85f);
+                    if (sp == 1) c = glm::mix(c, glm::vec3(0.16f, 0.12f, 0.09f), season_w_[3]);      // bare: bark
+                    col = glm::vec4(c, col.a);
+                }
                 glm::vec4 tex = (tex_on && sp == 3) ? glm::vec4(7.0f, 7.0f, 0.22f, 0.0f) : kNoTex;
                 VkAccelerationStructureInstanceKHR inst{};
                 for (int row = 0; row < 3; ++row)
@@ -1105,6 +1124,9 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
                     const size_t ri = size_t(a) * size_t(kVegDrawLods) + lvl;
                     if (ri < veg_lod_ranges_.size() && veg_lod_ranges_[ri].card_start != 0xFFFFFFFFu)
                         inst.instanceShaderBindingTableRecordOffset = uint32_t(veg_lod_ranges_[ri].card_cell) + 1u;
+                    // Winter: a leaf tree casts the shadow of its branches only.
+                    if (sp == 1 && season_w_[3] > 0.5f && inst.instanceShaderBindingTableRecordOffset != 0u)
+                        inst.instanceShaderBindingTableRecordOffset = 100u;
                 }
                 veg_tlas_inst_.push_back(inst);
                 vmats.push_back(col);

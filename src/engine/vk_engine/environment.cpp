@@ -230,6 +230,11 @@ void VulkanEngine::apply_environment(float dt) {
     // transition time.
     {
         const int want = glm::clamp(rt_.season, 0, 3);
+        {
+            static int logged = -1;
+            static const char* kName[4] = { "spring", "summer", "autumn", "winter" };
+            if (want != logged) { logged = want; log::infof("[weather] season: %s (changes take %.0f s)", kName[want], rt_.weather_transition_s); }
+        }
         const float st = season_init_ ? dt / glm::clamp(rt_.weather_transition_s, 1.0f, 300.0f) : 1.0f;
         float sum = 0.0f;
         for (int i = 0; i < 4; ++i) {

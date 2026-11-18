@@ -1360,6 +1360,7 @@ private:
     float season_w_[4] = { 0.0f, 1.0f, 0.0f, 0.0f };   // spring, summer, autumn, winter
     bool  season_init_ = false;
     float wx_clock_rate_ = 2.0f;      // game hours per second while a weather type turns the clock
+    int   veg_tlas_cache_season_ = -1; // season state the ray-traced vegetation records were made for
     Wx    mp_host_tgt_{};             // multiplayer client: the weather target the host decided
     int   wx_last_preset_ = -1;
     float wx_clock_target_ = -1.0f;   // hour the clock is being turned to (-1 = not)
