@@ -940,7 +940,9 @@ void VulkanEngine::run(const RunOptions& opts) {
                     if (pin.crawl) wish.y -= 1.0f;
                     // The higher above the ground, the faster: 40 m/s low down, kilometres
                     // a second on the way to orbit (so the planet can be left in a minute).
-                    const float alt_fly = player_.position.y - sample_terrain_height(player_.position.x, player_.position.z);
+                    // (height above the lowest ground, not above the hill being crossed: with the ground's
+                    // own height in it the speed rose and fell over every ridge - the flight surged)
+                    const float alt_fly = player_.position.y - rt_.water_level;
                     const float speed = (pin.sprint ? 120.0f : 40.0f) * glm::clamp(alt_fly / 60.0f, 1.0f, 2000.0f);   // walking is 8 m/s
                     const glm::vec3 target = glm::dot(wish, wish) > 1e-6f ? glm::normalize(wish) * speed : glm::vec3(0.0f);
                     player_.velocity += (target - player_.velocity) * std::min(1.0f, 8.0f * kFixedDt);

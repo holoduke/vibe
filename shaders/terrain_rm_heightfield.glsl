@@ -502,18 +502,22 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
 float rm_far_limit(float eye_y) {
     // (and from 25 km up it draws in again: by 60 km the planet's painted far field, with
     // its weather, has taken over - compose.frag has the same formula for the cross-fade)
-    return clamp(1500.0 + (eye_y - 300.0) * 100.0, 1500.0, 80000.0) * (1.0 - smoothstep(25000.0, 60000.0, eye_y));
+    return clamp(1500.0 + max(eye_y, 0.0) * 100.0, 1500.0, 80000.0) * (1.0 - smoothstep(25000.0, 60000.0, eye_y));
 }
 // The march for that: only used above 1 km, for rays the normal march
 // cannot reach. Looking down from the air there is nothing near the eye,
 // so this is a plain walk through the slab that holds the landscape.
 float raymarch_far(vec3 ro, vec3 rd, float t_end) {
-    if (rd.y > -1e-4) return -1.0;
-    float t = max((ro.y - terrainMaxHeight()) / (-rd.y), 0.0);
+    // (from the ground too: the land does not end 1.5 km away, it only is not marched in detail
+    // beyond that. From below the highest ground a ray may also climb to it.)
+    float maxH = terrainMaxHeight();
+    if (rd.y > -1e-4 && (ro.y > maxH || rd.y > 0.12)) return -1.0;
+    float t = (ro.y > maxH) ? (ro.y - maxH) / (-rd.y) : 1400.0;      // (the normal march has done the near part)
     float t_prev = t;
     for (int i = 0; i < 160; ++i) {
         if (t > t_end) return -1.0;
         vec3 p = ro + rd * t;
+        if (rd.y > 0.0 && p.y > maxH) return -1.0;
         float h = p.y - terrainM(p.xz);          // all octaves: the heights (lakes, snow line) must not shift with distance
         if (h < 0.0012 * t) {
             if (h < 0.0) {

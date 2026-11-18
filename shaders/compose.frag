@@ -180,7 +180,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     const float Rg = 6360.0;                                   // km
     float r = pc.atmo.z;                                       // camera distance from the planet centre (km)
     float alt = r - Rg;
-    float k = smoothstep(0.30, 0.45, alt);
+    float k = smoothstep(0.10, 0.22, alt);
     if (k <= 0.0 || dir.y >= 0.0) return vec4(0.0);
     // Ray from (0, r, 0) against the sphere.
     float b = r * dir.y;
@@ -1214,7 +1214,10 @@ void main() {
     vec2 uvp = gl_FragCoord.xy * pc.viewport.zw;
     float obj_dist = (obj_w > 0.0) ? eye_dist(uvp, obj_depth) : 0.0;
     if (!uw && pc.atmo.x > 0.5 && obj_w > 0.0) {
-        vec4 ap = atmo_aerial(uvp, obj_dist * 0.001);
+        // (no further than the terrain's depth reaches on the ground, ~1.2 km: above 1 km altitude the
+        // far plane moves out and the same clamped depth meant three times the distance - the land
+        // turned bluer in a step there)
+        vec4 ap = atmo_aerial(uvp, min(obj_dist, 1200.0) * 0.001);
         hdr_obj = hdr_obj * ap.a + ap.rgb * atmo_sun_illum() * obj_w;
     }
     // From the air: the raymarched landscape hands over to the planet's far
@@ -1239,13 +1242,26 @@ void main() {
                 hdr_obj = mix(hdr_obj, ccol * obj_w, ca);
             }
         }
-        if (!uw && pc.atmo.x > 0.5 && alt_m > 300.0 && obj_w > 0.0 && obj_depth > 0.9995) {
+        if (!uw && pc.atmo.x > 0.5 && alt_m > 100.0 && obj_w > 0.0 && obj_depth > 0.9995) {
             vec3 pdir = view_ray(uvp);
             if (pdir.y < -1e-4) {
-                float fl = clamp(1500.0 + (alt_m - 300.0) * 100.0, 1500.0, 80000.0) * (1.0 - smoothstep(25000.0, 60000.0, alt_m));
-                float tp = max(alt_m - 60.0, 1.0) / (-pdir.y);
+                float fl = clamp(1500.0 + alt_m * 100.0, 1500.0, 80000.0) * (1.0 - smoothstep(25000.0, 60000.0, alt_m));
+                // The distance at which this ray can FIRST meet land: where it passes below the
+                // highest ground there is (terrainMaxHeight, ~200 m). Not where it meets the plain:
+                // from low down a nearby mountain against the horizon lies on a ray that reaches the
+                // plain tens of km away, and was faded out as if it were that far (a white band
+                // for a distance between 100 and 300 m up).
+                float tp = max(alt_m - 220.0, 0.0) / (-pdir.y);
                 float wf = smoothstep(0.45 * fl, 0.92 * fl, tp);
-                if (wf > 0.0) hdr_obj = mix(hdr_obj, atmo_sky(pdir) * obj_w, wf);
+                if (wf > 0.0) {
+                    // Into the far field's LAND, and only as far as that has come in (100 - 220 m: on the
+                    // ground the landscape ends as it always did). Not into atmo_sky() while it is coming
+                    // in: the rest of that is the sky model's below-horizon value, a bright white - the
+                    // distance washed out to a white band between 100 and 300 m.
+                    vec4 plc = planet_surface(pdir, normalize(pc.sun_dir.xyz));
+                    vec3 tgt = (plc.a >= 0.999) ? atmo_sky(pdir) : plc.rgb;
+                    hdr_obj = mix(hdr_obj, tgt * obj_w, wf * plc.a);
+                }
             }
         }
         // Above the cloud layer the clouds are in front of the land (clouds.comp renders

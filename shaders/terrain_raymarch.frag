@@ -609,7 +609,7 @@ void main() {
     // the horizon - beyond the landscape the planet itself is drawn (compose.frag).
     // (No further than the terrain march reaches: past that there is no shore to bound it,
     // and from above 1.5 km it was a pale disc of "sea" under the camera.)
-    if (ro.y > 300.0 && t_water_plane > rm_far_limit(ro.y)) t_water_plane = -1.0;
+    if (ro.y > 220.0 && t_water_plane > rm_far_limit(ro.y)) t_water_plane = -1.0;
 #else /* QLIKE_WATER */
     // Distance to the water plane is just |vWPos - camera|. Replaces the
     // analytic ray-vs-plane intersection (which was algebraically equal
@@ -680,7 +680,7 @@ void main() {
                          : raymarch(ro, rd, t_stop);
     if (obj_stop && t < 0.0) discard;      // an object owns this pixel
     // From the air (above 1 km): the landscape beyond the normal march's reach.
-    if (t < 0.0 && !water_only && ro.y > 300.0) {
+    if (t < 0.0 && !water_only && !obj_stop) {
         float fl = rm_far_limit(ro.y);
         t = raymarch_far(ro, rd, (t_water_plane > 0.0) ? min(fl, t_water_plane) : fl);
     }
