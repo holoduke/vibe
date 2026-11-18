@@ -487,6 +487,9 @@ float cellMaxHeight(vec2 wp) {
 // run AFTER all atmospheric / specular passes.
 //   p_world: shaded point in world space
 //   cam:     camera position
+// The ground haze is tuned for the 1500 m seen from the ground. Beyond that
+// (only reached from the air, looking down through thinner air) it grows slowly.
+float rm_haze_dist(float t) { return (t > 1500.0) ? 1500.0 + (t - 1500.0) * 0.08 : t; }
 float distanceFogAmount(vec3 p_world, vec3 cam) {
     float strength = scene.distance_fog_color.a;
     if (strength < 1e-3) return 0.0;
@@ -494,7 +497,9 @@ float distanceFogAmount(vec3 p_world, vec3 cam) {
     float start_d   = scene.distance_fog_params.y;
     float height_top = scene.distance_fog_params.z;
     float max_alpha  = scene.distance_fog_params.w;
-    float d_raw = max(0.0, length(p_world - cam) - start_d);
+    float d_cam = length(p_world - cam);
+    if (d_cam > 1500.0) d_cam = 1500.0 + (d_cam - 1500.0) * 0.08;   // (from the air: see rm_haze_dist)
+    float d_raw = max(0.0, d_cam - start_d);
     // Exp² falloff — natural-looking atmospheric fog. Cheaper than
     // Beer-Lambert with no visible difference at typical density.
     float dx = d_raw * density;
@@ -600,7 +605,7 @@ void main() {
     // the horizon - beyond the landscape the planet itself is drawn (compose.frag).
     // (No further than the terrain march reaches: past that there is no shore to bound it,
     // and from above 1.5 km it was a pale disc of "sea" under the camera.)
-    if (ro.y - water_y > 1000.0 && t_water_plane > 1500.0) t_water_plane = -1.0;
+    if (ro.y - water_y > 1000.0 && t_water_plane > rm_far_limit(ro.y)) t_water_plane = -1.0;
 #else /* QLIKE_WATER */
     // Distance to the water plane is just |vWPos - camera|. Replaces the
     // analytic ray-vs-plane intersection (which was algebraically equal
@@ -669,6 +674,11 @@ void main() {
     float t = water_only ? raymarchMesh(ro, rd, t_water_plane)
                          : raymarch(ro, rd, t_stop);
     if (obj_stop && t < 0.0) discard;      // an object owns this pixel
+    // From the air (above 1 km): the landscape beyond the normal march's reach.
+    if (t < 0.0 && !water_only && ro.y > 1000.0) {
+        float fl = rm_far_limit(ro.y);
+        t = raymarch_far(ro, rd, (t_water_plane > 0.0) ? min(fl, t_water_plane) : fl);
+    }
 
     // Resolve water vs terrain ordering for the rest of the shader.
     float t_water = -1.0;
@@ -1493,7 +1503,7 @@ void main() {
         // existing block by jumping to a tail). To keep the diff
         // tight we re-do the fog inline here using the same code path.
         float sundotW = clamp(dot(rd, sunDirW), 0.0, 1.0);
-        vec3 ext_w = exp(-t_water * 0.00025 * vec3(1.0, 1.3, 2.0));
+        vec3 ext_w = exp(-rm_haze_dist(t_water) * 0.00025 * vec3(1.0, 1.3, 2.0));
         // pow(x, 8) → 3 squarings.
         float sd2 = sundotW * sundotW;
         float sd4 = sd2 * sd2;
@@ -2762,7 +2772,7 @@ void main() {
     // Wavelength-dependent atmospheric extinction (blue attenuates
     // ~4× faster than red), with a sun-tinted fog colour near the sun
     // direction so the horizon glows warm where the sun touches it.
-    vec3 extinction = exp(-t * 0.00025 * vec3(1.0, 1.3, 2.0));
+    vec3 extinction = exp(-rm_haze_dist(t) * 0.00025 * vec3(1.0, 1.3, 2.0));
     float sundot = clamp(dot(rd, sunDir), 0.0, 1.0);
     // pow(x, 8) → 3 squarings.
     float sn2 = sundot * sundot;

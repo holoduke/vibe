@@ -223,6 +223,14 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
         land = mix(land, 1.0 - wet * (1.0 - smoothstep(0.5, 0.9, gsnow)), w_mid);
         nl = normalize(N + vec3(tn.x, 0.0, tn.z) * (w_mid * (1.0 - wet)));
     }
+    // Where the view no longer resolves those heights (shallow, far): the same country's average look, not the generic map.
+    {
+        float w_avg = (1.0 - smoothstep(45.0, 90.0, md)) * (1.0 - smoothstep(0.3, 2.0, octf));
+        float snow_share = mix(smoothstep(160.0, 40.0, u_exposure.hl1.z), 1.0, u_exposure.planet.w);   // how much of it lies above the snow line
+        vec3 avg = mix(vec3(0.060, 0.075, 0.050), vec3(0.80, 0.83, 0.88), snow_share * 0.8);
+        col = mix(col, avg, w_avg);
+        land = mix(land, 1.0, w_avg);
+    }
     col = mix(sea, col, land);
     // Weather systems: broad swirls of cloud over it.
     float cl = smoothstep(0.56, 0.76, pl_fbm(Nf * 7.0 + vec3(0.0, 0.0, 0.31 * pl_fbm(Nf * 3.0))) * 0.65 + pl_fbm(Nf * 38.0 + 5.0) * 0.35);
@@ -243,8 +251,16 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     vec3 t_c = textureLod(u_atmo_trans, trans_uv(r, max(-dir.y, 0.02)), 0.0).rgb;
     vec3 T = clamp(t_g / max(t_c, vec3(1e-4)), 0.0, 1.0);
     // The same haze the real landscape below gets (the aerial-perspective volume, to its far end).
-    vec4 ap = atmo_aerial(gl_FragCoord.xy * pc.viewport.zw, min(t, pc.atmo.w));
-    return vec4(lit * T * ap.a + ap.rgb * atmo_sun_illum(), k);
+    // (as the raymarched landscape in front of it gets it: the volume over the first 1.5 km, then the
+    // slow ground haze of terrain_raymarch.frag rm_haze_dist, toward the colour of fully hazed air)
+    vec2 uvh = gl_FragCoord.xy * pc.viewport.zw;
+    vec4 ap = atmo_aerial(uvh, min(t, 1.5));
+    vec4 apf = atmo_aerial(uvh, pc.atmo.w);
+    vec3 hazed = apf.rgb * atmo_sun_illum() / max(1.0 - apf.a, 0.05);
+    float tm = t * 1000.0;
+    vec3 ext = exp(-((tm > 1500.0) ? 1500.0 + (tm - 1500.0) * 0.08 : tm) * 0.00025 * vec3(1.0, 1.3, 2.0));
+    vec3 seen = lit * T * ap.a + ap.rgb * atmo_sun_illum();
+    return vec4(seen * ext + hazed * (1.0 - ext), k);
 }
 
 vec3 atmo_sky(vec3 dir) {

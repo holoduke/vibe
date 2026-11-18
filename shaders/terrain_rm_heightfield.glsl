@@ -494,6 +494,44 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
     return t;
 }
 
+#ifndef QLIKE_WATER
+// How far the landscape is marched. 1500 m on the ground and up to 1 km
+// altitude (unchanged); from there it grows with height, so that flying up
+// the real landscape stays under the camera out to tens of kilometres (the
+// planet's shaded far field in compose.frag takes over beyond it).
+float rm_far_limit(float eye_y) {
+    return clamp(1500.0 + (eye_y - 1000.0) * 40.0, 1500.0, 80000.0);
+}
+// The march for that: only used above 1 km, for rays the normal march
+// cannot reach. Looking down from the air there is nothing near the eye,
+// so this is a plain walk through the slab that holds the landscape.
+float raymarch_far(vec3 ro, vec3 rd, float t_end) {
+    if (rd.y > -1e-4) return -1.0;
+    float t = max((ro.y - terrainMaxHeight()) / (-rd.y), 0.0);
+    float t_prev = t;
+    for (int i = 0; i < 160; ++i) {
+        if (t > t_end) return -1.0;
+        vec3 p = ro + rd * t;
+        float h = p.y - terrainM(p.xz);          // all octaves: the heights (lakes, snow line) must not shift with distance
+        if (h < 0.0012 * t) {
+            if (h < 0.0) {
+                float ta = t_prev, tb = t;
+                for (int k = 0; k < 6; ++k) {
+                    float tm = 0.5 * (ta + tb);
+                    vec3  pm = ro + tm * rd;
+                    if (pm.y - terrainM(pm.xz) > 0.0) ta = tm; else tb = tm;
+                }
+                return ta;
+            }
+            return t;
+        }
+        t_prev = t;
+        t += max(h * 0.55, 0.0025 * t);
+    }
+    return t;      // out of steps just above the ground: that is where it is (never a hole to the water plane)
+}
+#endif
+
 // Finite-difference normal with distance-scaled epsilon. Eps grows
 // linearly with distance (was quadratic — that smeared distant
 // detail far more than required for anti-aliasing) so distant
