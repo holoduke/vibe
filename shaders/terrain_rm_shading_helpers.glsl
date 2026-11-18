@@ -27,6 +27,14 @@ float terrainCavityAO(vec2 p) {
 
 float grassEligibility(vec2 worldXZ, float terrainY);
 vec3 calcNormal(vec3 pos, float t) {
+    // From the air (hits of raymarch_far, beyond the normal range): the slope of the
+    // landscape itself over about a pixel. The screen-space path below is too coarse out
+    // there (the hit positions are only that exact) and left the ground a flat sheet.
+    if (t > 1500.0) {
+        float e = max(0.0025 * t, 3.0);
+        float h0 = terrainM(pos.xz);
+        return normalize(vec3(h0 - terrainM(pos.xz + vec2(e, 0.0)), e, h0 - terrainM(pos.xz + vec2(0.0, e))));
+    }
     // Far-distance fast path: derive the normal from screen-space
     // derivatives of the hit position itself (`dFdx(pos)` and
     // `dFdy(pos)` are the tangents along screen x/y). Zero terrainH

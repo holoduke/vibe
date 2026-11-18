@@ -20,6 +20,7 @@ layout(std430, set = 0, binding = 4) readonly buffer Exposure {
     vec4 planet;         // xy: the camera's place on the map (km), z: water level (m), w: snow on the ground 0..1 (written by the CPU every frame)
     vec4 hl0;            // the landscape's height layers (m): sand->grass start, end, grass->dirt start, end
     vec4 hl1;            // dirt->rock start, end, rock->snow start, end
+    vec4 misc;           // x: top of the local cloud layer (m)
 } u_exposure;
 // Mip 0 of the bloom chain (Karis-prefiltered downsample → upsample). The
 // engine runs run_bloom_chain between TAA and compose; we sample it here at
@@ -142,7 +143,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     const float Rg = 6360.0;                                   // km
     float r = pc.atmo.z;                                       // camera distance from the planet centre (km)
     float alt = r - Rg;
-    float k = smoothstep(1.0, 1.2, alt);
+    float k = smoothstep(0.30, 0.45, alt);
     if (k <= 0.0 || dir.y >= 0.0) return vec4(0.0);
     // Ray from (0, r, 0) against the sphere.
     float b = r * dir.y;
@@ -192,7 +193,10 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     float md = length(m);
     float foot = t * 1.2 / max(dot(N, -dir), 0.08);            // metres of ground under one pixel
     float octf = clamp(log2(333.0 / max(2.0 * foot, 1e-3)) + 1.0, 0.0, 6.0);
-    float w_mid = (1.0 - smoothstep(45.0, 90.0, md)) * smoothstep(0.3, 2.0, octf);
+    // (the home country reaches far: from the heights where its edge would be in view the
+    // raymarched landscape must not end in a different-looking planet)
+    float w_home = 1.0 - smoothstep(350.0, 900.0, md);
+    float w_mid = w_home * smoothstep(0.3, 2.0, octf);
     if (w_mid > 0.0) {
         vec2 wp = m * 1000.0;
         float e = max(foot, 3.0);
@@ -225,7 +229,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     }
     // Where the view no longer resolves those heights (shallow, far): the same country's average look, not the generic map.
     {
-        float w_avg = (1.0 - smoothstep(45.0, 90.0, md)) * (1.0 - smoothstep(0.3, 2.0, octf));
+        float w_avg = w_home * (1.0 - smoothstep(0.3, 2.0, octf));
         float snow_share = mix(smoothstep(160.0, 40.0, u_exposure.hl1.z), 1.0, u_exposure.planet.w);   // how much of it lies above the snow line
         vec3 avg = mix(vec3(0.060, 0.075, 0.050), vec3(0.80, 0.83, 0.88), snow_share * 0.92);
         col = mix(col, avg, w_avg);
@@ -242,7 +246,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     vec3 t_sun = textureLod(u_atmo_trans, trans_uv(Rg + 0.02, clamp(ndl, -0.15, 1.0)), 0.0).rgb;
     // (brightness: matched to the real landscape below it at aircraft height; the darker value is the look from orbit)
     // (low: exactly the engine's own sunlight on a surface, albedo x E x N.L - atmo_sun_illum() is E x pi x intensity)
-    float sun_k = mix(0.3183 / max(pc.atmo.y, 0.1), 0.026, smoothstep(20.0, 110.0, alt));
+    float sun_k = mix(0.3183 / max(pc.atmo.y, 0.1), 0.10, smoothstep(20.0, 110.0, alt));
     // (+ the sky's share of the light, as the landscape itself has it; none of it from orbit, as before)
     float amb_k = sun_k * 0.45 * (1.0 - smoothstep(20.0, 110.0, alt)) * smoothstep(-0.10, 0.15, sun.y);
     vec3 lit = col * (t_sun * max(dot(nl, sun), 0.0) * sun_k + amb_k + 0.0004) * atmo_sun_illum();
@@ -253,6 +257,8 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     vec3 t_g = textureLod(u_atmo_trans, trans_uv(Rg + 0.02, max(dot(N, -dir), 0.02)), 0.0).rgb;
     vec3 t_c = textureLod(u_atmo_trans, trans_uv(r, max(-dir.y, 0.02)), 0.0).rgb;
     vec3 T = clamp(t_g / max(t_c, vec3(1e-4)), 0.0, 1.0);
+    // (comes in with distance: the raymarched landscape in front of this has none of it, and the two must join)
+    T = mix(vec3(1.0), T, smoothstep(60.0, 350.0, t));
     // The same haze the real landscape below gets (the aerial-perspective volume, to its far end).
     // (as the raymarched landscape in front of it gets it: the volume over the first 1.5 km, then the
     // slow ground haze of terrain_raymarch.frag rm_haze_dist, toward the colour of fully hazed air)
@@ -262,7 +268,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     // (pc.sun_dir is the moon at night: go by how much light there is)
     vec3 hazed = vec3(0.55, 0.55, 0.58) * mix(0.03, 1.0, smoothstep(0.05, 1.5, dot(atmo_sun_illum(), vec3(0.2126, 0.7152, 0.0722))));
     float tm = t * 1000.0 * min(1.0, 2.5 / max(alt, 0.001));         // the part of the ray in the hazy air near the ground
-    vec3 ext = exp(-((tm > 1500.0) ? 1500.0 + (tm - 1500.0) * 0.02 : tm) * 0.00025 * vec3(1.0, 1.3, 2.0));
+    vec3 ext = exp(-((tm > 1500.0) ? 1500.0 + (tm - 1500.0) * 0.004 : tm) * 0.00025 * vec3(1.0, 1.3, 2.0));
     ext = mix(ext, vec3(1.0), smoothstep(20.0, 80.0, alt));          // from space: the veil in atmo_sky is the air
     vec3 seen = lit * T * ap.a + ap.rgb * atmo_sun_illum();
     return vec4(seen * ext + hazed * (1.0 - ext), k);
@@ -1156,6 +1162,36 @@ void main() {
     if (!uw && pc.atmo.x > 0.5 && obj_w > 0.0) {
         vec4 ap = atmo_aerial(uvp, obj_dist * 0.001);
         hdr_obj = hdr_obj * ap.a + ap.rgb * atmo_sun_illum() * obj_w;
+    }
+    // From the air: the raymarched landscape hands over to the planet's far
+    // field behind it by a cross-fade over the outer half of its range
+    // (terrain_rm_heightfield.glsl rm_far_limit - keep the two in step), so
+    // there is no edge where it ends. The distance is that of the ground
+    // under this pixel's ray, which is what the far march hits.
+    {
+        float alt_m = (pc.atmo.z - 6360.0) * 1000.0;
+        if (!uw && pc.atmo.x > 0.5 && alt_m > 300.0 && obj_w > 0.0 && obj_depth > 0.9995) {
+            vec3 pdir = view_ray(uvp);
+            if (pdir.y < -1e-4) {
+                float fl = clamp(1500.0 + (alt_m - 300.0) * 100.0, 1500.0, 80000.0);
+                float tp = max(alt_m - 60.0, 1.0) / (-pdir.y);
+                float wf = smoothstep(0.45 * fl, 0.92 * fl, tp);
+                if (wf > 0.0) hdr_obj = mix(hdr_obj, atmo_sky(pdir) * obj_w, wf);
+            }
+        }
+        // Above the cloud layer the clouds are in front of the land (clouds.comp renders
+        // them over it then).
+        if (!uw && pc.atmo.x > 0.5 && alt_m > u_exposure.misc.x && obj_w > 0.0 && obj_depth > 0.9995) {
+            // (the cloud buffer is coarse and noisy per frame, and only the sky's share of it is
+            // filtered over time: over the land a wide tent filter makes them soft instead of blocks)
+            vec2 cts = 1.25 / vec2(textureSize(u_clouds, 0));
+            vec4 clo = vec4(0.0);
+            for (int cy = -2; cy <= 2; ++cy)
+                for (int cx = -2; cx <= 2; ++cx)
+                    clo += textureLod(u_clouds, sample_uv + vec2(cx, cy) * cts, 0.0) * ((3.0 - abs(float(cx))) * (3.0 - abs(float(cy))));
+            clo /= 81.0;
+            hdr_obj = hdr_obj * (1.0 - clo.a) + clo.rgb * obj_w;
+        }
     }
 
     // Stars, at output resolution, on the sky share of the pixel: only where

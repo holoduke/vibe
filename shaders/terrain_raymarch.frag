@@ -493,7 +493,7 @@ float cellMaxHeight(vec2 wp) {
 // from high up most of the way down is through clear air.
 float rm_haze_dist(float t) {
     float tl = t * min(1.0, 2500.0 / max(scene.camera_pos.y, 1.0));
-    return (tl > 1500.0) ? 1500.0 + (tl - 1500.0) * 0.02 : tl;
+    return (tl > 1500.0) ? 1500.0 + (tl - 1500.0) * 0.004 : tl;
 }
 float distanceFogAmount(vec3 p_world, vec3 cam) {
     float strength = scene.distance_fog_color.a;
@@ -609,7 +609,7 @@ void main() {
     // the horizon - beyond the landscape the planet itself is drawn (compose.frag).
     // (No further than the terrain march reaches: past that there is no shore to bound it,
     // and from above 1.5 km it was a pale disc of "sea" under the camera.)
-    if (ro.y - water_y > 1000.0 && t_water_plane > rm_far_limit(ro.y)) t_water_plane = -1.0;
+    if (ro.y > 300.0 && t_water_plane > rm_far_limit(ro.y)) t_water_plane = -1.0;
 #else /* QLIKE_WATER */
     // Distance to the water plane is just |vWPos - camera|. Replaces the
     // analytic ray-vs-plane intersection (which was algebraically equal
@@ -680,7 +680,7 @@ void main() {
                          : raymarch(ro, rd, t_stop);
     if (obj_stop && t < 0.0) discard;      // an object owns this pixel
     // From the air (above 1 km): the landscape beyond the normal march's reach.
-    if (t < 0.0 && !water_only && ro.y > 1000.0) {
+    if (t < 0.0 && !water_only && ro.y > 300.0) {
         float fl = rm_far_limit(ro.y);
         t = raymarch_far(ro, rd, (t_water_plane > 0.0) ? min(fl, t_water_plane) : fl);
     }
@@ -2765,6 +2765,10 @@ void main() {
     float ao_final_str = clamp(scene.terrain_rt_extra.z, 0.0, 1.0);
     float ao_floor     = 1.0 - ao_final_str;
     col *= mix(ao_floor, 1.0, ao_shaped);
+    // From the air: beyond the range of the occlusion and shadow terms above the ground
+    // was fully lit, a step brighter than the land near the camera (snow went to plain
+    // white). The average of what those terms take, faded in past their range.
+    col *= mix(1.0, 0.74, smoothstep(1500.0, 3500.0, t));
 
     // Contrast ('contrast (raymarch terrain)' slider): a power curve on
     // luminance around the brightness of average ground under the current
@@ -2779,7 +2783,9 @@ void main() {
             // Below the pivot the curve is much gentler: full strength there
             // crushed shadowed ground to black.
             float rel = max(l, 1e-5) / max(piv, 1e-4);
-            col *= clamp(pow(rel, (rm_con - 1.0) * (rel < 1.0 ? 0.3 : 1.0)), 0.15, 4.0);
+            // (not on the ground seen from the air, beyond the normal range: with nothing dark left in
+            // it the curve only pushed sunlit snow past white)
+            col *= mix(clamp(pow(rel, (rm_con - 1.0) * (rel < 1.0 ? 0.3 : 1.0)), 0.15, 4.0), 1.0, smoothstep(1500.0, 3500.0, t));
         }
     }
 

@@ -210,11 +210,14 @@ void render(ivec2 px) {
     ivec2 sz = imageSize(o_clouds);
     if (any(greaterThanEqual(px, sz))) return;
     vec2 uv = (vec2(px) + 0.5) / vec2(sz);
-    // Only sky pixels: the layer sits above all terrain.
-    vec4 dg = textureGather(u_depth, uv, 0);
-    if (max(max(dg.x, dg.y), max(dg.z, dg.w)) < 0.99999) { imageStore(o_clouds, px, vec4(0.0)); return; }
-    vec4 wf = pc.inv_vp * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+    // Only sky pixels: the layer sits above all terrain. Seen from above the layer it is
+    // the other way round - the ground is behind the clouds - so then also over the
+    // landscape (everything but what is close to the eye: the weapon in the hand).
     vec3 ro = pc.eye.xyz;
+    bool from_above = altitude(ro) > pc.params3.x + pc.params3.y;
+    vec4 dg = textureGather(u_depth, uv, 0);
+    if (max(max(dg.x, dg.y), max(dg.z, dg.w)) < (from_above ? 0.9995 : 0.99999)) { imageStore(o_clouds, px, vec4(0.0)); return; }
+    vec4 wf = pc.inv_vp * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
     vec3 rd = normalize(wf.xyz / wf.w - ro);
 
     // The layer between two spherical shells: it curves down to the horizon.

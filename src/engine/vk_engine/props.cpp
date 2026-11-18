@@ -1001,8 +1001,21 @@ void VulkanEngine::tick_jet_audio(float dt) {
     }
 }
 
-void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp,
-                                  const glm::mat4& view_inv) {
+void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world,
+                                  const glm::mat4& view_inv_world) {
+    // Drawn relative to the camera: the weapon sits 30 cm from an eye that can be
+    // hundreds of km from the world's origin, where a float is centimetres coarse -
+    // "world position x view-projection" made it flicker and jump from about 50 km
+    // up. Here the big numbers never meet: positions are (camera-relative) small,
+    // and the matrix is projection x rotation. Only the lighting gets a world
+    // position (pc.model), where a centimetre does not matter.
+    const bool rel = (vp_world == current_frame_view_.vp);
+    const glm::vec3 cam = rel ? glm::vec3(current_frame_view_.inv_view[3]) : glm::vec3(0.0f);
+    glm::mat4 view_inv = view_inv_world;
+    view_inv[3] = glm::vec4(glm::vec3(view_inv_world[3]) - cam, 1.0f);
+    const glm::mat4 vp = rel ? glm::mat4(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view)))
+                             : vp_world;
+    const glm::mat4 to_world = glm::translate(glm::mat4(1.0f), cam);
     auto draw_part = [&](const Mesh& m, const glm::mat4& model,
                          const glm::vec4& color, const glm::vec3& emissive,
                          bool full_emissive) {
@@ -1011,7 +1024,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp,
         vkCmdBindIndexBuffer(cmd, m.index_buffer, 0, VK_INDEX_TYPE_UINT32);
         PushConstants pc{};
         pc.mvp = vp * model;
-        pc.model = model;
+        pc.model = to_world * model;
         // Viewmodel is camera-attached — prev_mvp = mvp gives zero motion,
         // which is what we want for SVGF (the gun shouldn't smear when the
         // camera turns even though world points "moved").
