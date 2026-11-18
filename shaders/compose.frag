@@ -22,6 +22,7 @@ layout(std430, set = 0, binding = 4) readonly buffer Exposure {
     vec4 hl1;            // dirt->rock start, end, rock->snow start, end
     vec4 misc;           // x: top of the local cloud layer (m), y: cloud coverage, z: cloud size, w: metres the wind has carried the clouds
     vec4 misc2;          // x: base of the local cloud layer (m)
+    vec4 sun_land;       // rgb: the sunlight on the landscape (scene.sun_color.rgb x intensity)
 } u_exposure;
 // Mip 0 of the bloom chain (Karis-prefiltered downsample → upsample). The
 // engine runs run_bloom_chain between TAA and compose; we sample it here at
@@ -292,16 +293,16 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     // Sunlight on the ground, through the atmosphere above that spot.
     float ndl = dot(N, sun);
     vec3 t_sun = textureLod(u_atmo_trans, trans_uv(Rg + 0.02, clamp(ndl, -0.15, 1.0)), 0.0).rgb;
-    // (brightness: matched to the real landscape below it at aircraft height; the darker value is the look from orbit)
-    // (low: exactly the engine's own sunlight on a surface, albedo x E x N.L - atmo_sun_illum() is E x pi x intensity)
-    float sun_k = mix(0.3183 / max(pc.atmo.y, 0.1), 0.10, smoothstep(20.0, 110.0, alt));
-    // (+ the sky's share of the light, as the landscape itself has it; none of it from orbit, as before)
-    float amb_k = sun_k * 0.45 * (1.0 - smoothstep(20.0, 110.0, alt)) * smoothstep(-0.10, 0.15, sun.y);
-    // (pc.sun_color is the sun as it arrives at the ground: taking the atmosphere off it once
-    // more turned the land beige next to the raymarched landscape. Its dimming toward the
-    // terminator stays; the sky's share of the light is blue.)
-    vec3 t_sun_n = mix(t_sun, vec3(dot(t_sun, vec3(0.2126, 0.7152, 0.0722))), 0.8);
-    vec3 lit = col * (t_sun_n * max(dot(nl, sun), 0.0) * sun_k + amb_k * vec3(0.80, 0.92, 1.22) + 0.0004) * atmo_sun_illum();
+    // The land is lit exactly as the raymarched landscape is (terrain_raymarch.frag), at every
+    // altitude: the same sunlight (scene.sun_color), the same sky fill (scene.sky_color x 0.75 x
+    // (0.5 + 0.5 up)), and the share the far ground keeps without its occlusion terms (0.74).
+    // Around the planet the sun's light changes with the local sun height, RELATIVE to home
+    // (that light already has home's atmosphere in it); so does the sky fill.
+    vec3 t_home = textureLod(u_atmo_trans, trans_uv(Rg + 0.02, clamp(sun.y, -0.15, 1.0)), 0.0).rgb;
+    vec3 t_rel = clamp(t_sun / max(t_home, vec3(2e-3)), 0.0, 1.6);
+    float day_rel = clamp(smoothstep(-0.15, 0.10, ndl) / max(smoothstep(-0.15, 0.10, sun.y), 0.06), 0.0, 1.0);
+    vec3 lit = col * (u_exposure.sun_land.rgb * t_rel * max(dot(nl, sun), 0.0) +
+                      pc.sky_color.rgb * (0.75 * (0.5 + 0.5 * dot(nl, N)) * day_rel)) * 0.74;
     // Sea glint.
     vec3 hv = normalize(sun - dir);
     lit += (1.0 - land) * (1.0 - cl) * t_sun * pow(max(dot(N, hv), 0.0), 220.0) * 0.05 * atmo_sun_illum();
@@ -318,7 +319,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     // (as the raymarched landscape in front of it gets it: the volume over the first 1.5 km, then the
     // slow ground haze of terrain_raymarch.frag rm_haze_dist, toward the colour of fully hazed air)
     vec2 uvh = gl_FragCoord.xy * pc.viewport.zw;
-    vec4 ap = atmo_aerial(uvh, min(t, 1.5));
+    vec4 ap = atmo_aerial(uvh, min(t, 1.2));
     // (the haze colour of terrain_raymarch.frag: grey by day, dark at night)
     // (pc.sun_dir is the moon at night: go by how much light there is)
     vec3 hazed = vec3(0.55, 0.55, 0.58) * mix(0.03, 1.0, smoothstep(0.05, 1.5, dot(atmo_sun_illum(), vec3(0.2126, 0.7152, 0.0722))));
@@ -392,7 +393,13 @@ vec3 st_hash3(vec2 p) {
 vec3 st_oct_dir(vec2 e) { return normalize(vec3(e.x, 1.0 - abs(e.x) - abs(e.y), e.y)); }
 // px = angular size of a pixel (rad), t = clock (s), cover = cloud cover 0..1.
 vec3 star_field(vec3 dir, float px, float t, float cover) {
-    if (dir.y < -0.01) return vec3(0.0);
+    // (below the REAL horizon only - see the end of this function)
+    if (dir.y < -0.01 - sqrt(max(1.0 - (6360.0 * 6360.0) / (pc.atmo.z * pc.atmo.z), 0.0))) return vec3(0.0);
+    // The star map covers the upper half of the sky. Below the horizontal (seen from high up: the
+    // space between it and the planet's rim) the lower half gets its own stars from the same map,
+    // mirrored and re-seeded - there was a ring without stars around the planet.
+    float hemi = (dir.y < 0.0) ? 1.0 : 0.0;
+    vec3 dq = vec3(dir.x, abs(dir.y), dir.z);
     vec3 ad = abs(dir);
     vec2 e = dir.xz / (ad.x + ad.y + ad.z);
     const vec3 pole = vec3(0.4170, 0.5097, -0.7526);            // normal of the Milky Way plane
@@ -402,12 +409,12 @@ vec3 star_field(vec3 dir, float px, float t, float cover) {
     for (int L = 0; L < 3; ++L) {
         float N = (L == 0) ? 48.0 : (L == 1 ? 150.0 : 420.0);
         vec2 id = floor(e * N);
-        vec3 h = st_hash3(id + float(L) * 71.0);
+        vec3 h = st_hash3(id + float(L) * 71.0 + hemi * 133.0);
         float dens = (L == 0) ? 0.25 : (L == 1 ? 0.35 : 0.16 + 0.50 * band);
         if (h.x > dens) continue;
-        vec3 h2 = st_hash3(id * 1.37 + 17.0 + float(L) * 3.0);
+        vec3 h2 = st_hash3(id * 1.37 + 17.0 + float(L) * 3.0 + hemi * 57.0);
         vec3 sd = st_oct_dir((id + 0.2 + 0.6 * h.yz) / N);
-        float d = length(dir - sd);
+        float d = length(dq - sd);
         float m = h2.x;
         float flux = (L == 0) ? mix(0.55, 3.2, m * m * m) : (L == 1 ? mix(0.10, 0.60, m * m) : mix(0.015, 0.13, m * m));
         // Thin cloud / haze swallows the faint ones first.
@@ -424,7 +431,11 @@ vec3 star_field(vec3 dir, float px, float t, float cover) {
     // The band's unresolved glow.
     sum += vec3(0.50, 0.58, 0.78) * (band * band * 0.0035);
     // Extinction: dimmer near the horizon, but visible right down to it.
-    return sum * mix(0.40, 1.0, smoothstep(0.0, 0.35, dir.y)) * smoothstep(-0.01, 0.015, dir.y);
+    // (measured from the real horizon: from high up it lies well below the horizontal, and with a
+    // fixed cut at the horizontal there was a ring without stars around the planet)
+    float y_hor = -sqrt(max(1.0 - (6360.0 * 6360.0) / (pc.atmo.z * pc.atmo.z), 0.0));
+    float y_rel = dir.y - y_hor;
+    return sum * mix(0.40, 1.0, smoothstep(0.0, 0.35, y_rel)) * smoothstep(-0.01, 0.015, y_rel);
 }
 // Aerial perspective at world distance d_km: rgb in-scatter (unit sun),
 // a = transmittance. Slices are quadratic in distance (atmosphere.comp).
@@ -1238,8 +1249,7 @@ void main() {
                 vec2 cxz = u_exposure.planet.xy * 1000.0 + cdir.xz * tc;
                 float ca = weather_cloud(cxz, tc * 0.0012 / max(-cdir.y, 0.08)) * pw * 0.8;
                 vec3 csun = normalize(pc.sun_dir.xyz);
-                float ck = 0.3183 / max(pc.atmo.y, 0.1);
-                vec3 ccol = vec3(0.86) * (max(csun.y, 0.0) * ck + ck * 0.45 * smoothstep(-0.10, 0.15, csun.y) * vec3(0.80, 0.92, 1.22)) * atmo_sun_illum();   // (lit as planet_surface lights its clouds)
+                vec3 ccol = vec3(0.86) * (u_exposure.sun_land.rgb * max(csun.y, 0.0) + pc.sky_color.rgb * 0.75) * 0.74;   // (lit as planet_surface lights its clouds)
                 hdr_obj = mix(hdr_obj, ccol * obj_w, ca);
             }
         }

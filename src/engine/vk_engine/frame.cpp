@@ -347,7 +347,7 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     // GPU vegetation: cull + LOD-select every instance, fill indirect draws.
     // Where the camera is on the planet's map, the water level and the snow: for the ground seen from high up (compose.frag planet_surface).
     if (exposure_buf_) {
-        const float pl[20] = { current_frame_view_.eye_pos.x * 0.001f, current_frame_view_.eye_pos.z * 0.001f, rt_.water_level, env_snow_,
+        const float pl[24] = { current_frame_view_.eye_pos.x * 0.001f, current_frame_view_.eye_pos.z * 0.001f, rt_.water_level, env_snow_,
                                rt_.terrain_h_sand_grass_start, rt_.terrain_h_sand_grass_end, rt_.terrain_h_grass_dirt_start, rt_.terrain_h_grass_dirt_end,
                                rt_.terrain_h_dirt_rock_start, rt_.terrain_h_dirt_rock_end, rt_.terrain_h_rock_snow_start, rt_.terrain_h_rock_snow_end,
                                // the local cloud layer's top (m): above it the clouds are composited over the land too
@@ -355,7 +355,9 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
                                // ... and the weather field of clouds.comp (coverage, cloud size, metres the wind has carried it)
                                glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), glm::clamp(rt_.cloud_scale, 0.3f, 4.0f), float(cloud_travel_),
                                // the layer's base (m): from above it the clouds are in front of the land
-                               (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f) : 1.0e9f, 0.0f, 0.0f, 0.0f };
+                               (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f) : 1.0e9f, 0.0f, 0.0f, 0.0f,
+                               // the sunlight as the landscape gets it (scene.sun_color: golden-hour colour x intensity)
+                               last_sun_rgb_.x * rt_.sun_intensity, last_sun_rgb_.y * rt_.sun_intensity, last_sun_rgb_.z * rt_.sun_intensity, 0.0f };
         vkCmdUpdateBuffer(frame.command_buffer, exposure_buf_, 16, sizeof(pl), pl);
     }
     { CPU_SCOPE("+veg-cull"); cull_vegetation(frame.command_buffer); cull_clusters(frame.command_buffer); cull_plants(frame.command_buffer); cull_static_clusters(frame.command_buffer); }

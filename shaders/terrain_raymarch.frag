@@ -495,6 +495,13 @@ float rm_haze_dist(float t) {
     float tl = t * min(1.0, 2500.0 / max(scene.camera_pos.y, 1.0));
     return (tl > 1500.0) ? 1500.0 + (tl - 1500.0) * 0.004 : tl;
 }
+// 0: the look of the land on the ground (occlusion terms, contrast curve). 1: its look from the air.
+// By distance beyond the range of those terms - and by the camera's height, so that from the air
+// the land right below is not a brighter, harder patch in the middle of the rest: the whole view
+// goes from one look to the other between 250 and 1200 m up, and is one thing from there to space.
+float rm_air_look(float t) {
+    return max(smoothstep(1500.0, 3500.0, t), smoothstep(250.0, 1200.0, scene.camera_pos.y - scene.water_params.y));
+}
 float distanceFogAmount(vec3 p_world, vec3 cam) {
     float strength = scene.distance_fog_color.a;
     if (strength < 1e-3) return 0.0;
@@ -2768,7 +2775,7 @@ void main() {
     // From the air: beyond the range of the occlusion and shadow terms above the ground
     // was fully lit, a step brighter than the land near the camera (snow went to plain
     // white). The average of what those terms take, faded in past their range.
-    col *= mix(1.0, 0.74, smoothstep(1500.0, 3500.0, t));
+    col *= mix(1.0, 0.74, rm_air_look(t));
 
     // Contrast ('contrast (raymarch terrain)' slider): a power curve on
     // luminance around the brightness of average ground under the current
@@ -2785,7 +2792,7 @@ void main() {
             float rel = max(l, 1e-5) / max(piv, 1e-4);
             // (not on the ground seen from the air, beyond the normal range: with nothing dark left in
             // it the curve only pushed sunlit snow past white)
-            col *= mix(clamp(pow(rel, (rm_con - 1.0) * (rel < 1.0 ? 0.3 : 1.0)), 0.15, 4.0), 1.0, smoothstep(1500.0, 3500.0, t));
+            col *= mix(clamp(pow(rel, (rm_con - 1.0) * (rel < 1.0 ? 0.3 : 1.0)), 0.15, 4.0), 1.0, rm_air_look(t));
         }
     }
 
