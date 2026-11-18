@@ -90,7 +90,7 @@ float terrainM(vec2 p) {
     // mountains. Inside the plateau the FBM is already mixed out, so
     // the amplifier has no effect there (plateau stays flat under
     // the brush — only the offset fires).
-    float h = a * TERRAIN_HEIGHT;
+    float h = rm_world_h(a, wp);
     // Plateau blend — but instead of mixing toward a glass-flat
     // plateau_h, mix toward `plateau_h + small_detail_FBM` so the
     // plateau surface inherits the same procedural character as the
@@ -164,7 +164,7 @@ float terrainM_lod(vec2 p, float ray_t) {
         b *= 0.5;
         p = m2 * p * 2.0;
     }
-    float h = a * TERRAIN_HEIGHT;
+    float h = rm_world_h(a, wp);
     // Plateau is now tiny (11.5 m, hidden under castle) — no need
     // for extra ground-detail noise here.
     float tpl = plateauWeight(wp);
@@ -209,7 +209,7 @@ float terrainH_lod_pw(vec2 p, float ray_t, float tpl) {
         b *= 0.5;
         p = m2 * p * 2.0;
     }
-    float h = a * TERRAIN_HEIGHT;
+    float h = rm_world_h(a, wp);
     h = mix(h, pc.color.w, tpl);
     h += sampleHeightDelta(wp);   // (reverted 80 m gate — no near/far seam)
     h += rm_ground_detail(wp, ray_t, h) * (1.0 - tpl);
@@ -264,7 +264,7 @@ float terrainM_shadow(vec2 p, float ray_t) {
         b *= 0.5;
         p = m2 * p * 2.0;
     }
-    float h = a * TERRAIN_HEIGHT;
+    float h = rm_world_h(a, wp);
     float t = plateauWeight(wp);
     h = mix(h, pc.color.w, t);
     // The edits to the ground (castle site lowered, road cut and levelled,

@@ -137,7 +137,16 @@ float pl_terrain(vec2 wp, float octf) {
     float rest = 0.0, bb = 1.0;
     for (int i = 0; i < 6; ++i) { rest += bb * (1.0 - clamp(octf - float(i), 0.0, 1.0)); bb *= 0.5; }
     a += rest * 0.42 / (1.0 + dot(d, d));
-    return a * 120.0;
+    // The shape of the wider world (terrain_rm_noise_road.glsl rm_world_h - keep the two the same).
+    float h = a * 120.0;
+    float w = smoothstep(1500.0, 4000.0, length(wp));
+    if (w <= 0.0) return h;
+    float n = pl_noised(wp * 0.00008 + 7.3).x * 0.65 + pl_noised(wp * 0.00021 + 3.1).x * 0.35;
+    float amp = mix(0.42, 1.12, smoothstep(0.60, 0.78, n));
+    h = mix(h, 30.0 + (h - 30.0) * amp, w);
+    float c = pl_noised(wp * 0.000035 + 11.7).x * 0.6 + pl_noised(wp * 0.00009 + 4.2).x * 0.4;      // oceans
+    float sea = smoothstep(0.50, 0.41, c) * smoothstep(5000.0, 12000.0, length(wp));
+    return mix(h, u_exposure.planet.z - 24.0 - 14.0 * a, sea);
 }
 vec4 atmo_aerial(vec2 uv, float d_km);
 // ---- One weather map for every view of the clouds ---------------------
@@ -269,7 +278,8 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     // Where the view no longer resolves those heights (shallow, far): the same country's average look, not the generic map.
     {
         float w_avg = w_home * (1.0 - smoothstep(0.3, 2.0, octf));
-        float snow_share = mix(smoothstep(160.0, 40.0, u_exposure.hl1.z), 1.0, u_exposure.planet.w);   // how much of it lies above the snow line
+        // how much of it lies above the snow line: most of home, little of the low country beyond
+        float snow_share = mix(smoothstep(160.0, 40.0, u_exposure.hl1.z) * mix(1.0, 0.18, smoothstep(1.5, 4.0, md)), 1.0, u_exposure.planet.w);
         vec3 avg = mix(vec3(0.060, 0.075, 0.050), vec3(0.80, 0.83, 0.88), snow_share * 0.92);
         col = mix(col, avg, w_avg);
         land = mix(land, 1.0, w_avg);

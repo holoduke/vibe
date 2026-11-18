@@ -37,6 +37,32 @@ const mat2 m2 = mat2(0.8, -0.6, 0.6, 0.8);
 const float TERRAIN_SCALE  = 0.003;
 const float TERRAIN_HEIGHT = 120.0;
 
+// The shape of the wider world. Home (the 2 km landscape and the ring of
+// white mountains around it, out to 1.5 km from the centre) is the height
+// formula as it is. Beyond that the land calms down to low hills - too low
+// for the snow line - with a high range only here and there. `a`: the
+// formula's value 0..1; returns metres. (compose.frag pl_terrain has the
+// same function for the painted far field: change both.)
+#ifndef RM_WATER_LEVEL
+#define RM_WATER_LEVEL scene.water_params.y
+#endif
+float rm_world_h(float a, vec2 wp) {
+    float h = a * TERRAIN_HEIGHT;
+    float w = smoothstep(1500.0, 4000.0, length(wp));
+    if (w <= 0.0) return h;
+    float n = noise2(wp * 0.00008 + 7.3) * 0.65 + noise2(wp * 0.00021 + 3.1) * 0.35;
+    float amp = mix(0.42, 1.12, smoothstep(0.60, 0.78, n));      // low hills; now and then a high range
+    h = mix(h, 30.0 + (h - 30.0) * amp, w);                      // (scaled about 30 m: the lowlands stay above the water)
+    // Oceans: a layer above the generator that overrules it. Where the continent map says
+    // "sea" the ground goes down to a sea bed below the water level, whatever the hills
+    // formula wanted there - with a shelf in between, so coasts have beaches and shallows.
+    // Never within 5 km of home. (This is the place for more such areas: plains, deserts ...)
+    float c = noise2(wp * 0.000035 + 11.7) * 0.6 + noise2(wp * 0.00009 + 4.2) * 0.4;
+    float sea = smoothstep(0.50, 0.41, c) * smoothstep(5000.0, 12000.0, length(wp));
+    return mix(h, RM_WATER_LEVEL - 24.0 - 14.0 * a, sea);
+}
+
+
 // High-frequency FBM-eroded noise used by sampleHeightDelta to paint
 // procedural detail onto user-brushed cells. Same n.x / (1 + |∇d|²)
 // erosion recipe as terrainM, but with a much higher base scale (0.05
