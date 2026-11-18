@@ -349,7 +349,7 @@ void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
     const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(80.0f) * 0.5f));
     pc.cam = glm::vec4(fv.eye_pos, ppr);
     const uint32_t regular = veg_cluster_count_ ? veg_cluster_first_ : veg_count_;     // (clustered rocks: cull_clusters)
-    pc.params = glm::vec4(float(regular), 1450.0f, std::max(0.25f, rt_.veg_lod_bias),
+    pc.params = glm::vec4(float(regular), object_far_, std::max(0.25f, rt_.veg_lod_bias),
                           (veg_hiz_ready_ && !std::getenv("QLIKE_NO_HIZ")) ? 1.0f : 0.0f);
     {
         // Camera cut (teleport, respawn, big snap turn): last frame's Hi-Z

@@ -234,7 +234,7 @@ void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
     // Camera params — must match the projection compute_frame_view used.
     // 80° vertical FOV, 0.05/1500 near/far (see world.cpp).
     d.cameraNear              = 0.05f;
-    d.cameraFar               = 1500.0f;
+    d.cameraFar               = view_far_;
     d.cameraFovAngleVertical  = glm::radians(80.0f);
     d.viewSpaceToMetersFactor = 1.0f;
 

@@ -61,7 +61,12 @@ VulkanEngine::FrameView VulkanEngine::compute_frame_view() {
     // the lerped camera and grass/terrain visibly lag rasterised geo.
     fv.eye_pos = player_.eye_position();
     player_.position = saved;
-    fv.proj = glm::perspective(glm::radians(80.0f), aspect, 0.05f, 1500.0f);
+    // From the air the far plane moves out (the near plane stays: the weapon in the hand).
+    // Depth this far out is coarse (metres), which is fine for objects a few pixels tall;
+    // the limits follow from where terrain_raymarch.frag clamps its depth.
+    view_far_   = glm::clamp(1500.0f + (fv.eye_pos.y - 1000.0f) * 30.0f, 1500.0f, 30000.0f);
+    object_far_ = std::min(view_far_ - 50.0f, 3800.0f);
+    fv.proj = glm::perspective(glm::radians(80.0f), aspect, 0.05f, view_far_);
     fv.proj[1][1] *= -1.0f;
     if (rt_.taa_jitter_enabled || rt_.fsr2_enabled) {
         auto halton = [](int b, int i) {

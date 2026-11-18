@@ -327,7 +327,7 @@ void VulkanEngine::dispatch_fsr3(VkCommandBuffer cmd) {
     d.reset            = fsr3_reset_history_;
     fsr3_reset_history_ = false;
     d.cameraNear              = 0.05f;
-    d.cameraFar               = 1500.0f;
+    d.cameraFar               = view_far_;
     d.cameraFovAngleVertical  = glm::radians(80.0f);
     d.viewSpaceToMetersFactor = 1.0f;
     d.flags                   = 0;
@@ -908,7 +908,7 @@ void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
         prep.frameTimeDelta   = std::max(0.1f, last_frame_dt_ * 1000.0f);
         prep.unused_reset     = false;
         prep.cameraNear       = 0.05f;
-        prep.cameraFar        = 1500.0f;
+        prep.cameraFar        = view_far_;
         prep.cameraFovAngleVertical = glm::radians(80.0f);
         prep.viewSpaceToMetersFactor = 1.0f;
         prep.depth = make_resource(depth_image_,

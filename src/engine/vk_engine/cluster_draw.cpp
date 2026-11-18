@@ -211,7 +211,7 @@ void VulkanEngine::cull_clusters(VkCommandBuffer cmd) {
     pc.range = glm::uvec4(veg_cluster_first_, veg_cluster_count_, cl_vis_base_, cl_cmd_cap_);
     // One pixel of error at detail 1; the vegetation detail slider scales it.
     const bool occl = veg_cull_hiz_on_ && veg_hiz_view_ && !std::getenv("QLIKE_NO_CLUSTER_OCCL");
-    pc.params = glm::vec4(1450.0f, 1.0f / std::max(0.25f, rt_.veg_lod_bias), occl ? 1.0f : 0.0f, 0.0f);
+    pc.params = glm::vec4(object_far_, 1.0f / std::max(0.25f, rt_.veg_lod_bias), occl ? 1.0f : 0.0f, 0.0f);
     pc.prev_vp = veg_cull_prev_vp_;
     pc.hiz = glm::vec4(float(veg_hiz_w_), float(veg_hiz_h_), float(veg_hiz_mips_), 0.0f);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cl_pipeline_);

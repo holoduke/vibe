@@ -353,7 +353,7 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
     c.cameraRight = sl::float3(right.x, right.y, right.z);
     c.cameraFwd = sl::float3(fwd.x, fwd.y, fwd.z);
     c.cameraNear = 0.05f;
-    c.cameraFar = 1500.0f;
+    c.cameraFar = view_far_;
     c.cameraFOV = glm::radians(80.0f);
     c.cameraAspectRatio = float(render_extent_.width) / float(std::max(1u, render_extent_.height));
     c.depthInverted = sl::Boolean::eFalse;
