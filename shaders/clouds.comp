@@ -214,7 +214,9 @@ void render(ivec2 px) {
     // the other way round - the ground is behind the clouds - so then also over the
     // landscape (everything but what is close to the eye: the weapon in the hand).
     vec3 ro = pc.eye.xyz;
-    bool from_above = altitude(ro) > pc.params3.x + pc.params3.y;
+    // (the same from inside the layer: the land lies below the layer's base, so the march to
+    // that base is always in front of it)
+    bool from_above = altitude(ro) > pc.params3.x;
     vec4 dg = textureGather(u_depth, uv, 0);
     if (max(max(dg.x, dg.y), max(dg.z, dg.w)) < (from_above ? 0.9995 : 0.99999)) { imageStore(o_clouds, px, vec4(0.0)); return; }
     vec4 wf = pc.inv_vp * vec4(uv * 2.0 - 1.0, 1.0, 1.0);

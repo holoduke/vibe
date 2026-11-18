@@ -603,6 +603,19 @@ void VulkanEngine::run(const RunOptions& opts) {
             if (test_hold) {
                 if (!hold_init) { hold_pos = player_.position; hold_init = true; }
                 player_.position = hold_pos;
+                // QLIKE_TEST_FLIGHT=<y0>,<y1>,<frames>[,<yaw per frame>]: from frame 60 on the
+                // held camera flies from altitude y0 to y1 (evenly in the logarithm, so every
+                // part of a castle-to-space flight gets its share of frames) while turning.
+                // With --frames the time step is fixed, so a given frame is the same in every run.
+                static const char* test_flight = std::getenv("QLIKE_TEST_FLIGHT");
+                if (test_flight) {
+                    static float fy0 = 0.0f, fy1 = 0.0f, fn = 1.0f, fyaw = 0.0f, fyaw0 = 0.0f; static bool fi = false;
+                    if (!fi) { fi = true; std::sscanf(test_flight, "%f,%f,%f,%f", &fy0, &fy1, &fn, &fyaw); fyaw0 = player_.yaw; }
+                    const float k = glm::clamp((float(frame_number_) - 60.0f) / std::max(fn, 1.0f), 0.0f, 1.0f);
+                    player_.position.y = std::exp(glm::mix(std::log(std::max(fy0, 1.0f)), std::log(std::max(fy1, 1.0f)), k));
+                    player_.yaw = fyaw0 + fyaw * std::max(float(frame_number_) - 60.0f, 0.0f);
+                }
+
                 player_.velocity = glm::vec3(0.0f);
                 // QLIKE_TEST_PAN=<rad/s>: steady yaw pan (motion artefact captures).
                 static const char* test_pan = std::getenv("QLIKE_TEST_PAN");

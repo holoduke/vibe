@@ -20,7 +20,8 @@ layout(std430, set = 0, binding = 4) readonly buffer Exposure {
     vec4 planet;         // xy: the camera's place on the map (km), z: water level (m), w: snow on the ground 0..1 (written by the CPU every frame)
     vec4 hl0;            // the landscape's height layers (m): sand->grass start, end, grass->dirt start, end
     vec4 hl1;            // dirt->rock start, end, rock->snow start, end
-    vec4 misc;           // x: top of the local cloud layer (m)
+    vec4 misc;           // x: top of the local cloud layer (m), y: cloud coverage, z: cloud size, w: metres the wind has carried the clouds
+    vec4 misc2;          // x: base of the local cloud layer (m)
 } u_exposure;
 // Mip 0 of the bloom chain (Karis-prefiltered downsample → upsample). The
 // engine runs run_bloom_chain between TAA and compose; we sample it here at
@@ -138,6 +139,42 @@ float pl_terrain(vec2 wp, float octf) {
     return a * 120.0;
 }
 vec4 atmo_aerial(vec2 uv, float d_km);
+// ---- One weather map for every view of the clouds ---------------------
+// The volumetric clouds (clouds.comp) grow where a 2D weather field says
+// so. This is that same field (same hash, same cells, same wind drift), so
+// the clouds painted on the land from high up and on the planet from space
+// stand where the real ones are found on the way down.
+float wm_hash(vec2 i) {
+    uvec3 q = uvec3(ivec3(vec3(i, 7.0))) * uvec3(1597334673u, 3812015801u, 2798796415u);
+    q = (q.x ^ q.y ^ q.z) * uvec3(1597334673u, 3812015801u, 2798796415u);
+    return float(q.x) * (1.0 / 4294967295.0);
+}
+float wm_value(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(wm_hash(i), wm_hash(i + vec2(1, 0)), f.x), mix(wm_hash(i + vec2(0, 1)), wm_hash(i + vec2(1, 1)), f.x), f.y);
+}
+// How much cloud there is over world point `wxz` (m), 0..1, seen from above; `foot`: metres under a pixel.
+float weather_cloud(vec2 wxz, float foot) {
+    float size = max(u_exposure.misc.z, 0.2), cov = clamp(u_exposure.misc.y, 0.0, 1.0);
+    vec2 wp = (wxz + vec2(1.0, 0.35) * u_exposure.misc.w) / (6500.0 * size);
+    float wn = wm_value(wp) * 0.7 + wm_value(wp * 2.17 + 13.0) * 0.3;
+    float map_cov = smoothstep(0.2, 0.8, clamp(smoothstep(0.2, 0.8, wn) + (cov - 0.5) * 1.5, 0.0, 1.0));
+    if (map_cov <= 0.01) return 0.0;
+    // The cloud shapes inside a weather cell (the volumetric ones come from a 3D noise): broken into
+    // clumps while the view resolves them, their average beyond.
+    float lump = wm_value(wp * 6.3 + 3.1) * 0.6 + wm_value(wp * 14.7 + 9.0) * 0.4;
+    float res = 1.0 - smoothstep(0.15, 0.6, foot / (6500.0 * size / 6.3));
+    float shape = mix(0.55, smoothstep(0.62 - 0.45 * map_cov, 0.80 - 0.30 * map_cov, lump), res);
+    float deck = smoothstep(0.68, 0.92, cov);                 // bad weather: a closed sheet
+    return clamp(max(map_cov * shape, deck * (0.70 + 0.28 * mix(0.5, lump, res))), 0.0, 1.0);   // (a deck has thicker and thinner parts)
+}
+// 0 while the volumetric clouds are what is drawn, 1 once they have faded (atmosphere.cpp: 4 - 14 km above their top).
+float weather_paint_w() {
+    float alt_m = (pc.atmo.z - 6360.0) * 1000.0;
+    return smoothstep(u_exposure.misc.x + 4000.0, u_exposure.misc.x + 14000.0, alt_m);
+}
+
 // Returns the planet's contribution in rgb and how much it replaces the sky's below-horizon colour in a.
 vec4 planet_surface(vec3 dir, vec3 sun) {
     const float Rg = 6360.0;                                   // km
@@ -240,7 +277,15 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     float cl = smoothstep(0.56, 0.76, pl_fbm(Nf * 7.0 + vec3(0.0, 0.0, 0.31 * pl_fbm(Nf * 3.0))) * 0.65 + pl_fbm(Nf * 38.0 + 5.0) * 0.35);
     // (...while the local layer is what you see: from 25 km up, where the raymarched land and its
     // clouds hand over to this far field, the painted weather lies over home as well)
-    cl *= 1.0 - 0.9 * exp(-dot(m, m) / (350.0 * 350.0)) * (1.0 - smoothstep(25.0, 60.0, alt));           // fair weather over home (the local cloud layer is drawn separately)
+    cl *= 1.0 - 0.9 * exp(-dot(m, m) / (350.0 * 350.0));
+    {
+        // Over the home country: the same clouds as the ones found on the way down (where the
+        // ray passes the layer, about half its top's height above the ground).
+        float lay_km = 0.0005 * u_exposure.misc.x;
+        vec2 mc_km = m - dir.xz * (lay_km / max(dot(N, -dir), 0.08));
+        float home_cl = weather_cloud(mc_km * 1000.0, foot) * weather_paint_w();
+        cl = max(cl, home_cl * (1.0 - smoothstep(250.0, 700.0, md)));
+    }           // fair weather over home (the local cloud layer is drawn separately)
     col = mix(col, vec3(0.86), cl * 0.8);
     nl = normalize(mix(nl, N, cl * 0.8));
     // Sunlight on the ground, through the atmosphere above that spot.
@@ -251,7 +296,11 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     float sun_k = mix(0.3183 / max(pc.atmo.y, 0.1), 0.10, smoothstep(20.0, 110.0, alt));
     // (+ the sky's share of the light, as the landscape itself has it; none of it from orbit, as before)
     float amb_k = sun_k * 0.45 * (1.0 - smoothstep(20.0, 110.0, alt)) * smoothstep(-0.10, 0.15, sun.y);
-    vec3 lit = col * (t_sun * max(dot(nl, sun), 0.0) * sun_k + amb_k + 0.0004) * atmo_sun_illum();
+    // (pc.sun_color is the sun as it arrives at the ground: taking the atmosphere off it once
+    // more turned the land beige next to the raymarched landscape. Its dimming toward the
+    // terminator stays; the sky's share of the light is blue.)
+    vec3 t_sun_n = mix(t_sun, vec3(dot(t_sun, vec3(0.2126, 0.7152, 0.0722))), 0.8);
+    vec3 lit = col * (t_sun_n * max(dot(nl, sun), 0.0) * sun_k + amb_k * vec3(0.80, 0.92, 1.22) + 0.0004) * atmo_sun_illum();
     // Sea glint.
     vec3 hv = normalize(sun - dir);
     lit += (1.0 - land) * (1.0 - cl) * t_sun * pow(max(dot(N, hv), 0.0), 220.0) * 0.05 * atmo_sun_illum();
@@ -263,7 +312,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     T = mix(vec3(1.0), T, smoothstep(60.0, 350.0, t));
     // (the light lost on the way is mostly scattered back in as the blue veil, not gone: without
     // that share the snow country was beige from orbit)
-    T = mix(T, vec3(dot(T, vec3(0.2126, 0.7152, 0.0722))), 0.65);
+    T = mix(T, vec3(dot(T, vec3(0.2126, 0.7152, 0.0722))), 0.85);
     // The same haze the real landscape below gets (the aerial-perspective volume, to its far end).
     // (as the raymarched landscape in front of it gets it: the volume over the first 1.5 km, then the
     // slow ground haze of terrain_raymarch.frag rm_haze_dist, toward the colour of fully hazed air)
@@ -1175,6 +1224,21 @@ void main() {
     // under this pixel's ray, which is what the far march hits.
     {
         float alt_m = (pc.atmo.z - 6360.0) * 1000.0;
+        // Higher still the volumetric clouds have faded: the same weather map, painted on
+        // the land (planet_surface does the same for the far field behind it).
+        if (!uw && pc.atmo.x > 0.5 && alt_m > u_exposure.misc.x && obj_w > 0.0 && obj_depth > 0.9995) {
+            float pw = weather_paint_w();
+            vec3 cdir = view_ray(uvp);
+            if (pw > 0.0 && cdir.y < -1e-4) {
+                float tc = (alt_m - 0.5 * u_exposure.misc.x) / (-cdir.y);
+                vec2 cxz = u_exposure.planet.xy * 1000.0 + cdir.xz * tc;
+                float ca = weather_cloud(cxz, tc * 0.0012 / max(-cdir.y, 0.08)) * pw * 0.8;
+                vec3 csun = normalize(pc.sun_dir.xyz);
+                float ck = 0.3183 / max(pc.atmo.y, 0.1);
+                vec3 ccol = vec3(0.86) * (max(csun.y, 0.0) * ck + ck * 0.45 * smoothstep(-0.10, 0.15, csun.y) * vec3(0.80, 0.92, 1.22)) * atmo_sun_illum();   // (lit as planet_surface lights its clouds)
+                hdr_obj = mix(hdr_obj, ccol * obj_w, ca);
+            }
+        }
         if (!uw && pc.atmo.x > 0.5 && alt_m > 300.0 && obj_w > 0.0 && obj_depth > 0.9995) {
             vec3 pdir = view_ray(uvp);
             if (pdir.y < -1e-4) {
@@ -1186,10 +1250,10 @@ void main() {
         }
         // Above the cloud layer the clouds are in front of the land (clouds.comp renders
         // them over it then).
-        if (!uw && pc.atmo.x > 0.5 && alt_m > u_exposure.misc.x && obj_w > 0.0 && obj_depth > 0.9995) {
+        if (!uw && pc.atmo.x > 0.5 && alt_m > u_exposure.misc2.x && obj_w > 0.0 && obj_depth > 0.9995) {
             // (the cloud buffer is coarse and noisy per frame, and only the sky's share of it is
             // filtered over time: over the land a wide tent filter makes them soft instead of blocks)
-            vec2 cts = 1.25 / vec2(textureSize(u_clouds, 0));
+            vec2 cts = 2.0 / vec2(textureSize(u_clouds, 0));
             vec4 clo = vec4(0.0);
             for (int cy = -2; cy <= 2; ++cy)
                 for (int cx = -2; cx <= 2; ++cx)
