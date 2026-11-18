@@ -690,6 +690,18 @@ void VulkanEngine::run(const RunOptions& opts) {
             log::infof("[player] fly mode %s", fly_mode_ ? "on" : "off");
         }
         prev_fly_key_ = in.fly_key;
+        // H: home. Wherever the flight went (orbit included), back on the ground by the chapel,
+        // facing the castle, on foot.
+        if (in.home_key && !prev_home_key_ && state_ == State::Playing) {
+            fly_mode_ = false;
+            player_.position = glm::vec3(30.741f, 27.9f, 118.9f);
+            player_.velocity = glm::vec3(0.0f);
+            player_.yaw = 0.6f;
+            player_.pitch = 0.0f;
+            prev_player_position_ = player_.position;
+            log::info("[home] back to the home spot (H)");
+        }
+        prev_home_key_ = in.home_key;
         bool wire_edge = in.wireframe_key && !prev_wireframe_key_;
         prev_wireframe_key_ = in.wireframe_key;
         if (wire_edge && state_ == State::Playing) {

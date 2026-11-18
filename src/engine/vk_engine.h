@@ -438,6 +438,7 @@ private:
 
     std::array<FrameData, kFrameOverlap> frames_{};
     uint64_t frame_number_ = 0;
+    bool prev_home_key_ = false;                     // H: back to the home spot (by the chapel, facing the castle)
     bool fly_mode_ = false, prev_fly_key_ = false;   // V: free flight, no collision
     bool shadow_rebake_request_ = false;                // menu: 'Recalculate shadows'
     // Seconds-based animation clock (wind, water, grass sway): advanced once
