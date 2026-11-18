@@ -241,8 +241,9 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
         float hx = pl_terrain(wp + vec2(e, 0.0), octf), hz = pl_terrain(wp + vec2(0.0, e), octf);
         vec3 tn = normalize(vec3(h0 - hx, e, h0 - hz));
         // Away from home the country varies by region: lowlands (greener, more water) and highlands (more snow).
-        // (Nothing within 4 km of home, where the real landscape is.)
-        h0 += (pl_noise(vec3(wp * 0.00005, 7.7)) * 0.65 + pl_noise(vec3(wp * 0.00017, 2.2)) * 0.35 - 0.5) * 75.0 * smoothstep(4.0, 25.0, md);
+        // (Nothing within 120 km of home: that is where the raymarched landscape is seen and cross-fades into this -
+        // with other heights here the two did not line up, and hollows and snow hopped as the fade band moved.)
+        h0 += (pl_noise(vec3(wp * 0.00005, 7.7)) * 0.65 + pl_noise(vec3(wp * 0.00017, 2.2)) * 0.35 - 0.5) * 75.0 * smoothstep(120.0, 300.0, md);
         float wl = u_exposure.planet.z, gsnow = u_exposure.planet.w;
         float patchn = pl_noise(vec3(wp * 0.004, 1.3)), fine = pl_noise(vec3(wp * 0.05, 4.1));
         // The landscape's own height layers: sand, grass (wooded), dirt, rock, snow.

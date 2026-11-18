@@ -66,6 +66,11 @@ VulkanEngine::FrameView VulkanEngine::compute_frame_view() {
     // the limits follow from where terrain_raymarch.frag clamps its depth.
     view_far_   = glm::clamp(1500.0f + (fv.eye_pos.y - 1000.0f) * 30.0f, 1500.0f, 30000.0f);
     object_far_ = std::min(view_far_ - 50.0f, 3800.0f);
+    // The terrain's distance LOD (fewer octaves of the height formula beyond a few hundred metres) is a
+    // saving for the view along the ground. From the air it showed: a smoothed version of the land
+    // under the camera inside 1.5 km and the full one (raymarch_far) beyond, the border between the
+    // two sweeping over the land while climbing. Airborne, the LOD distances move out of range.
+    rm_air_lod_k_ = 1.0f + 40.0f * glm::smoothstep(80.0f, 350.0f, fv.eye_pos.y - rt_.water_level);
     fv.proj = glm::perspective(glm::radians(80.0f), aspect, 0.05f, view_far_);
     fv.proj[1][1] *= -1.0f;
     if (rt_.taa_jitter_enabled || rt_.fsr2_enabled) {
@@ -150,9 +155,9 @@ void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
     //   w = lod_min_oct — minimum octave count at far end of ramp
     pc.emissive = glm::vec4(
         std::clamp(rt_.terrain_raymarch_step_factor, 0.15f, 0.8f),
-        std::max(1.0f, rt_.terrain_raymarch_lod_near_m),
-        std::max(rt_.terrain_raymarch_lod_near_m + 1.0f,
-                 rt_.terrain_raymarch_lod_far_m),
+        std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
+        std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
+                 (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
         static_cast<float>(std::clamp(rt_.terrain_raymarch_lod_min_octaves, 2, 8)));
     pc.tex_params = glm::vec4(
         static_cast<float>(std::clamp(rt_.terrain_raymarch_max_steps, 60, 300)),
@@ -223,9 +228,9 @@ void VulkanEngine::render_grass_raymarch(VkCommandBuffer cmd) {
     // .x stays 0 — the grass shader doesn't read a step factor.
     pc.emissive = glm::vec4(
         rt_.terrain_raymarch_enabled ? 0.0f : 1.0f,   // .x 1 = mesh terrain: read the height texture
-        std::max(1.0f, rt_.terrain_raymarch_lod_near_m),
-        std::max(rt_.terrain_raymarch_lod_near_m + 1.0f,
-                 rt_.terrain_raymarch_lod_far_m),
+        std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
+        std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
+                 (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
         static_cast<float>(std::clamp(rt_.terrain_raymarch_lod_min_octaves, 2, 8)));
     pc.tex_params = glm::vec4(-1.0f, -1.0f, 1.0f, 0.0f);
     // .w = blade height scale. The SDF blade is ~1.7 units tall
@@ -604,9 +609,9 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         // clip its march against the depth pre-pass copy.)
         pc.emissive = glm::vec4(
             -std::clamp(rt_.terrain_raymarch_step_factor, 0.15f, 0.8f),
-            std::max(1.0f, rt_.terrain_raymarch_lod_near_m),
-            std::max(rt_.terrain_raymarch_lod_near_m + 1.0f,
-                     rt_.terrain_raymarch_lod_far_m),
+            std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
+            std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
+                     (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
             static_cast<float>(std::clamp(rt_.terrain_raymarch_lod_min_octaves, 2, 8)));
         // grass_params slot — fog strength + flags (mirrors LR pass).
         pc.grass_params = glm::vec4(

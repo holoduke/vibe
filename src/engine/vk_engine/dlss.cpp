@@ -328,15 +328,20 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
     glm::mat4 proj = fv.proj;
     proj[2][0] -= fv.jitter.x;                 // remove the sub-pixel jitter
     proj[2][1] -= fv.jitter.y;
-    const glm::mat4 vp_cur = proj * fv.view;
-    const glm::mat4 vp_prev = prev_view_proj_valid_ ? prev_view_proj_ : vp_cur;
-    const glm::mat4 clip_to_prev = vp_prev * glm::inverse(vp_cur);
+    // In double precision: with the eye far from the origin and the far plane tens of km out, a float
+    // inverse of the view-projection is noisy from frame to frame. DLSS and frame generation reproject
+    // with these - the generated frames put the land a little off, back and forth, the more the higher
+    // (and faster) the flight.
+    const glm::dmat4 vp_cur_d = glm::dmat4(proj) * glm::dmat4(fv.view);
+    const glm::dmat4 vp_prev_d = prev_view_proj_valid_ ? glm::dmat4(prev_view_proj_) : vp_cur_d;
+    const glm::dmat4 clip_to_prev_d = vp_prev_d * glm::inverse(vp_cur_d);
+    const glm::mat4 clip_to_prev = glm::mat4(clip_to_prev_d);
     sl::Constants c{};
     c.cameraViewToClip = to_sl(proj);
     c.clipToCameraView = to_sl(glm::inverse(proj));
     c.clipToLensClip = to_sl(glm::mat4(1.0f));
     c.clipToPrevClip = to_sl(clip_to_prev);
-    c.prevClipToClip = to_sl(glm::inverse(clip_to_prev));
+    c.prevClipToClip = to_sl(glm::mat4(glm::inverse(clip_to_prev_d)));
     // The projection jitter moves the image by -j in NDC (GLM w = -z_view),
     // so the pixel-space sample offset DLSS needs is -j * 0.5 * size on both
     // axes (measured: + made the output shimmer while standing still).

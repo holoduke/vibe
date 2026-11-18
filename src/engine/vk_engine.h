@@ -1366,6 +1366,7 @@ private:
     // Far plane and how far objects are drawn. 1500 m on the ground and up to 1 km altitude (unchanged);
     // from the air they grow, so trees and buildings stay visible below (world_render.cpp).
     float view_far_ = 1500.0f, object_far_ = 1450.0f;
+    float rm_air_lod_k_ = 1.0f;        // scales the terrain march's LOD distances (world_render.cpp)
     int   veg_tlas_cache_season_ = -1; // season state the ray-traced vegetation records were made for
     Wx    mp_host_tgt_{};             // multiplayer client: the weather target the host decided
     int   wx_last_preset_ = -1;
