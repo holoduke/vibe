@@ -1030,6 +1030,31 @@ void main() {
     vec3 X = (pc.sky_color.w > 0.5) ? pc.sky_color.rgb : vec3(0.55, 0.72, 0.95);
     outColor = vec4(sky_rad - X, 0.0);
 }
+#elif defined(CLOUDS_OVER)
+// The cloud layer in front of the land, at render resolution before the
+// upscaler (premultiplied blend: colour = cloud + land x (1 - alpha)). Only
+// where clouds.comp rendered them over geometry: camera above the layer's
+// base, far geometry (not the weapon in the hand, not the sky - the sky fill
+// has done that).
+void main() {
+    float alt_m = (pc.atmo.z - 6360.0) * 1000.0;
+    float depth = texelFetch(history_depth, ivec2(gl_FragCoord.xy), 0).r;
+    if (alt_m <= u_exposure.misc2.x || depth <= 0.9995 || depth >= 0.99999) discard;
+    vec2 cuv = gl_FragCoord.xy * pc.viewport.zw;
+    vec4 cl = textureLod(u_clouds, cuv, 0.0);
+    if (alt_m > u_exposure.misc.x) {
+        // From above the layer its far clouds come out of the march in coarse blocks: a small
+        // tent filter here (inside the layer the clouds are near and need none).
+        vec2 ts = 1.5 / vec2(textureSize(u_clouds, 0));
+        cl *= 4.0;
+        for (int j = -1; j <= 1; ++j)
+            for (int i = -1; i <= 1; ++i)
+                if (i != 0 || j != 0) cl += textureLod(u_clouds, cuv + vec2(i, j) * ts, 0.0) * ((i == 0 || j == 0) ? 2.0 : 1.0);
+        cl /= 16.0;
+    }
+    if (cl.a <= 0.0) discard;
+    outColor = cl;
+}
 #elif defined(SUN_SHAFTS)
 // Sun shafts at render resolution, before the upscaler (additive). The same
 // accumulation as in the full compose below; the geometry test is exact here
@@ -1275,19 +1300,8 @@ void main() {
                 }
             }
         }
-        // Above the cloud layer the clouds are in front of the land (clouds.comp renders
-        // them over it then).
-        if (!uw && pc.atmo.x > 0.5 && alt_m > u_exposure.misc2.x && obj_w > 0.0 && obj_depth > 0.9995) {
-            // (the cloud buffer is coarse and noisy per frame, and only the sky's share of it is
-            // filtered over time: over the land a wide tent filter makes them soft instead of blocks)
-            vec2 cts = 2.0 / vec2(textureSize(u_clouds, 0));
-            vec4 clo = vec4(0.0);
-            for (int cy = -2; cy <= 2; ++cy)
-                for (int cx = -2; cx <= 2; ++cx)
-                    clo += textureLod(u_clouds, sample_uv + vec2(cx, cy) * cts, 0.0) * ((3.0 - abs(float(cx))) * (3.0 - abs(float(cy))));
-            clo /= 81.0;
-            hdr_obj = hdr_obj * (1.0 - clo.a) + clo.rgb * obj_w;
-        }
+        // (The volumetric clouds in front of the land are in the colour already: the CLOUDS_OVER
+        // pass before the upscaler.)
     }
 
     // Stars, at output resolution, on the sky share of the pixel: only where

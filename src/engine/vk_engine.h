@@ -2688,6 +2688,8 @@ private:
     VkPipeline             sky_fill_pipeline_ = VK_NULL_HANDLE;
     VkShaderModule         sun_shafts_frag_module_ = VK_NULL_HANDLE;  // compose.frag -DSUN_SHAFTS
     VkPipeline             sun_shafts_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule         clouds_over_frag_module_ = VK_NULL_HANDLE; // compose.frag -DCLOUDS_OVER
+    VkPipeline             clouds_over_pipeline_ = VK_NULL_HANDLE;
     bool                   sun_shafts_prepass_ran_ = false;           // this frame: compose skips its own shafts
     bool                   atmo_dispatched_this_frame_ = false;
 

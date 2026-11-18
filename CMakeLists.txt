@@ -547,6 +547,19 @@ add_custom_command(
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${SUN_SHAFTS_SPV})
 
+# Clouds in front of the land (camera inside or above the cloud layer), also
+# before the upscaler: the same clouds, as sharp and steady as against the sky.
+set(CLOUDS_OVER_SPV "${SHADER_OUTPUT_DIR}/clouds_over.frag.spv")
+add_custom_command(
+    OUTPUT ${CLOUDS_OVER_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DCLOUDS_OVER=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/compose.frag -o ${CLOUDS_OVER_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/compose.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader clouds_over.frag (compose clouds-over-land variant)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${CLOUDS_OVER_SPV})
+
 # Sky-fill variant of compose.frag: writes the real sky into the render-res
 # scene colour BEFORE DLSS (exact colour/alpha alignment), so DLSS upscales
 # a finished sky instead of compose rebuilding it at silhouettes afterwards.

@@ -966,6 +966,45 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
     }
     // Sun shafts into the render-resolution scene colour, before the upscaler
     // (any temporal upscaler: DLSS or FSR). See compose.frag SUN_SHAFTS.
+    // ---- The cloud layer in front of the land ----
+    // From inside or above the layer the clouds lie between the eye and the ground
+    // (clouds.comp renders them over far geometry then). They go into the scene colour
+    // here, before the upscaler - exactly as the sky's clouds do in the sky fill - so
+    // they are the same clouds, as sharp and as steady. (Pasted in after the upscaler
+    // they were the raw low-resolution buffer: blocks, or a blur to hide the blocks.)
+    if (clouds_over_pipeline_ != VK_NULL_HANDLE && rt_.clouds_enabled && rt_.sky_mode == 1 && atmo_pipeline_ &&
+        current_frame_view_.eye_pos.y > glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f)) {
+        VkCommandBuffer cmd = frame.command_buffer;
+        vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        auto att = vkinit::color_attachment_info(scene_color_view_, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingInfo ri{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr, .flags = 0,
+            .renderArea = { {0, 0}, render_extent_ },
+            .layerCount = 1, .viewMask = 0,
+            .colorAttachmentCount = 1, .pColorAttachments = &att,
+            .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
+        };
+        vkCmdBeginRendering(cmd, &ri);
+        VkViewport vp{ 0.0f, 0.0f, float(render_extent_.width), float(render_extent_.height), 0.0f, 1.0f };
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        VkRect2D sc{ {0, 0}, render_extent_ };
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clouds_over_pipeline_);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_pipeline_layout_,
+                                0, 1, &compose_desc_sets_[history_write_slot_], 0, nullptr);
+        ComposePC op{};
+        const float rw = float(render_extent_.width), rh = float(render_extent_.height);
+        op.viewport = glm::vec4(rw, rh, 1.0f / rw, 1.0f / rh);
+        op.atmo = glm::vec4(1.0f, std::max(0.0f, rt_.atmosphere_intensity),
+                            6360.0f + std::max(current_frame_view_.eye_pos.y, 1.0f) * 0.001f, std::max(0.5f, rt_.aerial_max_km));
+        vkCmdPushConstants(cmd, compose_pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(op), &op);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
+        vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
     sun_shafts_prepass_ran_ = false;
     if (rt_.fsr2_enabled && sun_shafts_pipeline_ != VK_NULL_HANDLE && rt_.sun_shaft_intensity > 0.001f &&
         !std::getenv("QLIKE_SHAFTS_LATE")) {

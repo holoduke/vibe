@@ -683,13 +683,19 @@ void main() {
             if (t_water_plane < 0.0 || t_obj < t_water_plane) { t_stop = t_obj; obj_stop = true; }
         }
     }
+    // From the air (the eye well above the highest ground) the whole landscape is found by
+    // the far march: a careful walk made for the full-detail heights. The normal march takes
+    // long strides at distance, counting on the smoothed far LOD - with the detail kept from
+    // the air it stepped over thin ridges and left cracks and slivers in the land.
+    bool air = !water_only && ro.y > terrainMaxHeight() + 60.0;
     float t = water_only ? raymarchMesh(ro, rd, t_water_plane)
-                         : raymarch(ro, rd, t_stop);
-    if (obj_stop && t < 0.0) discard;      // an object owns this pixel
+                         : (air ? -1.0 : raymarch(ro, rd, t_stop));
+    if (!air && obj_stop && t < 0.0) discard;      // an object owns this pixel
     // From the air (above 1 km): the landscape beyond the normal march's reach.
-    if (t < 0.0 && !water_only && !obj_stop) {
+    if (t < 0.0 && !water_only && (air || !obj_stop)) {
         float fl = rm_far_limit(ro.y);
-        t = raymarch_far(ro, rd, (t_water_plane > 0.0) ? min(fl, t_water_plane) : fl);
+        t = raymarch_far(ro, rd, (t_stop > 0.0) ? min(fl, t_stop) : fl);     // (t_stop: the water plane or an object in front)
+        if (obj_stop && t < 0.0) discard;
     }
 
     // Resolve water vs terrain ordering for the rest of the shader.

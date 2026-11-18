@@ -117,6 +117,15 @@ void VulkanEngine::init_compose() {
             hcfg.additive_blend = true;
             sun_shafts_pipeline_ = vkpipe::build_graphics_pipeline(device_, hcfg);
         }
+        // The cloud layer in front of the land (camera inside / above it), before the upscaler.
+        clouds_over_frag_module_ = vkpipe::load_shader_module(device_, sd3 + "/clouds_over.frag.spv");
+        if (clouds_over_frag_module_) {
+            vkpipe::GraphicsPipelineConfig ocfg = ccfg;
+            ocfg.frag = clouds_over_frag_module_;
+            ocfg.color_format = scene_color_format_;
+            ocfg.premultiplied_blend = true;
+            clouds_over_pipeline_ = vkpipe::build_graphics_pipeline(device_, ocfg);
+        }
     }
     log::info("Compose pass initialized (ACES Fitted tonemap + sRGB encode)");
 }
@@ -210,6 +219,9 @@ void VulkanEngine::destroy_compose() {
     destroy_atmosphere();
     if (sky_fill_pipeline_)        vkDestroyPipeline(device_, sky_fill_pipeline_, nullptr);
     if (sun_shafts_pipeline_)      vkDestroyPipeline(device_, sun_shafts_pipeline_, nullptr);
+    if (clouds_over_pipeline_)     vkDestroyPipeline(device_, clouds_over_pipeline_, nullptr);
+    if (clouds_over_frag_module_)  vkDestroyShaderModule(device_, clouds_over_frag_module_, nullptr);
+    clouds_over_pipeline_ = VK_NULL_HANDLE; clouds_over_frag_module_ = VK_NULL_HANDLE;
     if (sun_shafts_frag_module_)   vkDestroyShaderModule(device_, sun_shafts_frag_module_, nullptr);
     sun_shafts_pipeline_ = VK_NULL_HANDLE; sun_shafts_frag_module_ = VK_NULL_HANDLE;
     if (sky_fill_frag_module_)     vkDestroyShaderModule(device_, sky_fill_frag_module_, nullptr);
