@@ -634,12 +634,25 @@ void VulkanEngine::tick_spacejet(float dt) {
                     glm::vec3 miss = f.target - impact; miss.y = 0.0f;
                     float along = glm::dot(miss, hf);                 // >0: impact short
                     float cross_err = glm::length(miss - hf * along);
-                    if (!f.bomb_dropped && along <= 0.0f && along > -60.0f &&
-                        cross_err < 35.0f && h < 190.0f) {
+                    // The called airstrike always releases: as soon as the predicted impact
+                    // reaches the target along the track, whatever the height and however far
+                    // the aircraft is off to the side (over high ground it had to fly higher
+                    // than the 190 m limit, or could not line up within 35 m - and then flew
+                    // past without dropping). The bomb is given the sideways speed that
+                    // takes it onto the mark.
+                    const bool strike_release = f.strike && along <= 0.0f;
+                    if (!f.bomb_dropped && (strike_release || (along <= 0.0f && along > -60.0f &&
+                        cross_err < 35.0f && h < 190.0f))) {
                         f.bomb_dropped = true;
                         Bomb b{};
                         b.pos = f.pos - f.up * 1.5f;
                         b.vel = v0;
+                        if (f.strike) {
+                            glm::vec3 corr = (miss - hf * along) / std::max(t_fall, 0.5f);
+                            const float cl = glm::length(corr);
+                            if (cl > 70.0f) corr *= 70.0f / cl;
+                            b.vel += corr;
+                        }
                         b.prev_pos = b.pos;
                         b.chute = chute;
                         b.phase = float(f.id) * 1.7f;
