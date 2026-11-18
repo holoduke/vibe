@@ -930,7 +930,7 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         // tilted, the sky tore into bands). Directions do not need the position: use
         // the inverse of the projection times the rotation only. Below 2 km: as always.
         sp.inv_view_proj = current_frame_view_.eye_pos.y > 2000.0f
-            ? glm::inverse(current_frame_view_.proj * glm::mat4(glm::mat3(current_frame_view_.view))) : last_inv_view_proj_;
+            ? glm::mat4(glm::inverse(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view)))) : last_inv_view_proj_;
         // Sky motion: last frame's view-projection (columns 0..2: a direction has w = 0),
         // with the jitter difference folded in like every other motion vector.
         // Carried in three fields the sky-fill shader does not use otherwise.
@@ -1285,7 +1285,7 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
                                                      rt_.underwater_turbidity, -1.0f);
         }
         pc_data.inv_view_proj = current_frame_view_.eye_pos.y > 2000.0f      // (see the sky fill above)
-            ? glm::inverse(current_frame_view_.proj * glm::mat4(glm::mat3(current_frame_view_.view))) : last_inv_view_proj_;
+            ? glm::mat4(glm::inverse(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view)))) : last_inv_view_proj_;
         // tone.x: tonemap mode, +8 = colour is DLSS output whose alpha
         // carries exact sky coverage (deferred writes geometry alpha 0).
         pc_data.tone = glm::vec4(float(rt_.tonemap_mode) +

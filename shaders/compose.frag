@@ -184,7 +184,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     if (k <= 0.0 || dir.y >= 0.0) return vec4(0.0);
     // Ray from (0, r, 0) against the sphere.
     float b = r * dir.y;
-    float disc = b * b - (r * r - Rg * Rg);
+    float disc = b * b - (r - Rg) * (r + Rg);                 // (not r*r - Rg*Rg: that loses the altitude in rounding low down)
     if (disc < 0.0) return vec4(0.0);
     float t = -b - sqrt(disc);
     if (t <= 0.0) return vec4(0.0);
