@@ -561,6 +561,38 @@ add_custom_command(
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${CLOUDS_OVER_SPV})
 
+# Screen-space displacement mapping: the three full-screen passes of ssdm_resolve.frag.
+set(SSDM_COLOR_SPV "${SHADER_OUTPUT_DIR}/ssdm_color.frag.spv")
+add_custom_command(
+    OUTPUT ${SSDM_COLOR_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DSSDM_COLOR=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag -o ${SSDM_COLOR_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader ssdm_color.frag (ssdm_resolve: colour + resolve map)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${SSDM_COLOR_SPV})
+set(SSDM_DEPTH_SPV "${SHADER_OUTPUT_DIR}/ssdm_depth.frag.spv")
+add_custom_command(
+    OUTPUT ${SSDM_DEPTH_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DSSDM_DEPTH=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag -o ${SSDM_DEPTH_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader ssdm_depth.frag (ssdm_resolve: displaced depth)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${SSDM_DEPTH_SPV})
+set(SSDM_VELOCITY_SPV "${SHADER_OUTPUT_DIR}/ssdm_velocity.frag.spv")
+add_custom_command(
+    OUTPUT ${SSDM_VELOCITY_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DSSDM_VELOCITY=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag -o ${SSDM_VELOCITY_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader ssdm_velocity.frag (ssdm_resolve: motion vectors)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${SSDM_VELOCITY_SPV})
+
 # Sky-fill variant of compose.frag: writes the real sky into the render-res
 # scene colour BEFORE DLSS (exact colour/alpha alignment), so DLSS upscales
 # a finished sky instead of compose rebuilding it at silhouettes afterwards.
