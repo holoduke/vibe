@@ -130,12 +130,16 @@ float terrainM(vec2 p) {
 // the base surface than that, its exact value cannot change the outcome,
 // so a constant upper bound replaces the 3 noise taps + texture fetch
 // (most march steps are in open air; this was ~40 % of the pass).
+// Set while the far march (and the normal of its hits) reads the land: the detail then follows
+// what a pixel resolves at that distance only - not the distance LOD of the view along the
+// ground, which would move the heights with distance.
+bool g_rm_fp_only = false;
 float terrainM_lod(vec2 p, float ray_t) {
     vec2 wp = p;
     p *= TERRAIN_SCALE;
     int oct_full = int(pc.tex_params.z);
     int oct_min  = max(2, min(oct_full, int(pc.emissive.w)));
-    float lod_f  = smoothstep(pc.emissive.y, pc.emissive.z, ray_t);
+    float lod_f  = g_rm_fp_only ? 0.0 : smoothstep(pc.emissive.y, pc.emissive.z, ray_t);
     // Fractional octave count — ceil() to include the partially-faded
     // top octave; `frac` is the [0..1] weight that octave gets so the
     // FBM is C0-continuous across the integer threshold.
@@ -509,7 +513,7 @@ float rm_far_limit(float eye_y) {
 // so this is a plain walk through the slab that holds the landscape.
 // `whole`: this march finds the land from the eye on (from the air, and anywhere outside the
 // home tile); otherwise it continues where the normal march stopped.
-float raymarch_far(vec3 ro, vec3 rd, float t_end, bool whole) {
+float raymarch_far_impl(vec3 ro, vec3 rd, float t_end, bool whole) {
     // (from the ground too: the land does not end 1.5 km away, it only is not marched in detail
     // beyond that. From below the highest ground a ray may also climb to it.)
     float maxH = terrainMaxHeight();
@@ -523,16 +527,27 @@ float raymarch_far(vec3 ro, vec3 rd, float t_end, bool whole) {
         if (t > t_end) return -1.0;
         vec3 p = ro + rd * t;
         if (rd.y > 0.0 && p.y > maxH) return -1.0;
-        float h = p.y - terrainM(p.xz);          // all octaves: the heights (lakes, snow line) must not shift with distance
+        float h = p.y - terrainM_lod(p.xz, t);   // as much detail as a pixel resolves there: with all of it, the part finer than a pixel showed as ruled lines
         if (h < 0.0012 * t) {
             if (h < 0.0) {
+                // (to the millimetre: the stride that stepped in can be metres long, and six halvings
+                // of that left centimetres - enough for the ground's fine grain to show each ray's
+                // error as a streak along the line of sight)
                 float ta = t_prev, tb = t;
-                for (int k = 0; k < 6; ++k) {
+                for (int k = 0; k < 14; ++k) {
                     float tm = 0.5 * (ta + tb);
                     vec3  pm = ro + tm * rd;
-                    if (pm.y - terrainM(pm.xz) > 0.0) ta = tm; else tb = tm;
+                    if (pm.y - terrainM_lod(pm.xz, tm) > 0.0) ta = tm; else tb = tm;
                 }
-                return ta;
+                return 0.5 * (ta + tb);
+            }
+            // Accepted a little above the ground (within the tolerance): walk the rest of the way
+            // down. Left as it was, each ray stopped at its own height above the surface and the
+            // ground's pattern was smeared into straight streaks along the line of sight.
+            for (int k = 0; k < 4; ++k) {
+                t += h * 0.8 / max(-rd.y, 0.3);            // (h is height; along a slanting ray it is further)
+                vec3 pr = ro + rd * t;
+                h = pr.y - terrainM_lod(pr.xz, t);
             }
             return t;
         }
@@ -543,8 +558,14 @@ float raymarch_far(vec3 ro, vec3 rd, float t_end, bool whole) {
     // plane). Still well clear of it (a level ray from the ground): open air.
     {
         vec3 p = ro + rd * t;
-        if (rd.y > -0.02 && p.y - terrainM(p.xz) > 0.02 * t) return -1.0;
+        if (rd.y > -0.02 && p.y - terrainM_lod(p.xz, t) > 0.02 * t) return -1.0;
     }
+    return t;
+}
+float raymarch_far(vec3 ro, vec3 rd, float t_end, bool whole) {
+    g_rm_fp_only = true;
+    float t = raymarch_far_impl(ro, rd, t_end, whole);
+    g_rm_fp_only = false;
     return t;
 }
 #endif

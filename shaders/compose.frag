@@ -215,7 +215,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     float home = exp(-dot(m, m) / (900.0 * 900.0));              // the place we stand on is land (not a peak: its height stays the map's)
     float wm_v = wm_continent(m);                                // the world map: > 0 land, < 0 sea
     float land = smoothstep(-0.012, 0.012, wm_v) * 1.0;         // (`cont` below only shapes the land's look)
-    land = mix(1.0, land, smoothstep(1.5, 2.6, length(m)));     // (home itself is the landscape, lakes and all)
+    land = mix(1.0, land, smoothstep(1.4, 1.9, length(m)));     // (home itself is the landscape, lakes and all)
     float high = wm_ranges(m) * smoothstep(2.6, 6.0, length(m));    // the world map's high ranges (home's own mountains: the landscape)
     float lat = abs(Nf.z);                                     // a pole along z: ice caps
     float detail = pl_fbm(Nf * 60.0);

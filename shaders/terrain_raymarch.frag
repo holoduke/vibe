@@ -135,8 +135,15 @@ float sampleHeightDelta(vec2 worldXZ) {
     // textureLod 0 — sampler is CLAMP_TO_EDGE and the heightmap delta
     // is ~0 at the world boundary (no sculpting past the edge), so a
     // clamped read at out-of-world XZ returns the right value too.
-    vec2 uv = clamp((worldXZ / kHeightmapSide) + vec2(0.5), 0.0, 1.0);
-    return textureLod(u_terrain_height, uv, 0.0).r;
+    // Beyond the home tile there is no sculpting. The edge texels are NOT
+    // all zero, and a clamped read drew them out into ruled furrows running
+    // straight away from the tile (lines in the meadows east/west/north/south
+    // of home): fade the delta out over the tile's last metres instead.
+    vec2 aq = abs(worldXZ);
+    float edge = kHeightmapSide * 0.5 - max(aq.x, aq.y);
+    if (edge <= 0.0) return 0.0;
+    vec2 uv = (worldXZ / kHeightmapSide) + vec2(0.5);
+    return textureLod(u_terrain_height, uv, 0.0).r * smoothstep(0.0, 14.0, edge);
 }
 
 // === Mesh-terrain height (water-only mode) ==========================
@@ -826,7 +833,10 @@ void main() {
         // speed; a train fades out where a pixel no longer resolves it, and a slow
         // noise breaks the ranks so the crests are not ruled lines.
         {
-            float sea_k = smoothstep(1500.0, 2000.0, length(wpos.xz));
+            float sea_k = smoothstep(1350.0, 1750.0, length(wpos.xz));
+            // Swell belongs to the sea. A pond inland has none: on a small lake the long
+            // wave trains read as a ruled cross-hatch in the sun's glitter.
+            if (sea_k > 0.0) sea_k *= 1.0 - smoothstep(0.0, 0.02, wm_continent(wpos.xz * 0.001));
             if (sea_k > 0.0) {
                 const float kAng[7] = float[7](2.83, 3.71, 3.19, 2.27, 4.02, 2.51, 3.47);          // where each train runs to (rad; the sea lies east)
                 const float kLen[7] = float[7](83.0, 47.0, 26.0, 14.5, 8.1, 4.6, 2.7);
@@ -857,7 +867,7 @@ void main() {
         wnor = normalize(vec3(wnor.x - rip_w.x, wnor.y, wnor.z - rip_w.y));
         // Winter: the lake freezes - no waves, a nearly flat sheet with a faint ripple in the surface.
         // (home's lakes; the open sea stays open)
-        float ice_k = smoothstep(0.35, 0.75, scene.season.w) * (1.0 - smoothstep(1500.0, 2000.0, length(wpos.xz)));     // the lake freezes in winter (not from a snow shower in another season)
+        float ice_k = smoothstep(0.35, 0.75, scene.season.w) * (1.0 - smoothstep(1350.0, 1750.0, length(wpos.xz)));     // the lake freezes in winter (not from a snow shower in another season)
         if (ice_k > 0.001) {
             vec3 n_ice = normalize(vec3((noise2(wpos.xz * 1.7) - 0.5) * 0.05, 1.0, (noise2(wpos.xz * 1.7 + 31.0) - 0.5) * 0.05));
             wnor = normalize(mix(wnor, n_ice, ice_k));
@@ -1444,7 +1454,7 @@ void main() {
         if (scene.water_foam_color.a > 0.001 && foam_op > 0.001) {
 #endif /* QLIKE_WATER */
             // (the sea's shore has surf: the same lapping foam, several times as wide as a lake's)
-            float foam_w = max(0.05, scene.water_foam_params.x) * (1.0 + 5.0 * smoothstep(1500.0, 2000.0, length(wpos.xz)));
+            float foam_w = max(0.05, scene.water_foam_params.x) * (1.0 + 5.0 * smoothstep(1350.0, 1750.0, length(wpos.xz)));
             float band   = exp(-depth_clean * (4.0 / foam_w));
             // Lapping wavelets instead of a solid stripe: thin foam lines
             // that run in toward the waterline (phase = depth), wobbling
@@ -2285,6 +2295,12 @@ void main() {
     // Terrain's own cavities (the RT rays above skip the terrain).
     {
         float cav_w = 1.0 - smoothstep(180.0, 260.0, cam_dist_pos);
+        // (read from the home tile's baked heights: beyond the tile a clamped read drew its
+        // edge row out as dark ruled lines over the land east / west / north / south of home)
+        {
+            vec2 cq = abs(pos.xz);
+            cav_w *= 1.0 - smoothstep(kHeightmapSide * 0.5 - 40.0, kHeightmapSide * 0.5 - 6.0, max(cq.x, cq.y));
+        }
         if (cav_w > 0.01) ao *= mix(1.0, terrainCavityAO(pos.xz), cav_w);
     }
 
@@ -2323,7 +2339,7 @@ void main() {
     // line up to a metre or so above it, with a ragged upper edge, and sand on the bed
     // below - the height layers put grass at the water level, which ran straight into the sea.
     {
-        float sea_k = smoothstep(1500.0, 2000.0, length(pos.xz));
+        float sea_k = smoothstep(1350.0, 1750.0, length(pos.xz));
         if (sea_k > 0.0 && scene.water_params.x > 0.5) {
             float wl = scene.water_params.y;
             float edge = wl + 0.5 + 1.0 * noise2(pos.xz * 0.045) + 0.35 * noise2(pos.xz * 0.31);
@@ -2333,10 +2349,34 @@ void main() {
             mate = mix(mate, sandc, sand);
             // Above the beach: grass. Out here there are no blades and no meadow mask, and the
             // soil under them is a grey gravel - from eye height the whole country was that.
-            float turf = sea_k * (1.0 - sand) * smoothstep(edge + 0.2, edge + 1.4, pos.y) * (1.0 - smoothstep(52.0, 70.0, pos.y));
+            float turf = 0.0;   // (below, with the edge of the home tile's grass)
             float tn = noise2(pos.xz * 0.031) * 0.6 + noise2(pos.xz * 0.21 + 4.0) * 0.4;
             vec3 turfc = mix(vec3(0.150, 0.118, 0.066), vec3(0.070, 0.112, 0.036), smoothstep(0.30, 0.52, tn)) *
-                         (0.80 + 0.40 * noise2(pos.xz * 1.9)) * (0.92 + 0.16 * noise2(pos.xz * 11.0));
+                         (1.0 + 0.40 * (noise2(pos.xz * 1.9) - 0.5) * (1.0 - smoothstep(120.0, 400.0, t))) *
+                         (1.0 + 0.16 * (noise2(pos.xz * 11.0) - 0.5) * (1.0 - smoothstep(18.0, 60.0, t)));   // (grain only while a pixel resolves it: finer than a pixel it turned into ruled lines)
+            mate = mix(mate, turfc, turf * 0.85);
+        }
+    }
+    // Turf where the home tile's grass thins out and beyond (grass_raymarch.frag fades its blades
+    // over the last 170 m of the tile): the two cross over, so there is no line where the lawn
+    // stops and no bare band between it and the turf of the wider world.
+    {
+        vec2 tq = abs(pos.xz);
+        float out_k = smoothstep(kHeightmapSide * 0.5 - 170.0, kHeightmapSide * 0.5 - 10.0, max(tq.x, tq.y));
+        if (out_k > 0.0) {
+            float wl = scene.water_params.y;
+            float turf = out_k * smoothstep(wl + 1.2, wl + 2.6, pos.y) * (1.0 - smoothstep(52.0, 70.0, pos.y)) *
+                         (1.0 - smoothstep(0.25, 0.60, 1.0 - nor.y));
+            // The patches of green and brown: value noise read straight has edges along the world's
+            // grid (ruled lines across the meadow, seen from a little way up). Read on a bent copy
+            // of the ground, in three turned layers, it has none.
+            vec2 tp = pos.xz + (vec2(noise2(pos.xz * 0.0091), noise2(pos.xz * 0.0091 + 23.0)) - 0.5) * 70.0;
+            float tn = noise2(mat2(0.80, -0.60, 0.60, 0.80) * tp * 0.027) * 0.45 +
+                       noise2(mat2(0.28, 0.96, -0.96, 0.28) * tp * 0.071 + 4.0) * 0.33 +
+                       noise2(mat2(-0.71, 0.71, -0.71, -0.71) * tp * 0.23 + 9.0) * 0.22;
+            vec3 turfc = mix(vec3(0.150, 0.118, 0.066), vec3(0.070, 0.112, 0.036), smoothstep(0.30, 0.52, tn)) *
+                         (1.0 + 0.40 * (noise2(pos.xz * 1.9) - 0.5) * (1.0 - smoothstep(120.0, 400.0, t))) *
+                         (1.0 + 0.16 * (noise2(pos.xz * 11.0) - 0.5) * (1.0 - smoothstep(18.0, 60.0, t)));   // (grain only while a pixel resolves it: finer than a pixel it turned into ruled lines)
             mate = mix(mate, turfc, turf * 0.85);
         }
     }

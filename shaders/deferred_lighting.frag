@@ -1354,6 +1354,11 @@ void main() {
         // lost at most 55 % of its sky light - narrow ground stayed far
         // too bright. Near-full range now (0.08 floor).
         float hv = textureLod(u_terrain_aux, aux_uv, 0.0).g;
+        // The bake covers the home tile only. Read clamped beyond it, its edge
+        // row was drawn out as dark ruled lines over the land east / west /
+        // north / south of home: fade to open sky over the tile's last metres.
+        vec2 aq = abs(world_pos.xz);
+        hv = mix(hv, 1.0, smoothstep(1024.0 - 40.0, 1024.0 - 4.0, max(aq.x, aq.y)));
         ambient_sky *= mix(0.08, 1.0, hv * hv * (3.0 - 2.0 * hv));
     }
     // sky_factor: cube.frag uses smoothstep(0, 0.6, sky_vis) floored at

@@ -123,8 +123,9 @@ inline float continent(glm::vec2 mk) {
     float dh = glm::length(mk);
     glm::vec2 wq2 = wq + (glm::vec2(fbm3(mk * 0.0035f + glm::vec2(13.1f)), fbm3(mk * 0.0035f + glm::vec2(71.4f))) - glm::vec2(0.5f)) *
                              170.0f * sstep(15.0f, 250.0f, dh);
-    float rim = glm::mix(2.0f, 45.0f, sstep(10.0f, 300.0f, dh));
-    v -= 0.46f * (1.0f - sstep(327.0f - rim, 327.0f + rim, glm::length(wq2 - glm::vec2(331.5f, 0.0f))));
+    v = glm::mix(v, std::max(v, 0.16f), 1.0f - sstep(5.0f, 25.0f, dh));
+    float rim = glm::mix(1.5f, 45.0f, sstep(10.0f, 300.0f, dh));
+    v -= 0.46f * (1.0f - sstep(327.0f - rim, 327.0f + rim, glm::length(wq2 - glm::vec2(329.2f, 0.0f))));
     if (std::abs(v) > 0.37f) return v;
     v += (fbm(mk * 0.011f + glm::vec2(8.9f)) - 0.5f) * 0.16f;
     v += (fbm3(mk * 0.35f + glm::vec2(61.0f)) - 0.5f) * 0.05f;
@@ -135,7 +136,7 @@ inline float ranges(glm::vec2 mk) {
 }
 inline float height(float a, glm::vec2 wp, float wl) {
     float h = a * 120.0f;
-    float w = sstep(1500.0f, 2600.0f, glm::length(wp));
+    float w = sstep(1400.0f, 1900.0f, glm::length(wp));
     if (w <= 0.0f) return h;
     float hl = 30.0f + (h - 30.0f) * glm::mix(0.42f, 1.12f, ranges(wp * 0.001f));
     float v = continent(wp * 0.001f);

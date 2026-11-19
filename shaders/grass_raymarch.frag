@@ -412,7 +412,8 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
         // 2 km tile's). Beyond it the mask repeated and the heights were the tile's edge: blades
         // stood in the air, under the ground and on the sea bed of the wider world.
         vec2 gq = abs(cellId * kPeriod);
-        elig *= 1.0 - smoothstep(kHeightmapSide * 0.5 - 24.0, kHeightmapSide * 0.5 - 4.0, max(gq.x, gq.y));
+        // (thinning out over the last 170 m, where terrain_raymarch.frag brings in its turf)
+        elig *= 1.0 - smoothstep(kHeightmapSide * 0.5 - 170.0, kHeightmapSide * 0.5 - 10.0, max(gq.x, gq.y));
     }
     // Soft patch border ('grass edge softness'): the mask alone gave a
     // wall of full-height grass next to bare ground. A low-frequency noise

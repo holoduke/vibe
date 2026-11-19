@@ -32,8 +32,11 @@ vec3 calcNormal(vec3 pos, float t) {
     // there (the hit positions are only that exact) and left the ground a flat sheet.
     if (t > 1500.0) {
         float e = max(0.0025 * t, 3.0);
-        float h0 = terrainM(pos.xz);
-        return normalize(vec3(h0 - terrainM(pos.xz + vec2(e, 0.0)), e, h0 - terrainM(pos.xz + vec2(0.0, e))));
+        g_rm_fp_only = true;
+        float h0 = terrainM_lod(pos.xz, t);
+        vec3 nf = normalize(vec3(h0 - terrainM_lod(pos.xz + vec2(e, 0.0), t), e, h0 - terrainM_lod(pos.xz + vec2(0.0, e), t)));
+        g_rm_fp_only = false;
+        return nf;
     }
     // Far-distance fast path: derive the normal from screen-space
     // derivatives of the hit position itself (`dFdx(pos)` and

@@ -43,7 +43,7 @@ float wm_continent(vec2 mk) {
     vec2 bend = vec2(WM_NOISE(q * 2.3 + 5.2), WM_NOISE(q * 2.3 + 91.7)) - 0.5;
     float v = wm_fbm(q + bend * 0.55 + 21.3) - 0.5;
     // Home lies inside a continent (its heart is 600 km to the west), on its east coast:
-    // the ocean begins a few km east of home and runs on for hundreds of km. Both are
+    // the ocean begins just behind home's mountains, under 2 km east, and runs on for hundreds of km. Both are
     // laid out on a bent copy of the map (a few km of bend near home, tens of km far
     // away), or that coast would be a ruled line on the planet.
     vec2 wq = mk + (vec2(wm_fbm3(mk * 0.013 + 3.3), wm_fbm3(mk * 0.013 + 47.9)) - 0.5) * mix(3.0, 60.0, smoothstep(4.0, 90.0, length(mk)));
@@ -55,8 +55,12 @@ float wm_continent(vec2 mk) {
     // an irregular sea, not a punched disc. At home the rim is where it was, and sharp.
     float dh = length(mk);
     vec2 wq2 = wq + (vec2(wm_fbm3(mk * 0.0035 + 13.1), wm_fbm3(mk * 0.0035 + 71.4)) - 0.5) * 170.0 * smoothstep(15.0, 250.0, dh);
-    float rim = mix(2.0, 45.0, smoothstep(10.0, 300.0, dh));
-    v -= 0.46 * (1.0 - smoothstep(327.0 - rim, 327.0 + rim, length(wq2 - vec2(331.5, 0.0))));
+    // Around home the land is firmly land (the fractal alone left it at the water's level
+    // for kilometres: one flat sand table, home an island in it). The coast east of home is
+    // then made by the basin alone, and its bays by the coast detail below.
+    v = mix(v, max(v, 0.16), 1.0 - smoothstep(5.0, 25.0, dh));
+    float rim = mix(1.5, 45.0, smoothstep(10.0, 300.0, dh));
+    v -= 0.46 * (1.0 - smoothstep(327.0 - rim, 327.0 + rim, length(wq2 - vec2(329.2, 0.0))));   // (its shore: about 1.9 km east of home, behind the mountains)
     // Far inland and far out to sea the coast's detail (at most 0.105) changes nothing that
     // is read from this value (everything saturates by 0.25): skip its eight noise lookups.
     if (abs(v) > 0.37) return v;
@@ -77,7 +81,7 @@ float wm_ranges(vec2 mk) {
 float wm_height(float a, vec2 wp, float wl) {
     float h = a * 120.0;
     // Home: the landscape and its ring of white mountains, as the formula has it.
-    float w = smoothstep(1500.0, 2600.0, length(wp));
+    float w = smoothstep(1400.0, 1900.0, length(wp));
     if (w <= 0.0) return h;
     // Hills and ranges: beyond home the land is low (under the snow line), with a
     // high range only where a slow noise says so. Scaled about 30 m.
