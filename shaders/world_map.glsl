@@ -42,10 +42,6 @@ float wm_continent(vec2 mk) {
     vec2 q = mk * 0.00042;
     vec2 bend = vec2(WM_NOISE(q * 2.3 + 5.2), WM_NOISE(q * 2.3 + 91.7)) - 0.5;
     float v = wm_fbm(q + bend * 0.55 + 21.3) - 0.5;
-    // Coasts: bays, capes, islands (90 km down to 5 km).
-    v += (wm_fbm(mk * 0.011 + 8.9) - 0.5) * 0.16;
-    // The shoreline itself: coves and points (3 km down to 700 m).
-    v += (wm_fbm3(mk * 0.35 + 61.0) - 0.5) * 0.05;
     // Home lies inside a continent (its heart is 600 km to the west), on its east coast:
     // the ocean begins a few km east of home and runs on for hundreds of km. Both are
     // laid out on a bent copy of the map (a few km of bend near home, tens of km far
@@ -55,7 +51,19 @@ float wm_continent(vec2 mk) {
     v += 0.20 * (1.0 - smoothstep(250.0, 1600.0, length(wq - vec2(-600.0, 0.0))));
     // (a round basin 650 km across whose rim passes just east of home - round, so that from orbit
     // it is a sea among the fractal's own, not a box)
-    v -= 0.46 * (1.0 - smoothstep(325.0, 329.0, length(wq - vec2(331.5, 0.0))));
+    // Away from home its outline wanders by tens of km and its rim is broad: from orbit it is
+    // an irregular sea, not a punched disc. At home the rim is where it was, and sharp.
+    float dh = length(mk);
+    vec2 wq2 = wq + (vec2(wm_fbm3(mk * 0.0035 + 13.1), wm_fbm3(mk * 0.0035 + 71.4)) - 0.5) * 170.0 * smoothstep(15.0, 250.0, dh);
+    float rim = mix(2.0, 45.0, smoothstep(10.0, 300.0, dh));
+    v -= 0.46 * (1.0 - smoothstep(327.0 - rim, 327.0 + rim, length(wq2 - vec2(331.5, 0.0))));
+    // Far inland and far out to sea the coast's detail (at most 0.105) changes nothing that
+    // is read from this value (everything saturates by 0.25): skip its eight noise lookups.
+    if (abs(v) > 0.37) return v;
+    // Coasts: bays, capes, islands (90 km down to 5 km).
+    v += (wm_fbm(mk * 0.011 + 8.9) - 0.5) * 0.16;
+    // The shoreline itself: coves and points (3 km down to 700 m).
+    v += (wm_fbm3(mk * 0.35 + 61.0) - 0.5) * 0.05;
     return v;
 }
 

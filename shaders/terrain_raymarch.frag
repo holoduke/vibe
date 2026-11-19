@@ -1439,7 +1439,8 @@ void main() {
         float foam_op = clamp(pc.color.w, 0.0, 1.0);
         if (scene.water_foam_color.a > 0.001 && foam_op > 0.001) {
 #endif /* QLIKE_WATER */
-            float foam_w = max(0.05, scene.water_foam_params.x);
+            // (the sea's shore has surf: the same lapping foam, several times as wide as a lake's)
+            float foam_w = max(0.05, scene.water_foam_params.x) * (1.0 + 5.0 * smoothstep(1500.0, 2000.0, length(wpos.xz)));
             float band   = exp(-depth_clean * (4.0 / foam_w));
             // Lapping wavelets instead of a solid stripe: thin foam lines
             // that run in toward the waterline (phase = depth), wobbling
@@ -2323,7 +2324,7 @@ void main() {
             float wl = scene.water_params.y;
             float edge = wl + 0.5 + 1.0 * noise2(pos.xz * 0.045) + 0.35 * noise2(pos.xz * 0.31);
             float sand = sea_k * (1.0 - smoothstep(edge - 0.5, edge + 0.6, pos.y));
-            vec3 sandc = vec3(0.58, 0.51, 0.37) * (0.86 + 0.28 * noise2(pos.xz * 0.9)) *
+            vec3 sandc = vec3(0.70, 0.58, 0.38) * (0.93 + 0.14 * noise2(pos.xz * 0.35)) *
                          mix(1.0, 0.72, smoothstep(wl + 0.25, wl - 0.15, pos.y));          // wet at the water's edge
             mate = mix(mate, sandc, sand);
         }
