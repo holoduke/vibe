@@ -394,7 +394,11 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
             // (A margin growing with the dropped octaves reached ~17 m far
             // out and switched the skip off exactly where it saves most.)
             float kHmMargin = 2.0;
-            float hm = 1e9;
+            // (beyond the home tile there is no bake: every step reads the real surface. This
+            // stood at "far above the ground", which made the first step past the tile's edge
+            // leap out of range - seen from inside the tile, the land beyond it was missing
+            // until the far march picked it up 1.4 km out.)
+            float hm = -1.0;
             if (all(lessThan(abs(pos.xz), vec2(kHeightmapSide * 0.5 - 2.0))))
                 hm = pos.y - meshHeight(pos.xz) - kHmMargin;
             coarse = hm > 0.75;
