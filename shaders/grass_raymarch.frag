@@ -408,6 +408,11 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
         vec2 mg = textureLod(u_grass_mask, (cellId * kPeriod / kHeightmapSide) + vec2(0.5), 0.0).rg;
         float slope_w = 1.0 - smoothstep(ctx.slope_max * 0.7, ctx.slope_max * 1.2, mg.g * 2.0);
         elig = mg.r * slope_w;
+        // Grass grows on the home landscape only (the mask and the heights it stands on are that
+        // 2 km tile's). Beyond it the mask repeated and the heights were the tile's edge: blades
+        // stood in the air, under the ground and on the sea bed of the wider world.
+        vec2 gq = abs(cellId * kPeriod);
+        elig *= 1.0 - smoothstep(kHeightmapSide * 0.5 - 24.0, kHeightmapSide * 0.5 - 4.0, max(gq.x, gq.y));
     }
     // Soft patch border ('grass edge softness'): the mask alone gave a
     // wall of full-height grass next to bare ground. A low-frequency noise

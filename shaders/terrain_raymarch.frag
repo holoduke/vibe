@@ -817,6 +817,29 @@ void main() {
         } else {
             wnor = waterNormal(wpos.xz, wave_t, wave_str, wave_scale);
         }
+        // The open sea (beyond home's lakes): swell. Five trains of waves from the
+        // sea's quarter, 70 m down to 3 m long, each running at its own deep-water
+        // speed; a train fades out where a pixel no longer resolves it, and a slow
+        // noise breaks the ranks so the crests are not ruled lines.
+        {
+            float sea_k = smoothstep(1500.0, 2000.0, length(wpos.xz));
+            if (sea_k > 0.0) {
+                const vec2  kDir[5] = vec2[5](vec2(-0.94, 0.34), vec2(-0.80, -0.60), vec2(-0.99, -0.10), vec2(-0.55, 0.83), vec2(-0.71, -0.71));
+                const float kLen[5] = float[5](70.0, 31.0, 13.0, 6.0, 3.1);
+                const float kSlope[5] = float[5](0.085, 0.080, 0.070, 0.055, 0.045);
+                float foot = max(t_water, 1.0) * 0.0025;
+                float rank = (noise2(wpos.xz * 0.013) - 0.5) * 9.0 + (noise2(wpos.xz * 0.06 + 5.0) - 0.5) * 2.5;
+                vec2 g = vec2(0.0);
+                for (int i = 0; i < 5; ++i) {
+                    float k = 6.2831853 / kLen[i];
+                    float keep = 1.0 - smoothstep(0.12, 0.45, foot / kLen[i]);
+                    if (keep <= 0.0) continue;
+                    float ph = dot(kDir[i], wpos.xz) * k + wave_t * sqrt(9.81 * k) + rank * (1.0 + float(i) * 0.6);
+                    g += kDir[i] * (kSlope[i] * keep * cos(ph));
+                }
+                wnor = normalize(vec3(wnor.x - g.x * sea_k, wnor.y, wnor.z - g.y * sea_k));
+            }
+        }
         // Splash rings bend the surface normal.
         vec3 rip_w = water_ripples(wpos.xz);
         wnor = normalize(vec3(wnor.x - rip_w.x, wnor.y, wnor.z - rip_w.y));
@@ -2281,6 +2304,20 @@ void main() {
         }
         vec3 canopy = mix(vec3(0.028, 0.052, 0.024), vec3(0.058, 0.082, 0.034), noise2(pos.xz * 0.11));
         mate = mix(mate, canopy, woods * smoothstep(1200.0, 1700.0, t));
+    }
+    // The sea's shore (beyond home's lakes): a beach of sand from just under the high-water
+    // line up to a metre or so above it, with a ragged upper edge, and sand on the bed
+    // below - the height layers put grass at the water level, which ran straight into the sea.
+    {
+        float sea_k = smoothstep(1500.0, 2000.0, length(pos.xz));
+        if (sea_k > 0.0 && scene.water_params.x > 0.5) {
+            float wl = scene.water_params.y;
+            float edge = wl + 0.5 + 1.0 * noise2(pos.xz * 0.045) + 0.35 * noise2(pos.xz * 0.31);
+            float sand = sea_k * (1.0 - smoothstep(edge - 0.5, edge + 0.6, pos.y));
+            vec3 sandc = vec3(0.58, 0.51, 0.37) * (0.86 + 0.28 * noise2(pos.xz * 0.9)) *
+                         mix(1.0, 0.72, smoothstep(wl + 0.25, wl - 0.15, pos.y));          // wet at the water's edge
+            mate = mix(mate, sandc, sand);
+        }
     }
     // The lake bed seen directly (camera under water): the same stones as
     // the bed seen through the surface from above (water branch, bed_h).
