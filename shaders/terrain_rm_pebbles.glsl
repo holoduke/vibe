@@ -149,7 +149,6 @@ void foot_bounds_init() {
     g_snow = scene_snow();
 #endif
     g_foot_r2 = -1.0;
-    if (g_snow < 0.05) return;
     vec2 c = vec2(0.0); float n = 0.0;
     for (int i = 0; i < 32; ++i) if (scene.footprints[i].w > 0.0) { c += scene.footprints[i].xy; n += 1.0; }
     if (n < 0.5) return;
@@ -177,6 +176,26 @@ float foot_depth(vec2 p) {
         d = max(d, f.w * 0.12 * smoothstep(0.014, -0.020, sdf));
     }
     return d;
+}
+
+// Blown sand on the road: it lies here and there in drifts a few cm thick on the paving - a
+// layer of its own in the marched height (like the snow), so it has an outline, buries the
+// cobbles and takes footprints. 0..1 where it lies; none under snow.
+float sand_road_patch(vec2 wp) {
+    float a = noise2(wp * 0.085 + 53.0);                                   // stretches of road with sand
+    if (a < 0.50) return 0.0;
+    float b = noise2(wp * 0.42 + 21.0) * 0.72 + noise2(wp * 1.7 + 8.0) * 0.28;
+    return smoothstep(0.50, 0.62, a) * smoothstep(0.40, 0.60, b) * (1.0 - smoothstep(0.05, 0.3, g_snow));
+}
+// Its height (m) above the paving, prints pressed in.
+float sand_road_h(vec2 wp) {
+    float p = sand_road_patch(wp);
+    if (p <= 0.0) return 0.0;
+    float wn = noise2(wp * 0.6 + 3.0);
+    float s = p * (0.030 + 0.055 * noise2(wp * 1.1 + 5.0) + 0.004 * sin(dot(wp, vec2(21.0, 9.0)) + 7.0 * wn));   // drift + wind ripples
+    float fd = foot_depth(wp);
+    if (fd > 0.0) s -= min(fd * 0.45, s * 0.85);
+    return s;
 }
 
 // ---- Lake ice (winter) --------------------------------------------------

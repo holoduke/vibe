@@ -509,14 +509,21 @@ void VulkanEngine::add_footprint(glm::vec3 pos, float yaw, bool left) {
 }
 
 void VulkanEngine::update_footprints(float dt) {
-    if (env_snow_ < 0.05f) {                           // thawed: gone
+    // Prints are left in snow anywhere, and (any season) on the road, where sand lies in
+    // drifts: the shader presses a print in only where there is snow or sand to press.
+    static bool had_snow = false;
+    const bool snow_now = env_snow_ >= 0.05f;
+    if (had_snow != snow_now) {                        // thawed / first snow: the old prints are gone
         for (auto& f : footprints_) f.w = 0.0f;
         foot_last_ = glm::vec3(1e9f);
-        return;
     }
+    had_snow = snow_now;
     if (env_snowfall_ > 0.05f)
         for (auto& f : footprints_) f.w = std::max(0.0f, f.w - dt * env_snowfall_ / 240.0f);
-    if (env_snow_ < 0.3f) return;
+    const bool snowy = env_snow_ >= 0.3f;
+    auto prints_at = [&](const glm::vec3& p) {
+        return snowy || (!castle_road_.empty() && castle_road_.distance(p.x, p.z) < castle_road_.half_width + 0.9f);
+    };
     // QLIKE_TEST_FOOTPRINTS=1: a trail of prints straight ahead of the player (captures).
     if (static bool done = false; !done && std::getenv("QLIKE_TEST_FOOTPRINTS")) {
         done = true;
@@ -525,6 +532,7 @@ void VulkanEngine::update_footprints(float dt) {
     }
     auto step = [&](glm::vec3 pos, glm::vec3 vel, float yaw, bool grounded, glm::vec3& last, bool& left) {
         if (!grounded) return;
+        if (!prints_at(pos)) { last = pos; return; }
         const glm::vec2 d(pos.x - last.x, pos.z - last.z);
         const float speed = glm::length(glm::vec2(vel.x, vel.z));
         const float stride = glm::clamp(0.45f + 0.09f * speed, 0.55f, 1.25f);

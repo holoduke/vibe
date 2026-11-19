@@ -1819,6 +1819,7 @@ void main() {
         // (a real branch: `a ? b : c` may evaluate both sides, and the winter side is not free)
         float road_snow = 0.0;
         if (g_snow >= 0.01) road_snow = snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, g_snow);
+        if (t < 30.0) road_snow = max(road_snow, sand_road_patch(pos.xz));      // (nor where sand lies on it)
         t = mix(t, t_s, clamp(rm_road.x + rm_road.y * 0.5, 0.0, 1.0) * (1.0 - smoothstep(0.02, 0.25, road_snow)));
         pos = ro + t * rd;
         rm_road = roadWeights(pos.xz, rm_road_uv, rm_road_dir);
@@ -1963,6 +1964,25 @@ void main() {
     // itself (the marched height, sampled a few cm apart) - none of the
     // soil's grit or the cobbles' relief shows through; only its own drifts,
     // lumps and the prints pressed into it shade it. Before the lighting.
+    // Sand on the road: the same - the normal of the sand's own surface (its drifts, ripples and
+    // the prints in it), no cobble relief showing through.
+    float sand_cov = 0.0;
+    if (rm_road.x + rm_road.y > 0.001) {
+        float sp = sand_road_patch(pos.xz) * clamp(rm_road.x + rm_road.y, 0.0, 1.0);
+        if (sp > 0.005) {
+            sand_cov = smoothstep(0.0, 0.30, sp);
+            vec3 n_s = nor;
+            if (t < 40.0) {
+                float se = max(0.012, t * 0.004), stpl = plateauWeight(pos.xz);
+                float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
+                float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
+                n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
+            }
+            vec2 gq = pos.xz * 55.0;                                   // grains
+            n_s = normalize(n_s + vec3(noise2(gq) - 0.5, 0.0, noise2(gq + 17.0) - 0.5) * 0.16 * (1.0 - smoothstep(3.0, 16.0, t)));
+            nor = normalize(mix(nor, n_s, sand_cov));
+        }
+    }
     float snow_cov = 0.0;
     {
         float sn = g_snow;
@@ -2285,6 +2305,7 @@ void main() {
     float shadow = max(dyn_shadow, self_shadow);
 
     if (g_snow >= 0.01) rm_road_vis = mix(rm_road_vis, 1.0, snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, g_snow));
+    rm_road_vis = mix(rm_road_vis, 1.0, sand_cov);
     float sha = (1.0 - shadow) * rm_road_vis * sun_horizon_lit(u_sun_horizon, pos);
 
     // RT ambient occlusion against castle / boxes / dyn-props
@@ -2510,6 +2531,27 @@ void main() {
         float cv1 = noise2(pos.xz * 6.5 + 9.1) * 0.6 + noise2(pos.xz * 2.1 + 1.7) * 0.4, cv2 = noise2(pos.xz * 0.55 + 3.3);
         cob *= mix(0.74, 1.22, cv1) * mix(vec3(1.06, 1.0, 0.92), vec3(0.94, 0.98, 1.05), cv2);
         mate = mix(mate, cob, rm_road.x);
+        // Sand lying on it: pale and fine-grained, darker and damper where it is thin; a print's
+        // floor is packed (darker) and the sun leaves part of it in shade.
+        if (sand_cov > 0.001) {
+            float sv = noise2(pos.xz * 3.1 + 40.0) * 0.6 + noise2(pos.xz * 23.0) * 0.4;
+            vec3 sand = vec3(0.265, 0.215, 0.145) * mix(0.84, 1.12, sv) * mix(0.80, 1.0, sand_cov);
+            float dC = t < 30.0 ? foot_depth(pos.xz) : 0.0;
+            if (dC > 0.002) {
+                float shade = 0.0;
+                vec3 sd3 = scene.sun_direction.xyz;
+                if (sd3.y > 0.02) {
+                    vec2 sdir = normalize(sd3.xz + vec2(1e-5));
+                    float rise = sd3.y / max(length(sd3.xz), 1e-3);
+                    for (int k = 1; k <= 4; ++k) {
+                        float x = 0.02 * float(k);
+                        shade = max(shade, smoothstep(0.0, 0.008, (dC - foot_depth(pos.xz + sdir * x)) * 0.45 - x * rise));
+                    }
+                }
+                sand *= mix(1.0, 0.80, smoothstep(0.0, 0.05, dC)) * mix(1.0, 0.55, shade);
+            }
+            mate = mix(mate, sand, sand_cov);
+        }
     }
 
     // Winter: snow lies on the road in patches (thicker toward the verges),
