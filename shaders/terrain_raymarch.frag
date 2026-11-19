@@ -687,14 +687,18 @@ void main() {
     // the far march: a careful walk made for the full-detail heights. The normal march takes
     // long strides at distance, counting on the smoothed far LOD - with the detail kept from
     // the air it stepped over thin ridges and left cracks and slivers in the land.
-    bool air = !water_only && ro.y > terrainMaxHeight() + 60.0;
+    // The same anywhere outside the home tile: the normal march leans on that tile's baked
+    // heights to skip empty space, and without them lost the land beyond a hundred metres
+    // (the water plane showed instead).
+    bool air = !water_only && (ro.y > terrainMaxHeight() + 60.0 ||
+                               any(greaterThan(abs(ro.xz), vec2(kHeightmapSide * 0.5 - 8.0))));
     float t = water_only ? raymarchMesh(ro, rd, t_water_plane)
                          : (air ? -1.0 : raymarch(ro, rd, t_stop));
     if (!air && obj_stop && t < 0.0) discard;      // an object owns this pixel
     // From the air (above 1 km): the landscape beyond the normal march's reach.
     if (t < 0.0 && !water_only && (air || !obj_stop)) {
         float fl = rm_far_limit(ro.y);
-        t = raymarch_far(ro, rd, (t_stop > 0.0) ? min(fl, t_stop) : fl);     // (t_stop: the water plane or an object in front)
+        t = raymarch_far(ro, rd, (t_stop > 0.0) ? min(fl, t_stop) : fl, air);     // (t_stop: the water plane or an object in front)
         if (obj_stop && t < 0.0) discard;
     }
 
@@ -2324,9 +2328,16 @@ void main() {
             float wl = scene.water_params.y;
             float edge = wl + 0.5 + 1.0 * noise2(pos.xz * 0.045) + 0.35 * noise2(pos.xz * 0.31);
             float sand = sea_k * (1.0 - smoothstep(edge - 0.5, edge + 0.6, pos.y));
-            vec3 sandc = vec3(0.70, 0.58, 0.38) * (0.93 + 0.14 * noise2(pos.xz * 0.35)) *
+            vec3 sandc = vec3(0.56, 0.46, 0.30) * (0.93 + 0.14 * noise2(pos.xz * 0.35)) *
                          mix(1.0, 0.72, smoothstep(wl + 0.25, wl - 0.15, pos.y));          // wet at the water's edge
             mate = mix(mate, sandc, sand);
+            // Above the beach: grass. Out here there are no blades and no meadow mask, and the
+            // soil under them is a grey gravel - from eye height the whole country was that.
+            float turf = sea_k * (1.0 - sand) * smoothstep(edge + 0.2, edge + 1.4, pos.y) * (1.0 - smoothstep(52.0, 70.0, pos.y));
+            float tn = noise2(pos.xz * 0.031) * 0.6 + noise2(pos.xz * 0.21 + 4.0) * 0.4;
+            vec3 turfc = mix(vec3(0.150, 0.118, 0.066), vec3(0.070, 0.112, 0.036), smoothstep(0.30, 0.52, tn)) *
+                         (0.80 + 0.40 * noise2(pos.xz * 1.9)) * (0.92 + 0.16 * noise2(pos.xz * 11.0));
+            mate = mix(mate, turfc, turf * 0.85);
         }
     }
     // The lake bed seen directly (camera under water): the same stones as

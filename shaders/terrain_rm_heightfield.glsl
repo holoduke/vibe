@@ -507,14 +507,19 @@ float rm_far_limit(float eye_y) {
 // The march for that: only used above 1 km, for rays the normal march
 // cannot reach. Looking down from the air there is nothing near the eye,
 // so this is a plain walk through the slab that holds the landscape.
-float raymarch_far(vec3 ro, vec3 rd, float t_end) {
+// `whole`: this march finds the land from the eye on (from the air, and anywhere outside the
+// home tile); otherwise it continues where the normal march stopped.
+float raymarch_far(vec3 ro, vec3 rd, float t_end, bool whole) {
     // (from the ground too: the land does not end 1.5 km away, it only is not marched in detail
     // beyond that. From below the highest ground a ray may also climb to it.)
     float maxH = terrainMaxHeight();
-    if (rd.y > -1e-4 && (ro.y > maxH || rd.y > 0.12)) return -1.0;
-    float t = (ro.y > maxH) ? (ro.y - maxH) / (-rd.y) : 1400.0;      // (the normal march has done the near part)
+    if (rd.y > -1e-4 && (ro.y > maxH || rd.y > 0.35)) return -1.0;
+    float t = (ro.y > maxH) ? (ro.y - maxH) / (-rd.y) : (whole ? 0.05 : 1400.0);      // (the normal march has done the near part)
     float t_prev = t;
-    for (int i = 0; i < 160; ++i) {
+    // From the ground a level ray runs a long way close over the land: more steps, and strides
+    // that lengthen with distance (the bisection below catches what a stride steps into).
+    int n_steps = (whole && ro.y <= maxH) ? 300 : 160;
+    for (int i = 0; i < n_steps; ++i) {
         if (t > t_end) return -1.0;
         vec3 p = ro + rd * t;
         if (rd.y > 0.0 && p.y > maxH) return -1.0;
@@ -532,9 +537,15 @@ float raymarch_far(vec3 ro, vec3 rd, float t_end) {
             return t;
         }
         t_prev = t;
-        t += max(h * 0.55, 0.0025 * t);
+        t += max(h * 0.55 * (1.0 + min(t * 0.006, 2.5)), 0.0025 * t);
     }
-    return t;      // out of steps just above the ground: that is where it is (never a hole to the water plane)
+    // Out of steps. Just above the ground: that is where it is (never a hole to the water
+    // plane). Still well clear of it (a level ray from the ground): open air.
+    {
+        vec3 p = ro + rd * t;
+        if (rd.y > -0.02 && p.y - terrainM(p.xz) > 0.02 * t) return -1.0;
+    }
+    return t;
 }
 #endif
 
