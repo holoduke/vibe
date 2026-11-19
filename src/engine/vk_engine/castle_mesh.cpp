@@ -11,6 +11,8 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include <unordered_map>
+#include <cmath>
 #include "engine/log.h"
 #include "engine/vk_initializers.h"
 
@@ -20,6 +22,90 @@ namespace qlike {
 
 static_assert(sizeof(game::LevelVertex) == sizeof(Vertex),
               "LevelVertex must match the engine Vertex layout");
+
+namespace {
+
+// The shell mesh of a displaced mesh (screen-space displacement mapping, ssdm.cpp).
+//
+// The displacement pass inflates the mesh along its vertex normals. A flat-shaded mesh has
+// one normal per face, so at every hard edge the inflated faces would part and leave the
+// corner uncovered. The shell mesh is the same surface with normals that round over the
+// edges: every quad is cut into 3 x 3, the inner four vertices keep the face's normal, and
+// the vertices on the quad's border take the average of the distinct normals of all faces
+// meeting at that position. Away from the edges (beyond `inset`) nothing changes; within it
+// the normal turns from one face to the next, and the shell is closed.
+// Meshes that are not made of quads (4 vertices, 6 indices each) get the position-averaged
+// normals without the cut.
+void build_ssdm_shell(const game::LevelMesh& lm, float inset, std::vector<Vertex>& out_v, std::vector<uint32_t>& out_i) {
+    out_v.clear(); out_i.clear();
+    const size_t nv = lm.verts.size(), ni = lm.idx.size();
+    bool quads = nv % 4 == 0 && ni == nv / 4 * 6;
+    for (size_t q = 0; quads && q < nv / 4; ++q)
+        for (int k = 0; k < 6; ++k) {
+            const uint32_t ix = lm.idx[q * 6 + k];
+            if (ix < q * 4 || ix >= q * 4 + 4) { quads = false; break; }
+        }
+    std::vector<uint8_t> border;                     // 1: takes the averaged normal
+    if (!quads) {
+        out_v.resize(nv);
+        for (size_t i = 0; i < nv; ++i) out_v[i] = { lm.verts[i].p, lm.verts[i].n, glm::vec2(lm.verts[i].u, lm.verts[i].v) };
+        out_i = lm.idx;
+        border.assign(nv, 1);
+    } else {
+        out_v.reserve(nv * 4); out_i.reserve(ni * 9);
+        for (size_t q = 0; q < nv / 4; ++q) {
+            const auto& a = lm.verts[q * 4], &b = lm.verts[q * 4 + 1], &c = lm.verts[q * 4 + 2], &d = lm.verts[q * 4 + 3];
+            const float lu = std::max(0.5f * (glm::distance(a.p, b.p) + glm::distance(d.p, c.p)), 1e-4f);
+            const float lv = std::max(0.5f * (glm::distance(a.p, d.p) + glm::distance(b.p, c.p)), 1e-4f);
+            const float iu = std::min(inset / lu, 0.33f), iv = std::min(inset / lv, 0.33f);
+            const float us[4] = { 0.0f, iu, 1.0f - iu, 1.0f }, vs[4] = { 0.0f, iv, 1.0f - iv, 1.0f };
+            const uint32_t base = uint32_t(out_v.size());
+            for (int j = 0; j < 4; ++j)
+                for (int i = 0; i < 4; ++i) {
+                    const float u = us[i], v = vs[j];
+                    auto bl = [&](auto A, auto B, auto C, auto Dd) { return glm::mix(glm::mix(A, B, u), glm::mix(Dd, C, u), v); };
+                    Vertex x;
+                    x.position = bl(a.p, b.p, c.p, d.p);
+                    x.normal   = glm::normalize(bl(a.n, b.n, c.n, d.n));
+                    x.uv       = bl(glm::vec2(a.u, a.v), glm::vec2(b.u, b.v), glm::vec2(c.u, c.v), glm::vec2(d.u, d.v));
+                    out_v.push_back(x);
+                    border.push_back((i == 0 || i == 3 || j == 0 || j == 3) ? 1 : 0);
+                }
+            // (the winding of the original quad: its first triangle tells which way it faces)
+            const glm::vec3 gn = glm::cross(lm.verts[lm.idx[q * 6 + 1]].p - lm.verts[lm.idx[q * 6]].p,
+                                            lm.verts[lm.idx[q * 6 + 2]].p - lm.verts[lm.idx[q * 6]].p);
+            for (int j = 0; j < 3; ++j)
+                for (int i = 0; i < 3; ++i) {
+                    const uint32_t p00 = base + uint32_t(j * 4 + i), p10 = p00 + 1, p01 = p00 + 4, p11 = p01 + 1;
+                    const glm::vec3 tn = glm::cross(out_v[p10].position - out_v[p00].position, out_v[p11].position - out_v[p00].position);
+                    if (glm::dot(tn, gn) >= 0.0f) out_i.insert(out_i.end(), { p00, p10, p11, p00, p11, p01 });
+                    else                          out_i.insert(out_i.end(), { p00, p11, p10, p00, p01, p11 });
+                }
+        }
+    }
+    // Average the distinct normals of everything meeting at a position (to the millimetre).
+    struct Acc { glm::vec3 n[6]; int c = 0; };
+    std::unordered_map<uint64_t, Acc> acc;
+    auto key = [](glm::vec3 p) {
+        const int64_t x = int64_t(std::llround(double(p.x) * 1000.0)), y = int64_t(std::llround(double(p.y) * 1000.0)), z = int64_t(std::llround(double(p.z) * 1000.0));
+        return uint64_t(x * 73856093LL) ^ (uint64_t(y * 19349663LL) << 1) ^ (uint64_t(z * 83492791LL) << 2);
+    };
+    for (size_t i = 0; i < out_v.size(); ++i) {
+        if (!border[i]) continue;
+        Acc& A = acc[key(out_v[i].position)];
+        bool seen = false;
+        for (int k = 0; k < A.c; ++k) if (glm::dot(A.n[k], out_v[i].normal) > 0.995f) { seen = true; break; }
+        if (!seen && A.c < 6) A.n[A.c++] = out_v[i].normal;
+    }
+    for (size_t i = 0; i < out_v.size(); ++i) {
+        if (!border[i]) continue;
+        const Acc& A = acc[key(out_v[i].position)];
+        glm::vec3 s(0.0f);
+        for (int k = 0; k < A.c; ++k) s += A.n[k];
+        if (glm::dot(s, s) > 1e-8f) out_v[i].normal = glm::normalize(s);
+    }
+}
+}  // namespace
 
 void VulkanEngine::init_castle_meshes() {
     size_t total_tris = 0;
@@ -42,6 +128,13 @@ void VulkanEngine::init_castle_meshes() {
         g.uv_scale = lm.uv_scale;
         g.relief = lm.relief;
         g.ssdm = lm.ssdm;
+        if (g.ssdm > 0.0f) {
+            // (its shell for the displacement pass: the same surface, normals rounded over the edges)
+            std::vector<Vertex> sv; std::vector<uint32_t> si;
+            build_ssdm_shell(lm, std::max(1.5f * g.ssdm, 0.05f), sv, si);
+            g.ssdm_mesh = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_,
+                                                sv.data(), uint32_t(sv.size()), si.data(), uint32_t(si.size()));
+        }
         g.emissive = glm::vec4(lm.emissive, lm.full_emissive ? 1.0f : 0.0f);
         castle_meshes_.push_back(g);
         total_tris += lm.idx.size() / 3;
@@ -144,6 +237,7 @@ void VulkanEngine::destroy_castle_meshes() {
         if (g.blas) g_rt.destroy_as(device_, g.blas, nullptr);
         if (g.blas_buf) vmaDestroyBuffer(allocator_, g.blas_buf, g.blas_alloc);
         if (g.mesh.vertex_buffer) destroy_mesh(allocator_, g.mesh);
+        if (g.ssdm_mesh.vertex_buffer) destroy_mesh(allocator_, g.ssdm_mesh);
     }
     castle_meshes_.clear();
 }

@@ -283,9 +283,10 @@ void VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
             pc.tex_params = glm::vec4(float(g.tex_albedo), float(g.tex_normal), g.uv_scale, 0.0f);
             pc.grass_params = glm::vec4(g.ssdm, 0.03f, 1.0f, 0.0f);    // shell, edge fade distance, edge handling mode 1
             vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
-            vkCmdBindVertexBuffers(cmd, 0, 1, &g.mesh.vertex_buffer, &off0);
-            vkCmdBindIndexBuffer(cmd, g.mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, g.mesh.index_count, 1, 0, 0, 0);
+            const Mesh& sm = g.ssdm_mesh.vertex_buffer ? g.ssdm_mesh : g.mesh;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &sm.vertex_buffer, &off0);
+            vkCmdBindIndexBuffer(cmd, sm.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, sm.index_count, 1, 0, 0, 0);
         }
         vkCmdEndRendering(cmd);
     }

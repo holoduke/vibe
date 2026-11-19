@@ -1718,6 +1718,7 @@ private:
         float uv_scale = 1.0f;
         float relief = 1.0f;
         float ssdm = 0.0f;            // screen-space displacement: shell thickness (m), 0 = none (ssdm.cpp)
+        Mesh  ssdm_mesh{};            // its shell mesh (normals rounded over hard edges)
         glm::vec4 emissive{0.0f};     // rgb, a = 1 full-emissive
         VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
         VkBuffer blas_buf = VK_NULL_HANDLE;
