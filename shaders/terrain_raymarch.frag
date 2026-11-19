@@ -2395,7 +2395,9 @@ void main() {
             float wl = scene.water_params.y;
             float edge = wl + 0.5 + 1.0 * noise2(pos.xz * 0.045) + 0.35 * noise2(pos.xz * 0.31);
             float sand = sea_k * (1.0 - smoothstep(edge - 0.5, edge + 0.6, pos.y));
-            vec3 sandc = vec3(0.56, 0.46, 0.30) * (0.93 + 0.14 * noise2(pos.xz * 0.35)) *
+            // (a little lighter than the lake shore's sand, no more: at 0.56 the beach burnt out
+            // in the sun and bloomed into a glowing patch)
+            vec3 sandc = vec3(0.29, 0.245, 0.17) * (0.90 + 0.20 * noise2(pos.xz * 0.35)) * (0.94 + 0.12 * noise2(pos.xz * 3.1)) *
                          mix(1.0, 0.72, smoothstep(wl + 0.25, wl - 0.15, pos.y));          // wet at the water's edge
             mate = mix(mate, sandc, sand);
             // Above the beach: grass. Out here there are no blades and no meadow mask, and the
