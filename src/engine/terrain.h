@@ -86,6 +86,8 @@ float world_ground_height(float x, float z, float water_level, int octaves);
 // Where woods grow, 0..1 (shaders/world_map.glsl wm_forest): the rule trees beyond the home
 // tile are placed by and the far landscape is coloured by. `ny`: the ground normal's y.
 float world_forest(float x, float z, float h, float ny, float water_level);
+// The launch site: the centre and level of its terrace (shaders/world_map.glsl wm_pad_c / wm_pad_h).
+constexpr float kLaunchSiteX = 1600.0f, kLaunchSiteZ = 830.0f, kLaunchSiteH = 36.0f;
 
 // The river's cut applied to a ground height h at (x, z) (shaders/world_map.glsl wm_river):
 // h itself away from the river. For heights that did not come from the formula (a saved sculpt).

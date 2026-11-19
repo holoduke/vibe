@@ -127,6 +127,7 @@ void VulkanEngine::build_hud_ui() {
 
     (void)draw_panel;
     draw_game_hud();          // health, weapon, slots, frame rate (ui_gamehud.cpp)
+    draw_rocket_hud();        // launch prompt, count, mission panel (rocket.cpp)
 
     // EDIT MODE banner — centered top, bright orange, impossible to
     // miss. Earlier issue: user pressed E by accident (next to D walk

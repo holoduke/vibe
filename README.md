@@ -19,6 +19,9 @@ A small open world you can walk, swim and fly through, from a castle by a lake u
 - Day and night, four seasons and eleven kinds of weather, all changing live.
 - Ray-traced shadows, lighting and reflections; raymarched terrain, grass, clouds and fog.
 - A sandbox to play in: a laser rifle, airstrikes, jets you can shoot down, physics objects.
+- A launch site on the coast: press the button in the control house and a rocket flies to orbit,
+  goes once round the planet and lands back on its mount (real orbital mechanics, sped up while
+  it is out of sight).
 - LAN multiplayer: games on the same network find each other and share weather, season and clock.
 - An in-game editor to paint trees, bushes and grass.
 
@@ -54,7 +57,7 @@ Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMa
 | 1 / 2 | Laser rifle / airstrike tablet |
 | V | Fly |
 | H | Back to the start |
-| E | World editor |
+| E | World editor; at the launch button: start the count |
 | F | Flashlight |
 | F12 | Save a screenshot |
 | Esc | Menu with all settings |

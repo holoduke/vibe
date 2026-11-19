@@ -1051,6 +1051,16 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         });
     }
 
+    // The rocket: exhaust, entry glow, smoke trail, the clouds round the pad (rocket.cpp).
+    {
+        static std::vector<RocketFxStrip> rstrips;
+        static std::vector<RocketFxFlash> rflashes;
+        rstrips.clear(); rflashes.clear();
+        rocket_build_fx(eye, px_ang, rstrips, rflashes);
+        for (const auto& st : rstrips) (st.kind == 0 ? smoke : glow).strip(st.p, st.w, st.a, st.tint);
+        for (const auto& fl : rflashes) flash.billboard(fl.pos, fl.r, cam_right, cam_up, fl.tint);
+    }
+
     // ---- Volumes (fireball / smoke / dust), sorted far to near ----
     struct Vol { glm::vec3 c; float r, squash, age, kind, seed, dens, heat, fade, scroll, dist; };
     static std::vector<Vol> vols;

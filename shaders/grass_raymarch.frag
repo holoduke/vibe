@@ -449,7 +449,8 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
                 vec2  lc = abs(cw - g_nf_org - 256.0);
                 elig = smoothstep(wl + 1.2, wl + 2.6, h0) * (1.0 - smoothstep(52.0, 70.0, h0)) *
                        (1.0 - smoothstep(ctx.slope_max * 0.7, ctx.slope_max * 1.2, length(sg))) *
-                       (1.0 - smoothstep(200.0, 245.0, max(lc.x, lc.y)));
+                       (1.0 - smoothstep(200.0, 245.0, max(lc.x, lc.y))) *
+                       smoothstep(84.0, 92.0, distance(cw, vec2(1600.0, 830.0)));       // (the launch site's apron: world_map.glsl wm_pad_c)
             }
         } else if (!g_nf_ok) {
             // (thinning out over the last 170 m, where terrain_raymarch.frag brings in its turf;

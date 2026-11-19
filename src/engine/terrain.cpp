@@ -176,7 +176,14 @@ inline float height_land(float a, glm::vec2 wp, float wl) {
     float bed = wl - 1.5f - 7.0f * a - 14.0f * (1.0f - sstep(-0.012f, 0.0f, v)) - 45.0f * (1.0f - sstep(-0.09f, -0.01f, v));
     return glm::mix(h, glm::mix(bed, hl, sstep(-0.012f, 0.012f, v)), w);
 }
-inline float height(float a, glm::vec2 wp, float wl) { return river(height_land(a, wp, wl), wp, wl); }
+// The launch site's terrace (shaders/world_map.glsl wm_pad: keep in step).
+inline float pad(float h, glm::vec2 wp) {
+    const glm::vec2 d = wp - glm::vec2(kLaunchSiteX, kLaunchSiteZ);
+    const float r2 = glm::dot(d, d);
+    if (r2 > 220.0f * 220.0f) return h;
+    return glm::mix(kLaunchSiteH, h, sstep(100.0f, 220.0f, std::sqrt(r2)));
+}
+inline float height(float a, glm::vec2 wp, float wl) { return river(pad(height_land(a, wp, wl), wp), wp, wl); }
 // (shaders/world_map.glsl wm_forest: keep in step)
 inline float forest(glm::vec2 wp, float h, float ny, float wl) {
     const float alt  = h - wl;
@@ -185,7 +192,7 @@ inline float forest(glm::vec2 wp, float h, float ny, float wl) {
     float m = noise(wp * 0.0011f + glm::vec2(3.7f)) * 0.55f + noise(wp * 0.0043f + glm::vec2(17.0f)) * 0.30f + noise(wp * 0.017f + glm::vec2(5.0f)) * 0.15f;
     m += 0.10f * (1.0f - sstep(4.0f, 25.0f, alt));
     m += (noise(wp * 0.00013f + glm::vec2(41.0f)) - 0.5f) * 0.35f;
-    return band * sstep(0.37f, 0.53f, m);
+    return band * sstep(0.37f, 0.53f, m) * sstep(150.0f, 230.0f, glm::distance(wp, glm::vec2(kLaunchSiteX, kLaunchSiteZ)));
 }
 }  // namespace wm
 

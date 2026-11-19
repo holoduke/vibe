@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <glm/vec4.hpp>
 #include <functional>
+#include <string>
 #include <vector>
 
 #include "game/collision.h"
@@ -122,6 +123,10 @@ int append_graveyard(Level& lv, glm::vec3 church, const std::function<float(floa
 // the terrain height. Adds its mesh and player colliders.
 void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
                          const std::function<float(float, float)>& ground);
+// A .mesh file (the text format the Blender scripts under tools/ write): one group per
+// material name, positions as in the file, uv in metres. Empty when the file is missing.
+struct MeshGroup { std::string name; LevelMesh mesh; };
+std::vector<MeshGroup> load_mesh_groups(const char* path);
 // The bridge's deck as a smooth floor (it has no collision boxes): its height at (x, z), or
 // -1e9 where (x, z) is not over the deck.
 float stone_bridge_deck_height(glm::vec3 a, glm::vec3 b, float width, float x, float z);

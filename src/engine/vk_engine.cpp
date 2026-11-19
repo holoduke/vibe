@@ -121,6 +121,8 @@ void VulkanEngine::init() {
     audio_->load_clip(ClipID::SamLaunch, "assets/sounds/sam_launch.wav");
     audio_->load_clip(ClipID::Splash, "assets/sounds/water_splash.wav");
     audio_->load_clip(ClipID::Rain, "assets/sounds/rain_bed.wav");
+    audio_->load_clip(ClipID::RocketRoar, "assets/sounds/rocket_roar.wav");
+    audio_->load_clip(ClipID::Beep, "assets/sounds/beep.wav");
     // Full jet flyby recordings; tick_jet_audio() times their peak to each
     // jet's predicted closest approach.
     audio_->load_clip(ClipID::JetFlyby1, "assets/sounds/jet_flyby_1.mp3");
@@ -676,7 +678,8 @@ void VulkanEngine::run(const RunOptions& opts) {
         // the menu shouldn't drop into edit-mode behind the menu.
         bool edit_edge = in.edit_key && !prev_edit_key_;
         prev_edit_key_ = in.edit_key;
-        if (edit_edge && state_ == State::Playing) {
+        // (at the control house's launch button E presses the button instead)
+        if (edit_edge && state_ == State::Playing && !(!terrain_edit_mode_ && rocket_press_button())) {
             terrain_edit_mode_ = !terrain_edit_mode_;
             log::infof("[terrain] edit mode %s (E)",
                        terrain_edit_mode_ ? "ON" : "OFF");
@@ -1368,6 +1371,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         }
         { CPU_SCOPE("water-fx"); tick_water_fx(sim_dt); }
         { CPU_SCOPE("aa"); tick_aa(sim_dt); }
+        { CPU_SCOPE("rocket"); tick_rocket(sim_dt); }
         maybe_autosave_settings(frame_dt);
         hz_ms[1] = hz_mark(hz_t);
 
@@ -1584,6 +1588,7 @@ void VulkanEngine::shutdown() {
     // deref freed Jolt body data.
     guarded("destroy_veg",    [&]{ destroy_vegetation(); });
     guarded("destroy_aa",     [&]{ destroy_aa(); });
+    guarded("destroy_rocket", [&]{ destroy_rocket(); });
     guarded("destroy_clutter_shadow", [&]{ destroy_clutter_shadow(); });
     guarded("destroy_castle", [&]{ destroy_castle_meshes(); });
     guarded("destroy_rt",     [&]{ destroy_rt(); });

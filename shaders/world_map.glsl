@@ -135,7 +135,17 @@ float wm_height_land(float a, vec2 wp, float wl) {
     float bed = wl - 1.5 - 7.0 * a - 14.0 * (1.0 - smoothstep(-0.012, 0.0, v)) - 45.0 * (1.0 - smoothstep(-0.09, -0.01, v));
     return mix(h, mix(bed, hl, smoothstep(-0.012, 0.012, v)), w);
 }
-float wm_height(float a, vec2 wp, float wl) { return wm_river(wm_height_land(a, wp, wl), wp, wl); }
+// The launch site: a level terrace on the coast east of home (the rocket's pad stands on it;
+// src/engine/terrain.cpp wm::pad and kLaunchSite* in terrain.h - keep in step).
+const vec2  wm_pad_c = vec2(1600.0, 830.0);
+const float wm_pad_h = 36.0;
+float wm_pad(float h, vec2 wp) {
+    vec2 d = wp - wm_pad_c;
+    float r2 = dot(d, d);
+    if (r2 > 220.0 * 220.0) return h;
+    return mix(wm_pad_h, h, smoothstep(100.0, 220.0, sqrt(r2)));
+}
+float wm_height(float a, vec2 wp, float wl) { return wm_river(wm_pad(wm_height_land(a, wp, wl), wp), wp, wl); }
 
 // Where woods grow (0 = open ground, 1 = closed forest) at world position wp (m), for ground
 // height h, the ground normal's y, and the water level. One rule for the whole world: the far
@@ -154,5 +164,5 @@ float wm_forest(vec2 wp, float h, float ny, float wl) {
     float m = WM_NOISE(wp * 0.0011 + 3.7) * 0.55 + WM_NOISE(wp * 0.0043 + 17.0) * 0.30 + WM_NOISE(wp * 0.017 + 5.0) * 0.15;
     m += 0.10 * (1.0 - smoothstep(4.0, 25.0, alt));
     m += (WM_NOISE(wp * 0.00013 + 41.0) - 0.5) * 0.35;
-    return band * smoothstep(0.37, 0.53, m);
+    return band * smoothstep(0.37, 0.53, m) * smoothstep(150.0, 230.0, distance(wp, wm_pad_c));      // (no woods at the launch site)
 }

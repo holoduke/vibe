@@ -304,6 +304,7 @@ add_library(qlike_engine STATIC
     src/engine/vk_engine/vegetation.cpp
     src/engine/vk_engine/clutter_shadow.cpp
     src/engine/vk_engine/aa.cpp
+    src/engine/vk_engine/rocket.cpp
     src/engine/vk_engine/post.cpp
     src/engine/vk_engine/atmosphere.cpp
     src/engine/vk_engine/radiance_cache.cpp
@@ -366,6 +367,7 @@ add_library(qlike_engine STATIC
     src/engine/eztree.cpp
     src/engine/world_props.cpp
     src/engine/aa_vehicle.cpp
+    src/engine/rocket_sim.cpp
 )
 target_include_directories(qlike_engine PUBLIC src)
 target_include_directories(qlike_engine PRIVATE

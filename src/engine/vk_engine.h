@@ -30,6 +30,7 @@
 #include "engine/world_props.h"
 #include "engine/veg_paint.h"
 #include "engine/aa_vehicle.h"
+#include "engine/rocket_sim.h"
 #include "engine/texture.h"   // for BackgroundDecodeHandle
 #include "engine/vk_engine/settings_types.h"  // RtSettings / GameSettings
 #include "game/level.h"
@@ -710,7 +711,7 @@ private:
     // terrain PBR materials (incl. proc grass, roof, road), 15 the leaf
     // atlas, 16 bark, 17 lamp timber, 18 the small-plant atlas.
     static constexpr int kFileTextureCount   = 7;
-    static constexpr int kTerrainMatCount    = 16;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
+    static constexpr int kTerrainMatCount    = 18;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
     static constexpr int kTextureCount       = kFileTextureCount +
                                                kTerrainMatCount;   // 20
     // Albedo/normal-array indices of the baked terrain materials.
@@ -740,6 +741,8 @@ private:
     static constexpr int kTexGlass   = kFileTextureCount + 14;  // 21: leaded stained glass (assets/church/stained_glass.png)
     static constexpr int kTexVegShade = kFileTextureCount + 15; // 22: how much vegetation stands over the ground (baked from the placed trees / bushes; world_textures.cpp)
     static constexpr int kTexGrave   = kFileTextureCount + 13;  // 20: old gravestone (assets/church/grave_stone.png)
+    static constexpr int kTexHull     = kFileTextureCount + 16;  // 23: the rocket's stainless hull (assets/rocket/hull.png)
+    static constexpr int kTexConcrete = kFileTextureCount + 17;  // 24: concrete slabs (assets/rocket/concrete.png)
     struct TextureSlot {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation alloc = nullptr;
@@ -1728,6 +1731,48 @@ private:
         uint32_t cl_count = 0, cl_cmd_base = 0;
     };
     std::vector<CastleMeshGpu> castle_meshes_;
+    // The launch site and its rocket (vk_engine/rocket.cpp).
+    struct RocketTrailPt { glm::vec3 p; float t; float alt; glm::vec3 v; };
+    struct Rocket {
+        RocketSim sim;
+        int    stage = 0;                    // 0 on the mount, 1 counting down, 2 flying, 3 lost
+        float  countdown = 0.0f;             // s to lift-off
+        int    beep_at = 0;
+        float  button_t = 0.0f;
+        double acc = 0.0;                    // simulation time owed
+        float  warp = 1.0f;                  // how much faster than the clock the flight runs
+        double px = 0.0, py = 0.0, pux = 0.0, puy = 1.0;     // the step before (drawn between the two)
+        glm::dvec3 pos{0.0}, prev_pos{0.0};  // base centre, world
+        glm::vec3  axis{0.0f, 1.0f, 0.0f}, prev_axis{0.0f, 1.0f, 0.0f};
+        bool   first = true;
+        float  alt = 0.0f;
+        float  thr_vis = 0.0f;               // the exhaust as drawn, 0..1
+        float  landed_t = 0.0f;
+        std::vector<RocketTrailPt> trail;
+        float  trail_acc = 0.0f;
+        float  pad_smoke_t0 = -1.0f, pad_smoke_end = -1e9f, pad_smoke_k = 0.0f;
+        uint32_t voice[2]{};
+        bool   test_done = false;
+        double test_skip = 0.0;
+    };
+    Rocket rocket_;
+    std::vector<CastleMeshGpu> rocket_parts_;
+    std::vector<int>           rocket_part_glow_;
+    glm::vec3 launch_pad_{0.0f}, launch_house_{0.0f}, launch_button_{0.0f};
+    bool      launch_site_placed_ = false;
+    struct RocketFxStrip { std::vector<glm::vec3> p; std::vector<float> w, a; glm::vec3 tint{1.0f}; int kind = 0; };   // 0 smoke, 1 glow
+    struct RocketFxFlash { glm::vec3 pos; float r; glm::vec3 tint; };
+    void place_launch_site();
+    void init_rocket_meshes();
+    void destroy_rocket();
+    void tick_rocket(float dt);
+    bool rocket_button_in_reach() const;
+    bool rocket_press_button();
+    glm::dvec3 rocket_world_pos(double sx, double sy) const;
+    bool rocket_view(glm::dvec3 pos, glm::vec3 axis, glm::vec3 eye, glm::mat4& model, float& scale) const;
+    void draw_rocket(VkCommandBuffer cmd, const glm::mat4& vp, const glm::mat4& prev_vp, bool depth_only, VkPipelineLayout shadow_layout);
+    void rocket_build_fx(glm::vec3 eye, float px_ang, std::vector<RocketFxStrip>& strips, std::vector<RocketFxFlash>& flashes) const;
+    void draw_rocket_hud();
     // Anti-aircraft vehicles (vk_engine/aa.cpp, model in engine/aa_vehicle.cpp).
     struct AaVehicle {
         glm::vec3 pos{0.0f};

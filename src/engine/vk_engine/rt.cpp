@@ -163,6 +163,7 @@ void VulkanEngine::init_rt() {
     build_veg_blas();
     build_mesh_part_blas(aa_parts_);
     build_mesh_part_blas(sam_missile_parts_);
+    build_mesh_part_blas(rocket_parts_);
 
     // --- Allocate TLAS storage + scratch + instance buffer (rebuilt each frame) ---
     // Sized for the FIFO box cap (200) + ~32 static brushes/lanterns +
@@ -932,6 +933,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     }
     for (const auto& v : aa_) { sig = mix64(sig, hash_f(v.turret_yaw)); sig = mix64(sig, hash_f(v.gun_pitch)); sig = mix64(sig, uint64_t(v.rails) + 1u); }
     for (const auto& d : doors_) sig = mix64(sig, hash_f(d.angle));   // swinging doors move BLAS instances
+    if (rocket_.stage != 0) { sig = mix64(sig, hash_f(float(rocket_.pos.y))); sig = mix64(sig, hash_f(float(rocket_.pos.x))); sig = mix64(sig, uint64_t(rocket_.stage)); }
     if (tlas_first_build_done_ && sig == prev_dyn_signature_) {
         return;   // tlas_ contents still valid — skip build + signal
     }
@@ -1204,6 +1206,19 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
                        false, blas_device_address_, door_tex, 0x7Fu);
     }
 
+    // The rocket (shadows / reflections while it is near; a far proxy is not in the TLAS).
+    if (!rocket_parts_.empty() && rocket_.stage != 3) {
+        glm::mat4 rm, rpm; float rsc = 1.0f, rpsc = 1.0f;
+        const glm::vec3 reye = current_frame_view_.eye_pos;
+        if (rocket_view(rocket_.pos, rocket_.axis, reye, rm, rsc) && rsc >= 1.0f) {
+            if (!rocket_view(rocket_.prev_pos, rocket_.prev_axis, reye, rpm, rpsc) || rpsc < 1.0f) rpm = rm;
+            for (const auto& g : rocket_parts_) {
+                if (!g.blas_addr) continue;
+                const glm::vec4 tex = (tex_on && g.tex_albedo >= 0) ? glm::vec4(float(g.tex_albedo), float(g.tex_normal), 1.0f, 0.0f) : kNoTex;
+                write_instance(rm, rpm, glm::vec4(tex_on ? g.tint : g.fallback, 1.0f), glm::vec3(0.0f), false, g.blas_addr, tex);
+            }
+        }
+    }
     // Anti-aircraft vehicles (hull, turret, guns; radar too small to matter).
     for (const auto& v : aa_) {
         glm::mat4 m[4], pm[4];

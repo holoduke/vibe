@@ -900,6 +900,35 @@ float stone_bridge_deck_height(glm::vec3 a, glm::vec3 b, float width, float x, f
     return glm::mix(a.y, b.y, t) + 0.5f * std::sin(kPi * t) + 0.32f * r * r * (3.0f - 2.0f * r) * (1.0f - t);
 }
 
+std::vector<MeshGroup> load_mesh_groups(const char* path) {
+    std::vector<MeshGroup> out;
+    FILE* fp = std::fopen(path, "r");
+    if (!fp) return out;
+    char name[32];
+    int tris = 0;
+    while (std::fscanf(fp, " mesh %31s %d", name, &tris) == 2) {
+        MeshGroup g;
+        g.name = name;
+        LevelMesh& m = g.mesh;
+        m.verts.reserve(size_t(tris) * 3); m.idx.reserve(size_t(tris) * 3);
+        for (int t = 0; t < tris; ++t) {
+            LevelVertex v[3];
+            for (auto& q : v)
+                if (std::fscanf(fp, "%f %f %f %f %f %f %f %f", &q.p.x, &q.p.y, &q.p.z, &q.n.x, &q.n.y, &q.n.z, &q.u, &q.v) != 8) { std::fclose(fp); return out; }
+            // Front faces: cross(b - a, c - a) must point along the normal.
+            const glm::vec3 gn = glm::cross(v[1].p - v[0].p, v[2].p - v[0].p);
+            const bool flip = glm::dot(gn, v[0].n + v[1].n + v[2].n) < 0.0f;
+            const uint32_t b0 = uint32_t(m.verts.size());
+            mesh_push(m, v[0]); mesh_push(m, v[1]); mesh_push(m, v[2]);
+            if (flip) m.idx.insert(m.idx.end(), { b0, b0 + 2, b0 + 1 });
+            else      m.idx.insert(m.idx.end(), { b0, b0 + 1, b0 + 2 });
+        }
+        if (!m.idx.empty()) out.push_back(std::move(g));
+    }
+    std::fclose(fp);
+    return out;
+}
+
 bool append_church(Level& lv, glm::vec3 base) {
     FILE* fp = std::fopen("assets/church/church.mesh", "r");
     if (!fp) return false;

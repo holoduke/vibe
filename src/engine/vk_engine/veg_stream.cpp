@@ -181,7 +181,11 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
         const float dx = h_at(lx + e, lz) - h_at(lx - e, lz), dz = h_at(lx, lz + e) - h_at(lx, lz - e);
         return 2.0f * e / std::sqrt(dx * dx + dz * dz + 4.0f * e * e);
     };
-    auto in_home = [](float x, float z) { return std::abs(x) < kHomeHalf && std::abs(z) < kHomeHalf; };
+    // (nothing is planted at home - it has its own vegetation - nor on the launch site)
+    auto in_home = [](float x, float z) {
+        const float dx = x - kLaunchSiteX, dz = z - kLaunchSiteZ;
+        return (std::abs(x) < kHomeHalf && std::abs(z) < kHomeHalf) || dx * dx + dz * dz < 150.0f * 150.0f;
+    };
 
     struct Ranked { float rank; VegInstance vi; collision::AABB col; };
     std::vector<Ranked> trees;

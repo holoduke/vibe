@@ -423,6 +423,7 @@ void VulkanEngine::init_world() {
             }
         }
         church_placed_ = game::append_church(world_, church_pos_);
+        place_launch_site();             // the rocket's pad, tower and control house (rocket.cpp)
         // The stone bridge over the river: from the end of the castle road (which was led up to
         // it, road.cpp) straight across to the far bank, where the ground comes back up to the
         // road's height. Laid out from where the player stood and looked when asking for it.
@@ -493,6 +494,7 @@ void VulkanEngine::init_world() {
         // over the whole map (vegetation.cpp). Adds trunk / rock colliders.
         place_aa_vehicles(hm);           // before vegetation (keep-out)
         init_aa_meshes();
+        init_rocket_meshes();
         {
             auto t0 = std::chrono::steady_clock::now();
             init_vegetation_data(hm);

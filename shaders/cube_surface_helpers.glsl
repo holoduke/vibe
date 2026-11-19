@@ -554,6 +554,8 @@ vec2 surface_rough_metal(int tex_idx, bool foliage, bool mesh_draw) {
         case 6:  return vec2(0.50, 0.0);   // Tiles074
         case 13: return vec2(0.58, 0.0);   // RoofingTiles012A
         case 14: return vec2(0.82, 0.0);   // PavingStones131
+        case 23: return vec2(0.27, 1.0);   // the rocket's stainless hull
+        case 24: return vec2(0.86, 0.0);   // concrete
         default: return vec2(0.78, 0.0);   // rock / stone clutter etc.
     }
 }

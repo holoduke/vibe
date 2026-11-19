@@ -334,6 +334,11 @@ void VulkanEngine::render_world_depth_pass(VkCommandBuffer cmd) {
         vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
         vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
     }
+    if (!rocket_parts_.empty()) {
+        draw_rocket(cmd, vp, vp, true, VK_NULL_HANDLE);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
+        vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+    }
     prof_mark(cmd, "d_solid");
     // GPU-instanced vegetation + rocks (indirect, culled on the GPU).
     if (veg_count_ > 0) {
@@ -1048,6 +1053,11 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     }
     if (!aa_.empty()) {
         draw_aa(cmd, vp, prev_vp, frustum, false, VK_NULL_HANDLE);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
+        vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+    }
+    if (!rocket_parts_.empty()) {
+        draw_rocket(cmd, vp, prev_vp, false, VK_NULL_HANDLE);
         vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
         vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
     }

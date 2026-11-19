@@ -735,6 +735,37 @@ void VulkanEngine::load_foliage_textures() {
             ++loaded;
         }
     }
+    // The launch site's own materials: colour from <name>.png, the normal map from the height
+    // in <name>_h.png (tools/rocket/make_rocket.py writes both).
+    for (int which = 0; which < 2; ++which) {
+        const int slot = which == 0 ? kTexHull : kTexConcrete;
+        const float strength = which == 0 ? 2.2f : 5.0f;
+        const std::string p  = resolve(which == 0 ? "../rocket/hull.png" : "../rocket/concrete.png");
+        const std::string ph = resolve(which == 0 ? "../rocket/hull_h.png" : "../rocket/concrete_h.png");
+        if (p.empty() || ph.empty()) continue;
+        int w = 0, h = 0, c = 0, hw = 0, hh = 0, hc = 0;
+        unsigned char* px = ::stbi_load(p.c_str(), &w, &h, &c, 4);
+        unsigned char* hx = ::stbi_load(ph.c_str(), &hw, &hh, &hc, 1);
+        if (px && hx && hw == w && hh == h) {
+            put(albedo_textures_[slot], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "rocket/albedo");
+            std::vector<unsigned char> nrm(size_t(w) * size_t(h) * 4);
+            auto Hh = [&](int x, int y) { return float(hx[size_t((y + h) % h) * size_t(w) + size_t((x + w) % w)]) / 255.0f; };
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    const float dx = (Hh(x + 1, y) - Hh(x - 1, y)) * strength, dy = (Hh(x, y + 1) - Hh(x, y - 1)) * strength;
+                    const float il = 1.0f / std::sqrt(dx * dx + dy * dy + 1.0f);
+                    unsigned char* o = &nrm[(size_t(y) * size_t(w) + size_t(x)) * 4];
+                    o[0] = static_cast<unsigned char>(std::clamp((-dx * il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
+                    o[1] = static_cast<unsigned char>(std::clamp((dy * il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
+                    o[2] = static_cast<unsigned char>(std::clamp((il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
+                    o[3] = hx[size_t(y) * size_t(w) + size_t(x)];
+                }
+            put(normal_textures_[slot], nrm.data(), w, h, VK_FORMAT_R8G8B8A8_UNORM, "rocket/normal");
+            ++loaded;
+        }
+        if (px) stbi_image_free(px);
+        if (hx) stbi_image_free(hx);
+    }
     if (std::string p = resolve("plant_atlas.png"); !p.empty()) {
         int w = 0, h = 0, c = 0;
         if (unsigned char* px = stbi_load(p.c_str(), &w, &h, &c, 4)) {
@@ -1280,6 +1311,8 @@ void VulkanEngine::bake_terrain_materials() {
         { TM_ROCK,  kTexGrave,     "church/grave_placeholder" },
         { TM_ROCK,  kTexGlass,     "church/glass_placeholder" },
         { TM_ROCK,  kTexVegShade,  "veg_shade_placeholder" },
+        { TM_ROCK,  kTexHull,      "rocket/hull_placeholder" },
+        { TM_ROCK,  kTexConcrete,  "rocket/concrete_placeholder" },
     };
     // CPU generation of all materials in parallel (pure functions of
     // kind + size); uploads stay on this thread (queue owner).
