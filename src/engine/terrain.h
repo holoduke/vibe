@@ -36,6 +36,7 @@ struct HeightmapParams {
     glm::vec2 plateau_extent = glm::vec2(40.0f, 40.0f); // half-extent
     float     plateau_height = 12.0f;
     float     plateau_blend  = 12.0f;  // smoothstep falloff width
+    float     water_level    = 20.9f;  // the river is cut to below this
 };
 
 struct Heightmap {
@@ -81,6 +82,10 @@ float raymarch_ground_relief(float x, float z, float h, float water_level);
 // raymarcher uses) through the world map - the CPU's copy of shaders/world_map.glsl
 // wm_height. For everything outside the baked home tile: walking, flying low, placing things.
 float world_ground_height(float x, float z, float water_level, int octaves);
+
+// The river's cut applied to a ground height h at (x, z) (shaders/world_map.glsl wm_river):
+// h itself away from the river. For heights that did not come from the formula (a saved sculpt).
+float world_river_cut(float h, float x, float z, float water_level);
 
 // Builds a single triangulated terrain mesh covering the whole heightmap.
 // Used by the merged BLAS for ray traversal — RT shadows / GI / AO see

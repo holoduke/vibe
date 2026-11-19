@@ -89,6 +89,7 @@ void VulkanEngine::init_world() {
         // approach instead.
         hp.plateau_extent = glm::vec2(11.5f, 11.5f);
         hp.plateau_height = 22.0f;
+        hp.water_level    = rt_.water_level;
         hp.plateau_blend  = 20.0f;
         hp.frequency      = 0.0014f;
         // ALWAYS use the value-noise FBM (generate_heightmap_raymarch),
@@ -106,6 +107,7 @@ void VulkanEngine::init_world() {
         //     LOD work needs the mesh to be this same FBM anyway.
         // (The FastNoiseLite generator was removed.)
         Heightmap hm = generate_heightmap_raymarch(hp);
+        bool sculpt_loaded = false;
         // Capture procedural baseline NOW (before any disk-overlay
         // load). The raymarch shader's heightmap-delta texture is
         // computed as `current - baseline` so sculpt edits + disk
@@ -138,6 +140,7 @@ void VulkanEngine::init_world() {
                             n * sizeof(float));
                     log::infof("[terrain] loaded sculpted heightmap "
                                "(%zu cells)", n);
+                    sculpt_loaded = true;
                 } else if (fdim > 0 && fcell > 0.0f &&
                            std::abs(float(fdim) * fcell - float(hm.dim) * hm.cell) < 1e-2f &&
                            std::abs(fox - hm.origin_x) < 1e-2f &&
@@ -201,6 +204,7 @@ void VulkanEngine::init_world() {
                         }
                         log::infof("[terrain] loaded sculpted heightmap %dx -> %dx (resampled)",
                                    fdim, hm.dim);
+                        sculpt_loaded = true;
                     } else {
                         log::warnf("[terrain] saved heightmap truncated - ignoring");
                     }
@@ -210,6 +214,20 @@ void VulkanEngine::init_world() {
                                fdim, fcell, hm.dim, hm.cell);
                 }
             }
+        }
+        // A saved sculpt holds whole heights: where the river now runs it would put the old
+        // ground back. Cut the river into what was loaded (it leaves alone what is already
+        // at or under its bed and banks).
+        if (sculpt_loaded) {
+            const int DW = hm.dim + 1;
+            const int x0 = std::clamp(int((-90.0f - hm.origin_x) / hm.cell), 0, DW - 1);
+            const int z0 = std::clamp(int((-115.0f - hm.origin_z) / hm.cell), 0, DW - 1);
+            const int z1 = std::clamp(int((785.0f - hm.origin_z) / hm.cell) + 1, 0, DW - 1);
+            for (int z = z0; z <= z1; ++z)
+                for (int x = x0; x < DW; ++x) {
+                    float& h = hm.heights[size_t(z) * DW + x];
+                    h = world_river_cut(h, hm.origin_x + float(x) * hm.cell, hm.origin_z + float(z) * hm.cell, rt_.water_level);
+                }
         }
         // Castle-courtyard visual sink. The physics path already clamps
         // its own copy (see init_physics' kCastleSink), but the VISUAL

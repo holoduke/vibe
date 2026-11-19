@@ -603,6 +603,18 @@ void VulkanEngine::run(const RunOptions& opts) {
             if (test_hold) {
                 if (!hold_init) {
                     hold_pos = player_.position; hold_init = true;
+                    // QLIKE_DUMP_HEIGHTS=<file>: the ground the CPU knows, as raw float32, every 8 m
+                    // over x -1400..3000, z -1400..1400 (551 x 351, rows of x) - for laying out
+                    // rivers / roads against the real relief.
+                    if (const char* dump = std::getenv("QLIKE_DUMP_HEIGHTS")) {
+                        if (FILE* f = std::fopen(dump, "wb")) {
+                            for (int j = 0; j < 351; ++j) for (int i = 0; i < 551; ++i) {
+                                const float g = sample_terrain_height(-1400.0f + 8.0f * float(i), -1400.0f + 8.0f * float(j));
+                                std::fwrite(&g, sizeof(float), 1, f);
+                            }
+                            std::fclose(f);
+                        }
+                    }
                     // QLIKE_TEST_GROUND=1: stand the held camera on the ground the CPU knows there (eye
                     // 1.7 m up) - a capture then shows whether that is the ground the GPU draws.
                     if (std::getenv("QLIKE_TEST_GROUND")) {

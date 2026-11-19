@@ -124,6 +124,7 @@ inline float continent(glm::vec2 mk) {
     glm::vec2 wq2 = wq + (glm::vec2(fbm3(mk * 0.0035f + glm::vec2(13.1f)), fbm3(mk * 0.0035f + glm::vec2(71.4f))) - glm::vec2(0.5f)) *
                              170.0f * sstep(15.0f, 250.0f, dh);
     v = glm::mix(v, std::max(v, 0.16f), 1.0f - sstep(5.0f, 25.0f, dh));
+    wq2.x += ((noise(mk * 0.9f + glm::vec2(31.7f)) - 0.5f) * 0.9f + (noise(mk * 2.7f + glm::vec2(5.1f)) - 0.5f) * 0.35f) * (1.0f - sstep(8.0f, 40.0f, dh));
     float rim = glm::mix(1.5f, 45.0f, sstep(10.0f, 300.0f, dh));
     v -= 0.46f * (1.0f - sstep(327.0f - rim, 327.0f + rim, glm::length(wq2 - glm::vec2(329.2f, 0.0f))));
     if (std::abs(v) > 0.37f) return v;
@@ -134,9 +135,34 @@ inline float continent(glm::vec2 mk) {
 inline float ranges(glm::vec2 mk) {
     return sstep(0.60f, 0.78f, noise(mk * 0.08f + glm::vec2(7.3f)) * 0.65f + noise(mk * 0.21f + glm::vec2(3.1f)) * 0.35f);
 }
-inline float height(float a, glm::vec2 wp, float wl) {
+// The river (shaders/world_map.glsl wm_river: keep in step).
+const glm::vec2 kRiv[26] = { {62.0f, 36.0f}, {86.0f, 70.0f}, {100.0f, 112.0f}, {96.0f, 170.0f}, {74.0f, 228.0f}, {56.0f, 290.0f}, {22.0f, 350.0f}, {48.0f, 406.0f}, {150.0f, 412.0f}, {248.0f, 470.0f}, {344.0f, 536.0f}, {410.0f, 628.0f}, {504.0f, 634.0f}, {600.0f, 570.0f}, {696.0f, 536.0f}, {792.0f, 474.0f}, {888.0f, 456.0f}, {984.0f, 456.0f}, {1080.0f, 410.0f}, {1176.0f, 410.0f}, {1272.0f, 486.0f}, {1368.0f, 552.0f}, {1464.0f, 584.0f}, {1600.0f, 604.0f}, {1752.0f, 616.0f}, {1950.0f, 620.0f} };
+const float kRivBox[5][4] = { {-69.0f, -89.0f, 225.0f, 415.0f}, {-103.0f, 165.0f, 469.0f, 661.0f}, {219.0f, 349.0f, 917.0f, 759.0f}, {667.0f, 285.0f, 1397.0f, 611.0f}, {1147.0f, 361.0f, 2075.0f, 745.0f} };
+inline float river(float h, glm::vec2 wp, float wl) {
+    if (wp.x < -85.0f || wp.x > 2095.0f || wp.y < -110.0f || wp.y > 780.0f) return h;
+    const float bed = wl - 2.4f;
+    if (h <= bed - 4.0f) return h;
+    glm::vec2 q = wp + 12.0f * glm::vec2(std::sin(wp.y * 0.043f + 1.3f), std::sin(wp.x * 0.037f + 0.4f)) +
+                       5.0f * glm::vec2(std::sin(wp.y * 0.113f), std::sin(wp.x * 0.097f + 2.0f));
+    float d2 = 1e12f;
+    for (int c = 0; c < 5; ++c) {
+        const float* b = kRivBox[c];
+        if (q.x < b[0] || q.y < b[1] || q.x > b[2] || q.y > b[3]) continue;
+        for (int i = c * 5; i < c * 5 + 5; ++i) {
+            glm::vec2 a = kRiv[i], ab = kRiv[i + 1] - a;
+            glm::vec2 dv = q - (a + ab * std::clamp(glm::dot(q - a, ab) / glm::dot(ab, ab), 0.0f, 1.0f));
+            d2 = std::min(d2, glm::dot(dv, dv));
+        }
+    }
+    if (d2 > 120.0f * 120.0f) return h;
+    const float e = std::max(std::sqrt(d2) - (7.0f + 9.0f * sstep(1450.0f, 1900.0f, wp.x)), 0.0f);
+    const float cap = bed + e * 0.45f + std::max(e - 8.0f, 0.0f) * 0.35f + std::max(e - 40.0f, 0.0f) * 0.5f;
+    const float t = std::clamp(0.5f + 0.125f * (cap - h), 0.0f, 1.0f);
+    return glm::mix(cap, h, t) - 4.0f * t * (1.0f - t);
+}
+inline float height_land(float a, glm::vec2 wp, float wl) {
     float h = a * 120.0f;
-    float w = sstep(1400.0f, 1900.0f, glm::length(wp));
+    float w = sstep(1450.0f, 1900.0f, glm::length(wp));
     if (w <= 0.0f) return h;
     float hl = 30.0f + (h - 30.0f) * glm::mix(0.42f, 1.12f, ranges(wp * 0.001f));
     float v = continent(wp * 0.001f);
@@ -146,6 +172,7 @@ inline float height(float a, glm::vec2 wp, float wl) {
     float bed = wl - 1.5f - 7.0f * a - 14.0f * (1.0f - sstep(-0.012f, 0.0f, v)) - 45.0f * (1.0f - sstep(-0.09f, -0.01f, v));
     return glm::mix(h, glm::mix(bed, hl, sstep(-0.012f, 0.012f, v)), w);
 }
+inline float height(float a, glm::vec2 wp, float wl) { return river(height_land(a, wp, wl), wp, wl); }
 }  // namespace wm
 
 float world_ground_height_impl(float x, float z, float water_level, int octaves) {
@@ -177,7 +204,7 @@ float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
         b *= 0.5f;
         q = rm_rotate(q) * 2.0f;
     }
-    float h = a * kRmTerrainHeight;
+    float h = wm::river(a * kRmTerrainHeight, wp, p.water_level);     // (as the shader: the home formula, with the river cut into it)
 
     // Soft plateau blend (mirrors shader's plateauWeight + mix).
     glm::vec2 ext = p.plateau_extent;
@@ -190,6 +217,8 @@ float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
 }
 
 } // namespace
+
+float world_river_cut(float h, float x, float z, float water_level) { return wm::river(h, glm::vec2(x, z), water_level); }
 
 float world_ground_height(float x, float z, float water_level, int octaves) {
     return world_ground_height_impl(x, z, water_level, octaves);

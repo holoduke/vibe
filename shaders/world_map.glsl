@@ -59,6 +59,9 @@ float wm_continent(vec2 mk) {
     // for kilometres: one flat sand table, home an island in it). The coast east of home is
     // then made by the basin alone, and its bays by the coast detail below.
     v = mix(v, max(v, 0.16), 1.0 - smoothstep(5.0, 25.0, dh));
+    // (near home the shore wanders by a few hundred metres - bays and points a kilometre or
+    // so across - instead of running dead straight behind the mountains)
+    wq2.x += ((WM_NOISE(mk * 0.9 + 31.7) - 0.5) * 0.9 + (WM_NOISE(mk * 2.7 + 5.1) - 0.5) * 0.35) * (1.0 - smoothstep(8.0, 40.0, dh));
     float rim = mix(1.5, 45.0, smoothstep(10.0, 300.0, dh));
     v -= 0.46 * (1.0 - smoothstep(327.0 - rim, 327.0 + rim, length(wq2 - vec2(329.2, 0.0))));   // (its shore: about 1.9 km east of home, behind the mountains)
     // Far inland and far out to sea the coast's detail (at most 0.105) changes nothing that
@@ -76,12 +79,42 @@ float wm_ranges(vec2 mk) {
     return smoothstep(0.60, 0.78, WM_NOISE(mk * 0.08 + 7.3) * 0.65 + WM_NOISE(mk * 0.21 + 3.1) * 0.35);
 }
 
+// The river: home's lake (the water around the castle) drains to the sea. Its course is laid
+// through the low ground that was already there - past the chapel's east side, down the valley
+// south of the castle, then east through two low passes - and the land is cut down to it: a
+// channel below the water level, banks, and valley sides that open up where the ground is high.
+// Bends: the course itself, and a slow sideways wander of the whole channel.
+// (src/engine/terrain.cpp has the same course: keep the two in step.)
+const vec2 wm_riv[26] = vec2[26](vec2(62.0, 36.0), vec2(86.0, 70.0), vec2(100.0, 112.0), vec2(96.0, 170.0), vec2(74.0, 228.0), vec2(56.0, 290.0), vec2(22.0, 350.0), vec2(48.0, 406.0), vec2(150.0, 412.0), vec2(248.0, 470.0), vec2(344.0, 536.0), vec2(410.0, 628.0), vec2(504.0, 634.0), vec2(600.0, 570.0), vec2(696.0, 536.0), vec2(792.0, 474.0), vec2(888.0, 456.0), vec2(984.0, 456.0), vec2(1080.0, 410.0), vec2(1176.0, 410.0), vec2(1272.0, 486.0), vec2(1368.0, 552.0), vec2(1464.0, 584.0), vec2(1600.0, 604.0), vec2(1752.0, 616.0), vec2(1950.0, 620.0));
+const vec4 wm_riv_box[5] = vec4[5](vec4(-69.0, -89.0, 225.0, 415.0), vec4(-103.0, 165.0, 469.0, 661.0), vec4(219.0, 349.0, 917.0, 759.0), vec4(667.0, 285.0, 1397.0, 611.0), vec4(1147.0, 361.0, 2075.0, 745.0));     // (five stretches of five reaches, with the valley's reach around them)
+float wm_river(float h, vec2 wp, float wl) {
+    if (wp.x < -85.0 || wp.x > 2095.0 || wp.y < -110.0 || wp.y > 780.0) return h;
+    float bed = wl - 2.4;
+    if (h <= bed - 4.0) return h;
+    vec2 q = wp + 12.0 * vec2(sin(wp.y * 0.043 + 1.3), sin(wp.x * 0.037 + 0.4)) + 5.0 * vec2(sin(wp.y * 0.113), sin(wp.x * 0.097 + 2.0));
+    float d2 = 1e12;
+    for (int c = 0; c < 5; ++c) {
+        vec4 b = wm_riv_box[c];
+        if (q.x < b.x || q.y < b.y || q.x > b.z || q.y > b.w) continue;
+        for (int i = c * 5; i < c * 5 + 5; ++i) {
+            vec2 a = wm_riv[i], ab = wm_riv[i + 1] - a;
+            vec2 dv = q - (a + ab * clamp(dot(q - a, ab) / dot(ab, ab), 0.0, 1.0));
+            d2 = min(d2, dot(dv, dv));
+        }
+    }
+    if (d2 > 120.0 * 120.0) return h;
+    float e = max(sqrt(d2) - (7.0 + 9.0 * smoothstep(1450.0, 1900.0, wp.x)), 0.0);      // (wider toward its mouth)
+    float cap = bed + e * 0.45 + max(e - 8.0, 0.0) * 0.35 + max(e - 40.0, 0.0) * 0.5;
+    float t = clamp(0.5 + 0.125 * (cap - h), 0.0, 1.0);                                  // smooth minimum, 4 m
+    return mix(cap, h, t) - 4.0 * t * (1.0 - t);
+}
+
 // Ground height (m) at world position wp (m from home) for the landscape
 // formula's value `a` (0..1) there. `wl`: the water level.
-float wm_height(float a, vec2 wp, float wl) {
+float wm_height_land(float a, vec2 wp, float wl) {
     float h = a * 120.0;
     // Home: the landscape and its ring of white mountains, as the formula has it.
-    float w = smoothstep(1400.0, 1900.0, length(wp));
+    float w = smoothstep(1450.0, 1900.0, length(wp));     // (from beyond the home tile's corners: the tile's bake is the home formula alone)
     if (w <= 0.0) return h;
     // Hills and ranges: beyond home the land is low (under the snow line), with a
     // high range only where a slow noise says so. Scaled about 30 m.
@@ -96,3 +129,4 @@ float wm_height(float a, vec2 wp, float wl) {
     float bed = wl - 1.5 - 7.0 * a - 14.0 * (1.0 - smoothstep(-0.012, 0.0, v)) - 45.0 * (1.0 - smoothstep(-0.09, -0.01, v));
     return mix(h, mix(bed, hl, smoothstep(-0.012, 0.012, v)), w);
 }
+float wm_height(float a, vec2 wp, float wl) { return wm_river(wm_height_land(a, wp, wl), wp, wl); }
