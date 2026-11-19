@@ -146,6 +146,37 @@ float sampleHeightDelta(vec2 worldXZ) {
     return textureLod(u_terrain_height, uv, 0.0).r * smoothstep(0.0, 14.0, edge);
 }
 
+// === The open sea's wave field ======================================
+// After "Seascape" by Alexander Alekseev (TDM), shadertoy.com/view/Ms2SD1
+// (CC BY-NC-SA 3.0): each octave is a sheet of sharp-crested waves made
+// from |sin| and |cos| of a noise-bent coordinate, raised to a "choppy"
+// power; two copies run against each other, and every octave is turned,
+// 3.8x finer, 0.22x lower and a little less choppy than the last.
+// Here it is evaluated on the water plane (metres) for the surface normal
+// and the crest tint; an octave fades out where a pixel no longer resolves
+// it (`foot`: metres per pixel there).
+float sea_octave(vec2 uv, float choppy) {
+    uv += noised(uv).x * 2.0 - 1.0;
+    vec2 wv  = 1.0 - abs(sin(uv));
+    vec2 swv = abs(cos(uv));
+    wv = mix(wv, swv, wv);
+    return pow(1.0 - pow(wv.x * wv.y, 0.65), choppy);
+}
+float sea_map(vec2 p, float tm, float foot) {
+    float freq = 0.16, amp = 0.6, choppy = 4.0, wlen = 19.6, h = 0.0;
+    vec2 uv = vec2(p.x * 0.75, p.y);
+    for (int i = 0; i < 5; ++i) {
+        float keep = 1.0 - smoothstep(0.25, 0.7, foot / wlen);
+        if (keep <= 0.0) break;
+        float d = sea_octave((uv + tm) * freq, choppy) + sea_octave((uv - tm) * freq, choppy);
+        h += d * amp * keep;
+        uv = mat2(1.6, 1.2, -1.2, 1.6) * uv;
+        freq *= 1.9; amp *= 0.22; wlen /= 3.8;
+        choppy = mix(choppy, 1.0, 0.2);
+    }
+    return h;
+}
+
 // === Mesh-terrain height (water-only mode) ==========================
 // Bilinear lookup of the FULL baked heightmap — identical to the
 // surface the rasterised CDLOD mesh draws. Used INSTEAD of the FBM
@@ -832,6 +863,7 @@ void main() {
         // sea's quarter, 70 m down to 3 m long, each running at its own deep-water
         // speed; a train fades out where a pixel no longer resolves it, and a slow
         // noise breaks the ranks so the crests are not ruled lines.
+        float rm_sea_crest = 0.0;      // the sea's wave height here, about its mean (m)
         {
             float sea_k = smoothstep(1350.0, 1750.0, length(wpos.xz));
             // Swell belongs to the sea. A pond inland has none: on a small lake the long
@@ -842,6 +874,20 @@ void main() {
                 const float kLen[7] = float[7](83.0, 47.0, 26.0, 14.5, 8.1, 4.6, 2.7);
                 const float kSlope[7] = float[7](0.070, 0.070, 0.065, 0.058, 0.050, 0.042, 0.036);
                 float foot = max(t_water, 1.0) * 0.0025;
+                // Near and middle distance: the Seascape wave field (sea_map above). Its slope
+                // is taken over about a pixel, so it smooths itself out with distance.
+                // Far out, where a pixel is wider than its longest wave, the long swell
+                // trains below take over (they keep the sea from going dead flat from the air).
+                float sea_far = smoothstep(0.25, 0.7, foot / 19.6);
+                vec2 g_sea = vec2(0.0);
+                if (sea_far < 1.0) {
+                    float tm = 1.0 + wave_t * 0.8;
+                    float e  = max(foot, 0.04);
+                    float h0 = sea_map(wpos.xz, tm, foot);
+                    g_sea = vec2(sea_map(wpos.xz + vec2(e, 0.0), tm, foot) - h0,
+                                 sea_map(wpos.xz + vec2(0.0, e), tm, foot) - h0) / e;
+                    rm_sea_crest = (h0 - 0.6) * sea_k;
+                }
                 // Seven trains at unrelated angles and lengths do not line up into a weave the way five
                 // did. Each keeps its direction (a train bent by a noise turns into whorls and rings -
                 // tried); only its height swells and sinks over a few hundred metres, as sets of waves do.
@@ -849,7 +895,7 @@ void main() {
                 vec2 g = vec2(0.0);
                 for (int i = 0; i < 7; ++i) {
                     float k = 6.2831853 / kLen[i];
-                    float keep = 1.0 - smoothstep(0.12, 0.45, foot / kLen[i]);
+                    float keep = sea_far * (1.0 - smoothstep(0.12, 0.45, foot / kLen[i]));
                     if (keep <= 0.0) continue;
                     float fi = float(i);
                     vec2 d = vec2(cos(kAng[i]), sin(kAng[i]));
@@ -859,7 +905,9 @@ void main() {
                     float c = cos(ph);
                     g += d * (kSlope[i] * keep * (c + 0.35 * cos(2.0 * ph + 0.6)));
                 }
-                wnor = normalize(vec3(wnor.x - g.x * sea_k, wnor.y, wnor.z - g.y * sea_k));
+                g += g_sea;
+                // (the lake ripple of the surface under it gives way to the sea's own waves)
+                wnor = normalize(vec3(wnor.x * (1.0 - 0.7 * sea_k) - g.x * sea_k, wnor.y, wnor.z * (1.0 - 0.7 * sea_k) - g.y * sea_k));
             }
         }
         // Splash rings bend the surface normal.
@@ -1173,6 +1221,9 @@ void main() {
         // geometric shoreline so it reads as natural beach.
         vec3 deep    = scene.water_color.rgb;
         vec3 shallow_tint = scene.water_color_shallow.rgb;
+        // (Seascape: the water shows more of its own green-blue in the crests, close by)
+        deep += vec3(0.48, 0.54, 0.36) * (0.09 * clamp(rm_sea_crest, -0.4, 1.2) * (1.0 - smoothstep(30.0, 180.0, t_water)));
+        deep = max(deep, vec3(0.0));
         float shore_blend = max(0.1, scene.water_shore.x);
         float shore_noise = scene.water_shore.y;
 #ifdef QLIKE_WATER
