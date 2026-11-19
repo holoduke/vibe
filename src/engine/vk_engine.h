@@ -1791,6 +1791,10 @@ private:
     glm::vec3 bridge_a_{0.0f}, bridge_b_{0.0f};   // the stone bridge over the river (world.cpp); deck ends
     bool      bridge_placed_ = false;
     size_t    bridge_col_begin_ = 0, bridge_col_end_ = 0;      // its colliders in world_.aabbs
+    // world_.meshes index -> castle_meshes_ index (-1: not drawn), for world_.loose.
+    std::vector<int> castle_of_level_mesh_;
+    // Lamp posts / gravestones whose ground was blown away: gone, a physics body falls instead.
+    void drop_loose_objects(glm::vec3 pos, float radius);
     glm::vec3 church_pos_{0.0f};           // chapel site (world.cpp); y = pad height, valid when church_placed_
     bool      church_placed_ = false;
     std::vector<glm::vec3> outposts_;    // outpost tower base points (world.cpp)

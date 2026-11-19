@@ -229,6 +229,7 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     }
 
     tp[5] = lap();   // grass mask
+    drop_loose_objects(pos, Rc * 1.05f);
     log::infof("[crater] r %.1f m depth %.1f m at (%.0f, %.0f, %.0f): %dx%d cells, %.2f ms "
                "(drain %.2f, heights %.2f, gpu copies %.2f, physics %.2f, reseat %.2f, grass mask %.2f)",
                Rc, D, pos.x, pos.y, pos.z, rw, rh,
@@ -243,6 +244,93 @@ namespace qlike {
 // texture sub-rects, terrain vertex rows + BLAS refit, grass-mask sub-rect.
 // Runs right after the frame-start barrier, i.e. ordered after everything
 // the previous frame did with these resources.
+
+// Lamp posts and gravestones inside a fresh crater have nothing to stand on. Each is taken out
+// of the static world - its vertices in the shared mesh are collapsed, its collider and (for a
+// post) its light are removed, the mesh's ray-tracing structure is rebuilt without it - and a
+// physics body of its size is dropped in its place, to topple into the hole.
+// Rare (a bomb must land within a few metres of one), so it simply waits for the GPU once.
+void VulkanEngine::drop_loose_objects(glm::vec3 pos, float radius) {
+    std::vector<size_t> hit;
+    for (size_t i = 0; i < world_.loose.size(); ++i) {
+        const auto& L = world_.loose[i];
+        if (L.gone) continue;
+        const glm::vec3 c = (L.lo + L.hi) * 0.5f;
+        const float dx = c.x - pos.x, dz = c.z - pos.z;
+        if (dx * dx + dz * dz < (radius + 0.3f) * (radius + 0.3f) && std::abs(L.lo.y - pos.y) < 8.0f) hit.push_back(i);
+    }
+    if (hit.empty()) return;
+    vkDeviceWaitIdle(device_);
+    std::vector<int> touched;
+    for (size_t hi_ : hit) {
+        auto& L = world_.loose[hi_];
+        L.gone = true;
+        const glm::vec3 c = (L.lo + L.hi) * 0.5f;
+        // Collapse its vertices (zero-area triangles far below the ground).
+        for (int k = 0; k < 3; ++k) {
+            if (L.mesh[k] < 0 || size_t(L.mesh[k]) >= castle_of_level_mesh_.size() || L.v1[k] <= L.v0[k]) continue;
+            const int gi = castle_of_level_mesh_[size_t(L.mesh[k])];
+            if (gi < 0 || size_t(gi) >= castle_meshes_.size()) continue;
+            CastleMeshGpu& g = castle_meshes_[size_t(gi)];
+            if (L.v1[k] > g.mesh.vertex_count) continue;
+            const VkDeviceSize bytes = VkDeviceSize(L.v1[k] - L.v0[k]) * sizeof(Vertex);
+            VkBufferCreateInfo bci{};
+            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bci.size = bytes; bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            VkBuffer stage = VK_NULL_HANDLE; VmaAllocation stage_alloc = nullptr; VmaAllocationInfo ai{};
+            if (vmaCreateBuffer(allocator_, &bci, &aci, &stage, &stage_alloc, &ai) != VK_SUCCESS) continue;
+            Vertex dead{ glm::vec3(c.x, L.lo.y - 400.0f, c.z), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f) };
+            Vertex* dst = static_cast<Vertex*>(ai.pMappedData);
+            for (uint32_t v = 0; v < L.v1[k] - L.v0[k]; ++v) dst[v] = dead;
+            vmaFlushAllocation(allocator_, stage_alloc, 0, VK_WHOLE_SIZE);
+            vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
+                VkBufferCopy r{ 0, VkDeviceSize(L.v0[k]) * sizeof(Vertex), bytes };
+                vkCmdCopyBuffer(cb, stage, g.mesh.vertex_buffer, 1, &r);
+            });
+            vmaDestroyBuffer(allocator_, stage, stage_alloc);
+            if (std::find(touched.begin(), touched.end(), gi) == touched.end()) touched.push_back(gi);
+        }
+        // Collider and light.
+        if (L.aabb >= 0 && size_t(L.aabb) < world_.aabbs.size())
+            world_.aabbs[size_t(L.aabb)] = { glm::vec3(0.0f, -9000.0f, 0.0f), glm::vec3(0.0f, -9000.0f, 0.0f) };
+        if (L.kind == 0)
+            for (auto& l : lamp_lights_)
+                if (std::abs(l.x - c.x) < 1.6f && std::abs(l.z - c.z) < 1.6f && l.y > L.lo.y && l.y < L.hi.y + 1.0f) l.y = -9000.0f;
+        // The body that falls: a timber beam for a post, a slab for a stone.
+        if (physics_) {
+            const glm::vec3 he = L.kind == 0 ? glm::vec3(0.09f, (L.hi.y - L.lo.y) * 0.5f - 0.2f, 0.09f)
+                                             : glm::max((L.hi - L.lo) * 0.5f * glm::vec3(0.8f, 0.9f, 0.8f), glm::vec3(0.06f));
+            auto& R = spacejet_rng_state_;
+            const glm::vec3 tilt(frand_range(R, -0.22f, 0.22f), frand_range(R, 0.0f, 6.28f), frand_range(R, -0.22f, 0.22f));
+            const uint32_t id = physics_->add_dynamic_box(c + glm::vec3(0.0f, 0.25f, 0.0f), he, tilt, L.kind == 0 ? 600.0f : 2400.0f);
+            if (id != 0) {
+                DynamicProp p{};
+                p.body_id = id;
+                p.jolt_handle = physics_->handle_of(id);
+                p.full_size = he * 2.0f;
+                p.tex_albedo = p.tex_normal = (L.kind == 0) ? kTexTimber : kTexGrave;
+                p.uv_scale = 1.0f;
+                p.color = (L.kind == 0) ? glm::vec4(0.85f, 0.80f, 0.74f, 1.0f) : glm::vec4(0.86f, 0.93f, 1.0f, 1.0f);
+                p.fallback_color = (L.kind == 0) ? glm::vec4(0.35f, 0.24f, 0.15f, 1.0f) : glm::vec4(0.42f, 0.40f, 0.36f, 1.0f);
+                dyn_props_.push_back(p);
+            }
+        }
+    }
+    near_static_src_[0] = SIZE_MAX;             // the player's colliders: taken again
+    // The touched meshes' ray-tracing structures: built again from the new vertices.
+    for (int gi : touched) {
+        CastleMeshGpu& g = castle_meshes_[size_t(gi)];
+        if (g.blas) g_rt.destroy_as(device_, g.blas, nullptr);
+        if (g.blas_buf) vmaDestroyBuffer(allocator_, g.blas_buf, g.blas_alloc);
+        g.blas = VK_NULL_HANDLE; g.blas_buf = VK_NULL_HANDLE; g.blas_alloc = nullptr; g.blas_addr = 0;
+    }
+    if (!touched.empty()) build_mesh_part_blas(castle_meshes_);
+    log::infof("[crater] %zu loose object(s) lost their ground and fell", hit.size());
+}
+
 void VulkanEngine::flush_pending_craters(VkCommandBuffer cb) {
     if (pending_craters_.empty()) return;
     for (PendingCrater& c : pending_craters_) {

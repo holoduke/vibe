@@ -86,6 +86,19 @@ struct Level {
     // direction); the engine builds them after the castle is placed.
     struct LampSpot { glm::vec3 base, arm; };
     std::vector<LampSpot> lamp_spots;
+    // Small things that stand on the ground and can lose it (a bomb crater under them): lamp
+    // posts and gravestones. They are merged into shared meshes, so each records which
+    // vertices are its own: the engine collapses those and lets a physics body fall in its
+    // place (craters.cpp drop_loose_objects).
+    struct Loose {
+        int       kind = 0;                 // 0 lamp post, 1 gravestone
+        glm::vec3 lo{0.0f}, hi{0.0f};       // its box
+        int       aabb = -1;                // its collider in `aabbs` (-1 none)
+        int       mesh[3] = { -1, -1, -1 }; // index into `meshes`
+        uint32_t  v0[3] = { 0, 0, 0 }, v1[3] = { 0, 0, 0 };
+        bool      gone = false;
+    };
+    std::vector<Loose> loose;
 };
 
 // Built-in starter level: floor + four walls + a few obstacle cubes.

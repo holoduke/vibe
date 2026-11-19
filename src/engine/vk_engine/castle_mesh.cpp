@@ -109,8 +109,11 @@ void build_ssdm_shell(const game::LevelMesh& lm, float inset, std::vector<Vertex
 
 void VulkanEngine::init_castle_meshes() {
     size_t total_tris = 0;
-    for (const auto& lm : world_.meshes) {
+    castle_of_level_mesh_.assign(world_.meshes.size(), -1);
+    for (size_t lmi = 0; lmi < world_.meshes.size(); ++lmi) {
+        const auto& lm = world_.meshes[lmi];
         if (lm.verts.empty() || lm.idx.empty()) continue;
+        castle_of_level_mesh_[lmi] = int(castle_meshes_.size());
         CastleMeshGpu g{};
         g.mesh = create_mesh_from_data(
             device_, allocator_, graphics_queue_, graphics_queue_family_,

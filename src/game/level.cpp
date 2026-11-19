@@ -998,8 +998,10 @@ int append_graveyard(Level& lv, glm::vec3 church, const std::function<float(floa
     uint32_t rs = 0x6A4E57u;
     auto rnd = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
     int placed = 0;
+    const size_t loose_first = lv.loose.size();
     auto place = [&](int mi, float x, float z, float yaw, float lean, float lean_dir, float sink, float scale) {
         const Model& m = models[size_t(mi)];
+        const uint32_t loose_v0 = uint32_t(mesh.verts.size());
         const float gy = ground(x, z) - sink;
         // yaw about y, then lean by `lean` about a horizontal axis.
         const float cy = std::cos(yaw), sy = std::sin(yaw);
@@ -1030,6 +1032,14 @@ int append_graveyard(Level& lv, glm::vec3 church, const std::function<float(floa
         // Collider: the part above the ground, a little slimmer than the stone.
         lo.y = gy - 0.2f;
         const glm::vec3 c = (lo + hi) * 0.5f, e = (hi - lo) * 0.5f * glm::vec3(0.8f, 1.0f, 0.8f);
+        {
+            Level::Loose L;
+            L.kind = 1; L.lo = lo; L.hi = hi;
+            L.mesh[0] = -2;                                    // (this function's mesh: its index is set when it is added)
+            L.v0[0] = loose_v0; L.v1[0] = uint32_t(mesh.verts.size());
+            if (hi.y - gy > 0.3f) L.aabb = int(lv.aabbs.size());
+            lv.loose.push_back(L);
+        }
         if (hi.y - gy > 0.3f) lv.aabbs.push_back({ c - e, c + e });
         ++placed;
     };
@@ -1053,6 +1063,8 @@ int append_graveyard(Level& lv, glm::vec3 church, const std::function<float(floa
                       yaw + (rnd() - 0.5f) * 0.9f, (rnd() - 0.5f) * 0.12f, rnd() * 6.2832f, 0.03f, sc);
         }
     }
+    for (size_t i = loose_first; i < lv.loose.size(); ++i)
+        if (lv.loose[i].mesh[0] == -2) lv.loose[i].mesh[0] = mesh.idx.empty() ? -1 : int(lv.meshes.size());
     if (!mesh.idx.empty()) lv.meshes.push_back(std::move(mesh));
     return placed;
 }
@@ -1165,20 +1177,30 @@ glm::vec3 append_lamp_post(Level& lv, glm::vec3 base, glm::vec3 arm_dir, uint32_
 
     // All posts share three meshes (wood / iron / glass): 3 draws and 3
     // BLAS geometries for the whole road instead of 3 per post.
+    Level::Loose loose;                       // (this post's own vertices in the shared meshes)
+    int loose_n = 0;
     auto merge = [&](LevelMesh&& m, auto same) {
-        for (LevelMesh& e : lv.meshes) {
+        const uint32_t count = uint32_t(m.verts.size());
+        for (size_t k = 0; k < lv.meshes.size(); ++k) {
+            LevelMesh& e = lv.meshes[k];
             if (!same(e)) continue;
             const uint32_t off = uint32_t(e.verts.size());
             e.verts.insert(e.verts.end(), m.verts.begin(), m.verts.end());
             for (uint32_t i : m.idx) e.idx.push_back(i + off);
             e.bmin = glm::min(e.bmin, m.bmin); e.bmax = glm::max(e.bmax, m.bmax);
+            loose.mesh[loose_n] = int(k); loose.v0[loose_n] = off; loose.v1[loose_n] = off + count; ++loose_n;
             return;
         }
+        loose.mesh[loose_n] = int(lv.meshes.size()); loose.v0[loose_n] = 0; loose.v1[loose_n] = count; ++loose_n;
         lv.meshes.push_back(std::move(m));
     };
     merge(std::move(wood),  [](const LevelMesh& e) { return e.tex_albedo == kWood && !e.full_emissive; });
     merge(std::move(iron),  [](const LevelMesh& e) { return e.tex_albedo == kMetal && e.tint == glm::vec3(0.16f, 0.15f, 0.14f); });
     merge(std::move(glass), [](const LevelMesh& e) { return e.full_emissive && e.emissive == glm::vec3(3.2f, 2.0f, 0.75f); });
+    loose.kind = 0;
+    loose.lo = base - glm::vec3(0.13f, 0.3f, 0.13f); loose.hi = base + glm::vec3(0.13f, H, 0.13f);
+    loose.aabb = int(lv.aabbs.size());
+    lv.loose.push_back(loose);
     lv.aabbs.push_back({ base - glm::vec3(0.13f, 0.3f, 0.13f), base + glm::vec3(0.13f, H, 0.13f) });
     return lb + up * (lh * 0.5f);
 }
