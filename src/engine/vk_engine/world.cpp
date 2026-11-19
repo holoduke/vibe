@@ -439,6 +439,16 @@ void VulkanEngine::init_world() {
             game::append_stone_bridge(world_, bridge_a_, bridge_b_, 2.0f * castle_road_.half_width,
                                       [&](float x, float z) { return hm.sample_world(x, z); });
             bridge_placed_ = true;
+            // A lantern post at each end, beside the parapet, its arm over the road.
+            {
+                const glm::vec2 nrm(-dir.y, dir.x);
+                const float off = castle_road_.half_width + 1.5f;
+                const glm::vec2 l0 = a2 - dir * 1.2f + nrm * off, l1 = b2 + dir * 1.2f - nrm * off;
+                lamp_lights_.push_back(game::append_lamp_post(world_, glm::vec3(l0.x, hm.sample_world(l0.x, l0.y), l0.y),
+                                                              glm::vec3(-nrm.x, 0.0f, -nrm.y), 0xB21D6E1u));
+                lamp_lights_.push_back(game::append_lamp_post(world_, glm::vec3(l1.x, hm.sample_world(l1.x, l1.y), l1.y),
+                                                              glm::vec3(nrm.x, 0.0f, nrm.y), 0xB21D6E2u));
+            }
             log::infof("[bridge] stone bridge (%.1f, %.1f, %.1f) -> (%.1f, %.1f, %.1f)", bridge_a_.x, bridge_a_.y, bridge_a_.z,
                        bridge_b_.x, bridge_b_.y, bridge_b_.z);
         }

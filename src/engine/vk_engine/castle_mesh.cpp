@@ -178,7 +178,7 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
             // Static-mesh mode flag (see file header).
             // .y = wind sway (uv = weight, phase), .z = world triplanar.
             // .x <= 0: relief reduction (0 = full depth, -1 = flat).
-            pc.grass_params = glm::vec4(glm::clamp(g.relief, 0.0f, 1.0f) - 1.0f, g.sway ? 1.0f : 0.0f,
+            pc.grass_params = glm::vec4(glm::clamp(g.relief, 0.0f, 2.0f) - 1.0f      /* (above 1: full relief + silhouettes at flat edges, see LevelMesh::relief) */, g.sway ? 1.0f : 0.0f,
                                         g.triplanar ? 1.0f : 0.0f, -1.0f);
             if (!depth_only) {
                 pc.color = glm::vec4(tex_on ? g.tint : g.fallback, 1.0f);

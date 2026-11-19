@@ -185,7 +185,10 @@ bool br_open_air(vec3 p, vec3 rd) {
 // the stone: this pixel shows what is behind. c = N.V.
 bool pom_silhouette_clip(float depth_m, float c, float curv) {
     c = clamp(c, 0.0, 1.0);
-    if (curv < 0.02 || c > 0.5 || depth_m < 0.008) return false;
+    // (curv >= 100: a flat-faced mesh that asked for its edges to be cut - LevelMesh::relief > 1.
+    // There is no curvature to go by, and the edge can be met at any angle.)
+    bool edges = curv >= 100.0;
+    if (depth_m < 0.008 || (!edges && (curv < 0.02 || c > 0.5))) return false;
     vec3  rd = normalize(vWorldPos - scene.camera_pos.xyz);
     float t_hit = min(depth_m / max(c, 0.04), 4.0);
     rayQueryEXT rq;

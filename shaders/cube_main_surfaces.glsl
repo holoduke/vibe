@@ -755,14 +755,14 @@
                         float dm_hit = 0.0;
                         {   // relief silhouette on round towers
                             float dm = (1.0 - textureGrad(u_height[hix], uvp, du1, du2).r) * hs / max(uvpm, 1e-4);
-                            if (pom_silhouette_clip(dm, Vt.z, mesh_curv)) discard;
+                            if (pom_silhouette_clip(dm, Vt.z, pc.grass_params.x > 0.25 ? 100.0 : mesh_curv)) discard;
                             dm_hit = dm;
                         }
                         vec3 Lt = vec3(dot(L, Tn), dot(L, Bn), dot(L, N));
                         mesh_pom_shade = mix(1.0, pom_shade(hix, uvp, Lt, hs, du1, du2, 1.0), fadeP);
                         muv = uvp;
                         m_dm = dm_hit; m_hs = hs;
-                    } else if (mesh_curv > 0.02) {
+                    } else if (mesh_curv > 0.02 || pc.grass_params.x > 0.25) {
                         // Grazing silhouette pixels (no march): clip by the
                         // height at the unshifted uv - the stone outline.
                         float uvpm = sqrt(max(dot(du1, du1), dot(du2, du2)) /
@@ -770,7 +770,7 @@
                         float hs = clamp(0.05 / max(uvpm, 0.01), 0.06, 0.3) * uvpm *
                                    scene.spom_params.x * fadeP;
                         float dm = (1.0 - textureGrad(u_height[hix], muv, du1, du2).r) * hs / max(uvpm, 1e-4);
-                        if (pom_silhouette_clip(dm, Vt.z, mesh_curv)) discard;
+                        if (pom_silhouette_clip(dm, Vt.z, pc.grass_params.x > 0.25 ? 100.0 : mesh_curv)) discard;
                     }
                 }
             }

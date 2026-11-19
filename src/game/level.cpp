@@ -698,7 +698,9 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
 
     LevelMesh m; m.tex_albedo = kBrick; m.tex_normal = kBrick;
     m.tint = glm::vec3(0.80f, 0.78f, 0.72f); m.fallback = glm::vec3(0.52f, 0.48f, 0.40f);
-    m.relief = 0.7f;
+    LevelMesh road; road.tex_albedo = 14; road.tex_normal = 14;      // (engine kTexRoad)
+    road.tint = glm::vec3(0.5f); road.fallback = glm::vec3(0.40f, 0.38f, 0.34f); road.relief = 0.5f;
+    m.relief = 1.5f;                 // (full stone relief, and its edges are cut by it: no ruled outlines)
     auto P = [&](float s, float u, float y) { return glm::vec3(a.x, 0.0f, a.z) + D * s + N * u + U * y; };
     auto V = [&](float s, float u, float y, glm::vec3 nn, float tu, float tv) { return LevelVertex{ P(s, u, y), nn, tu / tile, tv / tile }; };
     const float ds = 0.5f;
@@ -722,8 +724,11 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
             mesh_quad(m, V(s0, sg * hw, t0, -nn, s0, -t0), V(s1, sg * hw, t1, -nn, s1, -t1),
                          V(s1, sg * hw, t1 + par_h, -nn, s1, -(t1 + par_h)), V(s0, sg * hw, t0 + par_h, -nn, s0, -(t0 + par_h)));
         }
-        // The road.
-        mesh_quad(m, V(s0, -hw, t0, U, -hw, s0), V(s1, -hw, t1, U, -hw, s1), V(s1, hw, t1, U, hw, s1), V(s0, hw, t0, U, hw, s0));
+        // The road: the castle road's cobbles (2.5 m to a repeat).
+        {
+            auto C = [&](float s, float u, float y) { return LevelVertex{ P(s, u, y), U, u / 2.5f, s / 2.5f }; };
+            mesh_quad(road, C(s0, -hw, t0), C(s1, -hw, t1), C(s1, hw, t1), C(s0, hw, t0));
+        }
         // Under the arch.
         if (ai >= 0) {
             const glm::vec3 n0 = -glm::normalize(D * (s0 - ac[ai]) + U * (y0 - spring) + U * 1e-4f);
@@ -768,6 +773,7 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
             }
     }
     lv.meshes.push_back(std::move(m));
+    lv.meshes.push_back(std::move(road));
     for (const auto& c : cols) lv.aabbs.push_back(c);
 }
 
