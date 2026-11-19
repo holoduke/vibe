@@ -59,6 +59,8 @@ Road make_castle_road(const Heightmap& hm, float water_level, float gate_h, cons
         {-36.0f, 36.0f}, {-45.0f, 50.0f}, {-47.0f, 68.0f}, {-40.0f, 86.0f},
         {-22.0f, 102.0f}, { 2.0f, 120.0f}, {20.0f, 148.0f}, {28.0f, 182.0f},
         {26.0f, 225.0f}, {18.0f, 270.0f},
+        // (on to the stone bridge over the river: world.cpp starts its deck where this ends)
+        {19.6f, 274.4f}, {21.86f, 276.56f},
     };
     const int n = static_cast<int>(sizeof(ctrl) / sizeof(ctrl[0]));
 

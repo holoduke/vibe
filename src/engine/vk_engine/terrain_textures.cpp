@@ -684,6 +684,26 @@ void VulkanEngine::init_grass_mask_texture() {
         }
     }
 
+    // No lawn under or through the stone bridge (its ends lie at ground level: the blades
+    // stood up through the deck there).
+    if (bridge_placed_) {
+        const float cell = kWorldSide / float(dim);
+        const glm::vec2 a(bridge_a_.x, bridge_a_.z), b(bridge_b_.x, bridge_b_.z);
+        const float L = glm::length(b - a);
+        const glm::vec2 d = (b - a) / std::max(L, 1e-3f), n(-d.y, d.x);
+        const int x0 = std::max(0, int((std::min(a.x, b.x) - 8.0f + 0.5f * kWorldSide) / cell));
+        const int x1 = std::min(dim - 1, int((std::max(a.x, b.x) + 8.0f + 0.5f * kWorldSide) / cell));
+        const int z0 = std::max(0, int((std::min(a.y, b.y) - 8.0f + 0.5f * kWorldSide) / cell));
+        const int z1 = std::min(dim - 1, int((std::max(a.y, b.y) + 8.0f + 0.5f * kWorldSide) / cell));
+        for (int mz = z0; mz <= z1; ++mz)
+            for (int mx = x0; mx <= x1; ++mx) {
+                const glm::vec2 p((float(mx) + 0.5f) * cell - 0.5f * kWorldSide, (float(mz) + 0.5f) * cell - 0.5f * kWorldSide);
+                const float s = glm::dot(p - a, d), u = glm::dot(p - a, n);
+                if (s > -4.0f && s < L + 4.0f && std::abs(u) < 5.0f)
+                    grass_mask_data_[(size_t(mz) * size_t(dim) + size_t(mx)) * 2] = 0;
+            }
+    }
+
     // Upload as a sampled RG8 image.
     VkImageCreateInfo ici{};
     ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;

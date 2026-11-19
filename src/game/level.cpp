@@ -657,6 +657,120 @@ void append_outpost_tower(Level& lv, glm::vec3 base, int style, uint32_t seed) {
 // game's own materials: castle masonry (with stone relief), roof tiles,
 // timber, iron, and dark glass that glows faintly at night.
 // ---------------------------------------------------------------------
+
+// A Roman stone bridge in WORLD space: a level-ish deck from `a` to `b` (deck surface heights
+// in .y) carried on three semicircular arches between massive piers, with solid abutments at
+// both ends and a parapet along each side. `width`: clear deck width. `ground(x, z)`: terrain
+// height (the piers and abutments are carried 1.5 m into it). Adds its mesh and player
+// colliders (the deck and parapets as a slab, the piers and abutments solid; under the arches
+// it is open).
+void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
+                         const std::function<float(float, float)>& ground) {
+    constexpr int kBrick = 1;
+    const float tile = 1.0f / 0.22f;
+    const glm::vec2 a2(a.x, a.z), b2(b.x, b.z);
+    const float L = glm::length(b2 - a2);
+    if (L < 20.0f) return;
+    const glm::vec2 d = (b2 - a2) / L, n(-d.y, d.x);
+    const glm::vec3 D(d.x, 0.0f, d.y), N(n.x, 0.0f, n.y), U(0.0f, 1.0f, 0.0f);
+    const float hw = width * 0.5f, par = 0.55f, ho = hw + par, par_h = 1.0f;
+    // (a short ramp up from the road at the near end: the ground the road was levelled on, with
+    // its close-range relief, otherwise shows through the first metres of the deck)
+    auto deck = [&](float s) {
+        const float t = s / L, r = std::clamp(s / 2.5f, 0.0f, 1.0f);
+        return glm::mix(a.y, b.y, t) + 0.5f * std::sin(kPi * t) + 0.32f * r * r * (3.0f - 2.0f * r) * (1.0f - t);
+    };
+    auto gnd = [&](float s) {
+        const glm::vec2 p = a2 + d * s;
+        return (std::min)({ ground(p.x, p.y), ground(p.x + n.x * ho, p.y + n.y * ho), ground(p.x - n.x * ho, p.y - n.y * ho) });
+    };
+    // Three arches in the middle part; what is left at the ends are the abutments.
+    const float R = (std::min)(7.0f, (L - 26.0f) / 6.0f), pier = 4.0f;
+    const float open = 6.0f * R + 2.0f * pier, s_first = std::floor((L - open) * 0.42f * 2.0f) * 0.5f;
+    float ac[3];
+    for (int i = 0; i < 3; ++i) ac[i] = s_first + R + float(i) * (2.0f * R + pier);
+    float crown = 1e9f;
+    for (float s = ac[0] - R; s <= ac[2] + R; s += 0.5f) crown = (std::min)(crown, deck(s));
+    crown -= 1.35f;                                    // (arch ring + road bed over the crown)
+    const float spring = crown - R;
+    auto arch_of = [&](float s) { for (int i = 0; i < 3; ++i) if (std::abs(s - ac[i]) < R) return i; return -1; };
+    auto arch_y = [&](int i, float s) { const float x = s - ac[i]; return spring + std::sqrt((std::max)(R * R - x * x, 0.0f)); };
+
+    LevelMesh m; m.tex_albedo = kBrick; m.tex_normal = kBrick;
+    m.tint = glm::vec3(0.80f, 0.78f, 0.72f); m.fallback = glm::vec3(0.52f, 0.48f, 0.40f);
+    m.relief = 0.7f;
+    auto P = [&](float s, float u, float y) { return glm::vec3(a.x, 0.0f, a.z) + D * s + N * u + U * y; };
+    auto V = [&](float s, float u, float y, glm::vec3 nn, float tu, float tv) { return LevelVertex{ P(s, u, y), nn, tu / tile, tv / tile }; };
+    const float ds = 0.5f;
+    const int ns = int(std::ceil(L / ds));
+    std::vector<collision::AABB> cols;
+    for (int k = 0; k < ns; ++k) {
+        const float s0 = float(k) * ds, s1 = (std::min)(L, s0 + ds), sm = 0.5f * (s0 + s1);
+        const int ai = arch_of(sm);
+        const float t0 = deck(s0), t1 = deck(s1);
+        float y0, y1;
+        if (ai >= 0) { y0 = arch_y(ai, s0); y1 = arch_y(ai, s1); }
+        else { y0 = (std::min)(gnd(s0) - 1.5f, t0 - 1.0f); y1 = (std::min)(gnd(s1) - 1.5f, t1 - 1.0f); }
+        for (float sg : { -1.0f, 1.0f }) {
+            const glm::vec3 nn = N * sg;
+            // Outer face (up to the top of the parapet).
+            mesh_quad(m, V(s0, sg * ho, y0, nn, s0, -y0), V(s1, sg * ho, y1, nn, s1, -y1),
+                         V(s1, sg * ho, t1 + par_h, nn, s1, -(t1 + par_h)), V(s0, sg * ho, t0 + par_h, nn, s0, -(t0 + par_h)));
+            // Parapet: top and the face toward the road.
+            mesh_quad(m, V(s0, sg * hw, t0 + par_h, U, s0, sg * hw), V(s1, sg * hw, t1 + par_h, U, s1, sg * hw),
+                         V(s1, sg * ho, t1 + par_h, U, s1, sg * ho), V(s0, sg * ho, t0 + par_h, U, s0, sg * ho));
+            mesh_quad(m, V(s0, sg * hw, t0, -nn, s0, -t0), V(s1, sg * hw, t1, -nn, s1, -t1),
+                         V(s1, sg * hw, t1 + par_h, -nn, s1, -(t1 + par_h)), V(s0, sg * hw, t0 + par_h, -nn, s0, -(t0 + par_h)));
+        }
+        // The road.
+        mesh_quad(m, V(s0, -hw, t0, U, -hw, s0), V(s1, -hw, t1, U, -hw, s1), V(s1, hw, t1, U, hw, s1), V(s0, hw, t0, U, hw, s0));
+        // Under the arch.
+        if (ai >= 0) {
+            const glm::vec3 n0 = -glm::normalize(D * (s0 - ac[ai]) + U * (y0 - spring) + U * 1e-4f);
+            const glm::vec3 n1 = -glm::normalize(D * (s1 - ac[ai]) + U * (y1 - spring) + U * 1e-4f);
+            const float w0 = R * std::asin(std::clamp((s0 - ac[ai]) / R, -1.0f, 1.0f)), w1 = R * std::asin(std::clamp((s1 - ac[ai]) / R, -1.0f, 1.0f));
+            mesh_quad(m, V(s0, -ho, y0, n0, -ho, w0), V(s1, -ho, y1, n1, -ho, w1), V(s1, ho, y1, n1, ho, w1), V(s0, ho, y0, n0, ho, w0));
+        }
+    }
+    // Pier and abutment faces below the springing, facing into each arch.
+    for (int i = 0; i < 3; ++i)
+        for (float sg : { -1.0f, 1.0f }) {
+            const float s = ac[i] + sg * R;
+            const float yb = gnd(s) - 1.5f;
+            if (yb >= spring) continue;
+            const glm::vec3 nn = -D * sg;
+            mesh_quad(m, V(s, -ho, yb, nn, -ho, -yb), V(s, ho, yb, nn, ho, -yb), V(s, ho, spring, nn, ho, -spring), V(s, -ho, spring, nn, -ho, -spring));
+        }
+    // The ends (what stands clear of the ground there).
+    for (float s : { 0.0f, L }) {
+        const glm::vec3 nn = (s == 0.0f) ? -D : D;
+        const float yb = gnd(s) - 1.5f, yt = deck(s);
+        mesh_quad(m, V(s, -ho, yb, nn, -ho, -yb), V(s, ho, yb, nn, ho, -yb), V(s, ho, yt, nn, ho, -yt), V(s, -ho, yt, nn, -ho, -yt));
+        for (float sg : { -1.0f, 1.0f })
+            mesh_quad(m, V(s, sg * hw, yt, nn, sg * hw, -yt), V(s, sg * ho, yt, nn, sg * ho, -yt),
+                         V(s, sg * ho, yt + par_h, nn, sg * ho, -(yt + par_h)), V(s, sg * hw, yt + par_h, nn, sg * hw, -(yt + par_h)));
+    }
+    // Colliders: the bridge runs at an angle, the boxes are axis-aligned - so its footprint is
+    // tiled with 1 m columns. Deck and parapets are a 1 m slab; piers and abutments go to the ground.
+    {
+        const glm::vec2 c0 = a2 - n * ho, c1 = a2 + n * ho, c2 = b2 - n * ho, c3 = b2 + n * ho;
+        const int x0 = int(std::floor((std::min)({ c0.x, c1.x, c2.x, c3.x }))), x1 = int(std::ceil((std::max)({ c0.x, c1.x, c2.x, c3.x })));
+        const int z0 = int(std::floor((std::min)({ c0.y, c1.y, c2.y, c3.y }))), z1 = int(std::ceil((std::max)({ c0.y, c1.y, c2.y, c3.y })));
+        for (int z = z0; z < z1; ++z)
+            for (int x = x0; x < x1; ++x) {
+                const glm::vec2 p(float(x) + 0.5f, float(z) + 0.5f);
+                const float s = glm::dot(p - a2, d), u = glm::dot(p - a2, n);
+                if (s < -0.5f || s > L + 0.5f || std::abs(u) > ho + 0.2f) continue;
+                const float sc = std::clamp(s, 0.0f, L);
+                const float top = deck(sc) + ((std::abs(u) > hw - 0.1f) ? par_h : 0.0f);
+                const float bot = (arch_of(sc) >= 0) ? deck(sc) - 1.0f : (std::min)(ground(p.x, p.y) - 0.5f, deck(sc) - 1.0f);
+                cols.push_back({ glm::vec3(float(x), bot, float(z)), glm::vec3(float(x + 1), top, float(z + 1)) });
+            }
+    }
+    lv.meshes.push_back(std::move(m));
+    for (const auto& c : cols) lv.aabbs.push_back(c);
+}
+
 bool append_church(Level& lv, glm::vec3 base) {
     FILE* fp = std::fopen("assets/church/church.mesh", "r");
     if (!fp) return false;

@@ -423,6 +423,25 @@ void VulkanEngine::init_world() {
             }
         }
         church_placed_ = game::append_church(world_, church_pos_);
+        // The stone bridge over the river: from the end of the castle road (which was led up to
+        // it, road.cpp) straight across to the far bank, where the ground comes back up to the
+        // road's height. Laid out from where the player stood and looked when asking for it.
+        if (!castle_road_.empty()) {
+            const glm::vec2 o(19.7038f, 274.479f), dir(std::sin(8.62199f), -std::cos(8.62199f));
+            const glm::vec2 a2 = o + dir * 3.0f, b2 = o + dir * 76.0f;
+            float ya = hm.sample_world(a2.x, a2.y), best = 1e9f;
+            for (const auto& p : castle_road_.pts) {
+                const float d2 = (p.x - a2.x) * (p.x - a2.x) + (p.z - a2.y) * (p.z - a2.y);
+                if (d2 < best) { best = d2; ya = p.y; }
+            }
+            bridge_a_ = glm::vec3(a2.x, ya + 0.02f, a2.y);
+            bridge_b_ = glm::vec3(b2.x, hm.sample_world(b2.x, b2.y) + 0.12f, b2.y);
+            game::append_stone_bridge(world_, bridge_a_, bridge_b_, 2.0f * castle_road_.half_width,
+                                      [&](float x, float z) { return hm.sample_world(x, z); });
+            bridge_placed_ = true;
+            log::infof("[bridge] stone bridge (%.1f, %.1f, %.1f) -> (%.1f, %.1f, %.1f)", bridge_a_.x, bridge_a_.y, bridge_a_.z,
+                       bridge_b_.x, bridge_b_.y, bridge_b_.z);
+        }
         if (!church_placed_) log::warnf("[church] assets/church/church.mesh missing - no chapel");
         // Lamp posts along the castle road: one about every 50 m, on a
         // random side, arm over the verge toward the paving.

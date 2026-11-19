@@ -100,6 +100,11 @@ bool append_church(Level& lv, glm::vec3 base);
 // set out in rows beside the chapel. `ground(x, z)` gives the terrain
 // height. Returns how many stones were placed (0 = mesh file missing).
 int append_graveyard(Level& lv, glm::vec3 church, const std::function<float(float, float)>& ground);
+// A Roman stone bridge from `a` to `b` (world space, .y = the deck's height at each end): three
+// arches on massive piers, solid abutments, parapets. `width` = clear deck width; `ground` gives
+// the terrain height. Adds its mesh and player colliders.
+void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
+                         const std::function<float(float, float)>& ground);
 // Timber lamp post with a hanging lantern; returns the lantern's centre.
 glm::vec3 append_lamp_post(Level& lv, glm::vec3 base, glm::vec3 arm_dir, uint32_t seed);
 

@@ -187,6 +187,11 @@ WorldPropParams VulkanEngine::veg_place_params() const {
             wp.keep_out.push_back(glm::vec3(church_pos_.x + dx, church_pos_.z + 10.0f, 7.0f));    // the graveyard
         }
     for (const auto& l : lamp_lights_) wp.keep_out.push_back(glm::vec3(l.x, l.z, 2.5f));
+    if (bridge_placed_)                              // nothing grows through the bridge or over its ends
+        for (float t = -0.08f; t <= 1.081f; t += 0.04f) {
+            const glm::vec3 p = glm::mix(bridge_a_, bridge_b_, t);
+            wp.keep_out.push_back(glm::vec3(p.x, p.z, 6.5f));
+        }
     if (!paint_.empty()) wp.paint = &paint_;
     return wp;
 }
@@ -343,6 +348,11 @@ void VulkanEngine::build_scatter_from(const Heightmap& hm) {
     sp.snow_band_h = rt_.terrain_h_rock_snow_start;
     sp.road = &castle_road_;
     // (also no tall tufts / flowers between the graves)
+    if (bridge_placed_)                              // no tufts, ferns or flowers up through the stone bridge
+        for (float t = -0.06f; t <= 1.061f; t += 0.03f) {
+            const glm::vec3 p = glm::mix(bridge_a_, bridge_b_, t);
+            sp.keep_rects.push_back(glm::vec4(p.x - 4.2f, p.z - 4.2f, p.x + 4.2f, p.z + 4.2f));
+        }
     if (church_placed_) sp.keep_rects.push_back(glm::vec4(church_pos_.x - 7.0f, church_pos_.z + 5.0f, church_pos_.x + 8.2f, church_pos_.z + 15.0f));
     if (church_placed_) sp.keep_rects.push_back(glm::vec4(church_pos_.x - 6.2f, church_pos_.z - 3.9f, church_pos_.x + 8.0f, church_pos_.z + 3.9f));
     sp.rm_params = &terrain_hp_;   // offsets onto the raymarched surface
