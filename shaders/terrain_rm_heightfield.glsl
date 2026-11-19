@@ -528,10 +528,19 @@ float raymarch_far_impl(vec3 ro, vec3 rd, float t_end, bool whole) {
     // that lengthen with distance (the bisection below catches what a stride steps into).
     int n_steps = (whole && ro.y <= maxH) ? 300 : 160;
     for (int i = 0; i < n_steps; ++i) {
-        if (t > t_end) return -1.0;
+        // The end of the range (the water plane, an object, the far limit): look AT it before
+        // giving up. A stride may pass the ground and the end in one go - low land just above
+        // the water, seen from steeply above, was stepped over and the water showed through it
+        // as a round hole under the camera that grew and shrank with the camera's height.
+        bool last = false;
+        if (t > t_end) {
+            if (t_prev >= t_end) return -1.0;
+            t = t_end; last = true;
+        }
         vec3 p = ro + rd * t;
         if (rd.y > 0.0 && p.y > maxH) return -1.0;
-        float h = p.y - terrainM_lod(p.xz, t);   // as much detail as a pixel resolves there: with all of it, the part finer than a pixel showed as ruled lines
+        float h = p.y - terrainM_lod(p.xz, t);
+        if (last && h >= 0.0) return -1.0;   // as much detail as a pixel resolves there: with all of it, the part finer than a pixel showed as ruled lines
         if (h < 0.0012 * t) {
             if (h < 0.0) {
                 // (to the millimetre: the stride that stepped in can be metres long, and six halvings
