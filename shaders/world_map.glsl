@@ -130,3 +130,23 @@ float wm_height_land(float a, vec2 wp, float wl) {
     return mix(h, mix(bed, hl, smoothstep(-0.012, 0.012, v)), w);
 }
 float wm_height(float a, vec2 wp, float wl) { return wm_river(wm_height_land(a, wp, wl), wp, wl); }
+
+// Where woods grow (0 = open ground, 1 = closed forest) at world position wp (m), for ground
+// height h, the ground normal's y, and the water level. One rule for the whole world: the far
+// landscape is coloured by it and the trees that stand there are placed by it
+// (src/engine/terrain.cpp wm::forest - keep in step), so the wood seen from the air is the wood
+// found on the ground.
+//   height:   from just above the shore up to a treeline (thinning out over the last 14 m)
+//   slope:    not on steep ground
+//   moisture: three scales of noise - woods a kilometre across, stands of a few hundred metres,
+//             ragged edges - wetter low down by the water
+//   country:  an 8 km pattern of wooded and open country
+float wm_forest(vec2 wp, float h, float ny, float wl) {
+    float alt  = h - wl;
+    float band = smoothstep(2.0, 6.0, alt) * (1.0 - smoothstep(40.0, 54.0, alt)) * smoothstep(0.70, 0.84, ny);
+    if (band <= 0.0) return 0.0;
+    float m = WM_NOISE(wp * 0.0011 + 3.7) * 0.55 + WM_NOISE(wp * 0.0043 + 17.0) * 0.30 + WM_NOISE(wp * 0.017 + 5.0) * 0.15;
+    m += 0.10 * (1.0 - smoothstep(4.0, 25.0, alt));
+    m += (WM_NOISE(wp * 0.00013 + 41.0) - 0.5) * 0.35;
+    return band * smoothstep(0.46, 0.60, m);
+}

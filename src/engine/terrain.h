@@ -83,6 +83,10 @@ float raymarch_ground_relief(float x, float z, float h, float water_level);
 // wm_height. For everything outside the baked home tile: walking, flying low, placing things.
 float world_ground_height(float x, float z, float water_level, int octaves);
 
+// Where woods grow, 0..1 (shaders/world_map.glsl wm_forest): the rule trees beyond the home
+// tile are placed by and the far landscape is coloured by. `ny`: the ground normal's y.
+float world_forest(float x, float z, float h, float ny, float water_level);
+
 // The river's cut applied to a ground height h at (x, z) (shaders/world_map.glsl wm_river):
 // h itself away from the river. For heights that did not come from the formula (a saved sculpt).
 float world_river_cut(float h, float x, float z, float water_level);

@@ -1785,6 +1785,22 @@ private:
     // GPU-driven vegetation + rocks (vk_engine/vegetation.cpp).
     std::vector<VegArchetype> veg_arch_;
     std::vector<VegInstance>  veg_inst_cpu_;
+    // World vegetation (vk_engine/veg_stream.cpp): trees and bushes beyond the home tile, in
+    // streamed 128 m cells. Their instances live in a pool of kWvPool slots inside the
+    // instance buffer, at [veg_world_first_, +kWvPool) - after the home tile's ordinary
+    // instances, before the clustered rocks.
+public:
+    struct WvState;
+private:
+    static constexpr uint32_t kWvPool = 180000;
+    WvState*  wv_ = nullptr;
+    uint32_t  veg_world_first_ = UINT32_MAX;
+    std::vector<collision::AABB> wv_cols_;       // trunk colliders of the cells around the player
+    uint32_t  wv_quota(size_t arch) const;       // pool slots one archetype may use (its visible lists are sized for it)
+    void      wv_insert_pool();                  // (after the instance list was built / rebuilt)
+    void      wv_reset();                        // every cell re-applies (the buffers were re-made)
+    void      wv_update(glm::vec3 eye);
+    void      wv_shutdown();
     struct VegLodRange { uint32_t first_vertex, vertex_count, first_index, index_count;
                          uint32_t card_start = 0xFFFFFFFFu; int card_cell = 0; };
     std::vector<VegLodRange>  veg_lod_ranges_;

@@ -2379,9 +2379,7 @@ void main() {
         if (all(greaterThan(cuv, vec2(0.0))) && all(lessThan(cuv, vec2(1.0)))) {
             woods = smoothstep(0.06, 0.40, textureLod(u_albedo[22], cuv, 2.0).r);
         } else {
-            float band = smoothstep(scene.terrain_h_low.x, scene.terrain_h_low.y, pos.y) *
-                         (1.0 - smoothstep(scene.terrain_h_high.x, scene.terrain_h_high.z, pos.y));
-            woods = band * smoothstep(0.34, 0.58, noise2(pos.xz * 0.006) * 0.6 + noise2(pos.xz * 0.021) * 0.4);
+            woods = wm_forest(pos.xz, pos.y, nor.y, scene.water_params.y);     // (the rule the trees there are placed by)
         }
         vec3 canopy = mix(vec3(0.028, 0.052, 0.024), vec3(0.058, 0.082, 0.034), noise2(pos.xz * 0.11));
         mate = mix(mate, canopy, woods * smoothstep(1200.0, 1700.0, t));

@@ -78,6 +78,7 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
     veg_lod_ranges_.clear();
     std::vector<uint32_t> per_arch(veg_arch_.size(), 0);
     for (const auto& vi : veg_inst_cpu_) per_arch[size_t(vi.rot_arch_phase.y + 0.5f)]++;
+    for (size_t a = 0; a < per_arch.size(); ++a) per_arch[a] += wv_quota(a);      // room for the world's trees (veg_stream.cpp)
     uint32_t vis_base = 0;
     size_t tris_lod[kVegLods]{};
     veg_has_imp_.assign(veg_arch_.size(), 0);
@@ -170,6 +171,7 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
                                                [&](const VegInstance& vi) { return !clustered(vi); });
         veg_cluster_first_ = uint32_t(mid - veg_inst_cpu_.begin());
         veg_cluster_count_ = uint32_t(veg_inst_cpu_.end() - mid);
+        wv_insert_pool();
         cl_vis_base_ = vis_base;
         vis_base += veg_cluster_count_;
     }
@@ -320,6 +322,7 @@ void VulkanEngine::init_vegetation_pipelines() {
 
 void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
     if (!veg_cull_pipeline_ || veg_count_ == 0) return;
+    wv_update(current_frame_view_.eye_pos);          // the world's trees around the camera (veg_stream.cpp)
     // Previous frame's indirect / vertex reads must be done before reset.
     VkMemoryBarrier2 mb{};
     mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -512,6 +515,7 @@ void VulkanEngine::build_veg_blas() {
 }
 
 void VulkanEngine::destroy_vegetation() {
+    wv_shutdown();
     for (auto& B : veg_blas_) {
         if (B.as) g_rt.destroy_as(device_, B.as, nullptr);
         if (B.buf) vmaDestroyBuffer(allocator_, B.buf, B.alloc);

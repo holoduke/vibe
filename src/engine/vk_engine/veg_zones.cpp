@@ -261,6 +261,8 @@ void VulkanEngine::finish_veg_replant(VegJobResult&& r) {
     }
     std::vector<uint32_t> per_arch(veg_arch_.size(), 0);
     for (const auto& vi : veg_inst_cpu_) per_arch[size_t(vi.rot_arch_phase.y + 0.5f)]++;
+    for (size_t a = 0; a < per_arch.size(); ++a) per_arch[a] += wv_quota(a);
+    wv_insert_pool();                           // the world's trees keep their pool (veg_stream.cpp)
     uint32_t vis_base = 0;
     size_t ci = 0;
     for (size_t a = 0; a < veg_arch_.size(); ++a)
@@ -311,6 +313,7 @@ void VulkanEngine::finish_veg_replant(VegJobResult&& r) {
     }
     vkUpdateDescriptorSets(device_, 3, w, 0, nullptr);
     veg_rt_valid_ = false;                      // re-pick the ray-traced tree set
+    wv_reset();                                 // the pool is empty again: every cell re-applies
     rebind_cluster_instance_buffers();          // the clustered rocks read the same (re-made) buffers
     rebake_veg_shade();                         // the ground darkening follows the new planting
 

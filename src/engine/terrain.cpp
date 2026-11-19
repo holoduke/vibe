@@ -173,6 +173,16 @@ inline float height_land(float a, glm::vec2 wp, float wl) {
     return glm::mix(h, glm::mix(bed, hl, sstep(-0.012f, 0.012f, v)), w);
 }
 inline float height(float a, glm::vec2 wp, float wl) { return river(height_land(a, wp, wl), wp, wl); }
+// (shaders/world_map.glsl wm_forest: keep in step)
+inline float forest(glm::vec2 wp, float h, float ny, float wl) {
+    const float alt  = h - wl;
+    const float band = sstep(2.0f, 6.0f, alt) * (1.0f - sstep(40.0f, 54.0f, alt)) * sstep(0.70f, 0.84f, ny);
+    if (band <= 0.0f) return 0.0f;
+    float m = noise(wp * 0.0011f + glm::vec2(3.7f)) * 0.55f + noise(wp * 0.0043f + glm::vec2(17.0f)) * 0.30f + noise(wp * 0.017f + glm::vec2(5.0f)) * 0.15f;
+    m += 0.10f * (1.0f - sstep(4.0f, 25.0f, alt));
+    m += (noise(wp * 0.00013f + glm::vec2(41.0f)) - 0.5f) * 0.35f;
+    return band * sstep(0.46f, 0.60f, m);
+}
 }  // namespace wm
 
 float world_ground_height_impl(float x, float z, float water_level, int octaves) {
@@ -217,6 +227,8 @@ float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
 }
 
 } // namespace
+
+float world_forest(float x, float z, float h, float ny, float water_level) { return wm::forest(glm::vec2(x, z), h, ny, water_level); }
 
 float world_river_cut(float h, float x, float z, float water_level) { return wm::river(h, glm::vec2(x, z), water_level); }
 

@@ -1,0 +1,419 @@
+// World vegetation: trees and bushes everywhere beyond the home tile.
+//
+// The home tile (2048 m) keeps its own, hand-tuned planting (world_props.cpp
+// place_vegetation, the paint map). Everything beyond it is planted by rule:
+//
+//   * The world is cut into 128 m cells. A cell's plants are a pure function of
+//     its coordinates: a jittered grid of candidate spots, each with a random
+//     stream of its own, kept where the world's forest rule (world_forest: the
+//     same function the far landscape is coloured by) says woods grow. Coming
+//     back to a place finds the same trees.
+//   * Cells are generated on background threads, nearest first, and live while
+//     the camera is in range. Their instances go into a fixed pool of slots
+//     inside the vegetation instance buffer, so the existing GPU path draws them:
+//     culling, levels of detail, impostors, shadows, ray tracing.
+//   * A cell's trees are ordered by a rank. With distance only a leading part of
+//     the list is live (all, half, a quarter, a twelfth; bushes only close by),
+//     so the far woods are thinner, not different: every tree that stands far
+//     away still stands when you get there.
+//   * Trunk colliders exist for the cells around the player.
+//
+// Budget: kWvPool instances at 32 bytes, plus the visible lists. One compute
+// thread per slot per frame in veg_cull.comp (an empty slot returns at once).
+#include "engine/vk_engine/internal.h"
+
+#include <algorithm>
+#include <condition_variable>
+#include <cstdlib>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
+
+namespace qlike {
+
+namespace {
+
+constexpr float kCell      = 128.0f;
+constexpr float kHomeHalf  = 1000.0f;     // the home tile's own planting reaches this far
+constexpr int   kTreeGrid  = 19;          // candidates per cell side: one per 6.7 m (~45 m2 a tree in closed forest)
+constexpr int   kBushGrid  = 30;          // one per 4.3 m
+constexpr int   kLevels    = 5;
+// Live share of a cell's trees by level, and the distance (to the cell's centre) each level reaches.
+constexpr float kShare[kLevels] = { 1.0f, 1.0f, 0.5f, 0.25f, 0.085f };
+constexpr float kReach[kLevels] = { 260.0f, 650.0f, 1100.0f, 1600.0f, 1e9f };     // level 0 also has the bushes
+
+struct CellKey {
+    int x, z;
+    bool operator==(const CellKey& o) const { return x == o.x && z == o.z; }
+};
+struct CellHash {
+    size_t operator()(const CellKey& k) const { return size_t(uint32_t(k.x) * 73856093u) ^ size_t(uint32_t(k.z) * 19349663u); }
+};
+
+struct CellData {
+    std::vector<VegInstance>     items;     // trees by rank (lowest first), then the bushes
+    std::vector<collision::AABB> cols;      // one per tree, same order
+    uint32_t                     trees = 0;
+};
+
+inline uint32_t hash3(uint32_t a, uint32_t b, uint32_t c) {
+    uint32_t h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u) * 0x85EBCA77u ^ (c + 0x165667B1u) * 0xC2B2AE3Du;
+    h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
+    return h | 1u;
+}
+
+}  // namespace
+
+struct VulkanEngine::WvState {
+    struct Cell {
+        std::shared_ptr<CellData> data;       // null: not generated yet
+        std::vector<uint32_t>     slots;      // pool slot of each live item (UINT32_MAX: none was free)
+        int  level = kLevels;                 // kLevels: nothing live
+        bool requested = false;
+        bool cols_live = false;
+    };
+    std::unordered_map<CellKey, Cell, CellHash> cells;
+    std::vector<uint32_t> free_slots;
+    std::vector<uint32_t> arch_used;
+    glm::vec3 scan_eye{1e9f};
+    float     scan_far = 0.0f;
+    bool      dirty = true;                   // something is still to be applied: scan again next frame
+
+    // Background generation.
+    std::vector<std::thread> workers;
+    std::mutex mu;
+    std::condition_variable cv;
+    std::vector<CellKey> jobs;                // nearest LAST (workers pop the back)
+    std::vector<std::pair<CellKey, std::shared_ptr<CellData>>> done;
+    bool quit = false;
+    // Read-only for the workers.
+    std::vector<int> pines, broads, old_pines, old_broads, bushes;
+    std::vector<float> arch_h;
+    float water_level = 20.9f;
+    int   octaves = 10;
+    float tree_density = 1.0f, bush_density = 1.0f;
+};
+
+uint32_t VulkanEngine::wv_quota(size_t a) const {
+    if (a >= veg_arch_.size() || veg_arch_[a].species > 2) return 0;
+    size_t n = 0;
+    for (const auto& A : veg_arch_) if (A.species <= 2) ++n;
+    // Twice an even share: species are not used evenly (pines up high, broadleaf low).
+    return uint32_t(std::max<size_t>(2 * size_t(kWvPool) / std::max<size_t>(n, 1), 3000));
+}
+
+// The pool's slots sit between the home tile's ordinary instances and the clustered rocks.
+void VulkanEngine::wv_insert_pool() {
+    const uint32_t at = veg_cluster_count_ ? veg_cluster_first_ : uint32_t(veg_inst_cpu_.size());
+    veg_inst_cpu_.insert(veg_inst_cpu_.begin() + at, size_t(kWvPool), VegInstance{});
+    veg_world_first_ = at;
+    if (veg_cluster_count_) veg_cluster_first_ += kWvPool;
+    else veg_cluster_first_ = uint32_t(veg_inst_cpu_.size());
+}
+
+void VulkanEngine::wv_reset() {
+    if (!wv_) return;
+    WvState& S = *wv_;
+    for (auto& kv : S.cells) { kv.second.slots.clear(); kv.second.level = kLevels; kv.second.cols_live = false; }
+    S.free_slots.resize(kWvPool);
+    for (uint32_t i = 0; i < kWvPool; ++i) S.free_slots[i] = kWvPool - 1 - i;
+    S.arch_used.assign(veg_arch_.size(), 0);
+    wv_cols_.clear();
+    S.scan_eye = glm::vec3(1e9f);
+    S.dirty = true;
+}
+
+void VulkanEngine::wv_shutdown() {
+    if (!wv_) return;
+    {
+        std::lock_guard<std::mutex> lk(wv_->mu);
+        wv_->quit = true;
+    }
+    wv_->cv.notify_all();
+    for (auto& t : wv_->workers) if (t.joinable()) t.join();
+    delete wv_;
+    wv_ = nullptr;
+}
+
+namespace {
+
+// One cell's plants. Pure: depends on the cell and the world formula only.
+std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState& S) {
+    auto out = std::make_shared<CellData>();
+    const float x0 = float(key.x) * kCell, z0 = float(key.z) * kCell;
+    // Wholly inside the home tile's own planting: nothing.
+    if (x0 >= -kHomeHalf && x0 + kCell <= kHomeHalf && z0 >= -kHomeHalf && z0 + kCell <= kHomeHalf) return out;
+    const float wl = S.water_level;
+    // The ground on a 4 m grid (the landscape formula is the cost of a cell): candidates read
+    // height and slope from it; a plant that is kept gets its exact height.
+    constexpr int G = 33;
+    constexpr float gs = kCell / float(G - 1);
+    float hg[G * G];
+    float hmin = 1e9f, hmax = -1e9f;
+    for (int j = 0; j < G; ++j)
+        for (int i = 0; i < G; ++i) {
+            const float h = world_ground_height(x0 + float(i) * gs, z0 + float(j) * gs, wl, S.octaves);
+            hg[j * G + i] = h;
+            hmin = std::min(hmin, h); hmax = std::max(hmax, h);
+        }
+    if (hmax < wl + 1.0f || hmin > wl + 64.0f) return out;       // open water, or all above the treeline
+    auto h_at = [&](float lx, float lz) {
+        const float fx = std::clamp(lx / gs, 0.0f, float(G - 1) - 0.001f), fz = std::clamp(lz / gs, 0.0f, float(G - 1) - 0.001f);
+        const int ix = int(fx), iz = int(fz);
+        const float tx = fx - float(ix), tz = fz - float(iz);
+        const float* r0 = &hg[iz * G + ix];
+        const float* r1 = r0 + G;
+        return (r0[0] * (1.0f - tx) + r0[1] * tx) * (1.0f - tz) + (r1[0] * (1.0f - tx) + r1[1] * tx) * tz;
+    };
+    auto ny_at = [&](float lx, float lz) {
+        const float e = 3.0f;
+        const float dx = h_at(lx + e, lz) - h_at(lx - e, lz), dz = h_at(lx, lz + e) - h_at(lx, lz - e);
+        return 2.0f * e / std::sqrt(dx * dx + dz * dz + 4.0f * e * e);
+    };
+    auto in_home = [](float x, float z) { return std::abs(x) < kHomeHalf && std::abs(z) < kHomeHalf; };
+
+    struct Ranked { float rank; VegInstance vi; collision::AABB col; };
+    std::vector<Ranked> trees;
+    const float ts = kCell / float(kTreeGrid);
+    for (int j = 0; j < kTreeGrid; ++j)
+        for (int i = 0; i < kTreeGrid; ++i) {
+            uint32_t rs = hash3(uint32_t(key.x), uint32_t(key.z), uint32_t(j * kTreeGrid + i));
+            auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
+            // (jitter kept off the cell's edges: neighbours never stand in each other's trunk)
+            const float lx = (float(i) + 0.14f + 0.72f * u()) * ts, lz = (float(j) + 0.14f + 0.72f * u()) * ts;
+            const float x = x0 + lx, z = z0 + lz;
+            const float pick = u(), kind = u(), size = u(), oldp = u(), rot = u(), phase = u(), which = u(), rank = u();
+            if (in_home(x, z)) continue;
+            const float hc = h_at(lx, lz);
+            if (hc < wl + 2.0f) continue;
+            const float f = world_forest(x, z, hc, ny_at(lx, lz), wl);
+            // Closed forest keeps nearly every spot; thin woods few; a rare lone tree in open country.
+            const float dens = f * f * 0.96f + ((hc < wl + 46.0f && ny_at(lx, lz) > 0.8f) ? 0.004f : 0.0f);
+            if (pick > dens * S.tree_density) continue;
+            const float h = world_ground_height(x, z, wl, S.octaves);
+            if (h < wl + 2.0f) continue;
+            const bool pine = kind < std::clamp((h - 28.0f) / 30.0f, 0.15f, 0.95f);
+            // Old-growth stands: patches a few hundred metres across where the veterans stand.
+            const float og = world_forest(x * 0.37f + 5100.0f, z * 0.37f - 3300.0f, wl + 20.0f, 1.0f, wl);
+            const auto& oldp_pool = pine ? S.old_pines : S.old_broads;
+            const bool old_tree = og > 0.75f && f > 0.6f && !oldp_pool.empty() && oldp < 0.55f;
+            const auto& pool = old_tree ? oldp_pool : (pine ? S.pines : S.broads);
+            if (pool.empty()) continue;
+            const float scale = old_tree ? 0.95f + 0.35f * size : 0.75f + 0.55f * size;
+            const int ai = pool[size_t(which * float(pool.size())) % pool.size()];
+            Ranked r;
+            // Big trees outlast small ones as the wood thins with distance.
+            r.rank = rank / (scale * (old_tree ? 1.8f : 1.0f));
+            r.vi.pos_scale = glm::vec4(x, h - 0.05f, z, scale);
+            r.vi.rot_arch_phase = glm::vec4(rot * 6.2831853f, float(ai), phase * 6.2831853f, 0.0f);
+            const float tr = 0.38f * scale;
+            r.col = { glm::vec3(x - tr, h - 0.5f, z - tr), glm::vec3(x + tr, h + S.arch_h[size_t(ai)] * scale * 0.6f, z + tr) };
+            trees.push_back(r);
+        }
+    std::sort(trees.begin(), trees.end(), [](const Ranked& a, const Ranked& b) { return a.rank < b.rank; });
+    out->trees = uint32_t(trees.size());
+    out->items.reserve(trees.size() + 64);
+    out->cols.reserve(trees.size());
+    for (const auto& t : trees) { out->items.push_back(t.vi); out->cols.push_back(t.col); }
+
+    // Bushes: undergrowth inside the woods and thickets along their edges.
+    if (!S.bushes.empty()) {
+        const float bs = kCell / float(kBushGrid);
+        for (int j = 0; j < kBushGrid; ++j)
+            for (int i = 0; i < kBushGrid; ++i) {
+                uint32_t rs = hash3(uint32_t(key.x) + 0x51EDu, uint32_t(key.z), uint32_t(j * kBushGrid + i));
+                auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
+                const float lx = (float(i) + u()) * bs, lz = (float(j) + u()) * bs;
+                const float x = x0 + lx, z = z0 + lz;
+                const float pick = u(), size = u(), rot = u(), phase = u(), which = u();
+                if (in_home(x, z)) continue;
+                const float hc = h_at(lx, lz);
+                if (hc < wl + 1.2f) continue;
+                const float ny = ny_at(lx, lz);
+                if (ny < 0.75f) continue;
+                const float f = world_forest(x, z, hc, ny, wl);
+                const float dens = std::clamp(f * 0.45f + (1.0f - std::abs(f - 0.4f) * 3.0f) * 0.5f, 0.0f, 1.0f) * 0.42f * (f > 0.02f ? 1.0f : 0.0f);
+                if (pick > dens * S.bush_density) continue;
+                const float h = world_ground_height(x, z, wl, S.octaves);
+                if (h < wl + 1.0f) continue;
+                const int ai = S.bushes[size_t(which * float(S.bushes.size())) % S.bushes.size()];
+                VegInstance vi{};
+                vi.pos_scale = glm::vec4(x, h, z, 0.6f + 0.9f * size);
+                vi.rot_arch_phase = glm::vec4(rot * 6.2831853f, float(ai), phase * 6.2831853f, 0.0f);
+                out->items.push_back(vi);
+            }
+    }
+    return out;
+}
+
+}  // namespace
+
+void VulkanEngine::wv_update(glm::vec3 eye) {
+    if (veg_world_first_ == UINT32_MAX || !veg_inst_mapped_ || veg_arch_.empty()) return;
+    static const bool off = std::getenv("QLIKE_NO_WORLD_VEG") != nullptr;
+    if (off) return;
+    if (!wv_) {
+        wv_ = new WvState();
+        WvState& S = *wv_;
+        for (size_t a = 0; a < veg_arch_.size(); ++a) {
+            const auto& A = veg_arch_[a];
+            S.arch_h.push_back(A.height);
+            if (A.species == 0) (A.old ? S.old_pines : S.pines).push_back(int(a));
+            else if (A.species == 1) (A.old ? S.old_broads : S.broads).push_back(int(a));
+            else if (A.species == 2) S.bushes.push_back(int(a));
+        }
+        S.water_level  = rt_.water_level;
+        S.octaves      = std::clamp(rt_.terrain_raymarch_octaves, 4, 24);
+        S.tree_density = glm::clamp(rt_.forest_density, 0.0f, 2.0f);
+        S.bush_density = glm::clamp(rt_.bush_density, 0.0f, 2.0f);
+        wv_reset();
+        const unsigned nt = std::clamp(std::thread::hardware_concurrency() / 3u, 1u, 4u);
+        for (unsigned t = 0; t < nt; ++t)
+            S.workers.emplace_back([this]() {
+                WvState& W = *wv_;
+                for (;;) {
+                    CellKey k;
+                    {
+                        std::unique_lock<std::mutex> lk(W.mu);
+                        W.cv.wait(lk, [&]() { return W.quit || !W.jobs.empty(); });
+                        if (W.quit) return;
+                        k = W.jobs.back();
+                        W.jobs.pop_back();
+                    }
+                    auto d = generate_cell(k, W);
+                    std::lock_guard<std::mutex> lk(W.mu);
+                    W.done.emplace_back(k, std::move(d));
+                }
+            });
+        log::infof("[wveg] world vegetation: %u slots, %u generator threads", unsigned(kWvPool), nt);
+    }
+    WvState& S = *wv_;
+    VegInstance* gpu = static_cast<VegInstance*>(veg_inst_mapped_);
+
+    // Take what the generators finished.
+    {
+        std::lock_guard<std::mutex> lk(S.mu);
+        for (auto& d : S.done) {
+            auto it = S.cells.find(d.first);
+            if (it != S.cells.end()) { it->second.data = std::move(d.second); S.dirty = true; }
+        }
+        S.done.clear();
+    }
+
+    const float far_m = object_far_ + 0.75f * kCell;
+    const bool moved = glm::distance(glm::vec2(eye.x, eye.z), glm::vec2(S.scan_eye.x, S.scan_eye.z)) > 24.0f ||
+                       std::abs(far_m - S.scan_far) > 1.0f;
+    if (!moved && !S.dirty) return;
+    S.scan_eye = eye; S.scan_far = far_m; S.dirty = false;
+
+    auto set_live = [&](WvState::Cell& c, size_t want) {
+        const CellData& D = *c.data;
+        while (c.slots.size() > want) {                          // drop the tail
+            const uint32_t s = c.slots.back();
+            c.slots.pop_back();
+            if (s == UINT32_MAX) continue;
+            const size_t a = size_t(D.items[c.slots.size()].rot_arch_phase.y + 0.5f);
+            gpu[veg_world_first_ + s].pos_scale.w = 0.0f;
+            veg_inst_cpu_[veg_world_first_ + s].pos_scale.w = 0.0f;
+            if (a < S.arch_used.size() && S.arch_used[a]) --S.arch_used[a];
+            S.free_slots.push_back(s);
+        }
+        while (c.slots.size() < want) {                          // add to the tail
+            const VegInstance& vi = D.items[c.slots.size()];
+            const size_t a = size_t(vi.rot_arch_phase.y + 0.5f);
+            uint32_t s = UINT32_MAX;
+            if (!S.free_slots.empty() && a < S.arch_used.size() && S.arch_used[a] < wv_quota(a)) {
+                s = S.free_slots.back();
+                S.free_slots.pop_back();
+                ++S.arch_used[a];
+                // (the scale last: a slot the GPU reads half-written is still an empty one)
+                VegInstance& g = gpu[veg_world_first_ + s];
+                g.rot_arch_phase = vi.rot_arch_phase;
+                g.pos_scale = vi.pos_scale;
+                veg_inst_cpu_[veg_world_first_ + s] = vi;
+            }
+            c.slots.push_back(s);
+        }
+    };
+
+    const int ccx = int(std::floor(eye.x / kCell)), ccz = int(std::floor(eye.z / kCell));
+    const int rc = int(std::ceil(far_m / kCell)) + 1;
+    std::vector<std::pair<float, CellKey>> want_jobs;
+    bool cols_changed = false, any_change = false;
+    // Camera height: from the air the near rings are measured in 3D (no bushes under an aeroplane).
+    const float eye_h = std::max(eye.y - rt_.water_level - 60.0f, 0.0f);
+    for (int dz = -rc; dz <= rc; ++dz)
+        for (int dx = -rc; dx <= rc; ++dx) {
+            const CellKey k{ ccx + dx, ccz + dz };
+            const float cx = (float(k.x) + 0.5f) * kCell - eye.x, cz = (float(k.z) + 0.5f) * kCell - eye.z;
+            const float d_h = std::sqrt(cx * cx + cz * cz);
+            if (d_h > far_m) continue;
+            // Wholly inside the home tile's planting: never anything there.
+            {
+                const float x0 = float(k.x) * kCell, z0 = float(k.z) * kCell;
+                if (x0 >= -kHomeHalf && x0 + kCell <= kHomeHalf && z0 >= -kHomeHalf && z0 + kCell <= kHomeHalf) continue;
+            }
+            WvState::Cell& c = S.cells[k];
+            const float d = std::sqrt(d_h * d_h + eye_h * eye_h);
+            int lvl = kLevels - 1;
+            for (int l = 0; l < kLevels; ++l) {
+                // (a cell keeps its level until 8 % past the border: no flicker on a boundary)
+                const float reach = kReach[l] * ((c.level <= l) ? 1.08f : 1.0f);
+                if (d < reach) { lvl = l; break; }
+            }
+            if (!c.data) {
+                if (!c.requested) { c.requested = true; want_jobs.push_back({ d, k }); }
+                continue;
+            }
+            if (lvl != c.level) {
+                const CellData& D = *c.data;
+                const size_t want = lvl == 0 ? D.items.size() : size_t(std::ceil(float(D.trees) * kShare[lvl]));
+                set_live(c, want);
+                c.level = lvl;
+                any_change = true;
+            }
+            const bool cols = d_h < 200.0f && eye_h < 150.0f;
+            if (cols != c.cols_live) { c.cols_live = cols; cols_changed = true; }
+        }
+    // Out of range: give the slots back; forget cells well outside (their data is regenerated on return).
+    for (auto it = S.cells.begin(); it != S.cells.end();) {
+        const float cx = (float(it->first.x) + 0.5f) * kCell - eye.x, cz = (float(it->first.z) + 0.5f) * kCell - eye.z;
+        const float d = std::sqrt(cx * cx + cz * cz);
+        if (d > far_m && it->second.level != kLevels && it->second.data) {
+            set_live(it->second, 0);
+            it->second.level = kLevels;
+            any_change = true;
+            if (it->second.cols_live) { it->second.cols_live = false; cols_changed = true; }
+        }
+        if (d > far_m + 6.0f * kCell && it->second.data) it = S.cells.erase(it);
+        else ++it;
+    }
+    if (any_change) {
+        vmaFlushAllocation(allocator_, veg_inst_alloc_, sizeof(VegInstance) * veg_world_first_, sizeof(VegInstance) * kWvPool);
+        veg_rt_valid_ = false;                  // the ray-traced tree set is re-picked
+    }
+    if (cols_changed) {
+        wv_cols_.clear();
+        for (const auto& kv : S.cells) {
+            const auto& c = kv.second;
+            if (!c.cols_live || !c.data) continue;
+            const size_t n = std::min<size_t>(c.slots.size(), c.data->trees);
+            for (size_t i = 0; i < n; ++i)
+                if (c.slots[i] != UINT32_MAX) wv_cols_.push_back(c.data->cols[i]);
+        }
+        near_static_src_[0] = SIZE_MAX;         // the player's broadphase takes the new set
+    }
+    if (!want_jobs.empty()) {
+        std::lock_guard<std::mutex> lk(S.mu);
+        // Nearest last (workers take from the back); what was queued before stays wanted.
+        for (const auto& j : want_jobs) S.jobs.push_back(j.second);
+        std::sort(S.jobs.begin(), S.jobs.end(), [&](const CellKey& a, const CellKey& b) {
+            const float ax = (float(a.x) + 0.5f) * kCell - eye.x, az = (float(a.z) + 0.5f) * kCell - eye.z;
+            const float bx = (float(b.x) + 0.5f) * kCell - eye.x, bz = (float(b.z) + 0.5f) * kCell - eye.z;
+            return ax * ax + az * az > bx * bx + bz * bz;
+        });
+        S.cv.notify_all();
+    }
+}
+
+}  // namespace qlike
