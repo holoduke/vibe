@@ -81,6 +81,6 @@ float wm_height(float a, vec2 wp, float wl) {
     // (and the ground climbs away from the beach: a few metres within the first few hundred)
     hl += 9.0 * smoothstep(0.0, 0.05, v) * (1.0 - smoothstep(0.05, 0.25, v));
     // The sea bed: shallows along the coast, a shelf, then the deep.
-    float bed = wl - 1.2 - 6.0 * a - 55.0 * smoothstep(0.0, -0.10, v);
+    float bed = wl - 1.5 - 7.0 * a - 14.0 * smoothstep(0.0, -0.012, v) - 45.0 * smoothstep(-0.01, -0.09, v);
     return mix(h, mix(bed, hl, smoothstep(-0.012, 0.012, v)), w);
 }

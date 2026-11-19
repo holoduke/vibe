@@ -824,18 +824,26 @@ void main() {
         {
             float sea_k = smoothstep(1500.0, 2000.0, length(wpos.xz));
             if (sea_k > 0.0) {
-                const vec2  kDir[5] = vec2[5](vec2(-0.94, 0.34), vec2(-0.80, -0.60), vec2(-0.99, -0.10), vec2(-0.55, 0.83), vec2(-0.71, -0.71));
-                const float kLen[5] = float[5](70.0, 31.0, 13.0, 6.0, 3.1);
-                const float kSlope[5] = float[5](0.085, 0.080, 0.070, 0.055, 0.045);
+                const float kAng[7] = float[7](2.83, 3.71, 3.19, 2.27, 4.02, 2.51, 3.47);          // where each train runs to (rad; the sea lies east)
+                const float kLen[7] = float[7](83.0, 47.0, 26.0, 14.5, 8.1, 4.6, 2.7);
+                const float kSlope[7] = float[7](0.070, 0.070, 0.065, 0.058, 0.050, 0.042, 0.036);
                 float foot = max(t_water, 1.0) * 0.0025;
-                float rank = (noise2(wpos.xz * 0.013) - 0.5) * 9.0 + (noise2(wpos.xz * 0.06 + 5.0) - 0.5) * 2.5;
+                // Seven trains at unrelated angles and lengths do not line up into a weave the way five
+                // did. Each keeps its direction (a train bent by a noise turns into whorls and rings -
+                // tried); only its height swells and sinks over a few hundred metres, as sets of waves do.
+                float wa = noise2(wpos.xz * 0.0041), wb = noise2(wpos.xz * 0.0113 + 9.0);
                 vec2 g = vec2(0.0);
-                for (int i = 0; i < 5; ++i) {
+                for (int i = 0; i < 7; ++i) {
                     float k = 6.2831853 / kLen[i];
                     float keep = 1.0 - smoothstep(0.12, 0.45, foot / kLen[i]);
                     if (keep <= 0.0) continue;
-                    float ph = dot(kDir[i], wpos.xz) * k + wave_t * sqrt(9.81 * k) + rank * (1.0 + float(i) * 0.6);
-                    g += kDir[i] * (kSlope[i] * keep * cos(ph));
+                    float fi = float(i);
+                    vec2 d = vec2(cos(kAng[i]), sin(kAng[i]));
+                    float ph = dot(d, wpos.xz) * k + wave_t * sqrt(9.81 * k) + fi * 1.7;
+                    keep *= 0.55 + 0.9 * mix(wa, wb, fract(fi * 0.37));
+                    // (crests a little sharper than troughs)
+                    float c = cos(ph);
+                    g += d * (kSlope[i] * keep * (c + 0.35 * cos(2.0 * ph + 0.6)));
                 }
                 wnor = normalize(vec3(wnor.x - g.x * sea_k, wnor.y, wnor.z - g.y * sea_k));
             }
@@ -844,7 +852,8 @@ void main() {
         vec3 rip_w = water_ripples(wpos.xz);
         wnor = normalize(vec3(wnor.x - rip_w.x, wnor.y, wnor.z - rip_w.y));
         // Winter: the lake freezes - no waves, a nearly flat sheet with a faint ripple in the surface.
-        float ice_k = smoothstep(0.35, 0.75, scene.season.w);     // the lake freezes in winter (not from a snow shower in another season)
+        // (home's lakes; the open sea stays open)
+        float ice_k = smoothstep(0.35, 0.75, scene.season.w) * (1.0 - smoothstep(1500.0, 2000.0, length(wpos.xz)));     // the lake freezes in winter (not from a snow shower in another season)
         if (ice_k > 0.001) {
             vec3 n_ice = normalize(vec3((noise2(wpos.xz * 1.7) - 0.5) * 0.05, 1.0, (noise2(wpos.xz * 1.7 + 31.0) - 0.5) * 0.05));
             wnor = normalize(mix(wnor, n_ice, ice_k));
