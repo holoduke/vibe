@@ -701,7 +701,7 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
     LevelMesh road; road.tex_albedo = 14; road.tex_normal = 14;      // (engine kTexRoad)
     road.tint = glm::vec3(0.5f); road.fallback = glm::vec3(0.40f, 0.38f, 0.34f); road.relief = 0.5f;
     m.relief = 0.0f;                 // (the stones' depth comes from screen-space displacement)
-    m.ssdm   = 0.13f;
+    m.ssdm   = 0.08f;
     auto P = [&](float s, float u, float y) { return glm::vec3(a.x, 0.0f, a.z) + D * s + N * u + U * y; };
     auto V = [&](float s, float u, float y, glm::vec3 nn, float tu, float tv) { return LevelVertex{ P(s, u, y), nn, tu / tile, tv / tile }; };
     const float ds = 0.5f;
@@ -756,6 +756,12 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
             mesh_quad(m, V(s, sg * hw, yt, nn, sg * hw, -yt), V(s, sg * ho, yt, nn, sg * ho, -yt),
                          V(s, sg * ho, yt + par_h, nn, sg * ho, -(yt + par_h)), V(s, sg * hw, yt + par_h, nn, sg * hw, -(yt + par_h)));
     }
+    // (A mesh of its own: clean cut stone. Only the wall faces in `m` are displaced in screen
+    // space - a rubble wall's bumps laid over a small dressed block tear it apart. The blocks
+    // stand prouder than the wall's displacement shell, so its stones never poke through them.)
+    LevelMesh dress; dress.tex_albedo = kBrick; dress.tex_normal = kBrick;
+    dress.tint = glm::vec3(0.84f, 0.82f, 0.76f); dress.fallback = glm::vec3(0.55f, 0.51f, 0.43f);
+    dress.relief = 0.5f;
     // ---- Dressed stone, as real geometry (so every edge is a row of separate, slightly
     // uneven blocks instead of one ruled line - relief mapping cannot cut a thin wall's
     // outline without holes): coping stones on the parapets, a pillar with a cap at each of
@@ -772,21 +778,21 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
             // sides
             for (int k = 0; k < 2; ++k) {
                 const glm::vec3 ns = D * (k ? 1.0f : -1.0f), nu = N * (k ? 1.0f : -1.0f);
-                mesh_quad(m, V(sm[k], ua, ya, ns, ua, -ya), V(sm[k], ub, ya, ns, ub, -ya), V(sm[k], ub, ys, ns, ub, -ys), V(sm[k], ua, ys, ns, ua, -ys));
-                mesh_quad(m, V(sa, um[k], ya, nu, sa, -ya), V(sb, um[k], ya, nu, sb, -ya), V(sb, um[k], ys, nu, sb, -ys), V(sa, um[k], ys, nu, sa, -ys));
+                mesh_quad(dress, V(sm[k], ua, ya, ns, ua, -ya), V(sm[k], ub, ya, ns, ub, -ya), V(sm[k], ub, ys, ns, ub, -ys), V(sm[k], ua, ys, ns, ua, -ys));
+                mesh_quad(dress, V(sa, um[k], ya, nu, sa, -ya), V(sb, um[k], ya, nu, sb, -ya), V(sb, um[k], ys, nu, sb, -ys), V(sa, um[k], ys, nu, sa, -ys));
                 // chamfers
                 const glm::vec3 cs = glm::normalize(ns + U), cu = glm::normalize(nu + U);
-                mesh_quad(m, V(sm[k], ua, ys, cs, ua, -ys), V(sm[k], ub, ys, cs, ub, -ys), V(si[k], ui[1], yb, cs, ui[1], -yb - ch), V(si[k], ui[0], yb, cs, ui[0], -yb - ch));
-                mesh_quad(m, V(sa, um[k], ys, cu, sa, -ys), V(sb, um[k], ys, cu, sb, -ys), V(si[1], ui[k], yb, cu, si[1], -yb - ch), V(si[0], ui[k], yb, cu, si[0], -yb - ch));
+                mesh_quad(dress, V(sm[k], ua, ys, cs, ua, -ys), V(sm[k], ub, ys, cs, ub, -ys), V(si[k], ui[1], yb, cs, ui[1], -yb - ch), V(si[k], ui[0], yb, cs, ui[0], -yb - ch));
+                mesh_quad(dress, V(sa, um[k], ys, cu, sa, -ys), V(sb, um[k], ys, cu, sb, -ys), V(si[1], ui[k], yb, cu, si[1], -yb - ch), V(si[0], ui[k], yb, cu, si[0], -yb - ch));
             }
             // top
-            mesh_quad(m, V(si[0], ui[0], yb, U, si[0], ui[0]), V(si[1], ui[0], yb, U, si[1], ui[0]), V(si[1], ui[1], yb, U, si[1], ui[1]), V(si[0], ui[1], yb, U, si[0], ui[1]));
+            mesh_quad(dress, V(si[0], ui[0], yb, U, si[0], ui[0]), V(si[1], ui[0], yb, U, si[1], ui[0]), V(si[1], ui[1], yb, U, si[1], ui[1]), V(si[0], ui[1], yb, U, si[0], ui[1]));
         };
         for (float sg : { -1.0f, 1.0f }) {
             // Coping: stones of uneven length and height, a finger's gap between them.
             for (float s = 0.55f; s < L - 0.55f;) {
                 const float len = (std::min)(0.85f + 0.65f * rnd(), L - 0.55f - s);
-                const float h = 0.17f + 0.07f * rnd(), sh = (rnd() - 0.5f) * 0.035f, ov = 0.06f + 0.03f * rnd();
+                const float h = 0.17f + 0.07f * rnd(), sh = (rnd() - 0.5f) * 0.03f, ov = 0.12f + 0.03f * rnd();
                 const float y = deck(s + 0.5f * len) + par_h;
                 const float u0 = sg > 0.0f ? hw - ov + sh : -ho - ov + sh, u1 = sg > 0.0f ? ho + ov + sh : -hw + ov + sh;
                 if (len > 0.25f) block(s + 0.008f, s + len - 0.008f, u0, u1, y - 0.01f, y + h, 0.035f);
@@ -794,8 +800,8 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
             }
             // End pillars with a cap stone.
             for (int e = 0; e < 2; ++e) {
-                const float s0 = e ? L - 0.50f : -0.32f, s1 = e ? L + 0.32f : 0.50f;
-                const float u0 = sg > 0.0f ? hw - 0.13f : -ho - 0.13f, u1 = sg > 0.0f ? ho + 0.13f : -hw + 0.13f;
+                const float s0 = e ? L - 0.55f : -0.36f, s1 = e ? L + 0.36f : 0.55f;
+                const float u0 = sg > 0.0f ? hw - 0.17f : -ho - 0.17f, u1 = sg > 0.0f ? ho + 0.17f : -hw + 0.17f;
                 const float yd = deck(e ? L : 0.0f);
                 block(s0, s1, u0, u1, yd - 1.6f, yd + par_h + 0.28f, 0.03f);
                 block(s0 - 0.07f, s1 + 0.07f, u0 - 0.07f, u1 + 0.07f, yd + par_h + 0.27f, yd + par_h + 0.47f, 0.09f);
@@ -803,12 +809,12 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
             // The course at deck level: a row of blocks standing 7-10 cm proud of the wall.
             for (float s = 0.6f; s < L - 0.6f;) {
                 const float len = (std::min)(0.9f + 0.8f * rnd(), L - 0.6f - s);
-                const float out = 0.07f + 0.035f * rnd(), y = deck(s + 0.5f * len);
+                const float out = 0.12f + 0.03f * rnd(), y = deck(s + 0.5f * len);
                 const float u0 = sg > 0.0f ? ho - 0.02f : -ho - out, u1 = sg > 0.0f ? ho + out : -ho + 0.02f;
                 if (len > 0.3f) {
                     block(s + 0.006f, s + len - 0.006f, u0, u1, y - 0.30f, y - 0.06f - 0.03f * rnd(), 0.02f);
                     // (its underside is seen from the river)
-                    mesh_quad(m, V(s, u0, y - 0.30f, -U, s, u0), V(s + len, u0, y - 0.30f, -U, s + len, u0),
+                    mesh_quad(dress, V(s, u0, y - 0.30f, -U, s, u0), V(s + len, u0, y - 0.30f, -U, s + len, u0),
                                  V(s + len, u1, y - 0.30f, -U, s + len, u1), V(s, u1, y - 0.30f, -U, s, u1));
                 }
                 s += len;
@@ -820,7 +826,7 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
                     const bool key = (k == nv / 2);
                     const float a0 = kPi * (float(k) + 0.02f) / float(nv), a1 = kPi * (float(k) + 0.98f) / float(nv);
                     const float r0 = R - 0.015f, r1 = R + (key ? 0.92f : 0.56f + 0.16f * rnd());
-                    const float out = key ? 0.13f : 0.06f + 0.03f * rnd();
+                    const float out = key ? 0.17f : 0.115f + 0.03f * rnd();
                     const float ua = sg > 0.0f ? ho - 0.02f : -ho - out, ub = sg > 0.0f ? ho + out : -ho + 0.02f;
                     const float uf = sg > 0.0f ? ub : ua;                    // the face that shows
                     auto Q = [&](float ang, float r, float u, glm::vec3 nn) {
@@ -828,14 +834,14 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
                         return V(s, u, y, nn, ang * R, -r);
                     };
                     const glm::vec3 nf = N * sg;
-                    mesh_quad(m, Q(a0, r0, uf, nf), Q(a1, r0, uf, nf), Q(a1, r1, uf, nf), Q(a0, r1, uf, nf));
+                    mesh_quad(dress, Q(a0, r0, uf, nf), Q(a1, r0, uf, nf), Q(a1, r1, uf, nf), Q(a0, r1, uf, nf));
                     const float am = 0.5f * (a0 + a1);
                     const glm::vec3 rad = glm::normalize(-D * std::cos(am) + U * std::sin(am));
                     const glm::vec3 tan0 = glm::normalize(-D * std::sin(a0) - U * std::cos(a0)), tan1 = glm::normalize(D * std::sin(a1) + U * std::cos(a1));
-                    mesh_quad(m, Q(a0, r1, ua, rad), Q(a1, r1, ua, rad), Q(a1, r1, ub, rad), Q(a0, r1, ub, rad));       // outer rim
-                    mesh_quad(m, Q(a0, r0, ua, -rad), Q(a1, r0, ua, -rad), Q(a1, r0, ub, -rad), Q(a0, r0, ub, -rad));   // lip into the arch
-                    mesh_quad(m, Q(a0, r0, ua, tan0), Q(a0, r1, ua, tan0), Q(a0, r1, ub, tan0), Q(a0, r0, ub, tan0));
-                    mesh_quad(m, Q(a1, r0, ua, tan1), Q(a1, r1, ua, tan1), Q(a1, r1, ub, tan1), Q(a1, r0, ub, tan1));
+                    mesh_quad(dress, Q(a0, r1, ua, rad), Q(a1, r1, ua, rad), Q(a1, r1, ub, rad), Q(a0, r1, ub, rad));       // outer rim
+                    mesh_quad(dress, Q(a0, r0, ua, -rad), Q(a1, r0, ua, -rad), Q(a1, r0, ub, -rad), Q(a0, r0, ub, -rad));   // lip into the arch
+                    mesh_quad(dress, Q(a0, r0, ua, tan0), Q(a0, r1, ua, tan0), Q(a0, r1, ub, tan0), Q(a0, r0, ub, tan0));
+                    mesh_quad(dress, Q(a1, r0, ua, tan1), Q(a1, r1, ua, tan1), Q(a1, r1, ub, tan1), Q(a1, r0, ub, tan1));
                 }
             }
         }
@@ -858,6 +864,7 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
             }
     }
     lv.meshes.push_back(std::move(m));
+    lv.meshes.push_back(std::move(dress));
     lv.meshes.push_back(std::move(road));
     for (const auto& c : cols) lv.aabbs.push_back(c);
 }
