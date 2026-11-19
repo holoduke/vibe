@@ -92,7 +92,78 @@ inline glm::vec2 rm_rotate(glm::vec2 p) {
                      -0.6f * p.x + 0.8f * p.y);
 }
 
+// ---- The world map: the CPU's copy of shaders/world_map.glsl -----------------------------
+// Keep in step with that file line for line (the collision surface out there is this).
+namespace wm {
+inline float noise(glm::vec2 p) { glm::vec2 d; return rm_noised(p, d); }
+inline float sstep(float a, float b, float x) {
+    float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+inline float fbm(glm::vec2 p) {
+    float s = 0.0f, a = 0.5f;
+    for (int i = 0; i < 5; ++i) {
+        s += a * noise(p);
+        p = rm_rotate(p) * 2.03f + glm::vec2(17.1f);
+        a *= 0.5f;
+    }
+    return s / 0.96875f;
+}
+inline float fbm3(glm::vec2 p) {
+    return (0.5f * noise(p) + 0.25f * noise(rm_rotate(p) * 2.03f + glm::vec2(17.1f)) +
+            0.125f * noise(p * 4.1f - glm::vec2(9.4f))) / 0.875f;
+}
+inline float continent(glm::vec2 mk) {
+    glm::vec2 q = mk * 0.00042f;
+    glm::vec2 bend = glm::vec2(noise(q * 2.3f + glm::vec2(5.2f)), noise(q * 2.3f + glm::vec2(91.7f))) - glm::vec2(0.5f);
+    float v = fbm(q + bend * 0.55f + glm::vec2(21.3f)) - 0.5f;
+    glm::vec2 wq = mk + (glm::vec2(fbm3(mk * 0.013f + glm::vec2(3.3f)), fbm3(mk * 0.013f + glm::vec2(47.9f))) - glm::vec2(0.5f)) *
+                            glm::mix(3.0f, 60.0f, sstep(4.0f, 90.0f, glm::length(mk)));
+    v += 0.20f * (1.0f - sstep(250.0f, 1600.0f, glm::length(wq - glm::vec2(-600.0f, 0.0f))));
+    float dh = glm::length(mk);
+    glm::vec2 wq2 = wq + (glm::vec2(fbm3(mk * 0.0035f + glm::vec2(13.1f)), fbm3(mk * 0.0035f + glm::vec2(71.4f))) - glm::vec2(0.5f)) *
+                             170.0f * sstep(15.0f, 250.0f, dh);
+    float rim = glm::mix(2.0f, 45.0f, sstep(10.0f, 300.0f, dh));
+    v -= 0.46f * (1.0f - sstep(327.0f - rim, 327.0f + rim, glm::length(wq2 - glm::vec2(331.5f, 0.0f))));
+    if (std::abs(v) > 0.37f) return v;
+    v += (fbm(mk * 0.011f + glm::vec2(8.9f)) - 0.5f) * 0.16f;
+    v += (fbm3(mk * 0.35f + glm::vec2(61.0f)) - 0.5f) * 0.05f;
+    return v;
+}
+inline float ranges(glm::vec2 mk) {
+    return sstep(0.60f, 0.78f, noise(mk * 0.08f + glm::vec2(7.3f)) * 0.65f + noise(mk * 0.21f + glm::vec2(3.1f)) * 0.35f);
+}
+inline float height(float a, glm::vec2 wp, float wl) {
+    float h = a * 120.0f;
+    float w = sstep(1500.0f, 2600.0f, glm::length(wp));
+    if (w <= 0.0f) return h;
+    float hl = 30.0f + (h - 30.0f) * glm::mix(0.42f, 1.12f, ranges(wp * 0.001f));
+    float v = continent(wp * 0.001f);
+    hl = glm::mix(wl + 0.7f + std::max(hl - 24.0f, 0.0f) * 0.5f, hl, sstep(0.0f, 0.03f, v));
+    hl += 9.0f * sstep(0.0f, 0.05f, v) * (1.0f - sstep(0.05f, 0.25f, v));
+    // (GLSL smoothstep with edge0 > edge1 runs the other way: written out here)
+    float bed = wl - 1.5f - 7.0f * a - 14.0f * (1.0f - sstep(-0.012f, 0.0f, v)) - 45.0f * (1.0f - sstep(-0.09f, -0.01f, v));
+    return glm::mix(h, glm::mix(bed, hl, sstep(-0.012f, 0.012f, v)), w);
+}
+}  // namespace wm
+
+float world_ground_height_impl(float x, float z, float water_level, int octaves) {
+    glm::vec2 q = glm::vec2(x, z) * kRmTerrainScale;
+    float a = 0.0f, b = 1.0f;
+    glm::vec2 d(0.0f);
+    for (int i = 0; i < octaves; i++) {
+        glm::vec2 deriv;
+        float n = rm_noised(q, deriv);
+        d += deriv;
+        a += b * n / (1.0f + glm::dot(d, d));
+        b *= 0.5f;
+        q = rm_rotate(q) * 2.0f;
+    }
+    return wm::height(a, glm::vec2(x, z), water_level);
+}
+
 float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
+
     glm::vec2 wp = worldXZ;
     glm::vec2 q  = worldXZ * kRmTerrainScale;
     float a = 0.0f, b = 1.0f;
@@ -118,6 +189,10 @@ float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
 }
 
 } // namespace
+
+float world_ground_height(float x, float z, float water_level, int octaves) {
+    return world_ground_height_impl(x, z, water_level, octaves);
+}
 
 float raymarch_fine_correction(const Heightmap& hm, const HeightmapParams& p,
                                float x, float z, int octaves) {

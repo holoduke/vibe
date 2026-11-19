@@ -485,10 +485,13 @@ float VulkanEngine::sample_terrain_height(float x, float z) const {
     const int W = terrain_data_.dim + 1;
     float fx = (x - terrain_data_.origin_x) / terrain_data_.cell;
     float fz = (z - terrain_data_.origin_z) / terrain_data_.cell;
-    if (fx < 0.0f || fz < 0.0f) return 0.0f;
+    // Outside the baked home tile: the wider world's ground, from the same formula the
+    // raymarcher draws (it was 0 out there - nothing to stand on).
+    const auto outside = [&]() { return world_ground_height(x, z, rt_.water_level, std::clamp(rt_.terrain_raymarch_octaves, 4, 24)); };
+    if (fx < 0.0f || fz < 0.0f) return outside();
     int ix = static_cast<int>(std::floor(fx));
     int iz = static_cast<int>(std::floor(fz));
-    if (ix >= terrain_data_.dim || iz >= terrain_data_.dim) return 0.0f;
+    if (ix >= terrain_data_.dim || iz >= terrain_data_.dim) return outside();
     float tx = fx - static_cast<float>(ix);
     float tz = fz - static_cast<float>(iz);
     auto h = [&](int x_, int z_) {

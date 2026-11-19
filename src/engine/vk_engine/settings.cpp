@@ -571,7 +571,7 @@ void VulkanEngine::save_settings() const {
     // QLIKE_TEST_* hooks) pin or move the camera and tweak modes - never let
     // them overwrite the player's saved cfg (pose, toggles).
     static const bool test_run = [this] {
-        for (const char* e : { "QLIKE_TEST_HOLD", "QLIKE_TEST_FLIGHT", "QLIKE_TEST_PAN", "QLIKE_TEST_SHOOTDOWN",
+        for (const char* e : { "QLIKE_TEST_HOLD", "QLIKE_TEST_FLIGHT", "QLIKE_TEST_GROUND", "QLIKE_TEST_PAN", "QLIKE_TEST_SHOOTDOWN",
                                "QLIKE_TEST_BOOM", "QLIKE_TEST_BLAST", "QLIKE_TEST_FIRE", "QLIKE_TEST_CHUTE", "QLIKE_TEST_SAM",
                                "QLIKE_TEST_CRAWL", "QLIKE_TEST_FLARE", "QLIKE_TEST_STRIKE", "QLIKE_TEST_ROCKS", "QLIKE_TEST_AAFIRE", "QLIKE_TEST_ZONE", "QLIKE_TEST_EDIT", "QLIKE_TEST_MENU", "QLIKE_TEST_FLASHLIGHT" })
             if (std::getenv(e)) return true;

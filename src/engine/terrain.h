@@ -77,6 +77,11 @@ float raymarch_fine_correction(const Heightmap& hm, const HeightmapParams& p,
 // so the relief doesn't swallow them near the camera.
 float raymarch_ground_relief(float x, float z, float h, float water_level);
 
+// Ground height of the wider world at (x, z): the landscape formula (`octaves` as the
+// raymarcher uses) through the world map - the CPU's copy of shaders/world_map.glsl
+// wm_height. For everything outside the baked home tile: walking, flying low, placing things.
+float world_ground_height(float x, float z, float water_level, int octaves);
+
 // Builds a single triangulated terrain mesh covering the whole heightmap.
 // Used by the merged BLAS for ray traversal — RT shadows / GI / AO see
 // the full-resolution surface regardless of raster LOD.

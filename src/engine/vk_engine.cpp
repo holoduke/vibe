@@ -601,7 +601,16 @@ void VulkanEngine::run(const RunOptions& opts) {
                 spawn_explosion(p, 1.0f, true);
             }
             if (test_hold) {
-                if (!hold_init) { hold_pos = player_.position; hold_init = true; }
+                if (!hold_init) {
+                    hold_pos = player_.position; hold_init = true;
+                    // QLIKE_TEST_GROUND=1: stand the held camera on the ground the CPU knows there (eye
+                    // 1.7 m up) - a capture then shows whether that is the ground the GPU draws.
+                    if (std::getenv("QLIKE_TEST_GROUND")) {
+                        const float g = sample_terrain_height(hold_pos.x, hold_pos.z);
+                        hold_pos.y = std::max(g, rt_.water_level) + 1.7f - 0.75f;   // (position is 0.75 m below the eye)
+                        log::infof("[test] ground at (%.0f, %.0f): %.2f m (water %.2f)", hold_pos.x, hold_pos.z, g, rt_.water_level);
+                    }
+                }
                 player_.position = hold_pos;
                 // QLIKE_TEST_FLIGHT=<y0>,<y1>,<frames>[,<yaw per frame>]: from frame 60 on the
                 // held camera flies from altitude y0 to y1 (evenly in the logarithm, so every
