@@ -61,9 +61,7 @@ struct LevelMesh {
     float uv_scale  = 1.0f;
     // Depth of the stone relief on this mesh: 1 = as the texture gives it
     // (~20 cm on castle masonry), less for thin or small parts (steps,
-    // plinths), 0 = flat. Above 1 (use 1.5): full relief, and the relief also cuts the
-    // mesh's outline at its straight edges and corners (a flat-faced mesh otherwise keeps
-    // ruler-straight edges; round towers get their outline cut by their curvature).
+    // plinths), 0 = flat.
     float relief    = 1.0f;
 };
 
