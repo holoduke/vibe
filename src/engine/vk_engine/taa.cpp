@@ -228,7 +228,8 @@ void VulkanEngine::recreate_taa_targets() {
                scene_color_image_, scene_color_alloc_, scene_color_view_);
     make_image(motion_vec_format_,
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-               VK_IMAGE_USAGE_SAMPLED_BIT,
+               VK_IMAGE_USAGE_SAMPLED_BIT |
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT,      // (ssdm.cpp copies the re-projected vectors in)
                motion_vec_image_, motion_vec_alloc_, motion_vec_view_);
     // G-buffer (Phase 1 of the deferred migration). Allocated alongside
     // motion_vec since they're per-frame, render-resolution, and freed
@@ -359,6 +360,7 @@ void VulkanEngine::recreate_taa_targets() {
 }
 
 void VulkanEngine::destroy_taa() {
+    destroy_ssdm();          // (its targets are sized like these, its set points at them)
     if (taa_pipeline_)        vkDestroyPipeline(device_, taa_pipeline_, nullptr);
     if (taa_pipeline_layout_) vkDestroyPipelineLayout(device_, taa_pipeline_layout_, nullptr);
     if (taa_vert_module_)     vkDestroyShaderModule(device_, taa_vert_module_, nullptr);

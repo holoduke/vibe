@@ -1717,6 +1717,7 @@ private:
         bool triplanar = false, sway = false;
         float uv_scale = 1.0f;
         float relief = 1.0f;
+        float ssdm = 0.0f;            // screen-space displacement: shell thickness (m), 0 = none (ssdm.cpp)
         glm::vec4 emissive{0.0f};     // rgb, a = 1 full-emissive
         VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
         VkBuffer blas_buf = VK_NULL_HANDLE;
@@ -1765,6 +1766,25 @@ private:
     void tick_sam(float dt);
     glm::mat4 sam_missile_model(glm::vec3 pos, glm::vec3 dir) const;
     struct AaRound { glm::vec3 pos{0.0f}, prev{0.0f}, vel{0.0f}; float t = 0.0f; bool dead = false; };
+    // Screen-space displacement mapping (vk_engine/ssdm.cpp).
+    struct SsdmImage { VkImage image = VK_NULL_HANDLE; VmaAllocation alloc = nullptr; VkImageView view = VK_NULL_HANDLE; };
+    SsdmImage ssdm_disp_, ssdm_ray_, ssdm_hitz_, ssdm_shell_z_, ssdm_color_, ssdm_resolve_, ssdm_scene_z_, ssdm_mv_;
+    VkExtent2D ssdm_extent_{ 0, 0 };
+    VkPipeline ssdm_mesh_pipeline_ = VK_NULL_HANDLE, ssdm_color_pipeline_ = VK_NULL_HANDLE,
+               ssdm_depth_pipeline_ = VK_NULL_HANDLE, ssdm_velocity_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule ssdm_mesh_vert_ = VK_NULL_HANDLE, ssdm_mesh_frag_ = VK_NULL_HANDLE, ssdm_color_frag_ = VK_NULL_HANDLE,
+                   ssdm_depth_frag_ = VK_NULL_HANDLE, ssdm_velocity_frag_ = VK_NULL_HANDLE;
+    VkPipelineLayout ssdm_fs_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout ssdm_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool ssdm_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet  ssdm_set_ = VK_NULL_HANDLE;
+    VkSampler ssdm_nearest_ = VK_NULL_HANDLE;
+    bool ssdm_ready_ = false, ssdm_failed_ = false, ssdm_first_use_ = true;
+    bool init_ssdm();
+    void destroy_ssdm();
+    void create_ssdm_targets();
+    void destroy_ssdm_targets();
+    void render_ssdm(VkCommandBuffer cmd);
     glm::vec3 bridge_a_{0.0f}, bridge_b_{0.0f};   // the stone bridge over the river (world.cpp); deck ends
     bool      bridge_placed_ = false;
     glm::vec3 church_pos_{0.0f};           // chapel site (world.cpp); y = pad height, valid when church_placed_

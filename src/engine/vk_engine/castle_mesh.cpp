@@ -41,6 +41,7 @@ void VulkanEngine::init_castle_meshes() {
         g.sway = lm.sway;
         g.uv_scale = lm.uv_scale;
         g.relief = lm.relief;
+        g.ssdm = lm.ssdm;
         g.emissive = glm::vec4(lm.emissive, lm.full_emissive ? 1.0f : 0.0f);
         castle_meshes_.push_back(g);
         total_tris += lm.idx.size() / 3;

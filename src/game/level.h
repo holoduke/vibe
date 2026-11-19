@@ -63,6 +63,10 @@ struct LevelMesh {
     // (~20 cm on castle masonry), less for thin or small parts (steps,
     // plinths), 0 = flat.
     float relief    = 1.0f;
+    // Screen-space displacement mapping (engine ssdm.cpp): the thickness (m) of the shell
+    // the stones stand out by - real displaced outlines. 0 = none. Use with relief = 0
+    // (the relief shading would shift the stones a second time).
+    float ssdm      = 0.0f;
 };
 
 struct Level {

@@ -964,6 +964,9 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         prof_mark(cmd, "sky_fill");
     }
+    // Screen-space displacement mapping: the lit scene's displaced stonework, with its depth
+    // and motion vectors, before anything that is laid over the scene and before the upscaler.
+    render_ssdm(frame.command_buffer);
     // Sun shafts into the render-resolution scene colour, before the upscaler
     // (any temporal upscaler: DLSS or FSR). See compose.frag SUN_SHAFTS.
     // ---- The cloud layer in front of the land ----
