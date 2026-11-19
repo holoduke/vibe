@@ -1801,6 +1801,7 @@ private:
     void      wv_reset();                        // every cell re-applies (the buffers were re-made)
     void      wv_update(glm::vec3 eye);
     void      wv_shutdown();
+    void      wv_nf_poll();                      // the baked ground around the camera for the world's grass (frame start)
     struct VegLodRange { uint32_t first_vertex, vertex_count, first_index, index_count;
                          uint32_t card_start = 0xFFFFFFFFu; int card_cell = 0; };
     std::vector<VegLodRange>  veg_lod_ranges_;

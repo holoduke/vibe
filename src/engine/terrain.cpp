@@ -181,7 +181,7 @@ inline float forest(glm::vec2 wp, float h, float ny, float wl) {
     float m = noise(wp * 0.0011f + glm::vec2(3.7f)) * 0.55f + noise(wp * 0.0043f + glm::vec2(17.0f)) * 0.30f + noise(wp * 0.017f + glm::vec2(5.0f)) * 0.15f;
     m += 0.10f * (1.0f - sstep(4.0f, 25.0f, alt));
     m += (noise(wp * 0.00013f + glm::vec2(41.0f)) - 0.5f) * 0.35f;
-    return band * sstep(0.46f, 0.60f, m);
+    return band * sstep(0.37f, 0.53f, m);
 }
 }  // namespace wm
 

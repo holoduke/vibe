@@ -728,8 +728,10 @@ void main() {
     // The same anywhere outside the home tile: the normal march leans on that tile's baked
     // heights to skip empty space, and without them lost the land beyond a hundred metres
     // (the water plane showed instead).
-    bool air = !water_only && (ro.y > terrainMaxHeight() + 60.0 ||
-                               any(greaterThan(abs(ro.xz), vec2(kHeightmapSide * 0.5 - 8.0))));
+    // (Outside the home tile on the ground the normal march is used again: it lost the land there
+    // only through the empty-space bug fixed in terrain_rm_heightfield.glsl, and the far march for
+    // every pixel cost five times as much.)
+    bool air = !water_only && ro.y > terrainMaxHeight() + 60.0;
     float t = water_only ? raymarchMesh(ro, rd, t_water_plane)
                          : (air ? -1.0 : raymarch(ro, rd, t_stop));
     if (!air && obj_stop && t < 0.0) discard;      // an object owns this pixel

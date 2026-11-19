@@ -1180,6 +1180,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             veg_replant_request_ = false;
             start_veg_replant();                 // placement runs in the background
         }
+        wv_nf_poll();
         if (veg_job_active_ && veg_job_.valid() &&
             veg_job_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             VegJobResult r = veg_job_.get();

@@ -23,7 +23,10 @@
 #include "engine/vk_engine/internal.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <future>
 #include <cstdlib>
 #include <mutex>
 #include <thread>
@@ -78,6 +81,9 @@ struct VulkanEngine::WvState {
     glm::vec3 scan_eye{1e9f};
     float     scan_far = 0.0f;
     bool      dirty = true;                   // something is still to be applied: scan again next frame
+    glm::vec3 last_eye{1e9f};                 // (camera speed)
+    std::chrono::steady_clock::time_point last_t{}, scan_t{};
+    bool      parked = false;                 // nothing live, nothing queued (too high / too fast to see trees)
 
     // Background generation.
     std::vector<std::thread> workers;
@@ -86,6 +92,10 @@ struct VulkanEngine::WvState {
     std::vector<CellKey> jobs;                // nearest LAST (workers pop the back)
     std::vector<std::pair<CellKey, std::shared_ptr<CellData>>> done;
     bool quit = false;
+    // The near field for the grass (wv_nf_poll).
+    std::future<std::vector<unsigned char>> nf_job;
+    bool      nf_active = false, nf_valid = false;
+    glm::vec2 nf_job_center{0.0f}, nf_center{0.0f};
     // Read-only for the workers.
     std::vector<int> pines, broads, old_pines, old_broads, bushes;
     std::vector<float> arch_h;
@@ -131,6 +141,7 @@ void VulkanEngine::wv_shutdown() {
     }
     wv_->cv.notify_all();
     for (auto& t : wv_->workers) if (t.joinable()) t.join();
+    if (wv_->nf_active && wv_->nf_job.valid()) wv_->nf_job.wait();
     delete wv_;
     wv_ = nullptr;
 }
@@ -248,6 +259,72 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
 
 }  // namespace
 
+// The ground around the camera for the world's grass (grass_raymarch.frag nf_*): 512 x 512 m at
+// 1 m, re-baked on background threads when the camera has moved 72 m from the last centre, and
+// swapped into normal-texture slot kTexVegShade (unused otherwise). Only near the ground and
+// outside (or near the edge of) the home tile, where the grass shader has its own baked heights.
+void VulkanEngine::wv_nf_poll() {
+    if (!wv_ || !scene_desc_set_) return;
+    WvState& S = *wv_;
+    const glm::vec3 eye = S.scan_eye;
+    if (eye.x > 1e8f) return;
+    constexpr int N = 512;
+    if (S.nf_active && S.nf_job.valid() && S.nf_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const std::vector<unsigned char> px = S.nf_job.get();
+        S.nf_active = false;
+        Texture2D t = upload_texture_from_pixels(device_, allocator_, graphics_queue_, graphics_queue_family_,
+                                                 px.data(), N, N, VK_FORMAT_R8G8B8A8_UNORM, "near_ground");
+        if (t.ok) {
+            texture_upload_batch_sync(device_, allocator_, graphics_queue_);
+            vkDeviceWaitIdle(device_);
+            TextureSlot old = normal_textures_[kTexVegShade];
+            normal_textures_[kTexVegShade] = { t.image, t.alloc, t.view };
+            VkDescriptorImageInfo ii{ texture_sampler_, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = scene_desc_set_; w.dstBinding = 4; w.dstArrayElement = uint32_t(kTexVegShade); w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo = &ii;
+            vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+            if (old.view) vkDestroyImageView(device_, old.view, nullptr);
+            if (old.image) vmaDestroyImage(allocator_, old.image, old.alloc);
+            S.nf_center = S.nf_job_center;
+            S.nf_valid = true;
+        }
+    }
+    const bool want = std::max(std::abs(eye.x), std::abs(eye.z)) > 1024.0f - 260.0f && eye.y - rt_.water_level < 450.0f;
+    if (S.nf_active || !want) return;
+    const glm::vec2 e2(eye.x, eye.z);
+    if (S.nf_valid && glm::distance(e2, S.nf_center) < 72.0f) return;
+    const glm::vec2 c = glm::round(e2 / 64.0f) * 64.0f;
+    S.nf_job_center = c;
+    S.nf_active = true;
+    const float wl = S.water_level;
+    S.nf_job = std::async(std::launch::async, [c, wl]() {
+        std::vector<unsigned char> px(size_t(N) * N * 4, 255);
+        const float ox = c.x - 256.0f, oz = c.y - 256.0f;
+        const unsigned nt = std::clamp(std::thread::hardware_concurrency() / 3u, 1u, 6u);
+        std::vector<std::thread> th;
+        for (unsigned t = 0; t < nt; ++t)
+            th.emplace_back([&, t]() {
+                for (int j = 1 + int(t); j < N; j += int(nt))
+                    for (int i = 0; i < N; ++i) {
+                        // (9 octaves: what the grass stands on at home too - the bake there is 9 octaves)
+                        const float h = world_ground_height(ox + float(i), oz + float(j), wl, 9);
+                        const uint32_t v = uint32_t(std::clamp(h + 64.0f, 0.0f, 255.99f) * 65536.0f);
+                        unsigned char* p = &px[(size_t(j) * N + size_t(i)) * 4];
+                        p[0] = (unsigned char)(v >> 16); p[1] = (unsigned char)(v >> 8); p[2] = (unsigned char)v;
+                    }
+            });
+        for (auto& x : th) x.join();
+        const uint32_t ix = uint32_t(int(std::lround(ox / 64.0f)) + 8388608), iz = uint32_t(int(std::lround(oz / 64.0f)) + 8388608);
+        px[0] = (unsigned char)(ix >> 16); px[1] = (unsigned char)(ix >> 8); px[2] = (unsigned char)ix;
+        px[4] = (unsigned char)(iz >> 16); px[5] = (unsigned char)(iz >> 8); px[6] = (unsigned char)iz;
+        px[8] = 77; px[9] = 123; px[10] = 201;
+        return px;
+    });
+}
+
 void VulkanEngine::wv_update(glm::vec3 eye) {
     if (veg_world_first_ == UINT32_MAX || !veg_inst_mapped_ || veg_arch_.empty()) return;
     static const bool off = std::getenv("QLIKE_NO_WORLD_VEG") != nullptr;
@@ -301,9 +378,55 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
     }
 
     const float far_m = object_far_ + 0.75f * kCell;
-    const bool moved = glm::distance(glm::vec2(eye.x, eye.z), glm::vec2(S.scan_eye.x, S.scan_eye.z)) > 24.0f ||
+    // Camera speed. Above the height from which no tree can be seen, and while travelling faster
+    // than cells could ever be generated for (space flight covers kilometres a frame), there is
+    // nothing to do: everything is given back once and the generators' queue is emptied. This
+    // was the frame-rate drop in space - a full rescan and thousands of new requests every frame.
+    const auto now = std::chrono::steady_clock::now();
+    const float dt = std::max(std::chrono::duration<float>(now - S.last_t).count(), 1e-3f);
+    const float speed = S.last_eye.x > 1e8f ? 0.0f : glm::distance(eye, S.last_eye) / dt;
+    S.last_eye = eye; S.last_t = now;
+    const float height = eye.y - rt_.water_level;
+    if (height > far_m + 400.0f || speed > 900.0f) {
+        if (!S.parked) {
+            {
+                std::lock_guard<std::mutex> lk(S.mu);
+                S.jobs.clear();
+            }
+            bool any = false;
+            for (auto& kv : S.cells) {
+                WvState::Cell& c = kv.second;
+                if (c.data && !c.slots.empty()) {
+                    for (size_t i = 0; i < c.slots.size(); ++i) {
+                        const uint32_t sl = c.slots[i];
+                        if (sl == UINT32_MAX) continue;
+                        gpu[veg_world_first_ + sl].pos_scale.w = 0.0f;
+                        veg_inst_cpu_[veg_world_first_ + sl].pos_scale.w = 0.0f;
+                        any = true;
+                    }
+                }
+            }
+            S.cells.clear();
+            S.free_slots.resize(kWvPool);
+            for (uint32_t i = 0; i < kWvPool; ++i) S.free_slots[i] = kWvPool - 1 - i;
+            S.arch_used.assign(veg_arch_.size(), 0);
+            if (!wv_cols_.empty()) { wv_cols_.clear(); near_static_src_[0] = SIZE_MAX; }
+            if (any) {
+                vmaFlushAllocation(allocator_, veg_inst_alloc_, sizeof(VegInstance) * veg_world_first_, sizeof(VegInstance) * kWvPool);
+                veg_rt_valid_ = false;
+            }
+            S.parked = true;
+        }
+        S.scan_eye = eye;                       // (the near-field bake reads it)
+        return;
+    }
+    const bool moved = S.parked || glm::distance(glm::vec2(eye.x, eye.z), glm::vec2(S.scan_eye.x, S.scan_eye.z)) > 24.0f ||
                        std::abs(far_m - S.scan_far) > 1.0f;
     if (!moved && !S.dirty) return;
+    // At most ten scans a second (a scan walks every cell in range).
+    if (!S.parked && std::chrono::duration<float>(now - S.scan_t).count() < 0.1f) { S.dirty = true; return; }
+    S.parked = false;
+    S.scan_t = now;
     S.scan_eye = eye; S.scan_far = far_m; S.dirty = false;
 
     auto set_live = [&](WvState::Cell& c, size_t want) {
@@ -362,7 +485,8 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
                 if (d < reach) { lvl = l; break; }
             }
             if (!c.data) {
-                if (!c.requested) { c.requested = true; want_jobs.push_back({ d, k }); }
+                c.requested = true;
+                want_jobs.push_back({ d, k });
                 continue;
             }
             if (lvl != c.level) {
@@ -385,7 +509,8 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
             any_change = true;
             if (it->second.cols_live) { it->second.cols_live = false; cols_changed = true; }
         }
-        if (d > far_m + 6.0f * kCell && it->second.data) it = S.cells.erase(it);
+        // (a cell that left the range before it was generated is forgotten too: its request goes with it)
+        if ((d > far_m + 6.0f * kCell && it->second.data) || (d > far_m && !it->second.data)) it = S.cells.erase(it);
         else ++it;
     }
     if (any_change) {
@@ -403,16 +528,14 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
         }
         near_static_src_[0] = SIZE_MAX;         // the player's broadphase takes the new set
     }
-    if (!want_jobs.empty()) {
+    {
+        // The queue is exactly what is wanted NOW, nearest last (workers take from the back).
+        // (A cell a worker is busy with may be listed again: it is then made twice - harmless.)
+        std::sort(want_jobs.begin(), want_jobs.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
         std::lock_guard<std::mutex> lk(S.mu);
-        // Nearest last (workers take from the back); what was queued before stays wanted.
+        S.jobs.clear();
         for (const auto& j : want_jobs) S.jobs.push_back(j.second);
-        std::sort(S.jobs.begin(), S.jobs.end(), [&](const CellKey& a, const CellKey& b) {
-            const float ax = (float(a.x) + 0.5f) * kCell - eye.x, az = (float(a.z) + 0.5f) * kCell - eye.z;
-            const float bx = (float(b.x) + 0.5f) * kCell - eye.x, bz = (float(b.z) + 0.5f) * kCell - eye.z;
-            return ax * ax + az * az > bx * bx + bz * bz;
-        });
-        S.cv.notify_all();
+        if (!S.jobs.empty()) { S.dirty = true; S.cv.notify_all(); }
     }
 }
 

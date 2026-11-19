@@ -148,5 +148,5 @@ float wm_forest(vec2 wp, float h, float ny, float wl) {
     float m = WM_NOISE(wp * 0.0011 + 3.7) * 0.55 + WM_NOISE(wp * 0.0043 + 17.0) * 0.30 + WM_NOISE(wp * 0.017 + 5.0) * 0.15;
     m += 0.10 * (1.0 - smoothstep(4.0, 25.0, alt));
     m += (WM_NOISE(wp * 0.00013 + 41.0) - 0.5) * 0.35;
-    return band * smoothstep(0.46, 0.60, m);
+    return band * smoothstep(0.37, 0.53, m);
 }

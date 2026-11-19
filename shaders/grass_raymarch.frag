@@ -158,7 +158,31 @@ float terrainH(vec2 wp) {
 // centred on the origin) - the surface the
 // MESH terrain is built from, including sculpts, the road and craters.
 layout(set = 0, binding = 17) uniform sampler2D u_heightmap_full;
+// Beyond the home tile: the ground around the camera, baked by the engine as it moves
+// (vk_engine/veg_stream.cpp, wv_nf_poll): 512 x 512 m at 1 m, the world formula's heights
+// packed into RGB (24-bit fixed point, exact under bilinear filtering). Row 0 holds the
+// window's origin (texels 0 and 1, in 64 m steps) and a mark that the bake is there (texel 2).
+layout(set = 0, binding = 4) uniform sampler2D u_normal[23];
+vec2 g_nf_org = vec2(0.0);
+bool g_nf_ok  = false;
+void nf_setup() {
+    vec3 m = texelFetch(u_normal[22], ivec2(2, 0), 0).rgb * 255.0;
+    g_nf_ok = abs(m.r - 77.0) < 0.5 && abs(m.g - 123.0) < 0.5 && abs(m.b - 201.0) < 0.5;
+    if (!g_nf_ok) return;
+    vec3 a = texelFetch(u_normal[22], ivec2(0, 0), 0).rgb * 255.0;
+    vec3 b = texelFetch(u_normal[22], ivec2(1, 0), 0).rgb * 255.0;
+    g_nf_org = (vec2(a.r * 65536.0 + a.g * 256.0 + a.b, b.r * 65536.0 + b.g * 256.0 + b.b) - 8388608.0) * 64.0;
+}
+bool nf_inside(vec2 wp) {
+    vec2 l = wp - g_nf_org;
+    return g_nf_ok && all(greaterThan(l, vec2(3.0))) && all(lessThan(l, vec2(508.0)));
+}
+float nf_height(vec2 wp) {
+    vec3 c = textureLod(u_normal[22], (wp - g_nf_org + 0.5) / 512.0, 0.0).rgb;
+    return c.r * 255.0 + c.g * (255.0 / 256.0) + c.b * (255.0 / 65536.0) - 64.0;
+}
 float terrainH_mesh(vec2 wp) {
+    if (max(abs(wp.x), abs(wp.y)) > kHeightmapSide * 0.5) return nf_inside(wp) ? nf_height(wp) : -1e4;      // (no ground known: no grass)
     float W = float(textureSize(u_heightmap_full, 0).x);
     vec2 uv = ((wp / kHeightmapSide + 0.5) * (W - 1.0) + 0.5) / W;
     return textureLod(u_heightmap_full, uv, 0.0).r;
@@ -412,8 +436,26 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
         // 2 km tile's). Beyond it the mask repeated and the heights were the tile's edge: blades
         // stood in the air, under the ground and on the sea bed of the wider world.
         vec2 gq = abs(cellId * kPeriod);
-        // (thinning out over the last 170 m, where terrain_raymarch.frag brings in its turf)
-        elig *= 1.0 - smoothstep(kHeightmapSide * 0.5 - 170.0, kHeightmapSide * 0.5 - 10.0, max(gq.x, gq.y));
+        if (max(gq.x, gq.y) > kHeightmapSide * 0.5) {
+            // The wider world: grass by rule, on the baked ground around the camera - from just
+            // above the shore up to where the turf ends, not on steep ground, thinning out
+            // toward the edge of the baked window.
+            vec2 cw = cellId * kPeriod;
+            elig = 0.0;
+            if (nf_inside(cw)) {
+                float h0 = nf_height(cw);
+                vec2  sg = vec2(nf_height(cw + vec2(2.0, 0.0)) - h0, nf_height(cw + vec2(0.0, 2.0)) - h0) * 0.5;
+                float wl = scene.water_params.y;
+                vec2  lc = abs(cw - g_nf_org - 256.0);
+                elig = smoothstep(wl + 1.2, wl + 2.6, h0) * (1.0 - smoothstep(52.0, 70.0, h0)) *
+                       (1.0 - smoothstep(ctx.slope_max * 0.7, ctx.slope_max * 1.2, length(sg))) *
+                       (1.0 - smoothstep(200.0, 245.0, max(lc.x, lc.y)));
+            }
+        } else if (!g_nf_ok) {
+            // (thinning out over the last 170 m, where terrain_raymarch.frag brings in its turf;
+            // with the world's grass beyond it the meadow simply carries on)
+            elig *= 1.0 - smoothstep(kHeightmapSide * 0.5 - 170.0, kHeightmapSide * 0.5 - 10.0, max(gq.x, gq.y));
+        }
     }
     // Soft patch border ('grass edge softness'): the mask alone gave a
     // wall of full-height grass next to bare ground. A low-frequency noise
@@ -517,6 +559,7 @@ vec3 sample_sky_grad(vec3 dir) {
 }
 
 void main() {
+    nf_setup();
     // Reconstruct world ray from screen UV via inverse view-proj.
     vec2 uv  = gl_FragCoord.xy * scene.viewport.zw;
     vec4 ndc = vec4(uv * 2.0 - 1.0, 1.0, 1.0);
