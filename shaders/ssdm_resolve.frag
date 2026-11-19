@@ -27,8 +27,12 @@
 // Conventions here: screen UV = ndc * 0.5 + 0.5 (Vulkan, y down); depth 0 near .. 1 far, 1 =
 // nothing (the original is reversed-Z with 0 = nothing); metres; up is +y.
 //
-// Built three ways: SSDM_COLOR (colour + resolve map), SSDM_DEPTH (the displaced depth, from
-// the resolve map), SSDM_VELOCITY (motion vectors, from the resolve map).
+// Built four ways: SSDM_GBUFFER (what the engine runs: the resolve applied to the whole
+// G-buffer - colour, motion vectors, albedo/material, normal - before lighting, as Crimson
+// Desert is reported to do it; everything drawn afterwards, and the lighting itself, sees the
+// displaced surface), SSDM_DEPTH (the displaced depth, from the resolve map), and the
+// plugin's own arrangement on the lit image: SSDM_COLOR (colour + resolve map) and
+// SSDM_VELOCITY (motion vectors, from the resolve map).
 
 layout(set = 0, binding = 0) uniform sampler2D u_scene_color;   // the lit scene (linear, bilinear sampler)
 layout(set = 0, binding = 1) uniform sampler2D u_disp;          // ssdm_mesh outDisp
@@ -38,6 +42,8 @@ layout(set = 0, binding = 4) uniform sampler2D u_shell_z;       // the shell's d
 layout(set = 0, binding = 5) uniform sampler2D u_scene_z;       // the scene's depth, before this pass
 layout(set = 0, binding = 6) uniform sampler2D u_resolve;       // SSDM_COLOR's second output (depth / velocity variants)
 layout(set = 0, binding = 7) uniform sampler2D u_scene_mv;      // the scene's motion vectors, before this pass
+layout(set = 0, binding = 8) uniform sampler2D u_gbuffer0;      // SSDM_GBUFFER: albedo + material
+layout(set = 0, binding = 9) uniform sampler2D u_gbuffer1;      // SSDM_GBUFFER: normal + roughness + metallic
 
 layout(push_constant) uniform PC {
     mat4 inv_vp;        // clip -> world, of the view-projection the scene and the shell were drawn with
@@ -51,7 +57,15 @@ layout(push_constant) uniform PC {
 
 // (drawn with the vertexless full-screen triangle, taa.vert: the UV comes from the pixel)
 
-#if defined(SSDM_COLOR)
+#if defined(SSDM_GBUFFER)
+// The engine's use (ssdm.cpp): on the G-buffer, mid-frame, before lighting - the outputs are
+// the main pass's attachments in their order, then the resolve map.
+layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec2 outVelocity;
+layout(location = 2) out vec4 outG0;
+layout(location = 3) out vec4 outG1;
+layout(location = 4) out vec4 outResolve;
+#elif defined(SSDM_COLOR)
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outResolve;    // xy: where the colour was taken from; zw: the hit's source pixel (-1 = no hit)
 #elif defined(SSDM_VELOCITY)
@@ -409,9 +423,38 @@ vec2 camera_mv(vec2 uv, float z) {                 // the motion vector of a sta
     return (now.xy - prev.xy / prev.w) * pc.mv.xy;
 }
 
+// The motion vector of a displaced pixel: the displaced surface is seen AT this pixel, at the
+// hit's displaced depth - its camera motion is that of this screen ray at that depth. A moving
+// object's own motion (the source pixel's vector less the camera's share there) is added.
+vec2 displaced_mv(vec2 uv, vec2 final_uv, vec2 hit_uv, vec2 mv_here) {
+    vec2  hz = textureLod(u_hit_z, hit_uv, 0.0).rg;
+    float shz = textureLod(u_shell_z, uv, 0.0).r;
+    float z_here = hz.r < 1.0 ? hz.r : (shz < 1.0 ? shz : hz.g);
+    if (z_here >= 1.0) return mv_here;
+    vec2  cam_here = camera_mv(uv, z_here);
+    vec2  mv_src   = textureLod(u_scene_mv, final_uv, 0.0).rg;
+    float z_src    = textureLod(u_hit_z, final_uv, 0.0).g;
+    if (z_src >= 1.0) z_src = textureLod(u_scene_z, final_uv, 0.0).r;
+    vec2  object_mv = z_src < 1.0 ? mv_src - camera_mv(final_uv, z_src) : vec2(0.0);
+    if (dot(object_mv, object_mv) < 1e-10) object_mv = vec2(0.0);       // (a static mesh: zero up to rounding)
+    return cam_here + object_mv;
+}
+
 void main() {
     vec2 uv = gl_FragCoord.xy / pc.mv.zw;
-#if defined(SSDM_COLOR)
+#if defined(SSDM_GBUFFER)
+    vec2 final_uv, hit_uv;
+    bool hit = (pc.cam.w < 1.5) ? resolve_raymarch(uv, final_uv, hit_uv) : resolve_ncs(uv, final_uv, hit_uv);
+    if (!hit) final_uv = uv;
+    outResolve = vec4(sat(final_uv), hit ? sat(hit_uv) : vec2(-1.0));
+    // (G-buffer data is packed: exact texels, never a blend of neighbours)
+    ivec2 src = ivec2(clamp(final_uv * pc.mv.zw, vec2(0.0), pc.mv.zw - 1.0));
+    outColor = texelFetch(u_scene_color, src, 0);
+    outG0    = texelFetch(u_gbuffer0, src, 0); if (pc.misc.w < -0.5) outG0.rgb = hit ? vec3(1.0, 0.0, 0.0) : outG0.rgb * vec3(0.3, 0.3, 1.0);
+    outG1    = texelFetch(u_gbuffer1, src, 0);
+    vec2 mv_here = textureLod(u_scene_mv, uv, 0.0).rg;
+    outVelocity = hit ? displaced_mv(uv, final_uv, hit_uv, mv_here) : mv_here;
+#elif defined(SSDM_COLOR)
     vec2 final_uv, hit_uv;
     bool hit = (pc.cam.w < 1.5) ? resolve_raymarch(uv, final_uv, hit_uv) : resolve_ncs(uv, final_uv, hit_uv);
     if (!hit) final_uv = uv;

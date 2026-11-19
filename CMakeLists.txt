@@ -563,6 +563,16 @@ add_custom_command(
 list(APPEND COMPILED_SHADERS ${CLOUDS_OVER_SPV})
 
 # Screen-space displacement mapping: the three full-screen passes of ssdm_resolve.frag.
+set(SSDM_GBUFFER_SPV "${SHADER_OUTPUT_DIR}/ssdm_gbuffer.frag.spv")
+add_custom_command(
+    OUTPUT ${SSDM_GBUFFER_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DSSDM_GBUFFER=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag -o ${SSDM_GBUFFER_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader ssdm_gbuffer.frag (ssdm_resolve: the whole G-buffer)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${SSDM_GBUFFER_SPV})
 set(SSDM_COLOR_SPV "${SHADER_OUTPUT_DIR}/ssdm_color.frag.spv")
 add_custom_command(
     OUTPUT ${SSDM_COLOR_SPV}

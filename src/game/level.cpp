@@ -701,7 +701,7 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
     LevelMesh road; road.tex_albedo = 14; road.tex_normal = 14;      // (engine kTexRoad)
     road.tint = glm::vec3(0.5f); road.fallback = glm::vec3(0.40f, 0.38f, 0.34f); road.relief = 0.5f;
     m.relief = 0.0f;                 // (the stones' depth comes from screen-space displacement)
-    m.ssdm   = 0.07f;
+    m.ssdm   = 0.13f;
     auto P = [&](float s, float u, float y) { return glm::vec3(a.x, 0.0f, a.z) + D * s + N * u + U * y; };
     auto V = [&](float s, float u, float y, glm::vec3 nn, float tu, float tv) { return LevelVertex{ P(s, u, y), nn, tu / tile, tv / tile }; };
     const float ds = 0.5f;

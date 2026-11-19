@@ -1769,7 +1769,9 @@ private:
     struct AaRound { glm::vec3 pos{0.0f}, prev{0.0f}, vel{0.0f}; float t = 0.0f; bool dead = false; };
     // Screen-space displacement mapping (vk_engine/ssdm.cpp).
     struct SsdmImage { VkImage image = VK_NULL_HANDLE; VmaAllocation alloc = nullptr; VkImageView view = VK_NULL_HANDLE; };
-    SsdmImage ssdm_disp_, ssdm_ray_, ssdm_hitz_, ssdm_shell_z_, ssdm_color_, ssdm_resolve_, ssdm_scene_z_, ssdm_mv_;
+    SsdmImage ssdm_disp_, ssdm_ray_, ssdm_hitz_, ssdm_shell_z_, ssdm_color_, ssdm_resolve_, ssdm_scene_z_, ssdm_mv_, ssdm_g0_, ssdm_g1_;
+    VkPipeline ssdm_gbuffer_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule ssdm_gbuffer_frag_ = VK_NULL_HANDLE;
     VkExtent2D ssdm_extent_{ 0, 0 };
     VkPipeline ssdm_mesh_pipeline_ = VK_NULL_HANDLE, ssdm_color_pipeline_ = VK_NULL_HANDLE,
                ssdm_depth_pipeline_ = VK_NULL_HANDLE, ssdm_velocity_pipeline_ = VK_NULL_HANDLE;
@@ -1785,7 +1787,7 @@ private:
     void destroy_ssdm();
     void create_ssdm_targets();
     void destroy_ssdm_targets();
-    void render_ssdm(VkCommandBuffer cmd);
+    bool render_ssdm(VkCommandBuffer cmd);     // mid world pass; true = the pass was interrupted (bindings are to be restored)
     glm::vec3 bridge_a_{0.0f}, bridge_b_{0.0f};   // the stone bridge over the river (world.cpp); deck ends
     bool      bridge_placed_ = false;
     glm::vec3 church_pos_{0.0f};           // chapel site (world.cpp); y = pad height, valid when church_placed_

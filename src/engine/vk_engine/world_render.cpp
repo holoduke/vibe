@@ -1052,6 +1052,17 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
     }
     prof_mark(cmd, "w_castle");
+    // Screen-space displacement mapping (ssdm.cpp), on the G-buffer: the static stonework is
+    // in, the lighting is not done and trees, moving things, effects, grass and the weapon are
+    // not drawn yet - they come after, against the displaced depth. The pass is interrupted
+    // for it and taken up again.
+    if (render_ssdm(cmd)) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &scene_desc_set_, 0, nullptr);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
+        vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+        prof_mark(cmd, "w_ssdm");
+    }
     if (veg_count_ > 0) {
         draw_vegetation(cmd, false);
         prof_mark(cmd, "w_veg");

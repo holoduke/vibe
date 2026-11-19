@@ -237,11 +237,11 @@ void VulkanEngine::recreate_taa_targets() {
     // pass to fill them.
     make_image(gbuffer0_format_,
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-               VK_IMAGE_USAGE_SAMPLED_BIT,
+               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,     // (ssdm.cpp copies the displaced G-buffer in)
                gbuffer0_image_, gbuffer0_alloc_, gbuffer0_view_);
     make_image(gbuffer1_format_,
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-               VK_IMAGE_USAGE_SAMPLED_BIT,
+               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                gbuffer1_image_, gbuffer1_alloc_, gbuffer1_view_);
     // Staging colour for the deferred lighting pass (Phase 3).
     // TRANSFER_SRC_BIT is required because vk_engine.cpp blits this image
