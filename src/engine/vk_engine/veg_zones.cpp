@@ -250,6 +250,11 @@ void VulkanEngine::finish_veg_replant(VegJobResult&& r) {
         std::vector<PhysicsWorld::StaticBox> vb;
         vb.reserve(cols.size());
         for (const auto& a : cols) vb.push_back({ (a.min + a.max) * 0.5f, (a.max - a.min) * 0.5f });
+        // (the stone bridge's columns live in the same compounds: world.cpp)
+        for (size_t i = bridge_col_begin_; i < bridge_col_end_ && i < world_.aabbs.size(); ++i) {
+            const auto& a = world_.aabbs[i];
+            vb.push_back({ (a.min + a.max) * 0.5f, (a.max - a.min) * 0.5f });
+        }
         physics_->add_static_box_compounds(vb.data(), vb.size());
     }
 

@@ -1790,6 +1790,7 @@ private:
     bool render_ssdm(VkCommandBuffer cmd);     // mid world pass; true = the pass was interrupted (bindings are to be restored)
     glm::vec3 bridge_a_{0.0f}, bridge_b_{0.0f};   // the stone bridge over the river (world.cpp); deck ends
     bool      bridge_placed_ = false;
+    size_t    bridge_col_begin_ = 0, bridge_col_end_ = 0;      // its colliders in world_.aabbs
     glm::vec3 church_pos_{0.0f};           // chapel site (world.cpp); y = pad height, valid when church_placed_
     bool      church_placed_ = false;
     std::vector<glm::vec3> outposts_;    // outpost tower base points (world.cpp)

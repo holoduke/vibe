@@ -436,8 +436,10 @@ void VulkanEngine::init_world() {
             }
             bridge_a_ = glm::vec3(a2.x, ya + 0.02f, a2.y);
             bridge_b_ = glm::vec3(b2.x, hm.sample_world(b2.x, b2.y) + 0.12f, b2.y);
+            bridge_col_begin_ = world_.aabbs.size();
             game::append_stone_bridge(world_, bridge_a_, bridge_b_, 2.0f * castle_road_.half_width,
                                       [&](float x, float z) { return hm.sample_world(x, z); });
+            bridge_col_end_ = world_.aabbs.size();
             bridge_placed_ = true;
             // A lantern post at each end, beside the parapet, its arm over the road.
             {
@@ -581,7 +583,11 @@ void VulkanEngine::init_world() {
     }
     // Castle mesh colliders (round towers) sit after the brush AABBs.
     const size_t veg_begin = std::min(veg_col_begin_, world_.aabbs.size());
+    // (Not the stone bridge's: its parapets and piers are thousands of small columns - one
+    // physics body each overran the body limit, and every body made after that failed. They go
+    // into the merged compounds below, with the tree trunks.)
     for (size_t i = world_.brushes.size(); i < veg_begin; ++i) {
+        if (i >= bridge_col_begin_ && i < bridge_col_end_) continue;
         const auto& a = world_.aabbs[i];
         sboxes.push_back({(a.min + a.max) * 0.5f, (a.max - a.min) * 0.5f});
     }
@@ -589,7 +595,11 @@ void VulkanEngine::init_world() {
     // Vegetation trunks + rocks: merged per-cell compound bodies.
     {
         std::vector<PhysicsWorld::StaticBox> vb;
-        vb.reserve(world_.aabbs.size() - veg_begin);
+        vb.reserve(world_.aabbs.size() - veg_begin + (bridge_col_end_ - bridge_col_begin_));
+        for (size_t i = bridge_col_begin_; i < bridge_col_end_ && i < world_.aabbs.size(); ++i) {
+            const auto& a = world_.aabbs[i];
+            vb.push_back({(a.min + a.max) * 0.5f, (a.max - a.min) * 0.5f});
+        }
         for (size_t i = veg_begin; i < world_.aabbs.size(); ++i) {
             const auto& a = world_.aabbs[i];
             vb.push_back({(a.min + a.max) * 0.5f, (a.max - a.min) * 0.5f});

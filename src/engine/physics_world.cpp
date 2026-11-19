@@ -734,9 +734,12 @@ void PhysicsWorld::remove_body(uint32_t id) {
     auto it = impl_->ids.find(id);
     if (it == impl_->ids.end()) return;
     JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
-    bi.RemoveBody(it->second);
-    bi.DestroyBody(it->second);
-    impl_->id_by_body_index.erase(it->second.GetIndex());
+    // (a body that could not be created - the body limit - has an invalid id: destroying it crashed)
+    if (!it->second.IsInvalid()) {
+        if (bi.IsAdded(it->second)) bi.RemoveBody(it->second);
+        bi.DestroyBody(it->second);
+        impl_->id_by_body_index.erase(it->second.GetIndex());
+    }
     impl_->ids.erase(it);
 }
 

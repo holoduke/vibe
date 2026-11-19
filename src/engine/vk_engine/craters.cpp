@@ -54,8 +54,10 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
 
     auto& R = spacejet_rng_state_;
     const float Rc   = 2.4f + 2.4f * size;          // bowl radius (m): bomb ~4.8, crash ~7.9
-    const float D    = 0.45f + 0.7f * size;         // depth at the centre
-    const float rimh = 0.22f * D;                   // raised ejecta rim
+    // A real crater: a hole with a floor, a steep wall and a raised rim (it was a shallow dish,
+    // a metre deep over five metres - a dent, not a crater).
+    const float D    = 1.0f + 1.5f * size;          // depth of the floor: bomb ~2.5 m, crash ~4.4 m
+    const float rimh = 0.30f * D;                   // raised ejecta rim
     const float Rmax = Rc * 1.7f;
     const float phase = frand_range(R, 0.0f, 6.28f);
     // Height change at a point: paraboloid bowl + Gaussian rim, both with
@@ -67,8 +69,15 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
         const float ang = std::atan2(dz, dx);
         const float wob = 1.0f + 0.12f * std::sin(ang * 3.0f + phase) + 0.07f * std::sin(ang * 7.0f + phase * 2.1f);
         const float rr = r / (Rc * wob);
-        float d = rr < 1.0f ? -D * (1.0f - rr * rr) : 0.0f;
-        const float k = (rr - 1.0f) / 0.38f;
+        // Floor out to ~45 % of the radius (slightly dished), then the wall up to the rim.
+        float d = 0.0f;
+        if (rr < 1.0f) {
+            const float t = std::clamp((rr - 0.45f) / 0.55f, 0.0f, 1.0f);
+            const float wall = t * t * (3.0f - 2.0f * t);
+            d = -D * (1.0f - wall) * (1.0f - 0.12f * rr * rr / 0.2f * 0.2f);
+        }
+        // The rim: sharp on the inside (the wall's lip), falling away gently outside.
+        const float k = (rr - 1.02f) / (rr < 1.02f ? 0.10f : 0.34f);
         d += rimh * std::exp(-k * k);
         return d;
     };
