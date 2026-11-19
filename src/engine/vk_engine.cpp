@@ -1052,11 +1052,28 @@ void VulkanEngine::run(const RunOptions& opts) {
                     constexpr float kSampleDelta  = 1.0f;
                     float gx = player_.position.x;
                     float gz = player_.position.z;
-                    float h0  = sample_terrain_height(gx, gz);
-                    float hpx = sample_terrain_height(gx + kSampleDelta, gz);
-                    float hnx = sample_terrain_height(gx - kSampleDelta, gz);
-                    float hpz = sample_terrain_height(gx, gz + kSampleDelta);
-                    float hnz = sample_terrain_height(gx, gz - kSampleDelta);
+                    // The stone bridge's deck is a floor like the terrain (it has no collision
+                    // boxes: tiled boxes on a sloping, diagonal deck are a field of lips) - for a
+                    // player who is on or above it, not for one walking underneath.
+                    const float feet_now = player_.position.y - kHalfHeight;
+                    bool deck_hit = false;
+                    auto ground_at = [&](float x, float z) {
+                        float g = sample_terrain_height(x, z);
+                        deck_hit = false;
+                        if (bridge_placed_) {
+                            const float dk = game::stone_bridge_deck_height(bridge_a_, bridge_b_, 2.0f * castle_road_.half_width, x, z);
+                            if (dk > g && feet_now > dk - 0.7f) { g = dk; deck_hit = true; }
+                        }
+                        return g;
+                    };
+                    float h0  = ground_at(gx, gz);
+                    const bool on_deck = deck_hit;
+                    // (on the deck the floor is level for the slope test: a sample a metre to the
+                    // side may lie beyond the parapet, 17 m down - that is not a slope)
+                    float hpx = on_deck ? h0 : ground_at(gx + kSampleDelta, gz);
+                    float hnx = on_deck ? h0 : ground_at(gx - kSampleDelta, gz);
+                    float hpz = on_deck ? h0 : ground_at(gx, gz + kSampleDelta);
+                    float hnz = on_deck ? h0 : ground_at(gx, gz - kSampleDelta);
                     glm::vec3 n(-(hpx - hnx) / (2.0f * kSampleDelta),
                                  1.0f,
                                  -(hpz - hnz) / (2.0f * kSampleDelta));

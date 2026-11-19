@@ -109,6 +109,9 @@ int append_graveyard(Level& lv, glm::vec3 church, const std::function<float(floa
 // the terrain height. Adds its mesh and player colliders.
 void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
                          const std::function<float(float, float)>& ground);
+// The bridge's deck as a smooth floor (it has no collision boxes): its height at (x, z), or
+// -1e9 where (x, z) is not over the deck.
+float stone_bridge_deck_height(glm::vec3 a, glm::vec3 b, float width, float x, float z);
 // Timber lamp post with a hanging lantern; returns the lantern's centre.
 glm::vec3 append_lamp_post(Level& lv, glm::vec3 base, glm::vec3 arm_dir, uint32_t seed);
 

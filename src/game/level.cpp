@@ -847,39 +847,57 @@ void append_stone_bridge(Level& lv, glm::vec3 a, glm::vec3 b, float width,
             }
         }
     }
-    // Colliders: the bridge runs at an angle and the boxes are axis-aligned, so its footprint is
-    // tiled with square columns - deck and parapets as a slab, piers and abutments down to the
-    // ground. With 1 m columns the parapets' collision was a staircase that stood up to 70 cm
-    // into the walkway (invisible walls along both sides). Now: half-metre columns for the
-    // middle of the deck, quarter-metre ones along its edges and for the parapets, and a column
-    // only counts as parapet when its centre lies well inside the parapet - nothing sticks out
-    // into the road by more than a few centimetres.
+    // Colliders. The bridge runs at an angle and collision boxes are axis-aligned, so:
+    //   * the DECK has no boxes at all - any tiling of a sloping, diagonal deck is a field of
+    //     small lips the player catches on. It is a smooth floor instead, given by
+    //     stone_bridge_deck_height() below and applied by the engine where it clamps the
+    //     player to the ground (as it does for the terrain);
+    //   * the PARAPETS are quarter-metre columns, a column counting only when its centre lies
+    //     well inside the parapet (nothing stands out into the road);
+    //   * the PIERS and ABUTMENTS are metre columns from the ground to a little under the deck.
     {
         const glm::vec2 c0 = a2 - n * ho, c1 = a2 + n * ho, c2 = b2 - n * ho, c3 = b2 + n * ho;
         const float bx0 = std::floor((std::min)({ c0.x, c1.x, c2.x, c3.x })) - 1.0f, bx1 = std::ceil((std::max)({ c0.x, c1.x, c2.x, c3.x })) + 1.0f;
         const float bz0 = std::floor((std::min)({ c0.y, c1.y, c2.y, c3.y })) - 1.0f, bz1 = std::ceil((std::max)({ c0.y, c1.y, c2.y, c3.y })) + 1.0f;
-        auto tile = [&](float cell, float u_lo, float u_hi) {
+        auto tile = [&](float cell, bool parapet) {
             const int nx = int((bx1 - bx0) / cell), nz = int((bz1 - bz0) / cell);
             for (int z = 0; z < nz; ++z)
                 for (int x = 0; x < nx; ++x) {
                     const float px = bx0 + float(x) * cell, pz = bz0 + float(z) * cell;
                     const glm::vec2 p(px + 0.5f * cell, pz + 0.5f * cell);
                     const float s = glm::dot(p - a2, d), u = std::abs(glm::dot(p - a2, n));
-                    if (s < -0.3f || s > L + 0.3f || u < u_lo || u >= u_hi) continue;
+                    if (s < -0.3f || s > L + 0.3f) continue;
                     const float sc = std::clamp(s, 0.0f, L);
-                    const bool  par_zone = u > hw + 0.10f;
-                    const float top = deck(sc) + (par_zone ? par_h + 0.2f : 0.0f);
-                    const float bot = (arch_of(sc) >= 0) ? deck(sc) - 1.0f : (std::min)(ground(p.x, p.y) - 0.5f, deck(sc) - 1.0f);
-                    cols.push_back({ glm::vec3(px, bot, pz), glm::vec3(px + cell, top, pz + cell) });
+                    if (parapet) {
+                        if (u <= hw + 0.10f || u >= ho + 0.15f) continue;
+                        cols.push_back({ glm::vec3(px, deck(sc) - 1.0f, pz), glm::vec3(px + cell, deck(sc) + par_h + 0.2f, pz + cell) });
+                    } else {
+                        if (u >= ho || arch_of(sc) >= 0) continue;
+                        const float top = deck(sc) - 0.45f, bot = ground(p.x, p.y) - 0.5f;
+                        if (bot < top) cols.push_back({ glm::vec3(px, bot, pz), glm::vec3(px + cell, top, pz + cell) });
+                    }
                 }
         };
-        tile(0.5f, 0.0f, hw - 0.36f);              // the middle of the deck (a half-metre column lies wholly on it)
-        tile(0.25f, hw - 0.36f, ho + 0.15f);       // its edges and the parapets
+        tile(0.25f, true);
+        tile(1.0f, false);
     }
     lv.meshes.push_back(std::move(m));
     lv.meshes.push_back(std::move(dress));
     lv.meshes.push_back(std::move(road));
     for (const auto& c : cols) lv.aabbs.push_back(c);
+}
+
+// The bridge's deck as a floor: its height at world (x, z), or -1e9 where (x, z) is not over
+// the deck. Same deck line as append_stone_bridge (keep the two in step).
+float stone_bridge_deck_height(glm::vec3 a, glm::vec3 b, float width, float x, float z) {
+    const glm::vec2 a2(a.x, a.z), b2(b.x, b.z);
+    const float L = glm::length(b2 - a2);
+    if (L < 20.0f) return -1e9f;
+    const glm::vec2 d = (b2 - a2) / L, n(-d.y, d.x), p(x, z);
+    const float s = glm::dot(p - a2, d), u = std::abs(glm::dot(p - a2, n));
+    if (s < -0.6f || s > L + 0.6f || u > width * 0.5f + 0.12f) return -1e9f;
+    const float sc = std::clamp(s, 0.0f, L), t = sc / L, r = std::clamp(sc / 2.5f, 0.0f, 1.0f);
+    return glm::mix(a.y, b.y, t) + 0.5f * std::sin(kPi * t) + 0.32f * r * r * (3.0f - 2.0f * r) * (1.0f - t);
 }
 
 bool append_church(Level& lv, glm::vec3 base) {

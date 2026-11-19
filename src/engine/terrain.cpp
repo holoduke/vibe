@@ -144,6 +144,9 @@ inline float river(float h, glm::vec2 wp, float wl) {
     if (h <= bed - 4.0f) return h;
     glm::vec2 q = wp + 12.0f * glm::vec2(std::sin(wp.y * 0.043f + 1.3f), std::sin(wp.x * 0.037f + 0.4f)) +
                        5.0f * glm::vec2(std::sin(wp.y * 0.113f), std::sin(wp.x * 0.097f + 2.0f));
+    // (the pool under the stone bridge - as the shader)
+    const float pool = 1.0f - sstep(22.0f, 55.0f, glm::distance(wp, glm::vec2(43.4f, 297.4f)));
+    q -= pool * 6.0f * glm::vec2(0.719f, 0.695f);
     float d2 = 1e12f;
     for (int c = 0; c < 5; ++c) {
         const float* b = kRivBox[c];
@@ -155,8 +158,9 @@ inline float river(float h, glm::vec2 wp, float wl) {
         }
     }
     if (d2 > 120.0f * 120.0f) return h;
-    const float e = std::max(std::sqrt(d2) - (7.0f + 9.0f * sstep(1450.0f, 1900.0f, wp.x)), 0.0f);
-    const float cap = bed + e * 0.45f + std::max(e - 8.0f, 0.0f) * 0.35f + std::max(e - 40.0f, 0.0f) * 0.5f;
+    const float e = std::max(std::sqrt(d2) - (7.0f + 9.0f * sstep(1450.0f, 1900.0f, wp.x) + 4.0f * pool), 0.0f);
+    const float cap = bed + glm::mix(e * 0.45f + std::max(e - 8.0f, 0.0f) * 0.35f + std::max(e - 40.0f, 0.0f) * 0.5f,
+                                     std::min(e, 6.0f) * 0.45f + std::max(e - 6.0f, 0.0f) * 1.3f, pool);
     const float t = std::clamp(0.5f + 0.125f * (cap - h), 0.0f, 1.0f);
     return glm::mix(cap, h, t) - 4.0f * t * (1.0f - t);
 }

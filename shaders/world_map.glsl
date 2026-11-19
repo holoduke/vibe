@@ -92,6 +92,11 @@ float wm_river(float h, vec2 wp, float wl) {
     float bed = wl - 2.4;
     if (h <= bed - 4.0) return h;
     vec2 q = wp + 12.0 * vec2(sin(wp.y * 0.043 + 1.3), sin(wp.x * 0.037 + 0.4)) + 5.0 * vec2(sin(wp.y * 0.113), sin(wp.x * 0.097 + 2.0));
+    // Under the stone bridge the river is a pool: its channel lies 6 m further across (along
+    // the bridge), it is 4 m wider each side, and its banks are steep - so the water stands
+    // under two of the arches instead of one, and the road's end on the near bank is not cut.
+    float pool = 1.0 - smoothstep(22.0, 55.0, distance(wp, vec2(43.4, 297.4)));
+    q -= pool * 6.0 * vec2(0.719, 0.695);
     float d2 = 1e12;
     for (int c = 0; c < 5; ++c) {
         vec4 b = wm_riv_box[c];
@@ -103,8 +108,9 @@ float wm_river(float h, vec2 wp, float wl) {
         }
     }
     if (d2 > 120.0 * 120.0) return h;
-    float e = max(sqrt(d2) - (7.0 + 9.0 * smoothstep(1450.0, 1900.0, wp.x)), 0.0);      // (wider toward its mouth)
-    float cap = bed + e * 0.45 + max(e - 8.0, 0.0) * 0.35 + max(e - 40.0, 0.0) * 0.5;
+    float e = max(sqrt(d2) - (7.0 + 9.0 * smoothstep(1450.0, 1900.0, wp.x) + 4.0 * pool), 0.0);      // (wider toward its mouth)
+    float cap = bed + mix(e * 0.45 + max(e - 8.0, 0.0) * 0.35 + max(e - 40.0, 0.0) * 0.5,
+                          min(e, 6.0) * 0.45 + max(e - 6.0, 0.0) * 1.3, pool);
     float t = clamp(0.5 + 0.125 * (cap - h), 0.0, 1.0);                                  // smooth minimum, 4 m
     return mix(cap, h, t) - 4.0 * t * (1.0 - t);
 }
