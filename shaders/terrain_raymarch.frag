@@ -1911,11 +1911,21 @@ void main() {
     // ~0.5 m one that takes over right under the camera.
     vec3 rm_det_tint = vec3(1.0);
     {
-        float dw = (1.0 - smoothstep(34.0, 95.0, t)) * (1.0 - rm_road.x);   // (was 18 - 45 m)
+        // The ground sets carry on into the distance. A photo tiled at one size reads as a grid
+        // as soon as a dozen repeats are in view, and is gone (averaged out by the mips) a little
+        // further - leaving bare ground flat. So the tile grows with distance: each band four
+        // times the last (2.2 m, 9 m, 36 m, 142 m ...), and everywhere two neighbouring sizes
+        // are laid over each other, sliding from the one to the next. No more than a handful of
+        // repeats of either is ever in view, the two never line up, and the ground keeps
+        // structure of about the same size on screen out to the end of the landscape.
+        float dw = (1.0 - smoothstep(1300.0, 2600.0, t)) * (1.0 - rm_road.x);
         if (dw > 0.01) {
             const int kSoil = 9, kRock = 7;
             float rockw = 1.0 - smoothstep(0.5, 0.8, nor.y);
             float fp = t * 2.0 * scene.viewport.w;                       // ~metres per pixel
+            float bL = max(log2(t / 6.0) * 0.5, 0.0);                    // band: 0 to 6 m, +1 per four times the distance
+            float bi = floor(bL), bw = smoothstep(0.0, 1.0, bL - bi);
+            float sA = pow(0.25, bi);
             // Soil: planar from above. Rock: project along the wall.
             vec2 uvS = pos.xz * 0.45;
             // Parallax: the photographed height field shifts the texture
@@ -1930,15 +1940,37 @@ void main() {
                 for (int pi = 0; pi < 2; ++pi)
                     uvS = pos.xz * 0.45 + vts * ((textureLod(u_normal[kSoil], uvS, lodP).a - 0.5) * pk);
             }
-            vec2 uvR = (abs(nor.x) > abs(nor.z) ? pos.zy : pos.xy) * 0.30;
-            uvR = mix(pos.xz * 0.30, uvR, smoothstep(0.35, 0.6, 1.0 - nor.y));
-            float lodS = log2(max(fp * 0.45 * float(textureSize(u_albedo[kSoil], 0).x), 1.0));
-            float lodR = log2(max(fp * 0.30 * float(textureSize(u_albedo[kRock], 0).x), 1.0));
-            vec4 nS = textureLod(u_normal[kSoil], uvS, lodS), nR = textureLod(u_normal[kRock], uvR, lodR);
-            vec3 aS = textureLod(u_albedo[kSoil], uvS, lodS).rgb / max(textureLod(u_albedo[kSoil], uvS, 12.0).rgb, vec3(0.02));
-            vec3 aR = textureLod(u_albedo[kRock], uvR, lodR).rgb / max(textureLod(u_albedo[kRock], uvR, 12.0).rgb, vec3(0.02));
-            vec4 nD = mix(nS, nR, rockw);
-            vec3 aD = mix(aS, aR, rockw);
+            vec2 par = uvS - pos.xz * 0.45;                              // (the parallax shift, nearest band only)
+            vec2 rk = abs(nor.x) > abs(nor.z) ? pos.zy : pos.xy;
+            float wallw = smoothstep(0.35, 0.6, 1.0 - nor.y);            // (the two projections are blended as samples, not as coordinates)
+            float tsS = float(textureSize(u_albedo[kSoil], 0).x), tsR = float(textureSize(u_albedo[kRock], 0).x);
+            vec3 mS = max(textureLod(u_albedo[kSoil], vec2(0.5), 12.0).rgb, vec3(0.02));
+            vec3 mR = max(textureLod(u_albedo[kRock], vec2(0.5), 12.0).rgb, vec3(0.02));
+            vec4 nD = vec4(0.0);
+            vec3 aD = vec3(0.0);
+            for (int b = 0; b < 2; ++b) {
+                float sc = b == 0 ? sA : sA * 0.25, wb = b == 0 ? 1.0 - bw : bw;
+                if (wb < 0.004) continue;
+                vec4 nS = vec4(0.5, 0.5, 1.0, 0.5), nR = nS;
+                vec3 aS = vec3(1.0), aR = vec3(1.0);
+                vec2 bo = vec2(17.37, 9.13) * (bi + float(b));           // (each size shifted: no common origin)
+                if (rockw < 0.99) {
+                    rm_det_sample(kSoil, pos.xz * (0.45 * sc) + bo + (sc > 0.99 ? par : vec2(0.0)), log2(max(fp * 0.45 * sc * tsS, 1.0)), nS, aS);
+                    aS /= mS;
+                }
+                if (rockw > 0.01) {
+                    float lodR = log2(max(fp * 0.30 * sc * tsR, 1.0));
+                    if (wallw < 0.98) rm_det_sample(kRock, pos.xz * (0.30 * sc) + bo, lodR, nR, aR);
+                    if (wallw > 0.02) {
+                        vec4 nW; vec3 aW;
+                        rm_det_sample(kRock, rk * (0.30 * sc) + bo, lodR, nW, aW);
+                        nR = mix(nR, nW, wallw); aR = mix(aR, aW, wallw);
+                    }
+                    aR /= mR;
+                }
+                nD += mix(nS, nR, rockw) * wb;
+                aD += mix(aS, aR, rockw) * wb;
+            }
             // Fine layer under the camera.
             float fw = 1.0 - smoothstep(3.0, 12.0, t);
             if (fw > 0.01) {
@@ -1950,7 +1982,7 @@ void main() {
                 nD.a  = mix(nD.a, nD.a * (0.5 + nF.a), fw * (1.0 - rockw));
                 aD = mix(aD, aD * aF, fw * (1.0 - rockw) * 0.8);
             }
-            vec3 dn = vec3((nD.xy * 2.0 - 1.0) * 1.35, 1.0);              // (was 0.85)
+            vec3 dn = vec3((nD.xy * 2.0 - 1.0) * mix(1.35, 0.95, smoothstep(80.0, 600.0, t)), 1.0);     // (the big far tiles: a little flatter)
             vec3 dT = normalize(vec3(1.0, 0.0, 0.0) - nor * nor.x);
             vec3 dB = cross(nor, dT);
             nor = normalize(mix(nor, normalize(dT * dn.x + dB * dn.y + nor * dn.z), dw));

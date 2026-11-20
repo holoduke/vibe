@@ -582,3 +582,10 @@ float calcShadowMesh(vec3 pos, vec3 sunDir) {
     return 1.0;
 }
 
+
+// One of the photo-scanned ground sets at `uv`: normal + height (u_normal[idx]) and colour
+// (u_albedo[idx]).
+void rm_det_sample(int idx, vec2 uv, float lod, out vec4 n, out vec3 a) {
+    n = textureLod(u_normal[idx], uv, lod);
+    a = textureLod(u_albedo[idx], uv, lod).rgb;
+}
