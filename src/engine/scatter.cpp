@@ -516,7 +516,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
             VkBufferCreateInfo pb{};
             pb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             pb.size = sizeof(ScatterInstance) * all.size();
-            pb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;   // (read by plant_cull.comp)
+            pb.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;   // (read by plant_cull.comp)
             VmaAllocationCreateInfo pa{};
             pa.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
             pa.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -604,6 +604,7 @@ void scatter_set_raymarch_surface(ScatterSet& s, bool on) {
     };
     apply(s.inst_mapped, s.inst_dy);
     apply(s.plant_mapped, s.plant_dy);
+    ++s.plant_gen;
     s.rm_surface = on;
 }
 } // namespace qlike

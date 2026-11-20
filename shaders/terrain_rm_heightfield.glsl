@@ -66,6 +66,32 @@ float rm_ground_detail(vec2 wp, float t, float h) {
     return rm_snow_on(d * road_keep + rsand, wp, h, road_keep) * w;
 }
 
+// Beyond the home tile: the ground round the camera as the engine bakes it while it moves
+// (veg_stream.cpp wv_nf_poll; the grass stands on it): 512 x 512 m at 1 m, 9 octaves of the
+// world formula, heights packed in RGB. The march uses it as it uses the home tile's bake: to
+// stride through the air above the ground with one texture fetch a step instead of the FBM.
+vec2 g_nf_org = vec2(0.0);
+bool g_nf_ok  = false;
+void nf_setup() {
+    g_nf_ok = false;
+    if (scene.globe_info.z < 0.5) return;
+    vec3 m = texelFetch(u_normal[22], ivec2(2, 0), 0).rgb * 255.0;
+    g_nf_ok = abs(m.r - 77.0) < 0.5 && abs(m.g - 123.0) < 0.5 && abs(m.b - 201.0) < 0.5;
+    if (!g_nf_ok) return;
+    vec3 a = texelFetch(u_normal[22], ivec2(0, 0), 0).rgb * 255.0;
+    vec3 b = texelFetch(u_normal[22], ivec2(1, 0), 0).rgb * 255.0;
+    g_nf_org = (vec2(a.r * 65536.0 + a.g * 256.0 + a.b, b.r * 65536.0 + b.g * 256.0 + b.b) - 8388608.0) * 64.0;
+}
+// Height of the bake at wp, or -1e9 where there is none (outside its window, or ground above
+// what its packing holds).
+float nf_height(vec2 wp) {
+    vec2 l = wp - g_nf_org;
+    if (!g_nf_ok || any(lessThan(l, vec2(3.0))) || any(greaterThan(l, vec2(508.0)))) return -1e9;
+    vec3 c = textureLod(u_normal[22], (l + 0.5) / 512.0, 0.0).rgb;
+    float h = c.r * 255.0 + c.g * (255.0 / 256.0) + c.b * (255.0 / 65536.0) - 64.0;
+    return h > 188.0 ? -1e9 : h;
+}
+
 float terrainM(vec2 p) {
 
     vec2 wp = p;
@@ -407,6 +433,10 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
             float hm = -1.0;
             if (all(lessThan(abs(pos.xz), vec2(kHeightmapSide * 0.5 - 2.0))))
                 hm = pos.y - meshHeight(pos.xz) - kHmMargin;
+            else {
+                float nh = nf_height(pos.xz);
+                if (nh > -1e8) hm = pos.y - nh - kHmMargin;
+            }
             coarse = hm > 0.75;
             if (!coarse) g_rm_ray_y = pos.y;
             h = coarse ? hm : pos.y - terrainM_lod(pos.xz, t);

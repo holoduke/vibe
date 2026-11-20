@@ -148,6 +148,10 @@ void VulkanEngine::destroy_clutter_shadow() {
 // map is rendered with this frame.
 static const bool kNoClutter = std::getenv("QLIKE_NO_CLUTTER_SHADOW") != nullptr;   // A/B test hook
 void VulkanEngine::update_clutter_shadow_vp() {
+    // Every other frame (in turn with the sun's shadow map); every frame while the flashlight
+    // is on - its shadows move with the hand.
+    clutter_shadow_skip_ = (frame_number_ & 1) == 0 && !flashlight_on_ && clutter_shadow_vp_[3][3] > 0.5f;
+    if (clutter_shadow_skip_) return;
     if (!clutter_shadow_pipeline_ || scatter_.instance_count == 0 || kNoClutter) {
         clutter_shadow_vp_ = glm::mat4(0.0f);
         return;
@@ -170,7 +174,7 @@ void VulkanEngine::update_clutter_shadow_vp() {
 }
 
 void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
-    if (clutter_shadow_vp_[3][3] < 0.5f) return;
+    if (clutter_shadow_vp_[3][3] < 0.5f || clutter_shadow_skip_) return;
     const glm::vec3 cam = current_frame_view_.eye_pos;
 
     vkinit::transition_image_aspect(cmd, clutter_shadow_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,

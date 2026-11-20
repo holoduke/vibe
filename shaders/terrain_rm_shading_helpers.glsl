@@ -168,6 +168,12 @@ float calcShadow(vec3 pos, vec3 sunDir) {
     // march reaches at least as far as before).
     float maxH_sh = terrainMaxHeight();
     int fbm_steps = 0;
+    bool  nf_recv = false;
+    float nf_d0 = 0.0;
+    if (any(greaterThan(abs(pos.xz), vec2(kHeightmapSide * 0.5 - 2.0)))) {
+        float n0 = nf_height(pos.xz);
+        if (n0 > -1e8) { nf_recv = true; nf_d0 = pos.y - n0; }
+    }
     for (int i = 0; i < 96; ++i) {
         vec3 p = pos + t * sunDir;
         if (p.y > maxH_sh) break;                         // above every summit: nothing left to hit
@@ -178,6 +184,19 @@ float calcShadow(vec3 pos, vec3 sunDir) {
                 if (t > 800.0) break;
                 continue;
             }
+        } else if (nf_recv) {
+            // Beyond the home tile, on the ground baked round the camera: that ground is what
+            // casts (one texture fetch a step, as home's shadows come from its baked ground),
+            // with the ray starting as far above the bake as the receiver itself stands.
+            float nh = nf_height(p.xz);
+            if (nh > -1e8) {
+                float hn = p.y - nf_d0 - nh;
+                if (hn < 0.001) { res = 0.0; break; }
+                res = min(res, k * hn / t);
+                t += clamp(hn, min_step, 100.0);
+                if (t > 800.0 || res < 0.001) break;
+                continue;
+            }
         }
         if (++fbm_steps > kSteps) break;
         // Coarse FBM (same user octaves, no sculpt-delta tap).
@@ -186,7 +205,9 @@ float calcShadow(vec3 pos, vec3 sunDir) {
         // factor to shrink), so the only effect would be SMALLER
         // steps on cliffs (i.e. a regression). Keep the simple
         // h-clamp behaviour.
-        float h = p.y - terrainM_shadow(p.xz, t);
+        // (the detail of the ground that casts: as fine as the ground it falls on is drawn -
+        // a far hillside is drawn with few octaves, and its shadow was marched with all of them)
+        float h = p.y - terrainM_shadow(p.xz, max(t, recv_dist));
         if (h < 0.001) { res = 0.0; break; }
         res = min(res, k * h / t);
         // Bigger min-step and lower hard-cap at distance — same logic

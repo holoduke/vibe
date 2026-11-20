@@ -615,6 +615,7 @@ vec3 sample_sky(vec3 dir) {
 #include "terrain_rm_water.glsl"   // Water: flow, normals, foam pattern, ripples
 void main() {
     g_far_chart = scene.globe_info.x > 0.5;
+    nf_setup();
     foot_bounds_init();      // footprints in the snow (winter)
 #ifndef QLIKE_WATER
     // Ray reconstruction: vWNear / vWFar (relative to the camera) were computed in the vert

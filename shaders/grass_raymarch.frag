@@ -167,7 +167,7 @@ vec2 g_nf_org = vec2(0.0);
 bool g_nf_ok  = false;
 void nf_setup() {
     vec3 m = texelFetch(u_normal[22], ivec2(2, 0), 0).rgb * 255.0;
-    g_nf_ok = abs(m.r - 77.0) < 0.5 && abs(m.g - 123.0) < 0.5 && abs(m.b - 201.0) < 0.5;
+    g_nf_ok = scene.globe_info.z > 0.5 && abs(m.r - 77.0) < 0.5 && abs(m.g - 123.0) < 0.5 && abs(m.b - 201.0) < 0.5;
     if (!g_nf_ok) return;
     vec3 a = texelFetch(u_normal[22], ivec2(0, 0), 0).rgb * 255.0;
     vec3 b = texelFetch(u_normal[22], ivec2(1, 0), 0).rgb * 255.0;

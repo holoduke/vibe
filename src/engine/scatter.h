@@ -67,6 +67,7 @@ struct ScatterSet {
     // / removed in place by scatter_set_raymarch_surface().
     void*              inst_mapped  = nullptr;
     void*              plant_mapped = nullptr;
+    uint32_t           plant_gen = 1;          // bumped whenever plant_mapped is rewritten (the GPU culling keeps a copy)
     std::vector<float> inst_dy, plant_dy;
     // CPU copies of the instances (the mapped buffers are write-combined):
     // craters edit these and write the changed ones through.

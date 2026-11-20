@@ -96,6 +96,8 @@ struct VulkanEngine::WvState {
     std::future<std::vector<unsigned char>> nf_job;
     bool      nf_active = false, nf_valid = false;
     glm::vec2 nf_job_center{0.0f}, nf_center{0.0f};
+    const globe::Chart* nf_chart = nullptr;     // the chart the bake (or the job) was made in
+    const globe::Chart* nf_job_chart = nullptr;
     // Read-only for the workers.
     std::vector<int> pines, broads, old_pines, old_broads, bushes;
     std::vector<float> arch_h;
@@ -120,6 +122,10 @@ void VulkanEngine::wv_insert_pool() {
     if (veg_cluster_count_) veg_cluster_first_ += kWvPool;
     else veg_cluster_first_ = uint32_t(veg_inst_cpu_.size());
 }
+
+// The near-field ground bake is there and belongs to the chart the engine is in (the shaders'
+// nf_setup checks it: scene.globe_info.z).
+bool VulkanEngine::wv_nf_ok() const { return wv_ && wv_->nf_valid && wv_->nf_chart == &globe::current(); }
 
 void VulkanEngine::wv_reset() {
     if (!wv_) return;
@@ -276,6 +282,7 @@ void VulkanEngine::wv_nf_poll() {
     if (S.nf_active && S.nf_job.valid() && S.nf_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const std::vector<unsigned char> px = S.nf_job.get();
         S.nf_active = false;
+        if (S.nf_job_chart != &globe::current()) return;      // (baked for another part of the planet: re-anchored meanwhile)
         Texture2D t = upload_texture_from_pixels(device_, allocator_, graphics_queue_, graphics_queue_family_,
                                                  px.data(), N, N, VK_FORMAT_R8G8B8A8_UNORM, "near_ground");
         if (t.ok) {
@@ -293,15 +300,18 @@ void VulkanEngine::wv_nf_poll() {
             if (old.view) vkDestroyImageView(device_, old.view, nullptr);
             if (old.image) vmaDestroyImage(allocator_, old.image, old.alloc);
             S.nf_center = S.nf_job_center;
+            S.nf_chart = S.nf_job_chart;
             S.nf_valid = true;
         }
     }
     const bool want = std::max(std::abs(eye.x), std::abs(eye.z)) > 1024.0f - 260.0f && eye.y - rt_.water_level < 450.0f;
     if (S.nf_active || !want) return;
     const glm::vec2 e2(eye.x, eye.z);
+    if (S.nf_chart != &globe::current()) S.nf_valid = false;
     if (S.nf_valid && glm::distance(e2, S.nf_center) < 72.0f) return;
     const glm::vec2 c = glm::round(e2 / 64.0f) * 64.0f;
     S.nf_job_center = c;
+    S.nf_job_chart = &globe::current();
     S.nf_active = true;
     const float wl = S.water_level;
     S.nf_job = std::async(std::launch::async, [c, wl]() {

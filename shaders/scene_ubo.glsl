@@ -96,7 +96,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   season;           // how much of each season shows: x spring, y summer, z autumn, w winter
     // The globe (engine/globe.h): the chart the engine is in.
     mat4   globe_frame;      // columns: the chart's east, up, south at its origin (planet frame)
-    vec4   globe_info;       // x: 1 = a far chart (not home's), y: the chart origin's local x (m)
+    vec4   globe_info;       // x: 1 = a far chart (not home's), y: the chart origin's local x (m), z: 1 = the near-field ground bake is valid
     ivec4  globe_cell[12];   // the landscape FBM's lattice at the chart's origin, per octave: cell ...
     vec4   globe_frac[12];   // ... and position in it (world_map.glsl wm_shape3)
 } scene;

@@ -345,6 +345,7 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     flush_frame_uploads(frame.command_buffer);
     record_sun_horizon_upload(frame.command_buffer, gpu_query_slot);
     record_tlas_publish(frame.command_buffer);   // this frame's TLAS -> tlas_
+    prof_mark(frame.command_buffer, "uploads_tlas");
     // GPU vegetation: cull + LOD-select every instance, fill indirect draws.
     // Where the camera is on the planet's map, the water level and the snow: for the ground seen from high up (compose.frag planet_surface).
     if (exposure_buf_) {
@@ -370,7 +371,8 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
             vkCmdUpdateBuffer(frame.command_buffer, exposure_buf_, 112, sizeof(gb), &gb);
         }
     }
-    { CPU_SCOPE("+veg-cull"); cull_vegetation(frame.command_buffer); cull_clusters(frame.command_buffer); cull_plants(frame.command_buffer); cull_static_clusters(frame.command_buffer); }
+    { CPU_SCOPE("+veg-cull"); cull_vegetation(frame.command_buffer); prof_mark(frame.command_buffer, "cull_veg"); cull_clusters(frame.command_buffer); prof_mark(frame.command_buffer, "cull_clusters"); cull_plants(frame.command_buffer); prof_mark(frame.command_buffer, "cull_plants"); cull_static_clusters(frame.command_buffer); }
+    prof_mark(frame.command_buffer, "cull");
 
     // Quadtree CLOD terrain: select nodes + fill this frame's instance
     // ranges (camera list + light list). Must run after
@@ -394,7 +396,7 @@ void VulkanEngine::record_shadow_passes(FrameData& frame) {
         rt_.grass_enabled || rt_.grass_raymarch_enabled ||
         (rt_.water_enabled && rt_.water_shadows_enabled) ||
         scatter_.instance_count > 0;   // scatter.vert samples it every frame
-    if (sun_shadow_needed) {
+    if (sun_shadow_needed && (frame_number_ & 1) == 0) {       // (every other frame: see update_sun_shadow_light_vp's call)
         render_sun_shadow_pass(frame.command_buffer);
     }
     prof_mark(frame.command_buffer, "sun_shadow_map");

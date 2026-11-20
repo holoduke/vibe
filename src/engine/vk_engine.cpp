@@ -1233,7 +1233,9 @@ void VulkanEngine::run(const RunOptions& opts) {
         // Recompute the sun shadow-map light view-proj before update_scene_ubo
         // so the matrix copied into the UBO this frame matches the geometry
         // we'll draw into the shadow target.
-        update_sun_shadow_light_vp();
+        // The sun's shadow map and the small plants' are redrawn in turn, one a frame (each
+        // keeps the light matrix it was drawn with until its next turn).
+        if ((frame_number_ & 1) == 0) update_sun_shadow_light_vp();
         // If the user changed the shadow-map resolution slider, recreate the
         // image at the new size. Cheap (one vkDeviceWaitIdle + a 4-16MB
         // alloc); only fires when the slider actually moves.

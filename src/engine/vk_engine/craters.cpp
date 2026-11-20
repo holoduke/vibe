@@ -182,6 +182,7 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     };
     reseat(scatter_.inst_cpu, scatter_.inst_mapped, scatter_.inst_dy);
     reseat(scatter_.plant_cpu, scatter_.plant_mapped, scatter_.plant_dy);
+    ++scatter_.plant_gen;
 
     tp[4] = lap();   // plant / stone reseat
     // Mud: remember the crater for the terrain shader (newest kMaxCraters).

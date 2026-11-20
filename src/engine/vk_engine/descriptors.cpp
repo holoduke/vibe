@@ -853,7 +853,7 @@ void VulkanEngine::update_scene_ubo() {
     {
         const globe::Chart& gc = globe::current();
         data.globe_frame = glm::mat4(glm::mat3(gc.F));
-        data.globe_info = glm::vec4(gc.home ? 0.0f : 1.0f, float(gc.ox()), 0.0f, 0.0f);
+        data.globe_info = glm::vec4(gc.home ? 0.0f : 1.0f, float(gc.ox()), wv_nf_ok() ? 1.0f : 0.0f, 0.0f);
         int32_t cells[globe::kOctaves][4]; float fracs[globe::kOctaves][4];
         globe::lattice(gc.F[1] * globe::kR, cells, fracs);
         for (int i = 0; i < 12; ++i) {

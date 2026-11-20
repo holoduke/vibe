@@ -47,6 +47,7 @@ void VulkanEngine::init_plant_gpu() {
     for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp) total += scatter_.plant_count[sp];
     if (total == 0) return;
     pg_total_ = total;
+    log::infof("[plants] GPU culling: %u plants", total);
 
     // Buckets: (species, level) -> a range of the packed list big enough for
     // every plant of the species (near levels are capped: only so many plants
@@ -79,7 +80,11 @@ void VulkanEngine::init_plant_gpu() {
     pg_tmpl_buf_ = pg_buffer(allocator_, cmd_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, pg_tmpl_alloc_, &mp);
     if (mp) std::memcpy(mp, tmpl.data(), size_t(cmd_bytes));
     vmaFlushAllocation(allocator_, pg_tmpl_alloc_, 0, VK_WHOLE_SIZE);
-    pg_spec_buf_ = pg_buffer(allocator_, sizeof(glm::vec4) * ScatterSet::kPlantSpecies, ssbo, true, pg_spec_alloc_, &pg_spec_mapped_);
+    // (in GPU memory, refreshed each frame with vkCmdUpdateBuffer: the shader reads it per plant)
+    pg_spec_buf_ = pg_buffer(allocator_, sizeof(glm::vec4) * ScatterSet::kPlantSpecies, ssbo | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false, pg_spec_alloc_, nullptr);
+    pg_spec_mapped_ = this;       // (only says: the path is up)
+    pg_inst_buf_ = pg_buffer(allocator_, VkDeviceSize(total) * sizeof(ScatterInstance), ssbo | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false, pg_inst_alloc_, nullptr);
+    pg_inst_gen_ = 0;
 
     VkDescriptorSetLayoutBinding b[5]{};
     for (uint32_t i = 0; i < 5; ++i) {
@@ -102,7 +107,7 @@ void VulkanEngine::init_plant_gpu() {
     dai.descriptorPool = pg_pool_; dai.descriptorSetCount = 1; dai.pSetLayouts = &pg_set_layout_;
     vk_check(vkAllocateDescriptorSets(device_, &dai, &pg_set_), "plant gpu set");
     VkDescriptorBufferInfo bi[4] = {
-        { scatter_.plant_buffer, 0, VK_WHOLE_SIZE }, { pg_packed_buf_, 0, VK_WHOLE_SIZE },
+        { pg_inst_buf_, 0, VK_WHOLE_SIZE }, { pg_packed_buf_, 0, VK_WHOLE_SIZE },
         { pg_cmd_buf_, 0, VK_WHOLE_SIZE }, { pg_spec_buf_, 0, VK_WHOLE_SIZE } };
     VkWriteDescriptorSet w[4]{};
     for (uint32_t i = 0; i < 4; ++i) {
@@ -158,6 +163,8 @@ void VulkanEngine::destroy_plant_gpu() {
     if (pg_cmd_buf_) vmaDestroyBuffer(allocator_, pg_cmd_buf_, pg_cmd_alloc_);
     if (pg_tmpl_buf_) vmaDestroyBuffer(allocator_, pg_tmpl_buf_, pg_tmpl_alloc_);
     if (pg_spec_buf_) vmaDestroyBuffer(allocator_, pg_spec_buf_, pg_spec_alloc_);
+    if (pg_inst_buf_) vmaDestroyBuffer(allocator_, pg_inst_buf_, pg_inst_alloc_);
+    pg_inst_buf_ = VK_NULL_HANDLE;
     pg_pipeline_ = VK_NULL_HANDLE; pg_layout_ = VK_NULL_HANDLE; pg_module_ = VK_NULL_HANDLE; pg_pool_ = VK_NULL_HANDLE;
     pg_set_layout_ = VK_NULL_HANDLE; pg_set_ = VK_NULL_HANDLE;
     pg_packed_buf_ = pg_cmd_buf_ = pg_tmpl_buf_ = pg_spec_buf_ = VK_NULL_HANDLE;
@@ -173,7 +180,13 @@ void VulkanEngine::cull_plants(VkCommandBuffer cmd) {
         glm::vec4 spec[ScatterSet::kPlantSpecies];
         for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp)
             spec[sp] = glm::vec4(float(scatter_.plant_first[sp]), float(scatter_.plant_count[sp]), plant_max_d(sp), 0.0f);
-        std::memcpy(pg_spec_mapped_, spec, sizeof(spec));
+        vkCmdUpdateBuffer(cmd, pg_spec_buf_, 0, sizeof(spec), spec);
+    }
+    // The plants themselves, when the CPU has rewritten them (a crater, the surface they stand on).
+    if (pg_inst_gen_ != scatter_.plant_gen) {
+        VkBufferCopy ic{ 0, 0, VkDeviceSize(pg_total_) * sizeof(ScatterInstance) };
+        vkCmdCopyBuffer(cmd, scatter_.plant_buffer, pg_inst_buf_, 1, &ic);
+        pg_inst_gen_ = scatter_.plant_gen;
     }
     // Counts back to zero: the command template over the command buffer.
     VkBufferCopy cp{ 0, 0, VkDeviceSize(ScatterSet::kPlantSpecies) * kLevels * sizeof(VkDrawIndexedIndirectCommand) };

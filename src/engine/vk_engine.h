@@ -1772,6 +1772,8 @@ private:
     };
     bool prev_cam_key_ = false;
     // The globe (engine/globe.h; vk_engine/rocket.cpp): the player's chart follows them round the planet.
+    bool wv_nf_ok() const;
+    bool clutter_shadow_skip_ = false;                   // this frame the small plants' shadow maps keep last frame's
     bool globe_moved_player_ = false;                    // a re-anchoring changed the player's coordinates this frame
     void globe_update();                                 // re-anchor when the player has left the chart's reach
     void globe_enter(const struct GlobeChartRef& c);     // move the player (same place on the planet) into another chart
@@ -1926,6 +1928,11 @@ private:
     VkBuffer      pg_packed_buf_ = VK_NULL_HANDLE, pg_cmd_buf_ = VK_NULL_HANDLE, pg_tmpl_buf_ = VK_NULL_HANDLE, pg_spec_buf_ = VK_NULL_HANDLE;
     VmaAllocation pg_packed_alloc_ = nullptr, pg_cmd_alloc_ = nullptr, pg_tmpl_alloc_ = nullptr, pg_spec_alloc_ = nullptr;
     void*         pg_spec_mapped_ = nullptr;
+    // The culling shader's own copy of the plants, in GPU memory (the engine's instance buffer is
+    // in host memory, for the CPU to rewrite: read from a shader it costs a trip per plant).
+    VkBuffer      pg_inst_buf_ = VK_NULL_HANDLE;
+    VmaAllocation pg_inst_alloc_ = nullptr;
+    uint32_t      pg_inst_gen_ = 0;
     VkDescriptorSetLayout pg_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool      pg_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet       pg_set_ = VK_NULL_HANDLE;
