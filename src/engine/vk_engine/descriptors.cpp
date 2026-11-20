@@ -407,6 +407,15 @@ void VulkanEngine::update_scene_ubo() {
         } else {
             lamp_map_slot_ = -1;
         }
+        // The launch site's own lights, day and night: the lamp in the control house, and the
+        // rocket's exhaust while it burns nearby.
+        if (launch_site_placed_) {
+            const glm::vec3 leye = player_.eye_position();
+            if (glm::distance(leye, launch_house_) < 45.0f)
+                data.lamp_lights[7] = glm::vec4(launch_house_ + glm::vec3(0.0f, 2.95f, 0.0f), 2.4f);
+            if (rocket_.thr_vis > 0.02f && rocket_.stage != 3 && glm::distance(leye, glm::vec3(rocket_.pos)) < 1200.0f)
+                data.lamp_lights[6] = glm::vec4(glm::vec3(rocket_.pos) - rocket_.axis * 10.0f, 70.0f * rocket_.thr_vis);
+        }
     }
     // Candles in the chapel burn day and night. Each is a small light AT its
     // flame with a short reach (negative intensity = candle, see

@@ -58,6 +58,7 @@ Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMa
 | V | Fly |
 | H | Back to the start |
 | E | World editor; at the launch button: start the count |
+| C | During a launch: ride along with the rocket (mouse turns the camera) |
 | F | Flashlight |
 | F12 | Save a screenshot |
 | Esc | Menu with all settings |

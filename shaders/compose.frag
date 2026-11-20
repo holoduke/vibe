@@ -1271,9 +1271,15 @@ void main() {
     // under this pixel's ray, which is what the far march hits.
     {
         float alt_m = (pc.atmo.z - 6360.0) * 1000.0;
+        // Not for an object in the air in front of the land (the rocket, seen from beside it): a
+        // pixel with a real depth (not the far ground's clamped one) that lies well short of
+        // where its ray first reaches the ground.
+        bool in_air = obj_depth < 0.99998 && view_ray(uvp).y < -1e-4 &&
+                      obj_dist < 0.6 * max(alt_m - 220.0, 0.0) / max(-view_ray(uvp).y, 1e-4);
+        in_air = in_air || (obj_depth < 0.99998 && view_ray(uvp).y >= -1e-4 && alt_m > 3000.0);
         // Higher still the volumetric clouds have faded: the same weather map, painted on
         // the land (planet_surface does the same for the far field behind it).
-        if (!uw && pc.atmo.x > 0.5 && alt_m > u_exposure.misc.x && obj_w > 0.0 && obj_depth > 0.9995) {
+        if (!uw && !in_air && pc.atmo.x > 0.5 && alt_m > u_exposure.misc.x && obj_w > 0.0 && obj_depth > 0.9995) {
             float pw = weather_paint_w();
             vec3 cdir = view_ray(uvp);
             if (pw > 0.0 && cdir.y < -1e-4) {
@@ -1285,7 +1291,7 @@ void main() {
                 hdr_obj = mix(hdr_obj, ccol * obj_w, ca);
             }
         }
-        if (!uw && pc.atmo.x > 0.5 && alt_m > 100.0 && obj_w > 0.0 && obj_depth > 0.9995) {
+        if (!uw && !in_air && pc.atmo.x > 0.5 && alt_m > 100.0 && obj_w > 0.0 && obj_depth > 0.9995) {
             vec3 pdir = view_ray(uvp);
             if (pdir.y < -1e-4) {
                 float fl = clamp(1500.0 + alt_m * 100.0, 1500.0, 80000.0) * (1.0 - smoothstep(25000.0, 60000.0, alt_m));

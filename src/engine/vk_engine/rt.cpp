@@ -1210,7 +1210,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     if (!rocket_parts_.empty() && rocket_.stage != 3) {
         glm::mat4 rm, rpm; float rsc = 1.0f, rpsc = 1.0f;
         const glm::vec3 reye = current_frame_view_.eye_pos;
-        if (rocket_view(rocket_.pos, rocket_.axis, reye, rm, rsc) && rsc >= 1.0f) {
+        if (glm::length(reye) < 20000.0f && rocket_view(rocket_.pos, rocket_.axis, reye, rm, rsc) && rsc >= 1.0f) {
             if (!rocket_view(rocket_.prev_pos, rocket_.prev_axis, reye, rpm, rpsc) || rpsc < 1.0f) rpm = rm;
             for (const auto& g : rocket_parts_) {
                 if (!g.blas_addr) continue;

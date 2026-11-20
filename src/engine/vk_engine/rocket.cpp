@@ -243,6 +243,25 @@ bool VulkanEngine::rocket_press_button() {
     return true;       // (the key was meant for the button either way)
 }
 
+// ------------------------------------------------------------------ the rocket camera
+void VulkanEngine::rocket_toggle_camera() {
+    if (!launch_site_placed_) return;
+    Rocket& R = rocket_;
+    if (!R.cam) {
+        if (R.stage != 1 && R.stage != 2) return;        // (something to watch: from the count on)
+        R.saved_pos = player_.position; R.saved_yaw = player_.yaw; R.saved_pitch = player_.pitch; R.saved_fly = fly_mode_;
+        R.cam = true;
+        R.cam_yaw = player_.yaw; R.cam_pitch = player_.pitch;
+        R.first = true;
+    } else {
+        R.cam = false;
+        player_.position = R.saved_pos; player_.yaw = R.saved_yaw; player_.pitch = R.saved_pitch;
+        player_.velocity = glm::vec3(0.0f);
+        fly_mode_ = R.saved_fly;
+        R.first = true;
+    }
+}
+
 // ------------------------------------------------------------------ flight
 glm::dvec3 VulkanEngine::rocket_world_pos(double sx, double sy) const {
     // The simulation's plane is the world's x / y plane through the pad; the pad is at (0, rs).
@@ -276,6 +295,7 @@ void VulkanEngine::tick_rocket(float dt) {
             R.px = S.x; R.py = S.y; R.pux = S.ux; R.puy = S.uy;
             R.trail.clear();
             log::info("[rocket] lift-off");
+            if (std::getenv("QLIKE_TEST_ROCKET_CAM") && !R.cam) rocket_toggle_camera();
             if (R.test_skip > 0.0) { while (S.t < R.test_skip && S.phase != RocketSim::Landed && S.phase != RocketSim::Crashed) S.step(); R.px = S.x; R.py = S.y; R.pux = S.ux; R.puy = S.uy; R.test_skip = 0.0; }
         }
     } else if (R.stage == 2) {
@@ -328,8 +348,43 @@ void VulkanEngine::tick_rocket(float dt) {
     if (R.stage != 2) ax = glm::vec2(0.0f, 1.0f);
     ax = glm::normalize(ax);
     R.axis = glm::vec3(ax.x, ax.y, 0.0f);
-    if (R.first) { R.prev_pos = R.pos; R.prev_axis = R.axis; R.first = false; }
     R.alt = R.stage == 2 ? float(S.alt) : 0.0f;
+    if (R.cam) {
+        // Riding along. The engine's world is a flat map with the planet drawn under the camera
+        // by its height, so here the rocket is placed the engine's way: its distance along the
+        // ground as x, its altitude as y, its axis against the local horizon. (Seen from the
+        // ground it is placed on the round planet, above: near the pad the two agree.) On the
+        // planet's far side the map position wraps from +half-way to -half-way round - the
+        // map is not a globe - and the picture is lost for a moment.
+        const double r = std::hypot(sx, sy);
+        const double upx = sx / r, upy = sy / r, tgx = upy, tgy = -upx;
+        double ang = std::atan2(sx, sy);                                   // -pi .. pi from the pad
+        const bool far_side = R.stage == 2 && S.swept > 3.14159265358979 && S.swept < 6.2;
+        if (far_side != R.cam_far_side && R.stage == 2) { R.los_t = now; R.first = true; }
+        R.cam_far_side = far_side;
+        const glm::dvec3 L(double(launch_pad_.x) + ang * RocketSim::kPlanetR, double(launch_pad_.y) + double(kMountTop) + (r - S.rs), double(launch_pad_.z));
+        const glm::vec3 lax = glm::normalize(glm::vec3(float(double(ax.x) * tgx + double(ax.y) * tgy), float(double(ax.x) * upx + double(ax.y) * upy), 0.0f));
+        // the mouse turns the camera round the rocket
+        R.cam_az += player_.yaw - R.cam_yaw;
+        R.cam_el = glm::clamp(R.cam_el - (player_.pitch - R.cam_pitch), R.alt < 150.0f ? 0.03f : -1.2f, 1.35f);
+        const double dist = 190.0;
+        const glm::dvec3 centre = L + glm::dvec3(lax) * 36.0;
+        const glm::dvec3 off(std::cos(R.cam_el) * std::sin(R.cam_az) * dist, std::sin(R.cam_el) * dist, -std::cos(R.cam_el) * std::cos(R.cam_az) * dist);
+        const glm::dvec3 eye_d = centre + off;
+        const glm::vec3 look = glm::normalize(glm::vec3(-off));
+        fly_mode_ = true;
+        player_.velocity = glm::vec3(0.0f);
+        player_.position = glm::vec3(eye_d) - (player_.eye_position() - player_.position);
+        prev_player_position_ = player_.position;        // (the view is drawn between the last two physics positions)
+        player_.yaw = std::atan2(look.x, -look.z);
+        player_.pitch = std::asin(glm::clamp(look.y, -1.0f, 1.0f));
+        R.cam_yaw = player_.yaw; R.cam_pitch = player_.pitch;
+        // (drawn relative to the eye the engine will really use: far out a float position is metres coarse)
+        R.pos = glm::dvec3(player_.eye_position()) + (L - eye_d);
+        R.axis = lax;
+        if (R.stage != 1 && R.stage != 2 && now - R.landed_t > 12.0f) rocket_toggle_camera();      // the flight is over: back to the player
+    }
+    if (R.first) { R.prev_pos = R.pos; R.prev_axis = R.axis; R.first = false; }
 
     const glm::vec3 eye = current_frame_view_.eye_pos;
     const float dist = float(glm::length(R.pos - glm::dvec3(eye)));
@@ -381,7 +436,7 @@ void VulkanEngine::tick_rocket(float dt) {
 }
 
 // The rocket as the camera sees it: its transform, or `false` when it is out of sight.
-bool VulkanEngine::rocket_view(glm::dvec3 pos, glm::vec3 axis, glm::vec3 eye, glm::mat4& model, float& scale) const {
+bool VulkanEngine::rocket_view(glm::dvec3 pos, glm::vec3 axis, glm::vec3 eye, glm::mat4& model, float& scale, glm::vec3* rel_out) const {
     const glm::dvec3 rel = pos - glm::dvec3(eye);
     const double d = glm::length(rel);
     scale = 1.0f;
@@ -396,6 +451,9 @@ bool VulkanEngine::rocket_view(glm::dvec3 pos, glm::vec3 axis, glm::vec3 eye, gl
         if (disc > 0.0) { const double t0 = -b - std::sqrt(disc); if (t0 > 0.0 && t0 < d) return false; }
         scale = float(lim / d);
         at = eye + glm::vec3(dir * lim);
+        if (rel_out) *rel_out = glm::vec3(dir * lim);
+    } else if (rel_out) {
+        *rel_out = glm::vec3(rel);
     }
     const glm::vec3 y = glm::normalize(axis), z(0.0f, 0.0f, 1.0f);
     const glm::vec3 x = glm::normalize(glm::cross(y, z));
@@ -409,8 +467,19 @@ void VulkanEngine::draw_rocket(VkCommandBuffer cmd, const glm::mat4& vp, const g
     const Rocket& R = rocket_;
     const glm::vec3 eye = current_frame_view_.eye_pos;
     glm::mat4 model, prev_model; float s = 1.0f, ps = 1.0f;
-    if (!rocket_view(R.pos, R.axis, eye, model, s)) return;
-    if (!rocket_view(R.prev_pos, R.prev_axis, eye, prev_model, ps)) prev_model = model;
+    glm::vec3 rel(0.0f), prel(0.0f);
+    if (!rocket_view(R.pos, R.axis, eye, model, s, &rel)) return;
+    if (!rocket_view(R.prev_pos, R.prev_axis, eye, prev_model, ps, &prel)) { prev_model = model; prel = rel; }
+    // Far from the origin (riding along in orbit) a float world position is metres coarse and
+    // view-projection x model cancels badly: draw relative to the eye instead.
+    const bool far_eye = !shadow_layout && glm::length(eye) > 20000.0f;
+    glm::mat4 mvp_rel(1.0f), pmvp_rel(1.0f);
+    if (far_eye) {
+        const glm::mat4 vr = current_frame_view_.proj * glm::mat4(glm::mat3(current_frame_view_.view));
+        glm::mat4 m = model, pm = prev_model;
+        m[3] = glm::vec4(rel, 1.0f); pm[3] = glm::vec4(prel, 1.0f);
+        mvp_rel = vr * m; pmvp_rel = vr * pm;
+    }
     if (shadow_layout && s < 1.0f) return;               // (a far proxy casts no shadow here)
     if (s < 1.0f) {
         // Landscape in the way? March the line of sight over the ground the CPU knows.
@@ -436,9 +505,9 @@ void VulkanEngine::draw_rocket(VkCommandBuffer cmd, const glm::mat4& vp, const g
             vkCmdPushConstants(cmd, shadow_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp);
         } else {
             PushConstants pc{};
-            pc.mvp = vp * model;
+            pc.mvp = far_eye ? mvp_rel : vp * model;
             pc.model = model;
-            pc.prev_mvp = prev_vp * prev_model;
+            pc.prev_mvp = far_eye ? pmvp_rel : prev_vp * prev_model;
             pc.grass_params = glm::vec4(-1.0f, 0.0f, 0.0f, -1.0f);      // static-mesh mode, vertex UVs, flat
             if (!depth_only) {
                 pc.color = glm::vec4(tex_on ? g.tint : g.fallback, 1.0f);
@@ -499,12 +568,12 @@ void VulkanEngine::rocket_build_fx(glm::vec3 eye, float px_ang, std::vector<Rock
             }
             strips.push_back(std::move(st));
         };
-        beam(0.0f, len, w0 * 1.25f, 1.5f * k * (1.0f - 0.7f * vac), glm::vec3(1.0f, 0.42f, 0.12f));      // the orange body
-        beam(0.0f, len * 0.55f, w0 * 0.75f, 2.6f * k * (1.0f - 0.5f * vac), glm::vec3(1.0f, 0.74f, 0.42f));   // the bright core
+        beam(0.0f, len, w0 * 1.25f, 1.5f * k * (1.0f - 0.8f * vac), glm::vec3(1.0f, 0.42f, 0.12f));      // the orange body
+        beam(0.0f, len * 0.55f, w0 * 0.75f, 2.6f * k * (1.0f - 0.7f * vac), glm::vec3(1.0f, 0.74f, 0.42f));   // the bright core
         beam(0.0f, len * 0.22f, w0 * 0.5f, 3.2f * k, glm::vec3(0.75f, 0.80f, 1.0f));                      // shock-hot at the nozzles
         // glare
-        flashes.push_back({ e0 + back * (2.0f * s0), min_w(e0, (16.0f + 30.0f * vac) * s0 * (0.5f + 0.5f * k), 7.0f) * flick,
-                            glm::vec3(1.0f, 0.62f, 0.30f) * (2.2f * k) });
+        flashes.push_back({ e0 + back * (2.0f * s0), min_w(e0, (11.0f + 4.0f * vac) * s0 * (0.5f + 0.5f * k), 6.0f) * flick,
+                            glm::vec3(1.0f, 0.62f, 0.30f) * (1.5f * k * (1.0f - 0.7f * vac)) });
     }
     // ---- entry: a streak of glowing air ----
     if (seen && R.stage == 2 && R.sim.phase == RocketSim::Entry && R.sim.heat > 0.02) {
@@ -519,10 +588,10 @@ void VulkanEngine::rocket_build_fx(glm::vec3 eye, float px_ang, std::vector<Rock
             const glm::vec3 p = e0 - vdir * (len * f) + vdir * (20.0f * s0);
             st.p.push_back(p);
             st.w.push_back(min_w(p, (9.0f + 40.0f * f) * s0, 2.0f + 3.0f * h));
-            st.a.push_back(2.4f * h * (1.0f - f) * (1.0f - f));
+            st.a.push_back(1.5f * h * (1.0f - f) * (1.0f - f));
         }
         strips.push_back(std::move(st));
-        flashes.push_back({ e0 + vdir * (30.0f * s0), min_w(e0, 60.0f * s0, 6.0f + 10.0f * h), glm::vec3(1.0f, 0.7f, 0.45f) * (2.5f * h) });
+        flashes.push_back({ e0 + vdir * (30.0f * s0), min_w(e0, 34.0f * s0, 5.0f + 7.0f * h), glm::vec3(1.0f, 0.7f, 0.45f) * (1.5f * h) });
     }
     // ---- the smoke trail ----
     if (R.trail.size() >= 2) {
@@ -623,6 +692,7 @@ void VulkanEngine::draw_rocket_hud() {
         const float pulse = 1.0f + 0.08f * (1.0f - glm::fract(R.countdown));
         centred(fb, 120.0f * s * pulse, W * 0.5f, H * 0.16f, R.countdown < 3.0f ? kAccent : kWhite, buf);
         centred(fs, 24.0f * s, W * 0.5f, H * 0.16f + 132.0f * s, kDim, R.countdown < 3.0f ? "IGNITION" : "LAUNCH SEQUENCE");
+        centred(fs, 19.0f * s, W * 0.5f, H * 0.16f + 166.0f * s, kDim, R.cam ? "C   BACK TO THE GROUND" : "C   ROCKET CAMERA");
         return;
     }
     const bool show = R.stage == 2 || (R.stage != 1 && R.landed_t > 0.0f && now - R.landed_t < 14.0f);
@@ -675,6 +745,14 @@ void VulkanEngine::draw_rocket_hud() {
     }
     if (R.stage == 0 && S.phase == RocketSim::Landed)
         centred(fs, 22.0f * s, (x0 + x1) * 0.5f, y1 - 34.0f * s, kWhite, "BACK ON THE MOUNT");
+    else if (R.stage == 2)
+        centred(fs, 19.0f * s, (x0 + x1) * 0.5f, y1 - 30.0f * s, kDim, R.cam ? "C   BACK TO THE GROUND" : "C   ROCKET CAMERA");
+    // Riding along, past the far side of the planet: the picture drops out for a moment.
+    if (R.cam && now - R.los_t < 1.6f) {
+        const float k = 1.0f - glm::smoothstep(0.7f, 1.6f, now - R.los_t);
+        dl->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(W, H), IM_COL32(4, 6, 8, int(255.0f * k)));
+        if (k > 0.3f) centred(fs, 26.0f * s, W * 0.5f, H * 0.5f, IM_COL32(190, 196, 205, int(255.0f * k)), "LOSS OF SIGNAL");
+    }
 }
 
 }  // namespace qlike

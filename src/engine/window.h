@@ -29,6 +29,7 @@ struct InputFrame {
     bool brush_mode_next = false; // R; engine edge-detects to cycle brush mode
     bool wireframe_key = false;   // 9; engine edge-detects to toggle terrain wireframe
     bool home_key = false;        // H; engine edge-detects: back to the home spot
+    bool cam_key = false;         // C; engine edge-detects: the rocket camera
     bool fly_key = false;         // V; engine edge-detects to toggle fly mode
     bool weapon1 = false, weapon2 = false;   // 1 / 2: laser gun / airstrike tablet
     bool fire = false;      // left mouse, edge-triggered (one click = one)

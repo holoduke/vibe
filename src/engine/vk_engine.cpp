@@ -684,6 +684,8 @@ void VulkanEngine::run(const RunOptions& opts) {
             log::infof("[terrain] edit mode %s (E)",
                        terrain_edit_mode_ ? "ON" : "OFF");
         }
+        if (in.cam_key && !prev_cam_key_ && state_ == State::Playing) rocket_toggle_camera();      // C: ride along with the rocket
+        prev_cam_key_ = in.cam_key;
         // Digit 9 -> toggle terrain wireframe. Same edge-detect pattern
         // as the E key above. Only fires while playing so a 9 in the
         // pause menu / chat input wouldn't flip it.

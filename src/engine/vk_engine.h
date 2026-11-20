@@ -1754,7 +1754,18 @@ private:
         uint32_t voice[2]{};
         bool   test_done = false;
         double test_skip = 0.0;
+        // The rocket camera (C): the view rides beside the rocket; the mouse turns it round.
+        bool   cam = false;
+        float  cam_az = 2.5f, cam_el = 0.22f;
+        float  cam_yaw = 0.0f, cam_pitch = 0.0f;         // what the camera was set to last frame
+        glm::vec3 saved_pos{0.0f};
+        float  saved_yaw = 0.0f, saved_pitch = 0.0f;
+        bool   saved_fly = false;
+        bool   cam_far_side = false;                     // past the planet's far side (the map position wraps there)
+        float  los_t = -100.0f;                          // when the picture was lost there
     };
+    bool prev_cam_key_ = false;
+    void rocket_toggle_camera();
     Rocket rocket_;
     std::vector<CastleMeshGpu> rocket_parts_;
     std::vector<int>           rocket_part_glow_;
@@ -1769,7 +1780,7 @@ private:
     bool rocket_button_in_reach() const;
     bool rocket_press_button();
     glm::dvec3 rocket_world_pos(double sx, double sy) const;
-    bool rocket_view(glm::dvec3 pos, glm::vec3 axis, glm::vec3 eye, glm::mat4& model, float& scale) const;
+    bool rocket_view(glm::dvec3 pos, glm::vec3 axis, glm::vec3 eye, glm::mat4& model, float& scale, glm::vec3* rel_out = nullptr) const;
     void draw_rocket(VkCommandBuffer cmd, const glm::mat4& vp, const glm::mat4& prev_vp, bool depth_only, VkPipelineLayout shadow_layout);
     void rocket_build_fx(glm::vec3 eye, float px_ang, std::vector<RocketFxStrip>& strips, std::vector<RocketFxFlash>& flashes) const;
     void draw_rocket_hud();
