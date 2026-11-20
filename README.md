@@ -2,11 +2,6 @@
 
 A ray-traced open-world engine and its first-person game, written in C++ and Vulkan 1.3, entirely by AI.
 
-**The idea:** the human never reads or writes the code. They play the build, look at the
-picture and say what is wrong or what should come next. An AI coding agent
-([Claude Code](https://claude.com/claude-code)) does the rest: design, C++, shaders, debugging,
-profiling, testing and commits. This repository is the result, and its commit history is the log.
-
 ![The castle](docs/screenshots/castle.png)
 
 ## What it is
@@ -28,7 +23,7 @@ underneath is the point of this repository.
 
 A native C++20 application on Vulkan 1.3, with no game engine underneath: about 57,000 lines of
 C++ and 22,000 lines of GLSL in 69 shader files. Windowing, math, physics, audio and networking
-come from small libraries (see Credits); the renderer, the world and the tools are written here.
+come from small libraries; the renderer, the world and the tools are written here.
 
 The lists below name each technique and, where it follows published work, its source. Most are
 switches in the settings menu, so they can be compared live.
