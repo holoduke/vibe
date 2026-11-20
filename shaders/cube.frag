@@ -434,9 +434,7 @@ void main() {
         if ((vm == 2 || vm == 3) && veg_leaf_cut(vObjectPos, vWorldPos, vNormal, scene.camera_pos.xyz)) discard;
         if (vm == 7) {
             g_card_tex = texture(u_albedo[15], veg_card_uv(vObjectNormal.xy, vObjectNormal.z, 0.5 * max(fwidth(vObjectNormal.x), fwidth(vObjectNormal.y))), -0.7);
-            // (a sharper mip and a higher cut: a spray of needles a few pixels across was filled in
-            // to one solid lobe by the blurred coverage of the coarse mips)
-            if (g_card_tex.a < 0.36) discard;
+            if (g_card_tex.a < 0.33) discard;      // (the same cut as the depth pre-pass, veg_depth.frag: a pixel that one keeps and the other drops has depth but no surface - a bright speck)
         }
     }
     vec3 N = normalize(vNormal);
@@ -815,7 +813,7 @@ void main() {
             albedo *= mix(0.55, 1.15, smoothstep(0.10, 0.45, cl));
             // Where the card is thinly covered (needle tips, the fringe of a spray) less of it is
             // leaf: darker there, so the twig's own structure shows inside its outline.
-            albedo *= mix(0.58, 1.10, smoothstep(0.36, 0.95, g_card_tex.a));
+            albedo *= mix(0.58, 1.10, smoothstep(0.33, 0.95, g_card_tex.a));
             albedo *= crown * crown_tint;
         } else if (pc.grass_params.x > 0.5) {
             albedo *= crown * crown_tint;
