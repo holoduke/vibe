@@ -31,6 +31,7 @@
 #include "engine/veg_paint.h"
 #include "engine/aa_vehicle.h"
 #include "engine/rocket_sim.h"
+#include "engine/globe.h"
 #include "engine/texture.h"   // for BackgroundDecodeHandle
 #include "engine/vk_engine/settings_types.h"  // RtSettings / GameSettings
 #include "game/level.h"
@@ -41,6 +42,7 @@
 struct ImFont;      // Dear ImGui (HUD fonts)
 
 namespace qlike {
+struct GlobeChartRef { globe::Chart c; };
 
 // Running totals of validation-layer warnings / errors observed during this
 // process. Incremented (atomically — the validation layer is allowed to call
@@ -1742,7 +1744,11 @@ private:
         double acc = 0.0;                    // simulation time owed
         float  warp = 1.0f;                  // how much faster than the clock the flight runs
         double px = 0.0, py = 0.0, pux = 0.0, puy = 1.0;     // the step before (drawn between the two)
-        glm::dvec3 pos{0.0}, prev_pos{0.0};  // base centre, world
+        glm::dvec3 planet_pos{0.0}, planet_axis{0.0, 1.0, 0.0};     // base centre and axis in the planet frame (m from the centre)
+        const globe::Chart* last_chart = nullptr;
+        glm::dvec3 rel{0.0};                 // from the eye
+        globe::Chart saved_chart;
+        glm::dvec3 pos{0.0}, prev_pos{0.0};  // base centre, in the engine's coordinates (see tick_rocket)
         glm::vec3  axis{0.0f, 1.0f, 0.0f}, prev_axis{0.0f, 1.0f, 0.0f};
         bool   first = true;
         float  alt = 0.0f;
@@ -1765,6 +1771,12 @@ private:
         float  los_t = -100.0f;                          // when the picture was lost there
     };
     bool prev_cam_key_ = false;
+    // The globe (engine/globe.h; vk_engine/rocket.cpp): the player's chart follows them round the planet.
+    bool globe_moved_player_ = false;                    // a re-anchoring changed the player's coordinates this frame
+    void globe_update();                                 // re-anchor when the player has left the chart's reach
+    void globe_enter(const struct GlobeChartRef& c);     // move the player (same place on the planet) into another chart
+    void globe_go_home();                                // ... into home's chart (before anything sets home coordinates)
+    glm::dvec3 globe_planet_pos(glm::vec3 p) const;      // a chart position in the planet frame (m from the centre)
     void rocket_toggle_camera();
     Rocket rocket_;
     std::vector<CastleMeshGpu> rocket_parts_;
@@ -1779,7 +1791,6 @@ private:
     void tick_rocket(float dt);
     bool rocket_button_in_reach() const;
     bool rocket_press_button();
-    glm::dvec3 rocket_world_pos(double sx, double sy) const;
     bool rocket_view(glm::dvec3 pos, glm::vec3 axis, glm::vec3 eye, glm::mat4& model, float& scale, glm::vec3* rel_out = nullptr) const;
     void draw_rocket(VkCommandBuffer cmd, const glm::mat4& vp, const glm::mat4& prev_vp, bool depth_only, VkPipelineLayout shadow_layout);
     void rocket_build_fx(glm::vec3 eye, float px_ang, std::vector<RocketFxStrip>& strips, std::vector<RocketFxFlash>& flashes) const;

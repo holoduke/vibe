@@ -47,7 +47,8 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 7456 (cloud_a / cloud_b: cloud shadows follow the real clouds).
 //     → 7968 (footprints[32]: prints in the snow).
 //     → 7984 (season weights).
-static_assert(sizeof(SceneUBO) == 7984, "scene ubo layout");
+//     → 8448 (the globe: chart frame + FBM lattice).
+static_assert(sizeof(SceneUBO) == 8448, "scene ubo layout");
 
 RtFuncs g_rt;
 

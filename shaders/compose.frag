@@ -23,6 +23,12 @@ layout(std430, set = 0, binding = 4) readonly buffer Exposure {
     vec4 misc;           // x: top of the local cloud layer (m), y: cloud coverage, z: cloud size, w: metres the wind has carried the clouds
     vec4 misc2;          // x: base of the local cloud layer (m)
     vec4 sun_land;       // rgb: the sunlight on the landscape (scene.sun_color.rgb x intensity)
+    // The globe (engine/globe.h): the frame at the camera's ground point - the planet-frame
+    // directions of the view's east (x), up (y) and south (z) - and the landscape FBM's lattice
+    // at that point (world_map.glsl wm_shape3).
+    vec4 gf0; vec4 gf1; vec4 gf2;
+    ivec4 gcell[12];
+    vec4  gfrac[12];
 } u_exposure;
 // Mip 0 of the bloom chain (Karis-prefiltered downsample → upsample). The
 // engine runs run_bloom_chain between TAA and compose; we sample it here at
@@ -120,8 +126,11 @@ vec3 pl_noised(vec2 p) {
 }
 // The shape of the world: shaders/world_map.glsl, the same text the raymarched landscape uses.
 #define WM_NOISE(p) pl_noised(p).x
+#define WM_CELL(i) u_exposure.gcell[i].xyz
+#define WM_FRAC(i) u_exposure.gfrac[i].xyz
 #include "world_map.glsl"
-float pl_terrain(vec2 wp, float octf) {
+float g_pl_dd = 0.0;      // (the FBM's slope term, for the octaves left out)
+float pl_shape2(vec2 wp, float octf) {
     vec2 p = wp * 0.003;
     float a = 0.0, b = 1.0;
     vec2 d = vec2(0.0);
@@ -140,7 +149,22 @@ float pl_terrain(vec2 wp, float octf) {
     float rest = 0.0, bb = 1.0;
     for (int i = 0; i < 6; ++i) { rest += bb * (1.0 - clamp(octf - float(i), 0.0, 1.0)); bb *= 0.5; }
     a += rest * 0.42 / (1.0 + dot(d, d));
-    return wm_height(a, wp, u_exposure.planet.z);             // the shape of the world (world_map.glsl)
+    return a;
+}
+// Ground height at a point of the planet: `hp` its home coordinates (m), `Nf` the point (unit,
+// planet frame), `D` its offset (m, planet frame) from the camera's ground point.
+float pl_terrain(vec2 hp, vec3 Nf, vec3 D, float octf) {
+    float dh = length(hp);
+    float wT = smoothstep(wm_blend0, wm_blend1, dh);
+    float a = wT < 1.0 ? pl_shape2(hp, octf) : 0.0;
+    if (wT > 0.0) {
+        float a3 = wm_shape3(D, min(octf, 6.0));
+        float rest = 0.0, bb = 1.0;
+        for (int i = 0; i < 6; ++i) { rest += bb * (1.0 - clamp(octf - float(i), 0.0, 1.0)); bb *= 0.5; }
+        a3 += rest * 0.42 * 0.6;
+        a = mix(a, a3, wT);
+    }
+    return dh < 100000.0 ? wm_height(a, hp, u_exposure.planet.z) : wm_height_globe(a, hp, Nf, u_exposure.planet.z);
 }
 vec4 atmo_aerial(vec2 uv, float d_km);
 // ---- One weather map for every view of the clouds ---------------------
@@ -197,14 +221,10 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     // The same point in the planet's own frame: the camera has travelled
     // over the map, which is that far round the sphere. Home (the map's
     // origin) is the planet's top; `m` is the place on the flat map (km).
-    vec2 cam = u_exposure.planet.xy;
-    float cam_d = length(cam);
-    vec3 Nf = N;
-    if (cam_d > 1e-4) {
-        vec3 ax = vec3(cam.y, 0.0, -cam.x) / cam_d;
-        float ph = cam_d / Rg;
-        Nf = N * cos(ph) + cross(ax, N) * sin(ph) + ax * dot(ax, N) * (1.0 - cos(ph));
-    }
+    // (the frame at the camera's ground point, from the engine: the planet is a real sphere and
+    // the camera may be anywhere on it)
+    mat3 gF = mat3(u_exposure.gf0.xyz, u_exposure.gf1.xyz, u_exposure.gf2.xyz);
+    vec3 Nf = normalize(gF * N);
     float sth = length(Nf.xz);
     float th = (Nf.y > 0.0) ? asin(min(sth, 1.0)) : 3.14159265 - asin(min(sth, 1.0));
     vec2 m = Rg * Nf.xz * (sth > 1e-5 ? th / sth : 1.0);
@@ -213,10 +233,10 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     vec3 q = Nf * 3.2 + vec3(1.7, 0.0, 4.1);
     float cont = pl_fbm(q) * 0.62 + pl_fbm(Nf * 15.0 + 2.0) * 0.28 + pl_fbm(Nf * 70.0) * 0.10;
     float home = exp(-dot(m, m) / (900.0 * 900.0));              // the place we stand on is land (not a peak: its height stays the map's)
-    float wm_v = wm_continent(m);                                // the world map: > 0 land, < 0 sea
+    float wm_v = wm_continent_globe(m, Nf);                      // the world map: > 0 land, < 0 sea
     float land = smoothstep(-0.012, 0.012, wm_v) * 1.0;         // (`cont` below only shapes the land's look)
     land = mix(1.0, land, smoothstep(1.45, 1.9, length(m)));     // (home itself is the landscape, lakes and all)
-    float high = wm_ranges(m) * smoothstep(2.6, 6.0, length(m));    // the world map's high ranges (home's own mountains: the landscape)
+    float high = wm_ranges_globe(m, Nf) * smoothstep(2.6, 6.0, length(m));    // the world map's high ranges (home's own mountains: the landscape)
     float lat = abs(Nf.z);                                     // a pole along z: ice caps
     float detail = pl_fbm(Nf * 60.0);
     vec3 forest = mix(vec3(0.045, 0.085, 0.030), vec3(0.090, 0.110, 0.045), detail);
@@ -239,17 +259,22 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     // (the home country reaches far: from the heights where its edge would be in view the
     // raymarched landscape must not end in a different-looking planet)
     float w_home = 1.0 - smoothstep(350.0, 900.0, md);
-    float w_mid = w_home * smoothstep(0.3, 2.0, octf);
+    // (anywhere on the planet: the land's own heights wherever the view resolves them)
+    float w_mid = smoothstep(0.3, 2.0, octf);
+    vec3 tXc = vec3(1.0, 0.0, 0.0), tZc = vec3(0.0, 0.0, 1.0);    // the map's east and south at the point, in the view's frame
     if (w_mid > 0.0) {
         vec2 wp = m * 1000.0;
         float e = max(foot, 3.0);
-        float h0 = pl_terrain(wp, octf);
-        float hx = pl_terrain(wp + vec2(e, 0.0), octf), hz = pl_terrain(wp + vec2(0.0, e), octf);
+        vec3 tXp = abs(Nf.x) < 0.95 ? normalize(vec3(1.0, 0.0, 0.0) - Nf * Nf.x) : normalize(vec3(0.0, 0.0, 1.0) - Nf * Nf.z);
+        vec3 tZp = cross(tXp, Nf);
+        tXc = tXp * gF; tZc = tZp * gF;
+        vec3 Dp = gF * ((P - vec3(0.0, Rg, 0.0)) * 1000.0);
+        float h0 = pl_terrain(wp, Nf, Dp, octf);
+        float hx = pl_terrain(wp + vec2(e, 0.0), Nf, Dp + tXp * e, octf), hz = pl_terrain(wp + vec2(0.0, e), Nf, Dp + tZp * e, octf);
         vec3 tn = normalize(vec3(h0 - hx, e, h0 - hz));
         // Away from home the country varies by region: lowlands (greener, more water) and highlands (more snow).
         // (Nothing within 120 km of home: that is where the raymarched landscape is seen and cross-fades into this -
         // with other heights here the two did not line up, and hollows and snow hopped as the fade band moved.)
-        h0 += (pl_noise(vec3(wp * 0.00005, 7.7)) * 0.65 + pl_noise(vec3(wp * 0.00017, 2.2)) * 0.35 - 0.5) * 75.0 * smoothstep(120.0, 300.0, md);
         float wl = u_exposure.planet.z, gsnow = u_exposure.planet.w;
         float patchn = pl_noise(vec3(wp * 0.004, 1.3)), fine = pl_noise(vec3(wp * 0.05, 4.1));
         // The landscape's own height layers: sand, grass (wooded), dirt, rock, snow.
@@ -269,7 +294,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
         col = mix(col, mc, w_mid);
         sea = mix(sea, lake, w_mid);
         land = mix(land, 1.0 - wet * (1.0 - smoothstep(0.5, 0.9, gsnow)), w_mid);
-        nl = normalize(N + vec3(tn.x, 0.0, tn.z) * (w_mid * (1.0 - wet)));
+        nl = normalize(N + (tXc * tn.x + tZc * tn.z) * (w_mid * (1.0 - wet)));
     }
     // Where the view no longer resolves those heights (shallow, far): the same country's average look, not the generic map.
     {

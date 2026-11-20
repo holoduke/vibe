@@ -5,6 +5,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/globe.h"
 // Pulled in here (not in vk_engine.h) so the unique_ptr<voxel::VoxelWorld>
 // member's destructor can be generated in this TU where the type is
 // complete. Forward-declared in the header to keep its include surface tight.
@@ -359,6 +360,15 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
                                // the sunlight as the landscape gets it (scene.sun_color: golden-hour colour x intensity)
                                last_sun_rgb_.x * rt_.sun_intensity, last_sun_rgb_.y * rt_.sun_intensity, last_sun_rgb_.z * rt_.sun_intensity, 0.0f };
         vkCmdUpdateBuffer(frame.command_buffer, exposure_buf_, 16, sizeof(pl), pl);
+        // The globe: the frame at the camera's ground point and the FBM lattice there.
+        {
+            struct { float f[12]; int32_t cells[globe::kOctaves][4]; float fracs[globe::kOctaves][4]; } gb{};
+            const globe::Chart& gc = globe::current();
+            const glm::dmat3 fc = globe::frame_at(gc, double(current_frame_view_.eye_pos.x), double(current_frame_view_.eye_pos.z));
+            for (int c = 0; c < 3; ++c) { gb.f[c * 4 + 0] = float(fc[c].x); gb.f[c * 4 + 1] = float(fc[c].y); gb.f[c * 4 + 2] = float(fc[c].z); }
+            globe::lattice(fc[1] * globe::kR, gb.cells, gb.fracs);
+            vkCmdUpdateBuffer(frame.command_buffer, exposure_buf_, 112, sizeof(gb), &gb);
+        }
     }
     { CPU_SCOPE("+veg-cull"); cull_vegetation(frame.command_buffer); cull_clusters(frame.command_buffer); cull_plants(frame.command_buffer); cull_static_clusters(frame.command_buffer); }
 

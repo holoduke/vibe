@@ -40,11 +40,52 @@ const float TERRAIN_HEIGHT = 120.0;
 // The shape of the world: shaders/world_map.glsl (shared with the planet's far field in
 // compose.frag). Every height the landscape formula makes passes through it.
 #define WM_NOISE(p) noise2(p)
+#define WM_CELL(i) scene.globe_cell[i].xyz
+#define WM_FRAC(i) scene.globe_frac[i].xyz
 #include "world_map.glsl"
 #ifndef RM_WATER_LEVEL
 #define RM_WATER_LEVEL scene.water_params.y
 #endif
-float rm_world_h(float a, vec2 wp) { return wm_height(a, wp, RM_WATER_LEVEL); }
+// The globe (world_map.glsl, engine/globe.h). World positions here are the engine's chart
+// coordinates: in home's chart they are home coordinates and everything is as it always was;
+// in a far chart (another part of the planet) the world is made from the point on the sphere.
+bool rm_far_chart() { return scene.globe_info.x > 0.5; }
+// Distance from home for the rules that tell home's lakes from the open sea (a far chart is far).
+float rm_home_dist(vec2 wp) { return rm_far_chart() ? 1.0e9 : length(wp); }
+// A chart position's ground point, as an offset (m) from the chart origin's ground point, in
+// the chart's frame (east, up, south): the chart unrolls the sphere, this rolls it back.
+vec3 rm_chart_local(vec2 wp) {
+    vec2 l = vec2(wp.x - scene.globe_info.y, wp.y);
+    float d = length(l);
+    if (d < 1.0) return vec3(l.x, 0.0, l.y);
+    float th = d / wm_R, sh = sin(0.5 * th), k = wm_R * sin(th) / d;
+    return vec3(l.x * k, -2.0 * wm_R * sh * sh, l.y * k);
+}
+vec3 rm_planet_G(vec2 wp) { return normalize(mat3(scene.globe_frame) * (rm_chart_local(wp) + vec3(0.0, wm_R, 0.0))); }
+// The landscape FBM's value: `a` as the flat formula made it, handed over to the sphere's
+// between 40 and 90 km from home (a far chart is all sphere).
+float rm_shape(float a, vec2 wp, float oct_f) {
+    if (rm_far_chart()) return wm_shape3(mat3(scene.globe_frame) * rm_chart_local(wp), oct_f);
+    float d2 = dot(wp, wp);
+    if (d2 < wm_blend0 * wm_blend0) return a;
+    return mix(a, wm_shape3(mat3(scene.globe_frame) * rm_chart_local(wp), oct_f), smoothstep(wm_blend0, wm_blend1, sqrt(d2)));
+}
+float rm_world_h(float a, vec2 wp) {
+    if (!rm_far_chart()) return wm_height(a, wp, RM_WATER_LEVEL);
+    vec3 G = rm_planet_G(wp);
+    return wm_height_globe(a, wm_az(G), G, RM_WATER_LEVEL);
+}
+float rm_continent(vec2 wp) {
+    if (!rm_far_chart()) return wm_continent(wp * 0.001);
+    vec3 G = rm_planet_G(wp);
+    return wm_continent_globe(wm_az(G) * 0.001, G);
+}
+float rm_forest(vec2 wp, float h, float ny, float wl) {
+    bool far = rm_far_chart();
+    if (!far && dot(wp, wp) < wm_blend0 * wm_blend0) return wm_forest(wp, h, ny, wl);
+    vec3 G = rm_planet_G(wp);
+    return wm_forest_globe(far ? wm_az(G) : wp, G, h, ny, wl);
+}
 
 
 // High-frequency FBM-eroded noise used by sampleHeightDelta to paint
@@ -76,6 +117,7 @@ float terrainDetailNoise(vec2 worldXZ) {
 // terrain shape matches what physics / castle assume.
 const float kPlateauBlend = 20.0;  // smooth ramp from castle-flat to FBM mountains
 float plateauWeight(vec2 worldXZ) {
+    if (rm_far_chart()) return 0.0;                      // (home's castle site: not in another part of the planet)
     vec2 c = pc.color.xy;
     float ext = pc.color.z;
     vec2 d = abs(worldXZ - c) - vec2(ext);
@@ -131,6 +173,7 @@ float plateauGroundDetail(vec2 wp) {
 // below the baked heightmap that shadows / objects use) and faded out by
 // 34 m, where it is sub-pixel anyway.
 float rm_road_dist(vec2 q) {         // distance to the road centreline (1e9 outside its bounds)
+    if (rm_far_chart()) return 1e9;
     int rn = int(scene.road_info.x + 0.5);
     if (rn < 2 || any(lessThan(q, scene.road_bbox.xy)) || any(greaterThan(q, scene.road_bbox.zw))) return 1e9;
     float best = 1e9;
@@ -159,6 +202,7 @@ float rm_road_seg_d2(vec2 q, int i) {
     return dot(dv, dv);
 }
 float rm_road_dist_thr(vec2 q, float thr) {
+    if (rm_far_chart()) return 1e9;
     float moved = length(q - g_rd_q);
     float lb = g_rd_v - moved;
     if (lb >= thr) return lb;

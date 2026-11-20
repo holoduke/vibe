@@ -4,6 +4,7 @@
 // line; vec3 fields use space-separated triples.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/globe.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -597,6 +598,20 @@ void VulkanEngine::save_settings() const {
             explicit BaseSwap(VulkanEngine* x) : e(x) { if (e->env_applied_) e->env_swap_base(); }
             ~BaseSwap() { if (e->env_applied_) e->env_swap_base(); }
         } base_swap(const_cast<VulkanEngine*>(this));
+        // Away from home the engine's coordinates are those of a local chart of the planet
+        // (engine/globe.h): the place is saved in home coordinates, which every start-up
+        // understands (the engine re-anchors from them on the first frame).
+        struct PlaceSwap {
+            VulkanEngine* e; glm::vec3 keep;
+            explicit PlaceSwap(VulkanEngine* x) : e(x), keep(x->player_.position) {
+                const globe::Chart& c = globe::current();
+                if (!c.home) {
+                    const glm::dvec2 hz = globe::home_az(globe::to_planet(c, double(keep.x), double(keep.z)));
+                    e->player_.position.x = float(hz.x); e->player_.position.z = float(hz.y);
+                }
+            }
+            ~PlaceSwap() { e->player_.position = keep; }
+        } place_swap(const_cast<VulkanEngine*>(this));
         visit_settings(*this, [&](const char* key, const auto& v) {
             f << key << " = ";
             write_value(f, v);

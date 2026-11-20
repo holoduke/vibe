@@ -368,6 +368,7 @@ add_library(qlike_engine STATIC
     src/engine/world_props.cpp
     src/engine/aa_vehicle.cpp
     src/engine/rocket_sim.cpp
+    src/engine/globe.cpp
 )
 target_include_directories(qlike_engine PUBLIC src)
 target_include_directories(qlike_engine PRIVATE

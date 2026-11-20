@@ -1,4 +1,5 @@
 #include "engine/terrain.h"
+#include "engine/globe.h"
 
 #include "engine/log.h"
 
@@ -164,17 +165,39 @@ inline float river(float h, glm::vec2 wp, float wl) {
     const float t = std::clamp(0.5f + 0.125f * (cap - h), 0.0f, 1.0f);
     return glm::mix(cap, h, t) - 4.0f * t * (1.0f - t);
 }
-inline float height_land(float a, glm::vec2 wp, float wl) {
-    float h = a * 120.0f;
-    float w = sstep(1450.0f, 1900.0f, glm::length(wp));
-    if (w <= 0.0f) return h;
-    float hl = 30.0f + (h - 30.0f) * glm::mix(0.42f, 1.12f, ranges(wp * 0.001f));
-    float v = continent(wp * 0.001f);
+inline float height_core(float h, float a, float w, float rng, float v, float wl) {
+    float hl = 30.0f + (h - 30.0f) * glm::mix(0.42f, 1.12f, rng);
     hl = glm::mix(wl + 0.7f + std::max(hl - 24.0f, 0.0f) * 0.5f, hl, sstep(0.0f, 0.03f, v));
     hl += 9.0f * sstep(0.0f, 0.05f, v) * (1.0f - sstep(0.05f, 0.25f, v));
     // (GLSL smoothstep with edge0 > edge1 runs the other way: written out here)
     float bed = wl - 1.5f - 7.0f * a - 14.0f * (1.0f - sstep(-0.012f, 0.0f, v)) - 45.0f * (1.0f - sstep(-0.09f, -0.01f, v));
     return glm::mix(h, glm::mix(bed, hl, sstep(-0.012f, 0.012f, v)), w);
+}
+inline float height_land(float a, glm::vec2 wp, float wl) {
+    float h = a * 120.0f;
+    float w = sstep(1450.0f, 1900.0f, glm::length(wp));
+    if (w <= 0.0f) return h;
+    const float rng = ranges(wp * 0.001f);
+    return height_core(h, a, w, rng, continent(wp * 0.001f), wl);
+}
+// The globe part (shaders/world_map.glsl wm_*_globe: keep in step). hp: home coordinates (m),
+// G: the point on the sphere.
+inline float continent_globe(glm::vec2 mk, const glm::dvec3& G) {
+    const float wC = sstep(1800.0f, 3200.0f, glm::length(mk));
+    float v = wC < 1.0f ? continent(mk) : 0.0f;
+    if (wC > 0.0f) v = glm::mix(v, globe::continent3(G), wC);
+    return v;
+}
+inline float ranges_globe(glm::vec2 mk, const glm::dvec3& G) {
+    const float wC = sstep(1800.0f, 3200.0f, glm::length(mk));
+    float v = wC < 1.0f ? ranges(mk) : 0.0f;
+    if (wC > 0.0f) v = glm::mix(v, globe::ranges3(G), wC);
+    return v;
+}
+inline float height_globe(float a, glm::vec2 hp, const glm::dvec3& G, float wl) {
+    const glm::vec2 mk = hp * 0.001f;
+    const float rng = ranges_globe(mk, G);
+    return height_core(a * 120.0f, a, 1.0f, rng, continent_globe(mk, G), wl);
 }
 // The launch site's terrace (shaders/world_map.glsl wm_pad: keep in step).
 inline float pad(float h, glm::vec2 wp) {
@@ -194,6 +217,22 @@ inline float forest(glm::vec2 wp, float h, float ny, float wl) {
     m += (noise(wp * 0.00013f + glm::vec2(41.0f)) - 0.5f) * 0.35f;
     return band * sstep(0.37f, 0.53f, m) * sstep(150.0f, 230.0f, glm::distance(wp, glm::vec2(kLaunchSiteX, kLaunchSiteZ)));
 }
+inline float forest_globe(glm::vec2 hp, const glm::dvec3& G, float h, float ny, float wl) {
+    const float wT = sstep(float(globe::kBlend0), float(globe::kBlend1), glm::length(hp));
+    const float f2 = wT < 1.0f ? forest(hp, h, ny, wl) : 0.0f;
+    if (wT <= 0.0f) return f2;
+    const float alt  = h - wl;
+    const float band = sstep(2.0f, 6.0f, alt) * (1.0f - sstep(40.0f, 54.0f, alt)) * sstep(0.70f, 0.84f, ny);
+    float f3 = 0.0f;
+    if (band > 0.0f) {
+        const glm::dvec3 P = G * globe::kR;
+        float m = globe::noise3(P * 0.0011 + glm::dvec3(3.7)) * 0.55f + globe::noise3(P * 0.0043 + glm::dvec3(17.0)) * 0.30f + globe::noise3(P * 0.017 + glm::dvec3(5.0)) * 0.15f;
+        m += 0.10f * (1.0f - sstep(4.0f, 25.0f, alt));
+        m += (globe::noise3(P * 0.00013 + glm::dvec3(41.0)) - 0.5f) * 0.35f;
+        f3 = band * sstep(0.37f, 0.53f, m);
+    }
+    return glm::mix(f2, f3, wT);
+}
 }  // namespace wm
 
 float world_ground_height_impl(float x, float z, float water_level, int octaves) {
@@ -208,7 +247,18 @@ float world_ground_height_impl(float x, float z, float water_level, int octaves)
         b *= 0.5f;
         q = rm_rotate(q) * 2.0f;
     }
-    return wm::height(a, glm::vec2(x, z), water_level);
+    // On the globe (shaders: rm_shape / rm_world_h in terrain_rm_noise_road.glsl).
+    const globe::Chart& C = globe::current();
+    if (C.home) {
+        const float r = std::hypot(x, z);
+        if (r > float(globe::kBlend0)) {
+            const glm::dvec3 G = globe::to_planet(C, x, z);
+            a = glm::mix(a, globe::shape3(G * globe::kR, float(octaves)), wm::sstep(float(globe::kBlend0), float(globe::kBlend1), r));
+        }
+        return wm::height(a, glm::vec2(x, z), water_level);
+    }
+    const glm::dvec3 G = globe::to_planet(C, x, z);
+    return wm::height_globe(globe::shape3(G * globe::kR, float(octaves)), glm::vec2(globe::home_az(G)), G, water_level);
 }
 
 float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
@@ -239,9 +289,16 @@ float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
 
 } // namespace
 
-float world_forest(float x, float z, float h, float ny, float water_level) { return wm::forest(glm::vec2(x, z), h, ny, water_level); }
+float world_forest(float x, float z, float h, float ny, float water_level) {
+    const globe::Chart& C = globe::current();
+    if (C.home && x * x + z * z < float(globe::kBlend0 * globe::kBlend0)) return wm::forest(glm::vec2(x, z), h, ny, water_level);
+    const glm::dvec3 G = globe::to_planet(C, x, z);
+    return wm::forest_globe(C.home ? glm::vec2(x, z) : glm::vec2(globe::home_az(G)), G, h, ny, water_level);
+}
 
-float world_river_cut(float h, float x, float z, float water_level) { return wm::river(h, glm::vec2(x, z), water_level); }
+float world_river_cut(float h, float x, float z, float water_level) {
+    return globe::current().home ? wm::river(h, glm::vec2(x, z), water_level) : h;
+}
 
 float world_ground_height(float x, float z, float water_level, int octaves) {
     return world_ground_height_impl(x, z, water_level, octaves);

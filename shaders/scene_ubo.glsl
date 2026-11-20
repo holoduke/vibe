@@ -94,6 +94,11 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   cloud_b;          // xy = wind offset of the weather field (m), z = density
     vec4   footprints[32];   // prints in the snow: xy = world xz, z = heading (player yaw), w = depth 0..1 (0 = unused)
     vec4   season;           // how much of each season shows: x spring, y summer, z autumn, w winter
+    // The globe (engine/globe.h): the chart the engine is in.
+    mat4   globe_frame;      // columns: the chart's east, up, south at its origin (planet frame)
+    vec4   globe_info;       // x: 1 = a far chart (not home's), y: the chart origin's local x (m)
+    ivec4  globe_cell[12];   // the landscape FBM's lattice at the chart's origin, per octave: cell ...
+    vec4   globe_frac[12];   // ... and position in it (world_map.glsl wm_shape3)
 } scene;
 
 // Leaves through the year. `h`: a number 0..1 of the tree (each tree turns

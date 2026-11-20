@@ -625,6 +625,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                         log::infof("[test] ground at (%.0f, %.0f): %.2f m (water %.2f)", hold_pos.x, hold_pos.z, g, rt_.water_level);
                     }
                 }
+                if (globe_moved_player_) { hold_pos = player_.position; globe_moved_player_ = false; }    // (re-anchored on the globe)
                 player_.position = hold_pos;
                 // QLIKE_TEST_FLIGHT=<y0>,<y1>,<frames>[,<yaw per frame>]: from frame 60 on the
                 // held camera flies from altitude y0 to y1 (evenly in the logarithm, so every
@@ -720,6 +721,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         // facing the castle, on foot.
         if (in.home_key && !prev_home_key_ && state_ == State::Playing) {
             fly_mode_ = false;
+            globe_go_home();
             player_.position = glm::vec3(30.741f, 27.9f, 118.9f);
             player_.velocity = glm::vec3(0.0f);
             player_.yaw = 0.6f;
@@ -1373,6 +1375,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         }
         { CPU_SCOPE("water-fx"); tick_water_fx(sim_dt); }
         { CPU_SCOPE("aa"); tick_aa(sim_dt); }
+        globe_update();
         { CPU_SCOPE("rocket"); tick_rocket(sim_dt); }
         maybe_autosave_settings(frame_dt);
         hz_ms[1] = hz_mark(hz_t);

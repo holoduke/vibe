@@ -6,6 +6,7 @@
 // descriptor work (memcpy into a host-mapped UBO buffer).
 
 #include "engine/vk_engine/internal.h"
+#include "engine/globe.h"
 #include "engine/voxel/voxel_world.h"
 
 #include <GLFW/glfw3.h>
@@ -849,6 +850,17 @@ void VulkanEngine::update_scene_ubo() {
             ? glm::vec4(water_ripples_[i].xz, water_ripples_[i].age, water_ripples_[i].amp) : glm::vec4(0.0f);
     for (int i = 0; i < 32; ++i) data.footprints[i] = footprints_[i];
     data.season = glm::vec4(season_w_[0], season_w_[1], season_w_[2], season_w_[3]);
+    {
+        const globe::Chart& gc = globe::current();
+        data.globe_frame = glm::mat4(glm::mat3(gc.F));
+        data.globe_info = glm::vec4(gc.home ? 0.0f : 1.0f, float(gc.ox()), 0.0f, 0.0f);
+        int32_t cells[globe::kOctaves][4]; float fracs[globe::kOctaves][4];
+        globe::lattice(gc.F[1] * globe::kR, cells, fracs);
+        for (int i = 0; i < 12; ++i) {
+            data.globe_cell[i] = glm::ivec4(cells[i][0], cells[i][1], cells[i][2], 0);
+            data.globe_frac[i] = glm::vec4(fracs[i][0], fracs[i][1], fracs[i][2], 0.0f);
+        }
+    }
     data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_rain_,
                                    std::min(env_wet_, 0.99f) + std::floor(glm::clamp(env_snow_, 0.0f, 1.0f) * 255.0f),   // fract = wet, whole = snow (scene_ubo.glsl)
                                    0.0f);

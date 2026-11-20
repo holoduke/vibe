@@ -246,7 +246,7 @@ void VulkanEngine::init_exposure() {
     {
         VkBufferCreateInfo bci{};
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size = 112;   // + vec4 planet (compose.frag), written every frame
+        bci.size = 544;   // + vec4 planet ... + the globe's frame and lattice (compose.frag), written every frame
         bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;

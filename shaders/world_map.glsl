@@ -117,15 +117,11 @@ float wm_river(float h, vec2 wp, float wl) {
 
 // Ground height (m) at world position wp (m from home) for the landscape
 // formula's value `a` (0..1) there. `wl`: the water level.
-float wm_height_land(float a, vec2 wp, float wl) {
-    float h = a * 120.0;
-    // Home: the landscape and its ring of white mountains, as the formula has it.
-    float w = smoothstep(1450.0, 1900.0, length(wp));     // (from beyond the home tile's corners: the tile's bake is the home formula alone)
-    if (w <= 0.0) return h;
+// (`w`: how far the home formula has handed over, `rng`: the ranges there, `v`: land / sea)
+float wm_height_core(float h, float a, float w, float rng, float v, float wl) {
     // Hills and ranges: beyond home the land is low (under the snow line), with a
     // high range only where a slow noise says so. Scaled about 30 m.
-    float hl = 30.0 + (h - 30.0) * mix(0.42, 1.12, wm_ranges(wp * 0.001));
-    float v = wm_continent(wp * 0.001);
+    float hl = 30.0 + (h - 30.0) * mix(0.42, 1.12, rng);
     // The coastal plain: toward the sea the land comes down to a beach just above the water.
     // (its hills keep half their height: dunes and low rises, not a table)
     hl = mix(wl + 0.7 + max(hl - 24.0, 0.0) * 0.5, hl, smoothstep(0.0, 0.03, v));
@@ -134,6 +130,13 @@ float wm_height_land(float a, vec2 wp, float wl) {
     // The sea bed: shallows along the coast, a shelf, then the deep.
     float bed = wl - 1.5 - 7.0 * a - 14.0 * (1.0 - smoothstep(-0.012, 0.0, v)) - 45.0 * (1.0 - smoothstep(-0.09, -0.01, v));
     return mix(h, mix(bed, hl, smoothstep(-0.012, 0.012, v)), w);
+}
+float wm_height_land(float a, vec2 wp, float wl) {
+    float h = a * 120.0;
+    // Home: the landscape and its ring of white mountains, as the formula has it.
+    float w = smoothstep(1450.0, 1900.0, length(wp));     // (from beyond the home tile's corners: the tile's bake is the home formula alone)
+    if (w <= 0.0) return h;
+    return wm_height_core(h, a, w, wm_ranges(wp * 0.001), wm_continent(wp * 0.001), wl);
 }
 // The launch site: a level terrace on the coast east of home (the rocket's pad stands on it;
 // src/engine/terrain.cpp wm::pad and kLaunchSite* in terrain.h - keep in step).
@@ -166,3 +169,124 @@ float wm_forest(vec2 wp, float h, float ny, float wl) {
     m += (WM_NOISE(wp * 0.00013 + 41.0) - 0.5) * 0.35;
     return band * smoothstep(0.37, 0.53, m) * smoothstep(150.0, 230.0, distance(wp, wm_pad_c));      // (no woods at the launch site)
 }
+
+// ======================================================================
+// The globe.
+//
+// The planet is a sphere of radius wm_R. Home is its top: in the planet's own frame home is
+// (0, 1, 0), east of home +x, south +z. Everything above is written on a flat map of the
+// country round home ("home coordinates": metres east and south of home, which on the sphere
+// are the azimuthal coordinates round home - wm_az). That map cannot go round a sphere, so
+// away from home the world is made on the sphere itself, from 3D noise at the point:
+//   the fine shape of the land (the FBM `a`)   40 - 90 km from home it changes over
+//   continents and ranges                      1800 - 3200 km
+// (src/engine/terrain.cpp + globe.cpp mirror all of it - keep in step.)
+// ======================================================================
+const float wm_R = 6360000.0;
+const float wm_blend0 = 40000.0, wm_blend1 = 90000.0;      // (m from home: engine/globe.h kBlend0 / kBlend1)
+
+// Home coordinates (m) of the point G (unit vector, planet frame).
+vec2 wm_az(vec3 G) {
+    float sth = length(G.xz);
+    return wm_R * G.xz * (sth > 1e-6 ? atan(sth, G.y) / sth : 1.0);
+}
+float wm_hash3(ivec3 c) {
+    uint h = uint(c.x) * 0x8da6b343u ^ uint(c.y) * 0xd8163841u ^ uint(c.z) * 0xcb1ab31fu;
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return float(h & 0xFFFFFFu) * (1.0 / 16777216.0);
+}
+// 3D value noise at lattice cell `i`, position `f` in it: value and gradient.
+vec4 wm_noised3(ivec3 i, vec3 f) {
+    vec3 u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);
+    float a = wm_hash3(i), b = wm_hash3(i + ivec3(1, 0, 0)), c = wm_hash3(i + ivec3(0, 1, 0)), d = wm_hash3(i + ivec3(1, 1, 0));
+    float e = wm_hash3(i + ivec3(0, 0, 1)), g = wm_hash3(i + ivec3(1, 0, 1)), k = wm_hash3(i + ivec3(0, 1, 1)), l = wm_hash3(i + ivec3(1, 1, 1));
+    float v = mix(mix(mix(a, b, u.x), mix(c, d, u.x), u.y), mix(mix(e, g, u.x), mix(k, l, u.x), u.y), u.z);
+    vec3 gr = vec3(mix(mix(b - a, d - c, u.y), mix(g - e, l - k, u.y), u.z),
+                   mix(mix(c - a, d - b, u.x), mix(k - e, l - g, u.x), u.z),
+                   mix(mix(e - a, g - b, u.x), mix(k - c, l - d, u.x), u.y));
+    return vec4(v, du * gr);
+}
+float wm_noise3(vec3 p) {
+    vec3 fl = floor(p);
+    return wm_noised3(ivec3(fl), p - fl).x;
+}
+float wm_fbm3d(vec3 p) {
+    float s = 0.0, a = 0.5;
+    for (int i = 0; i < 5; ++i) { s += a * wm_noise3(p); p = p * 2.03 + 17.1; a *= 0.5; }
+    return s / 0.96875;
+}
+// Land (> 0) and sea (< 0) on the sphere, as wm_continent has them on the map.
+float wm_continent3(vec3 G) {
+    vec3 q = G * 2.6712;                                                   // (the map's 0.00042 per km)
+    vec3 bend = vec3(wm_noise3(q * 2.3 + 5.2), wm_noise3(q * 2.3 + 91.7), wm_noise3(q * 2.3 + 33.1)) - 0.5;
+    float v = (wm_fbm3d(q + bend * 0.55 + 21.3) - 0.5) * 1.25;             // (3D value noise is a little flatter than 2D)
+    if (abs(v) > 0.37) return v;
+    vec3 k = G * 6360.0;                                                   // km
+    v += (wm_fbm3d(k * 0.011 + 8.9) - 0.5) * 0.16;
+    v += ((0.5 * wm_noise3(k * 0.35 + 61.0) + 0.25 * wm_noise3(k * 0.71 + 78.1) + 0.125 * wm_noise3(k * 1.435 - 9.4)) / 0.875 - 0.5) * 0.05;
+    return v;
+}
+float wm_ranges3(vec3 G) {
+    vec3 k = G * 6360.0;
+    return smoothstep(0.56, 0.72, wm_noise3(k * 0.08 + 7.3) * 0.65 + wm_noise3(k * 0.21 + 3.1) * 0.35);
+}
+// Land / sea and ranges anywhere: the map's near home, the sphere's far away.
+// (`mk`: home coordinates in km)
+float wm_continent_globe(vec2 mk, vec3 G) {
+    float wC = smoothstep(1800.0, 3200.0, length(mk));
+    float v = wC < 1.0 ? wm_continent(mk) : 0.0;
+    if (wC > 0.0) v = mix(v, wm_continent3(G), wC);
+    return v;
+}
+float wm_ranges_globe(vec2 mk, vec3 G) {
+    float wC = smoothstep(1800.0, 3200.0, length(mk));
+    float v = wC < 1.0 ? wm_ranges(mk) : 0.0;
+    if (wC > 0.0) v = mix(v, wm_ranges3(G), wC);
+    return v;
+}
+// Ground height beyond the home country (no river, no launch terrace out here).
+float wm_height_globe(float a, vec2 hp, vec3 G, float wl) {
+    vec2 mk = hp * 0.001;
+    return wm_height_core(a * 120.0, a, 1.0, wm_ranges_globe(mk, G), wm_continent_globe(mk, G), wl);
+}
+// Woods, anywhere.
+float wm_forest_globe(vec2 hp, vec3 G, float h, float ny, float wl) {
+    float wT = smoothstep(wm_blend0, wm_blend1, length(hp));
+    float f2 = wT < 1.0 ? wm_forest(hp, h, ny, wl) : 0.0;
+    if (wT <= 0.0) return f2;
+    float alt  = h - wl;
+    float band = smoothstep(2.0, 6.0, alt) * (1.0 - smoothstep(40.0, 54.0, alt)) * smoothstep(0.70, 0.84, ny);
+    float f3 = 0.0;
+    if (band > 0.0) {
+        vec3 P = G * wm_R;
+        float m = wm_noise3(P * 0.0011 + 3.7) * 0.55 + wm_noise3(P * 0.0043 + 17.0) * 0.30 + wm_noise3(P * 0.017 + 5.0) * 0.15;
+        m += 0.10 * (1.0 - smoothstep(4.0, 25.0, alt));
+        m += (wm_noise3(P * 0.00013 + 41.0) - 0.5) * 0.35;
+        f3 = band * smoothstep(0.37, 0.53, m);
+    }
+    return mix(f2, f3, wT);
+}
+// The fine shape of the land on the sphere: the landscape's FBM made from 3D noise. A float
+// cannot hold a position on the planet finely enough for its small octaves, so the includer
+// supplies, per octave, the lattice cell and the position in it of a nearby origin
+// (WM_CELL(i), WM_FRAC(i) - worked out on the CPU in double precision), and `D` is the point's
+// offset from that origin in metres (planet frame).
+#ifdef WM_CELL
+float wm_shape3(vec3 D, float oct_f) {
+    int   oct = int(ceil(oct_f));
+    float fr  = 1.0 - (float(oct) - oct_f);
+    float a = 0.0, b = 1.0, s = 0.003;
+    vec3  d = vec3(0.0);
+    for (int i = 0; i < 12; ++i) {
+        if (i >= oct) break;
+        vec3 c  = WM_FRAC(i) + D * s;
+        vec3 fl = floor(c);
+        vec4 n  = wm_noised3(WM_CELL(i) + ivec3(fl), c - fl);
+        float w = (i == oct - 1) ? fr : 1.0;
+        d += n.yzw * (0.8 * w);
+        a += b * n.x * w / (1.0 + dot(d, d));
+        b *= 0.5; s *= 2.0;
+    }
+    return a;
+}
+#endif

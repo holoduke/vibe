@@ -122,7 +122,9 @@ float clutterOcc(vec2 uv, int layer, float zref) {
     return occ / 9.0;
 }
 #endif /* ! QLIKE_WATER */
-const float kHeightmapSide = 2048.0;
+// (in a far chart - another part of the planet - there is no home tile: its side is nothing)
+bool g_far_chart = false;        // (set first thing in main: scene.globe_info.x)
+#define kHeightmapSide (g_far_chart ? 1.0e-3 : 2048.0)
 // Forward decl — terrainDetailNoise is defined after `noised` + `m2`
 // (further down in the file) so we can reuse them. We use a forward
 // declaration here so sampleHeightDelta can call it without moving
@@ -612,6 +614,7 @@ vec3 sample_sky(vec3 dir) {
 #include "terrain_rm_shading_helpers.glsl"   // Normal, terrain / grass shadows, road weights, ground material, reflection marches
 #include "terrain_rm_water.glsl"   // Water: flow, normals, foam pattern, ripples
 void main() {
+    g_far_chart = scene.globe_info.x > 0.5;
     foot_bounds_init();      // footprints in the snow (winter)
 #ifndef QLIKE_WATER
     // Ray reconstruction: vWNear / vWFar (relative to the camera) were computed in the vert
@@ -867,10 +870,10 @@ void main() {
         // noise breaks the ranks so the crests are not ruled lines.
         float rm_sea_crest = 0.0;      // the sea's wave height here, about its mean (m)
         {
-            float sea_k = smoothstep(1350.0, 1750.0, length(wpos.xz));
+            float sea_k = smoothstep(1350.0, 1750.0, rm_home_dist(wpos.xz));
             // Swell belongs to the sea. A pond inland has none: on a small lake the long
             // wave trains read as a ruled cross-hatch in the sun's glitter.
-            if (sea_k > 0.0) sea_k *= 1.0 - smoothstep(0.0, 0.02, wm_continent(wpos.xz * 0.001));
+            if (sea_k > 0.0) sea_k *= 1.0 - smoothstep(0.0, 0.02, rm_continent(wpos.xz));
             if (sea_k > 0.0) {
                 const float kAng[7] = float[7](2.83, 3.71, 3.19, 2.27, 4.02, 2.51, 3.47);          // where each train runs to (rad; the sea lies east)
                 const float kLen[7] = float[7](83.0, 47.0, 26.0, 14.5, 8.1, 4.6, 2.7);
@@ -932,7 +935,7 @@ void main() {
         wnor = normalize(vec3(wnor.x - rip_w.x, wnor.y, wnor.z - rip_w.y));
         // Winter: the lake freezes - no waves, a nearly flat sheet with a faint ripple in the surface.
         // (home's lakes; the open sea stays open)
-        float ice_k = smoothstep(0.35, 0.75, scene.season.w) * (1.0 - smoothstep(1350.0, 1750.0, length(wpos.xz)));     // the lake freezes in winter (not from a snow shower in another season)
+        float ice_k = smoothstep(0.35, 0.75, scene.season.w) * (1.0 - smoothstep(1350.0, 1750.0, rm_home_dist(wpos.xz)));     // the lake freezes in winter (not from a snow shower in another season)
         if (ice_k > 0.001) {
             vec3 n_ice = normalize(vec3((noise2(wpos.xz * 1.7) - 0.5) * 0.05, 1.0, (noise2(wpos.xz * 1.7 + 31.0) - 0.5) * 0.05));
             wnor = normalize(mix(wnor, n_ice, ice_k));
@@ -1522,7 +1525,7 @@ void main() {
         if (scene.water_foam_color.a > 0.001 && foam_op > 0.001) {
 #endif /* QLIKE_WATER */
             // (the sea's shore has surf: the same lapping foam, several times as wide as a lake's)
-            float foam_w = max(0.05, scene.water_foam_params.x) * (1.0 + 5.0 * smoothstep(1350.0, 1750.0, length(wpos.xz)));
+            float foam_w = max(0.05, scene.water_foam_params.x) * (1.0 + 5.0 * smoothstep(1350.0, 1750.0, rm_home_dist(wpos.xz)));
             float band   = exp(-depth_clean * (4.0 / foam_w));
             // Lapping wavelets instead of a solid stripe: thin foam lines
             // that run in toward the waterline (phase = depth), wobbling
@@ -2449,7 +2452,7 @@ void main() {
         if (all(greaterThan(cuv, vec2(0.0))) && all(lessThan(cuv, vec2(1.0)))) {
             woods = smoothstep(0.06, 0.40, textureLod(u_albedo[22], cuv, 2.0).r);
         } else {
-            woods = wm_forest(pos.xz, pos.y, nor.y, scene.water_params.y);     // (the rule the trees there are placed by)
+            woods = rm_forest(pos.xz, pos.y, nor.y, scene.water_params.y);     // (the rule the trees there are placed by)
         }
         vec3 canopy = mix(vec3(0.028, 0.052, 0.024), vec3(0.058, 0.082, 0.034), noise2(pos.xz * 0.11));
         mate = mix(mate, canopy, woods * smoothstep(1200.0, 1700.0, t));
@@ -2458,7 +2461,7 @@ void main() {
     // line up to a metre or so above it, with a ragged upper edge, and sand on the bed
     // below - the height layers put grass at the water level, which ran straight into the sea.
     {
-        float sea_k = smoothstep(1350.0, 1750.0, length(pos.xz));
+        float sea_k = smoothstep(1350.0, 1750.0, rm_home_dist(pos.xz));
         if (sea_k > 0.0 && scene.water_params.x > 0.5) {
             float wl = scene.water_params.y;
             float edge = wl + 0.5 + 1.0 * noise2(pos.xz * 0.045) + 0.35 * noise2(pos.xz * 0.31);

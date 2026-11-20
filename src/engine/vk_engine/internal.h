@@ -391,6 +391,10 @@ struct SceneUBO {
     glm::vec4  cloud_b;      // xy = wind offset of the weather field (m), z = density
     glm::vec4  footprints[32];   // prints in the snow (environment.cpp update_footprints): xz, heading, depth
     glm::vec4  season;           // how much of each season shows: x spring, y summer, z autumn, w winter
+    glm::mat4  globe_frame;      // the globe: the current chart (engine/globe.h; scene_ubo.glsl)
+    glm::vec4  globe_info;
+    glm::ivec4 globe_cell[12];
+    glm::vec4  globe_frac[12];
 };
 
 // ---- KHR ray tracing entry points ----

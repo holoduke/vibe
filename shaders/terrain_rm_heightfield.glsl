@@ -73,7 +73,8 @@ float terrainM(vec2 p) {
     float a = 0.0, b = 1.0;
     vec2 d = vec2(0.0);
     int kOct = int(pc.tex_params.z);
-    for (int i = 0; i < kOct; i++) {
+    int kOctFlat = rm_far_chart() ? 0 : kOct;            // (a far chart: the sphere's formula, rm_shape below)
+    for (int i = 0; i < kOctFlat; i++) {
         vec3 n = noised(p);
         d += n.yz;
         a += b * n.x / (1.0 + dot(d, d));
@@ -91,6 +92,7 @@ float terrainM(vec2 p) {
     // mountains. Inside the plateau the FBM is already mixed out, so
     // the amplifier has no effect there (plateau stays flat under
     // the brush — only the offset fires).
+    a = rm_shape(a, wp, float(kOct));
     float h = rm_world_h(a, wp);
     // Plateau blend — but instead of mixing toward a glass-flat
     // plateau_h, mix toward `plateau_h + small_detail_FBM` so the
@@ -161,7 +163,7 @@ float terrainM_lod(vec2 p, float ray_t) {
     vec2 d = vec2(0.0);
     const int kMaxOct = 24;
     for (int i = 0; i < kMaxOct; i++) {
-        if (i >= oct) break;
+        if (i >= oct || rm_far_chart()) break;
         vec3 n = noised(p);
         float w = (i == oct - 1) ? frac : 1.0;
         d += n.yz * w;
@@ -169,6 +171,7 @@ float terrainM_lod(vec2 p, float ray_t) {
         b *= 0.5;
         p = m2 * p * 2.0;
     }
+    a = rm_shape(a, wp, oct_f);
     float h = rm_world_h(a, wp);
     // Plateau is now tiny (11.5 m, hidden under castle) — no need
     // for extra ground-detail noise here.
@@ -206,7 +209,7 @@ float terrainH_lod_pw(vec2 p, float ray_t, float tpl) {
     vec2 d = vec2(0.0);
     const int kMaxOct = 32;
     for (int i = 0; i < kMaxOct; i++) {
-        if (i >= oct) break;
+        if (i >= oct || rm_far_chart()) break;
         vec3 n = noised(p);
         float w = (i == oct - 1) ? frac : 1.0;
         d += n.yz * w;
@@ -214,6 +217,7 @@ float terrainH_lod_pw(vec2 p, float ray_t, float tpl) {
         b *= 0.5;
         p = m2 * p * 2.0;
     }
+    a = rm_shape(a, wp, oct_f);
     float h = rm_world_h(a, wp);
     h = mix(h, pc.color.w, tpl);
     h += sampleHeightDelta(wp);   // (reverted 80 m gate — no near/far seam)
@@ -261,7 +265,7 @@ float terrainM_shadow(vec2 p, float ray_t) {
     vec2 d = vec2(0.0);
     const int kMaxOct = 24;
     for (int i = 0; i < kMaxOct; i++) {
-        if (i >= oct) break;
+        if (i >= oct || rm_far_chart()) break;
         vec3 n = noised(p);
         float w = (i == oct - 1) ? frac : 1.0;
         d += n.yz * w;
@@ -269,6 +273,7 @@ float terrainM_shadow(vec2 p, float ray_t) {
         b *= 0.5;
         p = m2 * p * 2.0;
     }
+    a = rm_shape(a, wp, oct_f);
     float h = rm_world_h(a, wp);
     float t = plateauWeight(wp);
     h = mix(h, pc.color.w, t);
