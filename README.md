@@ -4,12 +4,9 @@ A ray-traced open-world engine and its first-person game, written in C++ and Vul
 
 ![The castle](docs/screenshots/castle.png)
 
-## What it is
-
-A small open world on a full-size planet: a castle by a lake, forests, a river and a sea coast,
-with day and night, four seasons and live weather. You can walk, swim and fly through it, from
-the castle courtyard up to orbit, without a loading screen. The game is a sandbox; the engine
-underneath is the point of this repository.
+An open world on a full-size planet where you can walk, swim and fly from a castle courtyard
+up to orbit, launch a rocket, and play together over LAN multiplayer, with day and night, four
+seasons and live weather.
 
 | | |
 |---|---|
