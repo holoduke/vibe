@@ -881,14 +881,29 @@ void main() {
                 // Far out, where a pixel is wider than its longest wave, the long swell
                 // trains below take over (they keep the sea from going dead flat from the air).
                 float sea_far = smoothstep(0.25, 0.7, foot / 19.6);
+                // Seen from a height the wave field is a lattice: every crest the same, in ranks.
+                // A real sea is not even. (1) The whole field is bent, slowly (30 m over a
+                // hundred), so the ranks wander. (2) The wind does not blow evenly: the waves
+                // stand higher in gusts a few hundred metres across and lie down in long
+                // slicks drawn out along the wind - which is what the eye reads from the air.
+                vec2 sea_p = wpos.xz;
+                float sea_amp = 1.0;
+                if (t_water > 60.0) {
+                    float far_k = smoothstep(60.0, 400.0, t_water);
+                    sea_p += (vec2(noise2(wpos.xz * 0.011), noise2(wpos.xz * 0.011 + 7.3)) - 0.5) * (30.0 * far_k);
+                    vec2 wq = vec2(0.86 * wpos.x + 0.5 * wpos.z, -0.5 * wpos.x + 0.86 * wpos.z);       // along / across the wind
+                    float gust  = noise2(wpos.xz * 0.0031 + 3.0) * 0.6 + noise2(wpos.xz * 0.0011 + 11.0) * 0.4;
+                    float slick = noise2(wq * vec2(0.0016, 0.0095) + 21.0) * 0.65 + noise2(wq * vec2(0.0050, 0.031) + 5.0) * 0.35;
+                    sea_amp = mix(1.0, mix(0.50, 1.35, smoothstep(0.25, 0.75, gust)) * mix(0.30, 1.0, smoothstep(0.34, 0.52, slick)), far_k);
+                }
                 vec2 g_sea = vec2(0.0);
                 if (sea_far < 1.0) {
                     float tm = 1.0 + wave_t * 0.8;
                     float e  = max(foot, 0.04);
-                    float h0 = sea_map(wpos.xz, tm, foot);
-                    g_sea = vec2(sea_map(wpos.xz + vec2(e, 0.0), tm, foot) - h0,
-                                 sea_map(wpos.xz + vec2(0.0, e), tm, foot) - h0) / e;
-                    rm_sea_crest = (h0 - 0.6) * sea_k;
+                    float h0 = sea_map(sea_p, tm, foot);
+                    g_sea = vec2(sea_map(sea_p + vec2(e, 0.0), tm, foot) - h0,
+                                 sea_map(sea_p + vec2(0.0, e), tm, foot) - h0) / e * sea_amp;
+                    rm_sea_crest = (h0 - 0.6) * sea_k * sea_amp;
                 }
                 // Seven trains at unrelated angles and lengths do not line up into a weave the way five
                 // did. Each keeps its direction (a train bent by a noise turns into whorls and rings -
@@ -905,7 +920,7 @@ void main() {
                     keep *= 0.55 + 0.9 * mix(wa, wb, fract(fi * 0.37));
                     // (crests a little sharper than troughs)
                     float c = cos(ph);
-                    g += d * (kSlope[i] * keep * (c + 0.35 * cos(2.0 * ph + 0.6)));
+                    g += d * (kSlope[i] * keep * sea_amp * (c + 0.35 * cos(2.0 * ph + 0.6)));
                 }
                 g += g_sea;
                 // (the lake ripple of the surface under it gives way to the sea's own waves)
