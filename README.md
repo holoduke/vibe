@@ -30,79 +30,90 @@ A native C++20 application on Vulkan 1.3, with no game engine underneath: about 
 C++ and 22,000 lines of GLSL in 69 shader files. Windowing, math, physics, audio and networking
 come from small libraries (see Credits); the renderer, the world and the tools are written here.
 
+The lists below name each technique and, where it follows published work, its source. Most are
+switches in the settings menu, so they can be compared live.
+
 ### Ray tracing
 
-Hardware ray tracing is required, not optional. Rays are traced inline from the fragment and
-compute shaders with ray queries, against a scene of bottom-level structures per mesh and one
-top-level structure rebuilt as things move.
+Hardware ray tracing is required. Rays are traced inline from fragment and compute shaders
+(ray queries, no separate ray-tracing pipeline).
 
-- **Shadows**: ray-traced shadows, also inside the volumetric fog.
-- **Global illumination**: bounce light from traced rays, backed by a world-space radiance
-  cache (a spatial hash in the style of SHaRC), so one ray carries several bounces. ReSTIR GI
-  and an SVGF denoiser are in the code as options.
-- **Reflections**: traced reflections on the water.
-- Lighting is deferred: the scene is drawn into a G-buffer and lit in one pass.
+| Technique | What it does |
+|---|---|
+| Acceleration structures | One bottom-level structure per mesh, static geometry merged, one top-level structure refit as things move; instance masks select what a ray may hit |
+| Soft shadows | Sun shadows with a blocker search and a variable cone (PCSS-style), so they sharpen at the contact and soften with distance |
+| Global illumination | Multi-bounce diffuse light from traced paths |
+| Radiance cache | World-space spatial hash of outgoing light (SHaRC-style); a ray that hits a cached cell gets several bounces for the price of one |
+| ReSTIR GI | Reservoir resampling of GI samples over time (optional) |
+| Ambient occlusion | Screen-space GTAO by default, ray-traced AO as the high-quality choice |
+| Reflections | Traced reflections of the scene on water and glossy surfaces |
+| Light shafts | The volumetric fog traces a ray to the sun per froxel, so shafts fall through trees and windows |
+| Denoising | SVGF (temporal variance + à-trous filter), or DLSS Ray Reconstruction at about one sample per pixel |
 
 ### Raymarched shaders
 
-Much of the picture has no triangles behind it. It is computed per pixel by marching a ray
-through a formula:
+Much of the picture has no triangles behind it: it is computed per pixel by marching a ray
+through a formula.
 
-- **Terrain**: the ground is a height formula marched in the fragment shader, with pebbles,
-  puddles, snow, footprints and ice as shading detail.
-- **Water**: sea, lake and river surface, with waves, foam and a visible bed.
-- **Grass**: individual blades, raymarched, standing on the terrain.
-- **Clouds and sky**: volumetric clouds in a compute shader, a physically based atmosphere
-  with aerial perspective, and froxel fog with mist over the lake.
-- **Stone walls**: the relief of the castle's masonry is marched into flat wall faces.
+| Technique | What it does |
+|---|---|
+| Terrain | A fractal height formula marched in the fragment shader; the number of noise octaves falls with distance; pebbles, puddles, snow, footprints and ice are shading detail |
+| Water | Sea, lake and river surface with waves, flow, foam, a visible bed and an underwater view |
+| Grass | A field of individual blades as a signed distance field, standing on the real terrain |
+| Volumetric clouds | Marched in a compute shader, grown from a 2D weather map |
+| Atmosphere | Physically based sky from look-up tables (Hillaire 2020): transmittance, multiple scattering, sky view and an aerial-perspective volume |
+| Volumetric fog | 160 x 90 x 64 camera-aligned froxels (Wronski 2014, Frostbite 2015), with mist that lies on the lake |
+| Wall relief | Stonework marched into flat wall faces (parallax occlusion with silhouettes) |
+| Explosions | Fireballs and smoke columns as marched noise volumes with a blackbody colour ramp |
+| Voxels | A destructible tower traversed per pixel with a brick DDA |
 
 ### A planet-sized map
 
 The world is a real sphere with a radius of 6360 km. Fly on round it and you come back home.
 
-- **One formula at every zoom level**: continents, coasts, mountain ranges, the river and the
-  ground under your feet all come from the same function, shared by the shaders and the CPU
-  (so you can land, walk and swim anywhere). What you see from orbit is what you find on the
-  way down.
-- **Hand-overs by altitude**: near the ground the terrain is marched in full detail; with
-  height the march range grows to 80 km, then a shaded far field of the sphere takes over, and
-  above the atmosphere the sky gives way to space. The same weather map drives the volumetric
-  clouds below and the cloud systems seen from orbit.
-- **Number precision**: 32-bit floats cannot hold a position on a planet. The engine works in
-  local charts of the sphere that are re-anchored under the player every 16 km, computes the
-  camera matrices in double precision, and hands the noise functions their lattice position
-  in doubles.
-- **Streaming**: beyond the home area the world is cut into 128 m cells whose trees and
-  bushes are a pure function of their coordinates, generated on background threads, nearest
-  first.
+| Technique | What it does |
+|---|---|
+| One world formula | Continents, coasts, mountain ranges, the river and the ground under your feet come from one function, shared by the shaders and the CPU, so you can land, walk and swim anywhere |
+| Hand-overs by altitude | Full-detail march near the ground; the march range grows to 80 km with height; then a shaded far field of the sphere takes over; above the atmosphere the sky gives way to space |
+| One weather map | The same field grows the volumetric clouds below and paints the cloud systems seen from orbit: what you see from space is what you find on the way down |
+| Charts of the sphere | The engine works in local flat coordinates that are re-anchored under the player every 16 km, so positions stay exact to the centimetre |
+| Double precision where it matters | Camera matrices, terrain rays and the noise lattice are computed in doubles or relative to the camera; 32-bit floats cannot hold a position on a planet |
+| Streamed vegetation | Beyond the home area the world is cut into 128 m cells whose trees are a pure function of their coordinates, generated on background threads, nearest first |
 
 ### Geometry at scale
 
-- **GPU-driven vegetation**: every tree, bush and rock instance is frustum- and
-  occlusion-culled (depth pyramid) in a compute shader, given one of four mesh levels or an
-  impostor, and drawn with indirect draws.
-- **Cluster LOD in the style of Nanite**: rocks and the castle's static meshes are cut into
-  clusters of up to 128 triangles in a hierarchy (meshoptimizer); a compute shader picks, per
-  cluster, the level whose error is under one pixel. The finest level is streamed from disk
-  when the camera comes near.
-- **Procedural content**: trees are grown at load time, plants and their lower levels of
-  detail are generated in code.
+| Technique | What it does |
+|---|---|
+| GPU-driven culling | Every tree, bush, rock and plant is culled in a compute shader (frustum + Hi-Z depth pyramid) and drawn with indirect draws |
+| Levels of detail | Four mesh levels and an impostor per tree, picked on the GPU, with dithered cross-fades |
+| Cluster LOD (Nanite-style) | Rocks and static meshes are cut into clusters of up to 128 triangles in a hierarchy (meshoptimizer); per cluster the level with under one pixel of error is drawn |
+| Geometry streaming | The finest cluster level is read from disk on a background thread when the camera comes near |
+| Procedural trees and plants | Trees are grown at load time, plants and their simplified levels are generated in code |
+| Mesh terrain | A second terrain renderer with continuous distance-dependent LOD (CDLOD), next to the raymarched one |
 
-### Image and performance
+### Image
 
-- Upscaling and frame generation with NVIDIA DLSS 3 (Streamline) or AMD FSR 3.1, with a
-  built-in TAA as fallback.
-- HDR pipeline with automatic exposure, bloom and tone mapping.
-- A job system for background work, GPU timings per pass in the log, and a command line that
-  renders a given frame to a file, which is how the AI looks at its own work.
+| Technique | What it does |
+|---|---|
+| Deferred lighting | The scene is drawn into a G-buffer after a depth pre-pass and lit in one pass |
+| Upscaling | NVIDIA DLSS (Streamline) or AMD FSR 3.1, with the engine's own TAA and temporal upsampler as fallback |
+| Frame generation | DLSS Frame Generation (up to 4x) or FSR 3; AMD Anti-Lag 2 |
+| HDR | HDR10 output where the display offers it; ACES, AgX or Khronos PBR Neutral tone mapping |
+| Auto-exposure | Eye adaptation from the scene's average luminance |
+| Bloom and lens flare | 13-tap downsample and tent upsample chain (Call of Duty: Advanced Warfare), ghosts and halo |
+| Decals | Deferred decals that wrap laser burns over any surface |
+| Colour grading | Temperature, vibrance, split toning, film grain and vignette |
 
-### Simulation
+### Simulation and tools
 
-- Rigid-body physics with Jolt.
-- LAN multiplayer over ENet: instances find each other, elect a host, and share players,
-  shots, weather, season and clock.
-- A rocket that flies a real mission: gravity turn, a 180 km circular orbit, one revolution,
-  a retrograde burn and a powered landing back on its mount, simulated in double precision.
+| Technique | What it does |
+|---|---|
+| Physics | Rigid bodies with Jolt |
+| LAN multiplayer | Instances find each other, elect a host and share players, shots, weather, season and clock (ENet); other players are interpolated 100 ms in the past |
+| Orbital mechanics | The rocket flies a real mission in double precision: gravity turn, 180 km circular orbit, one revolution, a retrograde burn and a powered landing on its mount |
+| Day, seasons and weather | A sun, moon with phases and stars; four seasons and eleven kinds of weather that change the land and the light |
+| Job system | Background threads for world generation and streaming |
+| Self-inspection | The command line renders a chosen frame to a file and the log gives GPU time per pass, which is how the AI looks at and measures its own work |
 
 ## Requirements
 
