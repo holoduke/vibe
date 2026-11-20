@@ -23,6 +23,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/globe.h"
 #include "engine/audio.h"
 
 #include <algorithm>
@@ -280,9 +281,18 @@ void VulkanEngine::apply_environment(float dt) {
         rt_.time_of_day = std::fmod(std::fmod(rt_.time_of_day, 24.0f) + 24.0f, 24.0f);
         const float H = (rt_.time_of_day - 12.0f) / 24.0f * 6.2831853f;
         const float lat = glm::radians(47.0f), dec = glm::radians(16.0f);
-        const float up    = std::sin(lat) * std::sin(dec) + std::cos(lat) * std::cos(dec) * std::cos(H);
-        const float east  = -std::cos(dec) * std::sin(H);
-        const float north = std::cos(lat) * std::sin(dec) - std::sin(lat) * std::cos(dec) * std::cos(H);
+        float up    = std::sin(lat) * std::sin(dec) + std::cos(lat) * std::cos(dec) * std::cos(H);
+        float east  = -std::cos(dec) * std::sin(H);
+        float north = std::cos(lat) * std::sin(dec) - std::sin(lat) * std::cos(dec) * std::cos(H);
+        // The clock is home's. The sun stands where it stands over the planet (engine/globe.h):
+        // elsewhere it is seen from that place's own east / up / north - so it is another time
+        // of day there, and on the far side it is night.
+        const glm::dmat3 gfp = globe::frame_at(globe::current(), double(player_.position.x), double(player_.position.z));
+        auto from_here = [&](float& u, float& e_, float& n) {
+            const glm::dvec3 v(double(e_), double(u), -double(n));          // (home's frame is the planet's)
+            u = float(glm::dot(v, gfp[1])); e_ = float(glm::dot(v, gfp[0])); n = float(-glm::dot(v, gfp[2]));
+        };
+        from_here(up, east, north);
         const float e = glm::degrees(std::asin(glm::clamp(up, -1.0f, 1.0f)));       // sun elevation
         const float az = glm::degrees(std::atan2(east, -north));                     // 0 = due south at noon
         // The moon: a body of its own. Its phase (0 new .. 0.5 full .. 1 new)
@@ -296,9 +306,10 @@ void VulkanEngine::apply_environment(float dt) {
         const float mph = 6.2831853f * rt_.moon_phase;
         const float Hm = H - mph;
         const float decm = dec * std::cos(mph);
-        const float upm    = std::sin(lat) * std::sin(decm) + std::cos(lat) * std::cos(decm) * std::cos(Hm);
-        const float eastm  = -std::cos(decm) * std::sin(Hm);
-        const float northm = std::cos(lat) * std::sin(decm) - std::sin(lat) * std::cos(decm) * std::cos(Hm);
+        float upm    = std::sin(lat) * std::sin(decm) + std::cos(lat) * std::cos(decm) * std::cos(Hm);
+        float eastm  = -std::cos(decm) * std::sin(Hm);
+        float northm = std::cos(lat) * std::sin(decm) - std::sin(lat) * std::cos(decm) * std::cos(Hm);
+        from_here(upm, eastm, northm);
         const float em  = glm::degrees(std::asin(glm::clamp(upm, -1.0f, 1.0f)));   // moon elevation
         const float azm = glm::degrees(std::atan2(eastm, -northm));
         const float illum = 0.5f - 0.5f * std::cos(mph);                           // lit fraction of the disc
