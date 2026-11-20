@@ -1,4 +1,4 @@
-﻿# Builds the launch site in Blender and exports it for the game:
+# Builds the launch site in Blender and exports it for the game:
 #   blender -b --python tools/rocket/make_rocket.py
 # Output (assets/rocket/):
 #   rocket.mesh  the vehicle (origin: centre of its base; drawn with a model matrix)

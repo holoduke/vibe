@@ -23,7 +23,7 @@
 layout(depth_greater) out float gl_FragDepth;
 
 layout(location = 0) in vec3 vNormal;
-// flat — see cube.vert for the rationale (these are push-constant values
+// flat вЂ” see cube.vert for the rationale (these are push-constant values
 // that must not perspective-interpolate; the vTexParams.x precision drift
 // was silently enabling texture sampling when textures were "off").
 layout(location = 1) flat in vec3 vColor;
@@ -36,7 +36,7 @@ layout(location = 5) flat in vec4 vTexParams;  // x: albedo idx, y: normal idx,
                                                //    1 = object-space triplanar
 layout(location = 6) in vec3 vObjectPos;
 layout(location = 7) in vec3 vObjectNormal;
-layout(location = 8) in vec4 vPrevClip;  // prev_view_proj × prev_model × local_pos
+layout(location = 8) in vec4 vPrevClip;  // prev_view_proj Г— prev_model Г— local_pos
 // Pre-extrusion shell base. For SPOM wall brushes cube.vert pushes the
 // rasterised vertex out by kShellThickness along the per-face normal;
 // vShellBase carries the original (un-extruded) world position. The
@@ -50,9 +50,9 @@ layout(location = 8) in vec4 vPrevClip;  // prev_view_proj × prev_model × loca
 layout(location = 9) in vec3 vShellBase;
 layout(location = 10) flat in vec4 vVegInfo;
 layout(location = 0) out vec4 outColor;
-// Per-pixel screen-space motion vector — current_uv minus prev_uv. Dynamic
+// Per-pixel screen-space motion vector вЂ” current_uv minus prev_uv. Dynamic
 // surfaces get correct reprojection because cube.vert applied prev_model
-// (DynRender::prev_world × scale for dyn boxes; current model for static
+// (DynRender::prev_world Г— scale for dyn boxes; current model for static
 // brushes / camera-attached viewmodel / sub-pixel particles). Future SVGF
 // pass reads motion_vec_image_ + uses this delta to walk into history.
 layout(location = 1) out vec2 outMotion;
@@ -65,14 +65,14 @@ layout(location = 1) out vec2 outMotion;
 //
 // Material IDs: 0 = stone/brick (default), 1 = wood, 2 = metal,
 //               3 = terrain, 4 = grass, 5 = emissive/sky-debug.
-// Coarse — refined per-material in Phase 5 when terrain gets its own
+// Coarse вЂ” refined per-material in Phase 5 when terrain gets its own
 // slot in the lighting branch.
 layout(location = 2) out vec4 outGBuffer0;
 layout(location = 3) out vec4 outGBuffer1;
 
 // Octahedral normal encoding (Meyer et al. 2010). Stable, branchless,
 // fits a unit normal into vec2 of [0,1] with ~10-bit precision per
-// component — enough for diffuse, no banding under our materials.
+// component вЂ” enough for diffuse, no banding under our materials.
 vec2 octa_encode(vec3 n) {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
     vec2 e = (n.z >= 0.0)
@@ -87,7 +87,7 @@ vec2 octa_encode(vec3 n) {
 #include "rock_sdf.glsl"
 
 // Half-rate shadow producer output, sampled when terrain_local_info.z
-// is on. linear_sampler_ → bilinear interpolation across the 4 nearest
+// is on. linear_sampler_ в†’ bilinear interpolation across the 4 nearest
 // half-res texels is the "bilateral" part of this minimum-viable upsample.
 layout(set = 0, binding = 18) uniform sampler2D u_shadow_lr;
 
@@ -101,7 +101,7 @@ layout(set = 0, binding = 19, rgba16f) uniform image2D u_svgf_gi;
 
 // SVGF temporal accumulator history (Session 2). Ping-pong pair: on
 // frame F, cube.frag reads from binding (20 + ((F+1) & 1)) and writes
-// to binding (20 + (F & 1)). Race-free under kFrameOverlap == 2 — F's
+// to binding (20 + (F & 1)). Race-free under kFrameOverlap == 2 вЂ” F's
 // write target was last touched by F-2, which is retired by the F-1
 // fence the CPU waits on before recording F. .rgb = accumulated
 // irradiance, .a = M-count [1..kSvgfMmax] for the EMA weight.
@@ -163,16 +163,16 @@ layout(set = 0, binding = 4) uniform sampler2D u_normal[kTextureCount];
 #define LEAF_ATLAS u_albedo[15]
 #include "leaf_rt.glsl"
 // Pre-baked heightmap sun-shadow texture (R8, 0 = lit, 255 = shadowed).
-// Sampled here as a distance fallback for terrain self-shadow — the
+// Sampled here as a distance fallback for terrain self-shadow вЂ” the
 // BLAS holds the full heightmap detail, so RT shadow rays from a low-
 // LOD rasterised surface false-hit BLAS peaks the raster missed. The
 // bake was traced against the heightmap directly so it matches the
 // rasterised LOD surface at distance with no false hits.
 layout(set = 0, binding = 6) uniform sampler2D u_terrain_shadow;
 // Sun shadow map (single-cascade ortho, rendered each frame from the
-// sun's POV with castle / dyn-props / terrain as casters). 1024² over
+// sun's POV with castle / dyn-props / terrain as casters). 1024ВІ over
 // ~120m world half = ~12cm per texel close to the camera. We sample
-// this for terrain receivers within the shadow map's frustum — much
+// this for terrain receivers within the shadow map's frustum вЂ” much
 // sharper than the bake's 1m texels.
 layout(set = 0, binding = 7) uniform sampler2DShadow u_sun_shadow_map;
 
@@ -200,13 +200,13 @@ layout(set = 0, binding = 17) uniform sampler2D u_heightmap_full;
 
 // Terrain aux bake (AAA Phases 4/5): R = curvature (0.5 flat, <0.5
 // concave gully, >0.5 convex ridge), G = sky visibility (horizon AO).
-// 1024² over the 2048 m world, baked at load from the heightmap.
+// 1024ВІ over the 2048 m world, baked at load from the heightmap.
 layout(set = 0, binding = 26) uniform sampler2D u_terrain_aux;
 
-// ReSTIR GI reservoir buffers (session 2 — see docs/restir_plan.md).
+// ReSTIR GI reservoir buffers (session 2 вЂ” see docs/restir_plan.md).
 // Layout MUST match the C++ Reservoir struct in restir.cpp (std430,
 // 48 B / pixel). Indexed as [pix.y * render_w + pix.x]. Session 2
-// only ships the write — temporal read of u_reservoir_prev lands in
+// only ships the write вЂ” temporal read of u_reservoir_prev lands in
 // session 3.
 struct Reservoir {
     vec3  sample_dir;   // surface normal N of the writing pixel
@@ -215,7 +215,7 @@ struct Reservoir {
     float w_sum;
     uint  M;            // sample count (0 = invalid / never written)
     uint  pad;          // session 5: floatBitsToUint(cam_dist) of the
-                        //   writing surface — used for depth-aware
+                        //   writing surface вЂ” used for depth-aware
                         //   disocclusion (reject reprojected/neighbour
                         //   samples whose surface is at a different
                         //   distance, i.e. a different object).
@@ -238,8 +238,8 @@ layout(set = 0, binding = 16, std430) buffer ReservoirCur {
 // parallax"). Keep in sync with vk_engine.h's spom_height_textures_
 // allocation order.
 int height_idx_for_albedo(int a) {
-    if (a == 1) return 0;   // Bricks078         — castle outer walls
-    if (a == 4) return 1;   // PaintedBricks001  — keep walls
+    if (a == 1) return 0;   // Bricks078         вЂ” castle outer walls
+    if (a == 4) return 1;   // PaintedBricks001  вЂ” keep walls
     if (a == 8) return 4;   // stylized-grass1 (kTexGrass / grass band).
                             // Used by the in-terrain SPOM pixel-displacement
                             // path inside the is_terrain block, NOT by the
@@ -254,7 +254,7 @@ int height_idx_for_albedo(int a) {
     return -1;
 }
 
-// Push constants — match cube.vert's PC layout exactly. Fragment shader
+// Push constants вЂ” match cube.vert's PC layout exactly. Fragment shader
 // only reads `model` (for the brush's world center + per-axis size used
 // by the SPOM silhouette test); the rest are unused here but the layout
 // must mirror the vertex shader because both stages share the range.
@@ -279,9 +279,9 @@ void main() {
     // to 1.0 below. The depth_greater qualifier on the gl_FragDepth
     // declaration keeps early-Z enabled regardless.
     gl_FragDepth = gl_FragCoord.z;
-    // Screen-space motion vector — current_uv в€’ prev_uv. prev_uv comes from
+    // Screen-space motion vector вЂ” current_uv РІв‚¬вЂ™ prev_uv. prev_uv comes from
     // perspective-divided prev_clip (smooth-interpolated by the rasterizer).
-    // Behind-camera prev pixels (prev_clip.w ≤ 0) have no valid prev_uv —
+    // Behind-camera prev pixels (prev_clip.w в‰¤ 0) have no valid prev_uv вЂ”
     // fall back to zero motion; the future SVGF pass treats sentinel as
     // "no history available" and rebuilds variance from current-frame
     // neighborhood instead of reprojecting.
@@ -290,7 +290,7 @@ void main() {
         if (vPrevClip.w > 0.0) {
             vec2 prev_ndc = vPrevClip.xy / vPrevClip.w;
             vec2 prev_uv = prev_ndc * vec2(0.5, 0.5) + vec2(0.5);
-            // Subtract jitter delta packed into restir_params.zw —
+            // Subtract jitter delta packed into restir_params.zw вЂ”
             // produces unjittered geometric motion that FSR3 expects.
             outMotion = (current_uv - prev_uv) - scene.restir_params.zw;
         } else {
@@ -434,7 +434,9 @@ void main() {
         if ((vm == 2 || vm == 3) && veg_leaf_cut(vObjectPos, vWorldPos, vNormal, scene.camera_pos.xyz)) discard;
         if (vm == 7) {
             g_card_tex = texture(u_albedo[15], veg_card_uv(vObjectNormal.xy, vObjectNormal.z, 0.5 * max(fwidth(vObjectNormal.x), fwidth(vObjectNormal.y))), -0.7);
-            if (g_card_tex.a < 0.33) discard;
+            // (a sharper mip and a higher cut: a spray of needles a few pixels across was filled in
+            // to one solid lobe by the blurred coverage of the coarse mips)
+            if (g_card_tex.a < 0.36) discard;
         }
     }
     vec3 N = normalize(vNormal);
@@ -454,7 +456,7 @@ void main() {
             e = texture(u_albedo[int(vTexParams.x + 0.5)], vUv * vTexParams.z).rgb * vColor + vEmissive.rgb;
         outColor = vec4(e, 1.0);
         // Also fill gbuffer with the lit emissive value tagged mat 5 so the
-        // deferred shader's mat≥5 pass-through reads scene_color (which
+        // deferred shader's matв‰Ґ5 pass-through reads scene_color (which
         // has the HDR emissive) instead of treating this as a hole and
         // mis-shading the brush behind. Without this, emissive brushes
         // (lamp strips, neon trim) render as scattered single-pixel black
@@ -467,9 +469,9 @@ void main() {
     }
 
     // Hoist the two scalar derivatives the shader uses repeatedly:
-    //   * cam_dist appears 13× in branches; with the conditional code
+    //   * cam_dist appears 13Г— in branches; with the conditional code
     //     in between, the compiler often fails to CSE it.
-    //   * L (sun direction unit vector) appears 4×.
+    //   * L (sun direction unit vector) appears 4Г—.
     // Computing once at the top costs nothing extra on the fast paths
     // (early-out emissive returns above this line) and saves ~12 sqrt
     // and 3 inversesqrt per pixel on the heavy lit-surface path.
@@ -479,7 +481,7 @@ void main() {
     // For most fragments it equals vWorldPos. The SPOM path below
     // overrides it with the parallax-displaced point so RT shadow,
     // AO, and muzzle-flash rays trace from the actual brick crevice
-    // instead of the flat geometric cube face — gives real
+    // instead of the flat geometric cube face вЂ” gives real
     // self-shadowing inside SPOM bricks at almost no cost.
     vec3 shading_pos = vWorldPos;
 
@@ -521,13 +523,13 @@ void main() {
         } else if (dbg == 2) {
             // Per-vertex normal as RGB. Adjacent triangles with
             // mismatched corner normals will show as visible colour
-            // jumps — direct view into the LOD/Gouraud issue.
+            // jumps вЂ” direct view into the LOD/Gouraud issue.
             outColor = vec4(N * 0.5 + 0.5, 1.0);
             return;
         } else if (dbg == 3) {
             // Geometric face normal (cross of world-pos derivatives,
             // sign-guarded for Vulkan y-down). Each large LOD triangle
-            // is a uniform colour — confirms what flat-shaded geometry
+            // is a uniform colour вЂ” confirms what flat-shaded geometry
             // looks like at distance.
             vec3 fn = cross(dFdx(vWorldPos), dFdy(vWorldPos));
             if (fn.y < 0.0) fn = -fn;
@@ -549,7 +551,7 @@ void main() {
             float ndl = max(dot(N, L), 0.0);
             float dist_to_cam = cam_dist;   // P5: use hoisted distance
 
-            // PURE BAKE with PCF — 5-tap kernel and no threshold so
+            // PURE BAKE with PCF вЂ” 5-tap kernel and no threshold so
             // shadow edges blend smoothly across triangles instead of
             // snapping at the 0.5 step boundary (which looked like
             // adjacent triangles flipping fully-lit / fully-shadowed).
@@ -634,7 +636,7 @@ void main() {
         }
     }
 
-    // (L = sun direction unit vector hoisted at top of main — used for
+    // (L = sun direction unit vector hoisted at top of main вЂ” used for
     // n_dot_l, shadow rays, GI bounces and slope material blends.)
 
     // --- Albedo + bump mapping (triplanar projection) ---
@@ -644,10 +646,10 @@ void main() {
     int   normal_idx_raw = int(vTexParams.y);
     float scale          = max(0.001, vTexParams.z);
     // tex_params.w convention:
-    //   0 = world-space triplanar (default — castle brushes)
+    //   0 = world-space triplanar (default вЂ” castle brushes)
     //   1 = object-space triplanar (dynamic crates so the texture
     //       rotates with the body)
-    //   2 = terrain shading: sand→grass→dirt→rock→snow blended by
+    //   2 = terrain shading: sandв†’grassв†’dirtв†’rockв†’snow blended by
     //       world height + slope, with optional triplanar Ground054
     //       detail multiplied on top.
 #ifdef QLIKE_TERRAIN_ONLY
@@ -656,7 +658,7 @@ void main() {
     bool  is_terrain     = vTexParams.w > 1.5;
 #endif
     bool  obj_space      = !is_terrain && vTexParams.w > 0.5;
-    // Terrain uses world-space triplanar like the static brushes — the
+    // Terrain uses world-space triplanar like the static brushes вЂ” the
     // mesh model is identity so vObjectPos == vWorldPos already, but we
     // pick world-space explicitly so the height read uses true world Y.
     vec3  sample_pos     = (obj_space ? vObjectPos : vWorldPos) * scale;
@@ -710,7 +712,7 @@ void main() {
     vec3 albedo = vColor;
     if (int(vTexParams.y - 0.5) == -7) albedo = army_paint(vObjectPos, normalize(vObjectNormal), albedo);
     // Baked sky visibility for terrain pixels (set in the is_terrain
-    // block, multiplied into the ambient terms downstream — Phase 5).
+    // block, multiplied into the ambient terms downstream вЂ” Phase 5).
     float terrain_sky_vis = 1.0;
     // Splat-height + specular weight carried to the lighting section:
     // micro-shadowing (crevices lose grazing sun first) and a glancing
@@ -811,6 +813,9 @@ void main() {
             // push them down so single leaves stand out.
             float cl = dot(g_card_tex.rgb, vec3(0.3, 0.6, 0.1));
             albedo *= mix(0.55, 1.15, smoothstep(0.10, 0.45, cl));
+            // Where the card is thinly covered (needle tips, the fringe of a spray) less of it is
+            // leaf: darker there, so the twig's own structure shows inside its outline.
+            albedo *= mix(0.58, 1.10, smoothstep(0.36, 0.95, g_card_tex.a));
             albedo *= crown * crown_tint;
         } else if (pc.grass_params.x > 0.5) {
             albedo *= crown * crown_tint;
@@ -827,9 +832,9 @@ void main() {
     }
 
     // Corner softening for axis-aligned brushes. Cube meshes have one
-    // flat normal per face, so 90° outside corners (e.g. tower-to-
-    // wall, gate-block-to-wall) read as a hard vertical seam — Lambert
-    // n·L jumps abruptly across the edge. Bend the shading normal
+    // flat normal per face, so 90В° outside corners (e.g. tower-to-
+    // wall, gate-block-to-wall) read as a hard vertical seam вЂ” Lambert
+    // nВ·L jumps abruptly across the edge. Bend the shading normal
     // toward the AVERAGE of (this face, the perpendicular face whose
     // edge we're close to) inside the last `kCornerWidth` of the
     // brush extent. Costs ~10 ALU per fragment; gives a smooth
@@ -875,7 +880,7 @@ void main() {
 
     float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
     // Split ambient into a sky-derived component (fades when the surface
-    // is enclosed — sky_factor below) and a constant ground/reflected
+    // is enclosed вЂ” sky_factor below) and a constant ground/reflected
     // component that exists indoors too (a real room has a floor that
     // reflects light, not a black void). Combining them later avoids
     // the "AO * sky_factor" double-darkening that crushed interior
@@ -891,16 +896,16 @@ void main() {
     // since this only affects the ambient term computed downstream.
     vec3 sky_tint       = mix(scene.sky_color.rgb, scene.sun_color.rgb, 0.12);
     vec3 ambient_sky    = sky_tint * 0.45 * scene.rt_params.z;
-    // Phase 5: baked horizon AO — valley floors see less sky dome, so
+    // Phase 5: baked horizon AO вЂ” valley floors see less sky dome, so
     // their ambient drops. 0.45 floor keeps deep gorges readable.
     if (is_terrain) {
         float sv = mix(0.08, 1.0, terrain_sky_vis * terrain_sky_vis * (3.0 - 2.0 * terrain_sky_vis));   // matches deferred (was 0.45 floor: gullies far too bright)
         ambient_sky *= sv;
     }
 
-    // Direct lighting uses pure Lambert (max(0, N·L)). The "wrap" lift
+    // Direct lighting uses pure Lambert (max(0, NВ·L)). The "wrap" lift
     // for back-of-mountain pixels is applied LATER as a sky-tinted
-    // ambient bounce — applying it to direct here would produce the
+    // ambient bounce вЂ” applying it to direct here would produce the
     // "back-face fully lit while front-face shadow-rayed" artifact:
     // back faces have n_dot_l_raw = 0 so no shadow ray fires, but the
     // wrap pushes their effective n_dot_l above zero and the missing
@@ -909,29 +914,29 @@ void main() {
     // looking radically different is what the user reported.
     float n_dot_l_raw = max(dot(N, L), 0.0);
     float n_dot_l = n_dot_l_raw;
-    // Terrain shading contrast: pow on n_dot_l. exp=1 → standard
-    // Lambert; exp>1 sharpens the lit→shadow transition by darkening
+    // Terrain shading contrast: pow on n_dot_l. exp=1 в†’ standard
+    // Lambert; exp>1 sharpens the litв†’shadow transition by darkening
     // grazing slopes faster. Brushes/dyn-props keep linear Lambert.
     if (is_terrain_pre) {
         float contrast = max(0.25, scene.terrain_extra.x);
         // Fast paths for the common slider values:
-        //   contrast == 1 → no-op (default; most users)
-        //   contrast == 2 → just n_dot_l²
+        //   contrast == 1 в†’ no-op (default; most users)
+        //   contrast == 2 в†’ just n_dot_lВІ
         // Anything else falls through to the (slower) pow().
         // Common slider stops get cheap dedicated paths (avoids the
         // exp+log of pow). Anything not covered falls through to pow.
         if (contrast > 1.99 && contrast < 2.01) {
             n_dot_l = n_dot_l * n_dot_l;
         } else if (contrast < 1.01) {
-            // identity — skip pow entirely
+            // identity вЂ” skip pow entirely
         } else if (contrast > 2.99 && contrast < 3.01) {
-            // P11: x³ via two muls
+            // P11: xВі via two muls
             n_dot_l = n_dot_l * n_dot_l * n_dot_l;
         } else if (contrast > 1.49 && contrast < 1.51) {
-            // P11: x^1.5 = x·sqrt(x), one mul + one sqrt vs full pow
+            // P11: x^1.5 = xВ·sqrt(x), one mul + one sqrt vs full pow
             n_dot_l = n_dot_l * sqrt(n_dot_l);
         } else if (contrast > 3.99 && contrast < 4.01) {
-            // P11: x⁴ via two squarings
+            // P11: xвЃґ via two squarings
             float n2 = n_dot_l * n_dot_l;
             n_dot_l = n2 * n2;
         } else {
@@ -939,7 +944,7 @@ void main() {
         }
     }
 
-    // Per-pixel seed WITH the frame counter — TAA accumulates over ~8
+    // Per-pixel seed WITH the frame counter вЂ” TAA accumulates over ~8
     // frames, so animating the noise lets temporal averaging resolve the
     // residual dither into a clean signal. We tried a frame-stable seed
     // earlier (less moment-to-moment shimmer) but it left a fixed dither
@@ -958,7 +963,7 @@ void main() {
     uvec3 seed_stable = uvec3(uint(gl_FragCoord.x),
                               uint(gl_FragCoord.y), 0u);
 
-    // (cam_dist already hoisted at the top of main — single source of
+    // (cam_dist already hoisted at the top of main вЂ” single source of
     // truth for distance-from-camera across LOD, terrain blending, AO
     // distance fade, GI sampling, etc.)
 
@@ -1000,7 +1005,7 @@ void main() {
 
 #include "cube_main_forward_lighting.glsl"   // main(): forward lighting path (RT sun shadow, AO, GI, final colour) - skipped when deferred lighting owns the frame
     int mat_id = is_terrain_pre ? 3 : 1;
-    if (vEmissive.a > 0.5) mat_id = 5;     // emissive — handled above too
+    if (vEmissive.a > 0.5) mat_id = 5;     // emissive вЂ” handled above too
     outGBuffer0 = vec4(clamp(albedo * terrain_grass_occ, vec3(0.0), vec3(1.0)),
                        float(mat_id) / 255.0);
     vec2 rmf = surface_rough_metal(albedo_idx_raw, is_foliage_px, is_mesh_draw);

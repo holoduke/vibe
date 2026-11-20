@@ -1,4 +1,4 @@
-﻿// The launch site and its rocket.
+// The launch site and its rocket.
 //
 // The site (assets/rocket/site.mesh, house.mesh - built by tools/rocket/make_rocket.py in
 // Blender) stands on a terrace on the coast east of home (terrain.h kLaunchSite*): a concrete

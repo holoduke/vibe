@@ -1511,7 +1511,9 @@ void main() {
         // Leaves / flowers in shadow sit under a canopy: less sky reaches them.
         ambient_term *= mix(0.45, 1.0, lit);
         vec3  spec_keep = sun_term - diff_albedo * sun_rad;          // specular part computed above
-        sun_term = max(spec_keep, vec3(0.0)) +
+        // (a leaf card is not a glossy sheet: seen toward the sun its highlight turned whole
+        // sprays of needles white)
+        sun_term = max(spec_keep, vec3(0.0)) * 0.15 +
                    sunE * lit * (diff_albedo * nw * 0.9 + tcol * band * 0.30) +
                    sunE * tcol * (back * 0.40 + fwd * 0.85) * thin;
     }

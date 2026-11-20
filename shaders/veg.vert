@@ -188,7 +188,7 @@ void main() {
             tone = tone;   // (kept: per-leaf tone)
             inner_k = mix(0.42, 1.0, smoothstep(0.15, 0.85, rr));
         }
-        col = (mod(floor(card_uvk.z), 2.0) > 0.5 ? vec3(0.72, 0.80, 0.76) : (card_uvk.z >= 2.0 ? vec3(0.46, 0.52, 0.40) : vec3(0.60, 0.64, 0.50))) * (0.80 + 0.40 * tone) * inner_k;   // tint over the atlas
+        col = (mod(floor(card_uvk.z), 2.0) > 0.5 ? vec3(0.62, 0.80, 0.63) : (card_uvk.z >= 2.0 ? vec3(0.46, 0.52, 0.40) : vec3(0.60, 0.64, 0.50))) * (0.80 + 0.40 * tone) * inner_k;   // tint over the atlas
     }
     else if (mat == 6) {            // leaf blade (real geometry): each leaf its own tone
         float lv = fract(sin(dot(floor(rest_wp * 2.3), vec3(12.9898, 78.233, 37.719))) * 43758.5453);
