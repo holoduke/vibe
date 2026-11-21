@@ -14,7 +14,16 @@ namespace qlike::vkpipe {
 // missing or corrupt.
 static VkPipelineCache g_pipeline_cache = VK_NULL_HANDLE;
 
-VkShaderModule load_shader_module(VkDevice device, const std::string& path) {
+VkShaderModule load_shader_module(VkDevice device, const std::string& path_in) {
+    // The directory compiled in is the build tree of the machine that built the game. A copy
+    // somewhere else (a release) has its shaders next to it: build/shaders under the folder the
+    // game is started from - looked for first, so a copy never reads another tree's shaders.
+    std::string path = path_in;
+    {
+        const size_t slash = path_in.find_last_of("/\\");
+        const std::string local = "build/shaders/" + (slash == std::string::npos ? path_in : path_in.substr(slash + 1));
+        if (std::ifstream t(local, std::ios::binary); t.good()) path = local;
+    }
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) throw std::runtime_error("can't open shader: " + path);
     std::streamsize sz = f.tellg();

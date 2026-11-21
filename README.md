@@ -114,6 +114,12 @@ The world is a real sphere with a radius of 6360 km. Fly on round it and you com
 Windows and a fast, recent graphics card with hardware ray tracing. Tested on a GeForce RTX 4080
 (DLSS) and a Radeon RX 9070 XT (FSR). There is no low-end fallback.
 
+## Download
+
+A ready-to-run Windows build is on the [releases page](https://github.com/holoduke/vibe/releases):
+unzip it and start `Vibe.cmd`. The first start prepares shaders for your graphics card in the
+background; the terrain looks plain for about a minute.
+
 ## Build and run
 
 Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMake.
@@ -160,3 +166,9 @@ Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMa
   (CC BY 4.0, https://www.ianxmason.com/100style/), retargeted to the soldier (`tools/anim/build_motion_db.py`).
 - Libraries: GLFW, glm, Dear ImGui, VMA, vk-bootstrap, Jolt Physics, meshoptimizer, miniaudio,
   NVIDIA Streamline, AMD FidelityFX.
+
+## Licence
+
+The code and shaders written for this project are under the [MIT licence](LICENSE). Third-party
+material (motion capture, the sea wave function, character assets, textures, vendor libraries)
+keeps the licence of its source; see the list above and the notes in `LICENSE`.
