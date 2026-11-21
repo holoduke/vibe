@@ -16,6 +16,10 @@
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/GroupFilterTable.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
@@ -221,6 +225,8 @@ struct PhysicsWorld::Impl {
     // greedy decomposition produced the same boxes (e.g. carves outside
     // the collision-build radius, or no carves between two cadence ticks).
     size_t voxel_shape_hash = 0;
+    struct Ragdoll { std::vector<JPH::BodyID> bodies; std::vector<JPH::Ref<JPH::Constraint>> joints; JPH::BodyID floor; };
+    std::unordered_map<uint32_t, Ragdoll> ragdolls;
     std::unordered_map<uint32_t, JPH::BodyID> ids;
     // Reverse lookup so raycast hits → user id is O(1) instead of a
     // linear walk over `ids`. Keyed on BodyID's internal index value
@@ -728,6 +734,154 @@ uint32_t PhysicsWorld::add_dynamic_sphere(glm::vec3 c, float radius,
     impl_->ids.emplace(id, bid);
     impl_->id_by_body_index[bid.GetIndex()] = id;
     return id;
+}
+
+uint32_t PhysicsWorld::add_ragdoll(const RagdollPart* parts, size_t n, glm::vec3 linvel,
+                                   const glm::vec3* floor_point, glm::vec3 floor_normal) {
+    if (n == 0 || n > 32) return 0;
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    Impl::Ragdoll rg;
+    if (floor_point) {
+        const glm::vec3 nrm = glm::normalize(floor_normal);
+        const glm::vec3 ax = glm::cross(glm::vec3(0, 1, 0), nrm);
+        const float sn = glm::length(ax);
+        const glm::quat q = sn < 1e-5f ? glm::quat(1, 0, 0, 0) : glm::angleAxis(std::atan2(sn, nrm.y), ax / sn);
+        const float thick = 0.5f;
+        JPH::BoxShapeSettings fs(JPH::Vec3(8.0f, thick, 8.0f), 0.02f);
+        fs.SetEmbedded();
+        JPH::ShapeSettings::ShapeResult fr = fs.Create();
+        if (!fr.HasError()) {
+            const glm::vec3 c = *floor_point - nrm * thick;
+            JPH::BodyCreationSettings fb(fr.Get(), JPH::RVec3(c.x, c.y, c.z), JPH::Quat(q.x, q.y, q.z, q.w),
+                                         JPH::EMotionType::Static, Layers::NON_MOVING);
+            fb.mFriction = 0.9f;
+            if (JPH::Body* b = bi.CreateBody(fb)) { bi.AddBody(b->GetID(), JPH::EActivation::DontActivate); rg.floor = b->GetID(); }
+        }
+    }
+    const uint32_t id = impl_->next_id++;
+    JPH::Ref<JPH::GroupFilterTable> filter = new JPH::GroupFilterTable(static_cast<JPH::uint>(n));
+    // No part collides with another of the same body: in a living pose they overlap (forearms
+    // across the chest, thighs side by side) and would be thrown apart. The joint limits keep the shape.
+    for (size_t i = 0; i < n; ++i)
+        for (size_t j = i + 1; j < n; ++j)
+            filter->DisableCollision(static_cast<JPH::CollisionGroup::SubGroupID>(i), static_cast<JPH::CollisionGroup::SubGroupID>(j));
+    auto perp = [](glm::vec3 d) {
+        const glm::vec3 o = std::abs(d.y) < 0.9f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+        return glm::normalize(glm::cross(d, o));
+    };
+    for (size_t i = 0; i < n; ++i) {
+        const RagdollPart& p = parts[i];
+        glm::vec3 d = p.b - p.a;
+        const float len = std::max(glm::length(d), 1e-3f);
+        d /= len;
+        // the capsule's axis is its local y
+        const glm::vec3 ax = glm::cross(glm::vec3(0, 1, 0), d);
+        const float sn = glm::length(ax), cs = d.y;
+        const glm::quat q = sn < 1e-5f ? (cs > 0.0f ? glm::quat(1, 0, 0, 0) : glm::quat(0, 1, 0, 0))
+                                       : glm::angleAxis(std::atan2(sn, cs), ax / sn);
+        const float rad = std::min(p.radius, len * 0.49f);
+        JPH::CapsuleShapeSettings ss(std::max(len * 0.5f - rad, 0.005f), rad);
+        ss.SetEmbedded();
+        JPH::ShapeSettings::ShapeResult sr = ss.Create();
+        if (sr.HasError()) { log::errorf("[jolt] ragdoll shape: %s", sr.GetError().c_str()); rg.bodies.push_back(JPH::BodyID()); continue; }
+        const glm::vec3 c = (p.a + p.b) * 0.5f;
+        JPH::BodyCreationSettings bcs(sr.Get(), JPH::RVec3(c.x, c.y, c.z), JPH::Quat(q.x, q.y, q.z, q.w),
+                                      JPH::EMotionType::Dynamic, Layers::MOVING);
+        bcs.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+        bcs.mMassPropertiesOverride.mMass = p.mass;
+        bcs.mLinearVelocity = JPH::Vec3(linvel.x, linvel.y, linvel.z);
+        bcs.mLinearDamping = 0.08f;
+        bcs.mAngularDamping = 0.55f;
+        bcs.mFriction = 0.9f;
+        bcs.mRestitution = 0.05f;
+        bcs.mMotionQuality = JPH::EMotionQuality::LinearCast;        // (a thrown limb must not pass through the ground)
+        bcs.mCollisionGroup = JPH::CollisionGroup(filter, id, static_cast<JPH::CollisionGroup::SubGroupID>(i));
+        JPH::Body* body = bi.CreateBody(bcs);
+        if (!body) { rg.bodies.push_back(JPH::BodyID()); continue; }       // (the body limit)
+        bi.AddBody(body->GetID(), JPH::EActivation::Activate);
+        rg.bodies.push_back(body->GetID());
+    }
+    for (size_t i = 0; i < n; ++i) {
+        const RagdollPart& p = parts[i];
+        if (p.parent < 0 || size_t(p.parent) >= i || rg.bodies[i].IsInvalid() || rg.bodies[p.parent].IsInvalid()) continue;
+        const glm::vec3 d = glm::normalize(p.b - p.a + glm::vec3(0.0f, 1e-6f, 0.0f));
+        const JPH::RVec3 at(p.a.x, p.a.y, p.a.z);
+        JPH::Ref<JPH::Constraint> c;
+        if (p.hinge) {
+            glm::vec3 ax = glm::normalize(p.axis);
+            glm::vec3 nr = d - ax * glm::dot(d, ax);
+            nr = glm::dot(nr, nr) < 1e-6f ? perp(ax) : glm::normalize(nr);
+            JPH::HingeConstraintSettings hs;
+            hs.mPoint1 = hs.mPoint2 = at;
+            hs.mHingeAxis1 = hs.mHingeAxis2 = JPH::Vec3(ax.x, ax.y, ax.z);
+            hs.mNormalAxis1 = hs.mNormalAxis2 = JPH::Vec3(nr.x, nr.y, nr.z);
+            hs.mLimitsMin = std::min(p.lim_min, 0.0f);
+            hs.mLimitsMax = std::max(p.lim_max, 0.0f);
+            hs.mMaxFrictionTorque = 4.0f;
+            JPH::Body* b1 = impl_->system.GetBodyLockInterfaceNoLock().TryGetBody(rg.bodies[p.parent]);
+            JPH::Body* b2 = impl_->system.GetBodyLockInterfaceNoLock().TryGetBody(rg.bodies[i]);
+            if (b1 && b2) c = hs.Create(*b1, *b2);
+        } else {
+            const glm::vec3 pl = perp(d);
+            JPH::SwingTwistConstraintSettings st;
+            st.mPosition1 = st.mPosition2 = at;
+            st.mTwistAxis1 = st.mTwistAxis2 = JPH::Vec3(d.x, d.y, d.z);
+            st.mPlaneAxis1 = st.mPlaneAxis2 = JPH::Vec3(pl.x, pl.y, pl.z);
+            st.mNormalHalfConeAngle = st.mPlaneHalfConeAngle = p.cone;
+            st.mTwistMinAngle = -0.5f;
+            st.mTwistMaxAngle = 0.5f;
+            st.mMaxFrictionTorque = 4.0f;
+            JPH::Body* b1 = impl_->system.GetBodyLockInterfaceNoLock().TryGetBody(rg.bodies[p.parent]);
+            JPH::Body* b2 = impl_->system.GetBodyLockInterfaceNoLock().TryGetBody(rg.bodies[i]);
+            if (b1 && b2) c = st.Create(*b1, *b2);
+        }
+        if (c) { impl_->system.AddConstraint(c); rg.joints.push_back(c); }
+    }
+    impl_->ragdolls.emplace(id, std::move(rg));
+    return id;
+}
+
+bool PhysicsWorld::ragdoll_part(uint32_t id, size_t part, glm::vec3& pos, glm::quat& rot) const {
+    auto it = impl_->ragdolls.find(id);
+    if (it == impl_->ragdolls.end() || part >= it->second.bodies.size() || it->second.bodies[part].IsInvalid()) return false;
+    JPH::RVec3 p;
+    JPH::Quat q;
+    impl_->system.GetBodyInterface().GetPositionAndRotation(it->second.bodies[part], p, q);
+    pos = glm::vec3(float(p.GetX()), float(p.GetY()), float(p.GetZ()));
+    rot = glm::quat(q.GetW(), q.GetX(), q.GetY(), q.GetZ());
+    return true;
+}
+
+void PhysicsWorld::ragdoll_impulse(uint32_t id, size_t part, glm::vec3 impulse, glm::vec3 at) {
+    auto it = impl_->ragdolls.find(id);
+    if (it == impl_->ragdolls.end() || part >= it->second.bodies.size() || it->second.bodies[part].IsInvalid()) return;
+    impl_->system.GetBodyInterface().AddImpulse(it->second.bodies[part], JPH::Vec3(impulse.x, impulse.y, impulse.z),
+                                                JPH::RVec3(at.x, at.y, at.z));
+}
+
+bool PhysicsWorld::ragdoll_active(uint32_t id) const {
+    auto it = impl_->ragdolls.find(id);
+    if (it == impl_->ragdolls.end()) return false;
+    for (const JPH::BodyID& b : it->second.bodies)
+        if (!b.IsInvalid() && impl_->system.GetBodyInterface().IsActive(b)) return true;
+    return false;
+}
+
+void PhysicsWorld::remove_ragdoll(uint32_t id) {
+    auto it = impl_->ragdolls.find(id);
+    if (it == impl_->ragdolls.end()) return;
+    for (auto& c : it->second.joints) impl_->system.RemoveConstraint(c);
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    if (!it->second.floor.IsInvalid()) {
+        if (bi.IsAdded(it->second.floor)) bi.RemoveBody(it->second.floor);
+        bi.DestroyBody(it->second.floor);
+    }
+    for (const JPH::BodyID& b : it->second.bodies) {
+        if (b.IsInvalid()) continue;
+        if (bi.IsAdded(b)) bi.RemoveBody(b);
+        bi.DestroyBody(b);
+    }
+    impl_->ragdolls.erase(it);
 }
 
 void PhysicsWorld::remove_body(uint32_t id) {

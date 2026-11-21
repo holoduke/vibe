@@ -704,11 +704,48 @@ void VulkanEngine::update_player_body(float dt) {
                        glm::determinant(R), body_P_[i].x, body_P_[i].y, body_P_[i].z);
         }
     }
+    // Test hook: QLIKE_TEST_RAGDOLL=<frame>: at that frame the body as posed here is shot (from
+    // the camera, at chest height unless QLIKE_TEST_RAGDOLL_Y=<m above the feet>) and falls.
+    {
+        static const int kRag = int(env_float("QLIKE_TEST_RAGDOLL", -1.0f));
+        if (kRag >= 0 && !mp_pose_dst_ && int(frame_number_) == kRag) {
+            glm::mat4 bm = body_model_;
+            bm[3].y = sample_terrain_height(bm[3].x, bm[3].z);          // (standing on the ground there)
+            const glm::vec3 base = glm::vec3(bm[3]);
+            const glm::vec3 hp = base + glm::vec3(0.0f, env_float("QLIKE_TEST_RAGDOLL_Y", 1.25f), 0.0f);
+            const glm::mat4 vi = bm * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, eye_h, -back));
+            corpse_spawn(bm, vi, vel, hp, glm::normalize(hp - eye), env_float("QLIKE_TEST_RAGDOLL_POWER", 1.0f));
+        }
+    }
     const uint32_t slot = frame_number_ % kFrameOverlap;
     void* dst = mp_pose_dst_ ? static_cast<void*>(mp_pose_dst_) : body_vmapped_[slot];     // a remote player's buffer (multiplayer.cpp)
     if (dst) {
         std::memcpy(dst, body_skinned_.data(), nv * sizeof(Vertex));
         body_drawn_ = true;
+    }
+}
+
+// Skins the pose in body_R_ / body_P_ into a vertex buffer.
+void VulkanEngine::body_skin_to(Vertex* dst) {
+    const size_t nb = body_bones_.size();
+    body_skin_R_.resize(nb);
+    body_skin_T_.resize(nb);
+    for (size_t i = 0; i < nb; ++i) {
+        body_skin_R_[i] = body_R_[i];
+        body_skin_T_[i] = body_P_[i] - body_R_[i] * body_bones_[i].head;
+    }
+    const size_t nv = body_verts_.size();
+    for (size_t i = 0; i < nv; ++i) {
+        const BodyVert& v = body_verts_[i];
+        glm::vec3 p(0.0f), n(0.0f);
+        for (int k = 0; k < 4; ++k) {
+            const float w = v.weight[k];
+            if (w <= 0.0f) continue;
+            const glm::mat3& R = body_skin_R_[v.bone[k]];
+            p += (R * v.pos + body_skin_T_[v.bone[k]]) * w;
+            n += (R * v.nrm) * w;
+        }
+        dst[i] = { p, glm::normalize(n), v.uv };
     }
 }
 

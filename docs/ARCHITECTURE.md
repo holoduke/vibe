@@ -57,6 +57,7 @@ Everything is in `namespace qlike`. Runtime files live in the project root:
 | Character movement: motion matching on motion capture (search, inertialisation) | `engine/motion_match.cpp`; database built by `tools/anim/build_motion_db.py` into `assets/character/motion.qmm` |
 | LAN multiplayer: discovery, host election, snapshots, interpolation | `src/engine/net/net.h`, `net.cpp` (ENet; no engine types) |
 | Multiplayer game side: other players (avatars), their shots, hits, health, HUD | `multiplayer.cpp` |
+| A killed player falls as a physics ragdoll | `ragdoll.cpp`, `physics_world.cpp` (`add_ragdoll`) |
 | In-game HUD (health, weapon, slots, frame rate); fonts are loaded in `ui_setup.cpp` | `ui_gamehud.cpp` |
 | Water effects (splashes, ripples) | `water_fx.cpp` |
 | UI | `ui_setup.cpp`, `ui_hud.cpp` (HUD, crosshair), `ui_menu.cpp` (pause menu) |
@@ -243,3 +244,15 @@ current pose and the path of the next second, and hides the jump by inertialisat
 - **Still by hand**: the arms (IK to the weapon), crouch depth.
 - `QLIKE_BODY_FRONT=<m>` + `QLIKE_BODY_TURN=<deg>` show the body from outside; `QLIKE_BODY_WALK` /
   `QLIKE_BODY_STRAFE` drive it; `QLIKE_BODY_PROCEDURAL=1` gives the old walk cycle.
+
+## Ragdolls (`vk_engine/ragdoll.cpp`, `PhysicsWorld::add_ragdoll`)
+
+A killed player's body goes to the physics: eleven capsules (pelvis, torso, head, upper arms,
+forearms, thighs, shins) joined by cone joints and knee hinges, created in the pose and with the
+velocity of the moment of death. The `Hit` network event carries where the shot struck and its
+direction; the nearest part gets a knock there, the whole body a shove, both scaled by the damage.
+Each frame the capsules are read back into the skeleton and the mesh is skinned (until the
+physics sleeps). Up to 6 bodies, 25 s each. The parts of one body do not collide with each other.
+Each ragdoll has a floor slab of its own at the height the game's terrain function gives, so it
+also works beyond the home tile. Test: `QLIKE_TEST_RAGDOLL=<frame>` (+ `_Y` hit height, `_POWER`)
+with `QLIKE_BODY_FRONT`; `QLIKE_RAGDOLL_DEBUG=1` logs positions.

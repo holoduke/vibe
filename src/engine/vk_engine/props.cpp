@@ -138,6 +138,7 @@ void VulkanEngine::init_viewmodel() {
 
 void VulkanEngine::destroy_viewmodel() {
     destroy_flashlight_meshes();
+    corpses_destroy();
     destroy_player_body();
     destroy_static_clusters();
     for (auto& vm : viewmodel_gltf_) destroy_mesh(allocator_, vm.mesh);
@@ -1068,6 +1069,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
         draw_part(cube_mesh_, hb * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.075f, 0.01f)) *
                               glm::scale(glm::mat4(1.0f), glm::vec3(0.22f, 0.13f, 0.25f)),
                   glm::vec4(0.16f, 0.20f, 0.12f, 1.0f), glm::vec3(0.0f), false);
+        if (mp_draw_->corpse) return;          // a body on the ground: no weapon in its hands
     }
 
     if (flashlight_on_) {              // the flashlight replaces the weapon in the hand

@@ -1225,6 +1225,10 @@ private:
         bool          drawn = false, fresh_pose = true;
         glm::vec3     foot_last{1e9f};                 // footprints in the snow
         BodyAnim      anim;                            // their movement (motion matching state)
+        bool          corpse = false;                  // drawn as a body on the ground: head, no weapon
+        bool          die = false;                     // killed: the next pose becomes a ragdoll (ragdoll.cpp)
+        glm::vec3     hit_pos{0.0f}, hit_dir{0.0f};    // the last shot that hit them
+        float         hit_power = 0.0f, hit_age = 1e9f;
         bool          foot_left = false;
         net::PlayerState st{};                         // interpolated state this frame
     };
@@ -1238,6 +1242,26 @@ private:
     glm::vec3 mp_spawn_{0.0f};
     float     mp_health_ = 100.0f, mp_hurt_ = 0.0f, mp_hitmark_ = 0.0f;
     int       mp_kills_ = 0;
+    // ---- Ragdolls (ragdoll.cpp): a killed player's body, handed to the physics. ----
+    static constexpr int kCorpseParts = 11;
+    struct Corpse {
+        uint32_t  rag = 0;                             // physics ragdoll; 0 = free slot
+        float     age = 0.0f;
+        MpAvatar  av;                                  // vertex buffers + matrices, drawn like a player
+        glm::vec3 origin{0.0f};
+        std::vector<glm::mat3> R0;                     // per bone at the moment of death (world)
+        std::vector<glm::vec3> P0;                     //   (relative to origin)
+        glm::quat q0[kCorpseParts]{};
+        glm::vec3 p0[kCorpseParts]{};
+        glm::mat4 eye0{1.0f};                          // the head's frame then
+    };
+    std::array<Corpse, 6> corpses_{};
+    void corpse_spawn(const glm::mat4& model, const glm::mat4& view_inv, glm::vec3 velocity,
+                      glm::vec3 hit_pos, glm::vec3 hit_dir, float power);     // from the pose in body_R_/body_P_
+    void corpses_update(float dt);
+    void corpses_destroy();
+    void draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp);
+    void body_skin_to(Vertex* dst);
     void mp_init();
     void mp_shutdown();
     void mp_update(float dt);                          // network + events (main loop)

@@ -133,6 +133,29 @@ public:
     // missing. Used by projectile bookkeeping to detect bounce / impact.
     glm::vec3 get_linear_velocity(uint32_t id) const;
 
+    // A ragdoll: capsules joined at their ends. Part i is the capsule from `a` to `b` (world);
+    // it hangs on part `parent` (which comes before it; -1 for the first) at `a`. `hinge`: the
+    // joint only bends about `axis` between lim_min and lim_max (rad, 0 = as it is now);
+    // otherwise it may swing `cone` radians any way from how it is now, and twist a little.
+    // Parts that are joined do not collide with each other.
+    struct RagdollPart {
+        glm::vec3 a{0.0f}, b{0.0f};
+        float radius = 0.05f, mass = 5.0f;
+        int   parent = -1;
+        bool  hinge = false;
+        glm::vec3 axis{1.0f, 0.0f, 0.0f};
+        float lim_min = 0.0f, lim_max = 0.0f, cone = 0.6f;
+    };
+    // `floor_point` / `floor_normal`: a floor of its own under it (a slab 16 m across through
+    // that point), for where the ground the game stands on is not the physics' ground - the
+    // paved road, the world beyond the home terrain. Removed with the ragdoll.
+    uint32_t add_ragdoll(const RagdollPart* parts, size_t n, glm::vec3 linear_velocity,
+                         const glm::vec3* floor_point = nullptr, glm::vec3 floor_normal = glm::vec3(0.0f, 1.0f, 0.0f));
+    bool ragdoll_part(uint32_t id, size_t part, glm::vec3& pos, glm::quat& rot) const;   // centre + orientation
+    void ragdoll_impulse(uint32_t id, size_t part, glm::vec3 impulse, glm::vec3 at);
+    bool ragdoll_active(uint32_t id) const;
+    void remove_ragdoll(uint32_t id);
+
     // Remove and destroy a previously-added dynamic body.
     void remove_body(uint32_t id);
 

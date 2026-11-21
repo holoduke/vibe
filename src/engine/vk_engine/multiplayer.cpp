@@ -102,6 +102,12 @@ void VulkanEngine::mp_update(float dt) {
             if (audio_) audio_->play_at(ClipID::Laser, o, 0.8f);
             for (auto& a : mp_avatars_) if (a.id == e.from) { a.recoil_t = kRecoilDuration; a.muzzle_t = kMuzzleFlashDuration; }
         } else if (e.kind == net::Event::Hit) {
+            // (where and from where they were hit: the push their body gets if this kills them)
+            for (auto& a : mp_avatars_)
+                if (a.id == e.to) {
+                    a.hit_pos = glm::vec3(e.a[0], e.a[1], e.a[2]); a.hit_dir = glm::vec3(e.b[0], e.b[1], e.b[2]);
+                    a.hit_power = e.v / kHitDamage; a.hit_age = 0.0f;
+                }
             if (e.to == net_->id() && mp_health_ > 0.0f) {
                 mp_health_ -= e.v;
                 mp_hurt_ = 1.0f;
@@ -120,6 +126,7 @@ void VulkanEngine::mp_update(float dt) {
             spawn_airstrike(glm::vec3(e.a[0], e.a[1], e.a[2]), glm::normalize(glm::vec3(e.b[0], e.b[1], e.b[2]) + glm::vec3(1e-5f, 0.0f, 0.0f)), true);
             mp_feed(net_->name_of(e.from) + " called an airstrike");
         } else if (e.kind == net::Event::Death) {
+            for (auto& a : mp_avatars_) if (a.id == e.from) a.die = true;      // their body falls where it is (ragdoll.cpp)
             if (e.to == net_->id()) ++mp_kills_;
             mp_feed(net_->name_of(e.to) + " killed " + net_->name_of(e.from));
         } else if (e.kind == net::Event::Leave) {
@@ -203,6 +210,17 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         a.prev_model = a.fresh_pose ? body_model_ : a.model;
         a.fresh_pose = false;
         a.model = body_model_;
+        a.hit_age += dt;
+        if (a.die) {
+            // Killed: this pose, with the speed they had, goes to the physics; the push comes
+            // from the shot that did it (if we saw it), at the part of the body it hit.
+            a.die = false;
+            const bool seen = a.hit_age < 1.0f && glm::dot(a.hit_dir, a.hit_dir) > 0.5f;
+            corpse_spawn(body_model_, glm::mat4(glm::vec4(std::cos(s.yaw), 0.0f, std::sin(s.yaw), 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
+                                                glm::vec4(-std::sin(s.yaw), 0.0f, std::cos(s.yaw), 0.0f), glm::vec4(eye, 1.0f)),
+                         player_.velocity, seen ? a.hit_pos : eye - glm::vec3(0.0f, 0.4f, 0.0f),
+                         seen ? a.hit_dir : glm::vec3(0.0f), seen ? std::max(a.hit_power, 0.5f) : 0.0f);
+        }
         a.phase = body_phase_; a.move = body_move_; a.air = body_air_; a.dir = body_dir_; a.root = body_root_off_;
         // Their camera: where their gun and head are drawn from.
         const float cy = std::cos(s.yaw), sy = std::sin(s.yaw), cp = std::cos(s.pitch), sp = std::sin(s.pitch);
@@ -306,6 +324,9 @@ bool VulkanEngine::mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
         net::Event e{};
         e.kind = net::Event::Hit; e.from = net_->id(); e.to = av.id; e.v = kHitDamage;
         e.a[0] = hit.x; e.a[1] = hit.y; e.a[2] = hit.z;
+        const glm::vec3 bd = glm::normalize(b - a + glm::vec3(1e-6f, 0.0f, 0.0f));
+        e.b[0] = bd.x; e.b[1] = bd.y; e.b[2] = bd.z;
+        av.hit_pos = hit; av.hit_dir = bd; av.hit_power = 1.0f; av.hit_age = 0.0f;
         net_->send_event(e);
         mp_hitmark_ = 0.25f;
         return true;

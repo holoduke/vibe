@@ -1185,6 +1185,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // glm::inverse(fv.view) here -- a full 4x4 mat inverse is ~80 fmuls).
     prof_mark(cmd, "w_grass_rm");
     draw_remote_players(cmd, vp);          // multiplayer: the other players, with their guns
+    draw_corpses(cmd, vp);
     draw_viewmodel(cmd, vp, fv.inv_view);
     prof_mark(cmd, "w_viewmodel");
 
