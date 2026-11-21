@@ -185,17 +185,29 @@ float sand_road_patch(vec2 wp) {
     float a = noise2(wp * 0.085 + 53.0);                                   // stretches of road with sand
     if (a < 0.50) return 0.0;
     float b = noise2(wp * 0.42 + 21.0) * 0.72 + noise2(wp * 1.7 + 8.0) * 0.28;
-    return smoothstep(0.50, 0.62, a) * smoothstep(0.40, 0.60, b) * (1.0 - smoothstep(0.05, 0.3, g_snow));
+    return smoothstep(0.50, 0.62, a) * smoothstep(0.43, 0.55, b) * (1.0 - smoothstep(0.05, 0.3, g_snow));    // (a drift ends in a lip, not a long fade)
 }
 // Its height (m) above the paving, prints pressed in.
 float sand_road_h(vec2 wp) {
     float p = sand_road_patch(wp);
     if (p <= 0.0) return 0.0;
     float wn = noise2(wp * 0.6 + 3.0);
-    float s = p * (0.030 + 0.055 * noise2(wp * 1.1 + 5.0) + 0.004 * sin(dot(wp, vec2(21.0, 9.0)) + 7.0 * wn));   // drift + wind ripples
+    // drift, the lumps in it, and wind ripples with a sharp crest (a gentle windward side, a steep lee)
+    float rs = fract((dot(wp, vec2(21.0, 9.0)) + 7.0 * wn) * 0.15915);
+    float rr = rs < 0.72 ? rs / 0.72 : (1.0 - rs) / 0.28;
+    float s = p * (0.030 + 0.055 * noise2(wp * 1.1 + 5.0) + 0.010 * noise2(wp * 4.3 + 11.0) + 0.007 * rr * rr);
     float fd = foot_depth(wp);
     if (fd > 0.0) s -= min(fd * 0.45, s * 0.85);
     return s;
+}
+
+// The fine wind ripples of the sand (about 9 cm apart, too fine for the march: they go into
+// the normal and the colour). 0 in the trough .. 1 on the crest; they fork and die out.
+float sand_fine_ripple(vec2 wp, float wn) {
+    float ph = (dot(wp, vec2(64.0, 24.0)) + 10.0 * wn + 3.0 * noise2(wp * 2.3 + 7.0)) * 0.15915;
+    float rs = fract(ph);
+    float rr = rs < 0.70 ? rs / 0.70 : (1.0 - rs) / 0.30;
+    return rr * rr * (3.0 - 2.0 * rr);
 }
 
 // ---- Lake ice (winter) --------------------------------------------------

@@ -2017,20 +2017,37 @@ void main() {
     // lumps and the prints pressed into it shade it. Before the lighting.
     // Sand on the road: the same - the normal of the sand's own surface (its drifts, ripples and
     // the prints in it), no cobble relief showing through.
-    float sand_cov = 0.0;
+    float sand_cov = 0.0, sand_rip = 0.5;
     if (rm_road.x + rm_road.y > 0.001) {
         float sp = sand_road_patch(pos.xz) * clamp(rm_road.x + rm_road.y, 0.0, 1.0);
         if (sp > 0.005) {
-            sand_cov = smoothstep(0.0, 0.30, sp);
+            // Where it thins out it lies in the joints first and the stones' tops stand clear of
+            // it: the edge follows the cobbles, grain by grain, instead of fading over them.
+            float cob_h = rm_road.x > 0.001 ? textureLod(u_normal[kRmMatRoad], rm_road_uv, rm_road_lod).a * rm_road.x : 0.0;
+            float edge_n = (noise2(pos.xz * 38.0 + 3.0) - 0.5) * 0.05 * (1.0 - smoothstep(4.0, 14.0, t));
+            sand_cov = smoothstep(0.0, mix(0.05, 0.30, smoothstep(6.0, 25.0, t)), sp - 0.015 - 0.20 * cob_h * (1.0 - smoothstep(10.0, 30.0, t)) + edge_n);
             vec3 n_s = nor;
             if (t < 40.0) {
-                float se = max(0.012, t * 0.004), stpl = plateauWeight(pos.xz);
+                float se = max(0.006, t * 0.003), stpl = plateauWeight(pos.xz);
                 float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
                 float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
                 n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
             }
-            vec2 gq = pos.xz * 55.0;                                   // grains
-            n_s = normalize(n_s + vec3(noise2(gq) - 0.5, 0.0, noise2(gq + 17.0) - 0.5) * 0.16 * (1.0 - smoothstep(3.0, 16.0, t)));
+            // the fine wind ripples (their slope from two more samples), where the sand has some depth
+            float rip_f = (1.0 - smoothstep(6.0, 18.0, t)) * smoothstep(0.25, 0.7, sp) * smoothstep(0.30, 0.55, noise2(pos.xz * 0.9 + 31.0));
+            if (rip_f > 0.01) {
+                float wn = noise2(pos.xz * 0.6 + 3.0);
+                const float re = 0.008;
+                sand_rip = sand_fine_ripple(pos.xz, wn);
+                float rx = sand_fine_ripple(pos.xz + vec2(re, 0.0), wn), rz = sand_fine_ripple(pos.xz + vec2(0.0, re), wn);
+                n_s = normalize(n_s + vec3(sand_rip - rx, 0.0, sand_rip - rz) * (0.0045 / re) * rip_f);
+                sand_rip = mix(0.5, sand_rip, rip_f);
+            }
+            // grains: three sizes, each gone before it is finer than a pixel
+            vec2 gq = pos.xz * 70.0;
+            n_s = normalize(n_s + vec3(noise2(gq) - 0.5, 0.0, noise2(gq + 17.0) - 0.5) * 0.20 * (1.0 - smoothstep(3.0, 14.0, t))
+                                + vec3(noise2(gq * 3.7 + 5.0) - 0.5, 0.0, noise2(gq * 3.7 + 29.0) - 0.5) * 0.22 * (1.0 - smoothstep(1.2, 6.0, t))
+                                + vec3(noise2(gq * 11.0 + 9.0) - 0.5, 0.0, noise2(gq * 11.0 + 41.0) - 0.5) * 0.18 * (1.0 - smoothstep(0.5, 2.5, t)));
             nor = normalize(mix(nor, n_s, sand_cov));
         }
     }
@@ -2587,6 +2604,18 @@ void main() {
         if (sand_cov > 0.001) {
             float sv = noise2(pos.xz * 3.1 + 40.0) * 0.6 + noise2(pos.xz * 23.0) * 0.4;
             vec3 sand = vec3(0.265, 0.215, 0.145) * mix(0.84, 1.12, sv) * mix(0.80, 1.0, sand_cov);
+            // The grains themselves: pale quartz and dark mineral specks, coarser and darker in
+            // the ripples' troughs (where the heavy grains collect), finer and paler on the crests.
+            {
+                float gk1 = 1.0 - smoothstep(1.5, 7.0, t), gk2 = 1.0 - smoothstep(0.6, 3.0, t);
+                float g1 = noise2(pos.xz * 190.0 + 3.0), g2 = noise2(pos.xz * 610.0 + 11.0);
+                sand *= 1.0 + (g1 - 0.5) * 0.30 * gk1 + (g2 - 0.5) * 0.34 * gk2;
+                float dark = smoothstep(0.74, 0.80, noise2(pos.xz * 260.0 + 71.0)) * gk1 * mix(1.0, 0.45, sand_rip);
+                sand = mix(sand, sand * vec3(0.42, 0.40, 0.40), dark * 0.75);
+                float pale = smoothstep(0.80, 0.86, noise2(pos.xz * 330.0 + 19.0)) * gk1;
+                sand = mix(sand, sand * 1.35 + 0.02, pale * 0.6);
+                sand *= mix(0.86, 1.07, sand_rip);
+            }
             float dC = t < 30.0 ? foot_depth(pos.xz) : 0.0;
             if (dC > 0.002) {
                 float shade = 0.0;
