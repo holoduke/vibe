@@ -1192,10 +1192,10 @@ private:
     struct BodyVert { glm::vec3 pos, nrm; glm::vec2 uv; uint8_t bone[4]; float weight[4]; };
     // Animation (src/anim): one shared set (skeleton, clips, motion database) and one animator per
     // character. The animator turns controller state - or, for another player, the interpolated
-    // network state - into joint matrices; pose_character skins them. See docs/animation.
+    // network state - into joint matrices; pose_character sends them to the GPU, which skins (cube_skin.vert). See docs/animation.
     anim::AnimationSet anim_set_;
     std::unique_ptr<anim::CharacterAnimator> body_animator_;      // the local player's
-    void pose_character(anim::CharacterAnimator& a, anim::CharacterAnimationInput& in, Vertex* dst);
+    void pose_character(anim::CharacterAnimator& a, anim::CharacterAnimationInput& in, int* palette, std::vector<glm::vec4>* keep = nullptr);
     float anim_ground_height(float x, float z, float feet_y) const;   // what a foot at (x, z) stands on
     void apply_anim_tuning(anim::AnimTuning& t) const; // QLIKE_ANIM_TUNE
     void anim_debug_overlay();                         // QLIKE_ANIM_DEBUG=1 / the menu: chosen clip, costs, contacts, IK targets
@@ -1209,13 +1209,24 @@ private:
     int       anim_lod_count_[4]{};
     std::vector<BodyBone> body_bones_;
     std::vector<BodyVert> body_verts_;
-    std::vector<Vertex>   body_skinned_;
-    std::vector<glm::mat3> body_R_, body_skin_R_;
-    std::vector<glm::vec3> body_P_, body_skin_T_;
-    Mesh          body_mesh_{};                       // index buffer (+ rest pose)
-    VkBuffer      body_vbuf_[kFrameOverlap]{};
-    VmaAllocation body_valloc_[kFrameOverlap]{};
-    void*         body_vmapped_[kFrameOverlap]{};
+    std::vector<glm::mat3> body_R_;
+    std::vector<glm::vec3> body_P_;
+    Mesh          body_mesh_{};                       // rest pose + indices
+    Mesh          body_skin_mesh_{};                  // second vertex stream: bone indices and weights (as floats in a Vertex)
+    // The bone palette: three rows (a 3x4 matrix, rest -> posed, model space) per bone, for every
+    // character drawn this frame, one region per frame in flight. Binding 33 of the scene set.
+    static constexpr uint32_t kSkinBones = 64, kSkinCharacters = 48;
+    VkBuffer      body_palette_buf_ = VK_NULL_HANDLE;
+    VmaAllocation body_palette_alloc_ = nullptr;
+    glm::vec4*    body_palette_map_ = nullptr;
+    uint32_t      body_palette_used_ = 0;             // characters pushed this frame
+    int           body_palette_ = -1;                 // the local body: its first row this frame
+    std::vector<glm::vec4> body_rows_;
+    int  body_push_pose(std::vector<glm::vec4>* keep = nullptr);     // body_R_ / body_P_ -> palette; first row, or -1 when full
+    int  body_push_rows(const std::vector<glm::vec4>& rows);
+    VkPipeline pipeline_skin_ = VK_NULL_HANDLE, pipeline_skin_gbuf_ = VK_NULL_HANDLE;
+    VkShaderModule skin_vert_module_ = VK_NULL_HANDLE;
+    VkPipeline skin_pipeline() const { return (pipeline_skin_gbuf_ && deferred_owns_lighting()) ? pipeline_skin_gbuf_ : pipeline_skin_; }
     uint32_t      body_index_count_ = 0;
     std::vector<uint32_t> body_dbg_idx_;
     float         body_scale_ = 1.0f;
@@ -1225,9 +1236,8 @@ private:
     // ---- LAN multiplayer (vk_engine/multiplayer.cpp, engine/net) ----
     struct MpAvatar {                                  // another player, as drawn here
         uint32_t      id = 0;                          // 0 = free slot
-        VkBuffer      vbuf[kFrameOverlap]{};           // their skinned soldier
-        VmaAllocation valloc[kFrameOverlap]{};
-        void*         mapped[kFrameOverlap]{};
+        int           palette = -1;                    // this frame's first row in the bone palette; -1 = not drawn
+        std::vector<glm::vec4> pose_rows;              // the last pose (re-sent on a frame that is not posed)
         glm::mat4     model{1.0f}, prev_model{1.0f}, view_inv{1.0f};
         glm::vec3     eye{0.0f};
         glm::mat4     weapon_offset{1.0f};             // from their animator (recoil, reload, equip)
@@ -1263,7 +1273,7 @@ private:
     struct Corpse {
         uint32_t  rag = 0;                             // physics ragdoll; 0 = free slot
         float     age = 0.0f;
-        MpAvatar  av;                                  // vertex buffers + matrices, drawn like a player
+        MpAvatar  av;                                  // palette + matrices, drawn like a player
         glm::vec3 origin{0.0f};
         std::vector<glm::mat3> R0;                     // per bone at the moment of death (world)
         std::vector<glm::vec3> P0;                     //   (relative to origin)
@@ -1277,7 +1287,6 @@ private:
     void corpses_update(float dt);
     void corpses_destroy();
     void draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp);
-    void body_skin_to(Vertex* dst);
     void mp_init();
     void mp_shutdown();
     void mp_update(float dt);                          // network + events (main loop)

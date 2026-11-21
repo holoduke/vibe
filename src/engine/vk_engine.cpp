@@ -589,6 +589,18 @@ void VulkanEngine::run(const RunOptions& opts) {
                 in.fire = true;
                 in.fire_held = true;
             }
+            // QLIKE_TEST_MOVE=1: real movement keys on a 9 s loop (forward with a jump, sprint,
+            // strafe, back, a turning arc) - an unattended player for watching animation and
+            // netcode from a second instance.
+            static const bool test_move = std::getenv("QLIKE_TEST_MOVE") != nullptr;
+            if (test_move) {
+                static const auto move_t0 = std::chrono::steady_clock::now();
+                const float t = std::fmod(std::chrono::duration<float>(std::chrono::steady_clock::now() - move_t0).count(), 9.0f);
+                if (t < 3.0f) { in.fwd = true; in.jump = t > 1.2f && t < 1.3f; in.sprint = t > 2.0f; }
+                else if (t < 4.5f) in.right = true;
+                else if (t < 6.0f) in.back = true;
+                else if (t < 8.5f) { in.fwd = true; in.left = t > 7.2f; in.mouse_dx = 6.0; in.jump = t > 7.9f && t < 8.0f; }
+            }
             // QLIKE_TEST_HOLD=1: pin the camera at the restored settings
             // pose (no gravity) for aerial / overview captures.
             static const bool test_hold = std::getenv("QLIKE_TEST_HOLD") != nullptr;

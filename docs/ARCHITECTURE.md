@@ -102,7 +102,7 @@ its local variables and are not self-contained.
 | A HUD element | `ui_hud.cpp` |
 | Editor items | `veg_zones.cpp` (`kItems`) |
 | Gun, bullets, fire rate | `combat.cpp`; bolt glow: `fx.cpp` |
-| What the animator is told about the local player; skinning; the animation debug overlay | `player_body.cpp` |
+| What the animator is told about the local player; the bone palette; the animation debug overlay | `player_body.cpp`; the skinning itself: `shaders/cube_skin.vert` (pipelines in `pipelines_setup.cpp`, palette buffer = scene set binding 33 in `descriptors.cpp`) |
 | How a pose is made (order of layers, warps, feet, arms, recoil, reload) | `src/anim/character_animator.cpp`; tuning: `AnimTuning` in its header |
 | Which captured frame is played next | `src/anim/motion_matcher.cpp` (ground), `src/anim/airborne.cpp` (jumps, falls, landings) |
 | Where the hands hold the weapon, recoil and reload timing | `WeaponDef` in `src/anim/character_animator.h` |
@@ -152,7 +152,7 @@ against the avatar as drawn there (`mp_bolt_hits`).
 
 Other players each have an animator of their own (`MpAvatar::animator`): `mp_pose_avatars` turns
 their interpolated state into its input (`net::remote_animation_input`), picks a level of detail
-by their size on screen, and skins into their vertex buffer. No pose data is sent: position,
+by their size on screen, and writes their bone palette (the GPU skins). No pose data is sent: position,
 velocity, view, movement keys, stance, weapon and a shot counter are (35 bytes, 30 times a second).
 Shots are stamped events, de-duplicated and played when the delayed picture reaches their moment.
 `draw_remote_players` draws body + what they carry through `draw_viewmodel` with their camera

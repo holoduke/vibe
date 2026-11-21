@@ -53,15 +53,20 @@ Reading it:
 
 | | |
 |---|---|
-| Local body, per frame (`player body` in the `[cpuprof]` line) | 0.75 - 0.85 ms, of which skinning 43,155 vertices on the CPU ~0.6 ms |
-| Two bodies in view (two-instance run, `QLIKE_ANIM_LOG=1`) | animation 0.03 ms, skinning 1.17 ms |
+| Local body, per frame (`player body` in the `[cpuprof]` line) | 0.08 - 0.40 ms: the animation (0.02 idle, up to 0.35 on a frame that searches) plus 0.002 ms to write the bone palette |
+| The same before skinning moved to the GPU | 0.75 - 0.85 ms (skinning 43,155 vertices on the CPU ~0.6 ms) |
+| Two bodies in view (two-instance run, `QLIKE_ANIM_LOG=1`) | animation 0.03 - 0.3 ms, palettes 0.002 ms |
+| GPU, body + weapon (`w_viewmodel` in `gpu-passes`, RTX 4080, 1440p internal) | 0.06 ms |
+| GPU, 33 skinned bodies (`QLIKE_BODY_CROWD=32`) | 0.31 - 0.37 ms |
+| GPU, 129 skinned bodies (`QLIKE_BODY_CROWD=128`) | 1.25 - 1.47 ms |
 | Pose search | 0.20 - 0.45 ms over 79,210 frames, both mirror halves; 0.005 ms while idle |
 
-**Skinning, not animation, is what limits how many characters can be drawn**: ~0.6 ms each on
-the CPU. Thirty-two drawn players would cost ~19 ms. Moving skinning to the vertex shader
-(the animator already produces a skinning palette: `IAnimationRuntime::skinning_matrices`) is the
-next step before any large player count; it was not done here because it changes the mesh
-pipeline and shaders, not the animation.
+**Skinning is on the GPU** (`shaders/cube_skin.vert`): the rest-pose mesh and each vertex's bones
+and weights are static buffers, a character costs the CPU one 53-bone palette (7.6 kB) a frame.
+On the CPU it was ~0.6 ms a body, which put the wall at 20 - 30 drawn players; now about 0.01 ms
+of GPU time a body (43k vertices each: the crowd numbers above are vertex work, the block of
+copies is mostly off screen, so shading is not in them). The mesh has no levels of detail: at
+hundreds in view its 79k triangles per body become the cost, not the skinning.
 
 ## Memory
 

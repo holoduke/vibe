@@ -16,7 +16,8 @@ src/anim/                    library qlike_anim: glm + ozz, no Vulkan, no engine
   character_animator.*         one character: input -> pose (the order of layers is at the top of the header)
   anim_lod.h                   levels of detail
   offline/                     BVH import, retargeting, validation, cooking (never linked into the game)
-src/engine/vk_engine/player_body.cpp   gathers the input, skins, draws; debug overlay
+src/engine/vk_engine/player_body.cpp   gathers the input, writes the bone palette, draws; debug overlay
+shaders/cube_skin.vert                 skins on the GPU (bone palette: binding 33 of the scene set)
 src/engine/net/net_state.h, net_anim.h what is replicated and how it becomes a remote animator's input
 tools/anim/cook_main.cpp     vibe_animcook
 tools/anim/bench_main.cpp    vibe_animbench
@@ -94,16 +95,18 @@ prediction follows.
 | `QLIKE_BODY_WALK=<m/s>`, `QLIKE_BODY_STRAFE=<m/s>`, `QLIKE_BODY_AIR=<m/s>` | Drive it |
 | `QLIKE_BODY_FIRE=<shots/s>`, `QLIKE_BODY_RELOAD=1` | Fire / reload in a loop |
 | `QLIKE_BODY_REST=1` | Rest pose |
+| `QLIKE_BODY_CROWD=<n>` | Draw the local body n more times (GPU cost of n skinned characters) |
+| `QLIKE_TEST_MOVE=1` | The player moves by itself on a 9 s loop of real key input: forward, jump, sprint, strafe, back, a turning arc |
 | `QLIKE_ANIM_LOD=<0..3>` | Force other players' level of detail |
-| `QLIKE_ANIM_LOG=1` | Per-frame animation and skinning cost, level counts, network bytes in the log |
+| `QLIKE_ANIM_LOG=1` | Per-frame animation cost, level counts, network bytes, and what each remote player's animator is doing, in the log |
 | `QLIKE_NET_PORT=<n>` | Another discovery port: test instances do not meet real games |
 | `QLIKE_CFG=<file>` | Another settings file (captures without touching the player's own) |
 
 Two instances on one PC, one observing the other:
 
 ```bash
-QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=a.cfg QLIKE_TEST_HOLD=1 QLIKE_BODY_FIRE=6 ./build/vibe.exe --frames 5000 &
-QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=b.cfg QLIKE_TEST_HOLD=1 QLIKE_ANIM_DEBUG=1 ./build/vibe.exe --frames 1500 --screenshot obs.png --screenshot-after 1200
+QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=a.cfg QLIKE_TEST_MOVE=1 QLIKE_TEST_FIRE=1 ./build/vibe.exe --frames 5000 &
+QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=b.cfg QLIKE_TEST_HOLD=1 QLIKE_ANIM_DEBUG=1 QLIKE_ANIM_LOG=1 ./build/vibe.exe --frames 1500 --screenshot obs.png --screenshot-after 130
 ```
 
 ## Tests
@@ -139,10 +142,15 @@ QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=b.cfg QLIKE_TEST_HOLD=1 QLIKE_ANIM_DE
 - **G3 — stops.** No distance matching; a stop is found by the search (the StartStop takes help).
 - **G4 — ground under remote players** far from the local one is the terrain only when in the air
   (time to contact may be late over a floor) and level when grounded.
-- **G5 — skinning is on the CPU** and costs ~0.6 ms per drawn character: twenty times the
-  animation. It is the limit on how many characters can be drawn, not the animation.
+- **G5 — one mesh for every distance.** Skinning is on the GPU (`cube_skin.vert`, ~0.01 ms a
+  body), but every body is the full 43k-vertex mesh and at most 48 skinned characters are drawn
+  in a frame (`kSkinCharacters`). Motion vectors of a body come from its model matrix, not its
+  previous pose. Bodies cast no shadows (as before).
 - **G6 — third-person mesh.** The soldier has no head geometry (stand-in box for others).
-- **G7 — not watched in motion.** Verified by tests and stills.
+- **G7 — not watched in motion by a person.** Verified by tests, stills, and a two-instance run
+  on the real netcode in which one instance walks, sprints, jumps, strafes, back-pedals and swims
+  by itself (`QLIKE_TEST_MOVE=1`) and the other logs what its animator reconstructs
+  (`captures/mp_moving.png`).
 - **G8 — reload is cosmetic** (the laser has no magazine); weapon switching has an equip layer
   but no captured draw / holster.
 - **G9 — one weapon definition** (`default_rifle()`); `WeaponDef` holds grips, muzzle, recoil

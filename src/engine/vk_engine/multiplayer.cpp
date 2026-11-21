@@ -56,8 +56,6 @@ void VulkanEngine::mp_init() {
 void VulkanEngine::mp_shutdown() {
     if (net_) { net_->stop(); delete net_; net_ = nullptr; }
     for (auto& a : mp_avatars_) {
-        for (uint32_t i = 0; i < kFrameOverlap; ++i)
-            if (a.vbuf[i]) { vmaDestroyBuffer(allocator_, a.vbuf[i], a.valloc[i]); a.vbuf[i] = VK_NULL_HANDLE; a.mapped[i] = nullptr; }
         a.animator.reset();
         a.id = 0;
     }
@@ -163,9 +161,7 @@ void VulkanEngine::mp_update(float dt) {
         if (!av) {
             for (auto& a : mp_avatars_) if (!a.id) { av = &a; break; }
             if (!av) continue;
-            MpAvatar fresh{};
-            for (uint32_t i = 0; i < kFrameOverlap; ++i) { fresh.vbuf[i] = av->vbuf[i]; fresh.valloc[i] = av->valloc[i]; fresh.mapped[i] = av->mapped[i]; }
-            *av = std::move(fresh);
+            *av = MpAvatar{};
             av->id = p.id;
             av->fresh_pose = true;
             mp_feed(net_->name_of(p.id) + " joined");
@@ -184,8 +180,6 @@ void VulkanEngine::mp_pose_avatars(float dt) {
     if (!net_ || body_bones_.empty() || !anim_set_.ok()) return;
     CPU_SCOPE("remote bodies");
     dt = glm::clamp(dt, 0.0f, 0.1f);
-    const size_t nv = body_verts_.size();
-    const uint32_t slot = frame_number_ % kFrameOverlap, other = (frame_number_ + kFrameOverlap - 1) % kFrameOverlap;
     const glm::vec3 cam = current_frame_view_.eye_pos;
     const float tan_half = current_frame_view_.proj[1][1] != 0.0f ? 1.0f / std::abs(current_frame_view_.proj[1][1]) : 0.7f;
     for (auto& a : mp_avatars_) {
@@ -197,20 +191,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         a.muzzle_t = std::max(0.0f, a.muzzle_t - dt);
         a.combat_t += dt;
         a.hit_age += dt;
-        for (uint32_t i = 0; i < kFrameOverlap; ++i) {
-            if (a.vbuf[i]) continue;
-            VkBufferCreateInfo bci{};
-            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bci.size = sizeof(Vertex) * nv;
-            bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-            VmaAllocationCreateInfo aci{};
-            aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-            aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            VmaAllocationInfo ai{};
-            if (vmaCreateBuffer(allocator_, &bci, &aci, &a.vbuf[i], &a.valloc[i], &ai) != VK_SUCCESS) { a.vbuf[i] = VK_NULL_HANDLE; continue; }
-            a.mapped[i] = ai.pMappedData;
-        }
-        if (!a.mapped[slot]) continue;
+        a.palette = -1;
         if (!a.animator) { a.animator = std::make_unique<anim::CharacterAnimator>(anim_set_); apply_anim_tuning(a.animator->tuning); a.fresh_pose = true; }
         const net::PlayerState& s = a.st;
         anim::CharacterAnimationInput in;
@@ -242,19 +223,19 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         a.teleported = false;
         in.lod = a.lod;
 
-        // Level 2 is posed every other frame; in between, the last pose is copied into this
-        // frame's buffer. (Level 3 is not posed at all; its animator only keeps time.)
-        const bool skip = a.lod == 2 && !a.fresh_pose && !a.die && a.skipped == 0 && (frame_number_ & 1u) && a.mapped[other];
-        Vertex* dst = static_cast<Vertex*>(a.mapped[slot]);
+        // Level 2 is posed every other frame; in between, the last pose is sent again.
+        // (Level 3 is not posed at all; its animator only keeps time.)
+        const bool skip = a.lod == 2 && !a.fresh_pose && !a.die && a.skipped == 0 && (frame_number_ & 1u) && !a.pose_rows.empty();
         if (skip) {
             a.skipped = 1;
             a.skip_dt = dt;
-            std::memcpy(dst, a.mapped[other], nv * sizeof(Vertex));
+            a.palette = body_push_rows(a.pose_rows);
         } else {
             in.dt = dt + a.skip_dt;
             a.skipped = 0;
             a.skip_dt = 0.0f;
-            pose_character(*a.animator, in, a.lod >= 3 ? nullptr : dst);
+            if (a.lod >= 3) a.pose_rows.clear();
+            pose_character(*a.animator, in, a.lod >= 3 ? nullptr : &a.palette, &a.pose_rows);
             a.weapon_offset = a.animator->weapon_offset();
         }
         a.prev_model = a.fresh_pose ? model : a.model;
@@ -273,7 +254,17 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         }
         a.view_inv = rf.view_inv;          // their camera: where their gun and head are drawn from
         a.eye = eye;
-        a.drawn = a.lod < 3;
+        a.drawn = a.lod < 3 && a.palette >= 0;
+    }
+    if (std::getenv("QLIKE_ANIM_LOG") && frame_number_ % 20 == 0) {
+        // (what each remote animator is doing: the evidence for a two-instance run)
+        for (const auto& a : mp_avatars_) {
+            if (!a.id || !a.animator) continue;
+            const anim::AnimDebug& d = a.animator->debug();
+            log::infof("[anim] remote %u: L%d %s clip %s  speed %.2f rate %.2f  air %s  contact %d%d  pos %.1f %.1f %.1f", a.id, a.lod, d.mode,
+                       d.clip >= 0 ? anim_set_.runtime->clip(d.clip).name.c_str() : "-", d.speed, d.rate, anim::air_phase_name(d.air_phase),
+                       int(d.contact[0]), int(d.contact[1]), a.st.px, a.st.py, a.st.pz);
+        }
     }
     if (std::getenv("QLIKE_ANIM_LOG") && frame_number_ % 120 == 0) {
         const net::Session::Stats& ns = net_->stats();

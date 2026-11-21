@@ -43,7 +43,7 @@ void VulkanEngine::init_descriptors() {
         { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 },
         // 2 originals (materials, prev_transforms) + 2 ReSTIR reservoirs
         // + 2 voxel SSBOs (brick atlas + shape directory, bindings 24/25).
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7 },      // + the bone palette (33)
         // SVGF GI denoiser storage images: 1 raw gi (binding 19) +
         // 2 history ping-pong (bindings 20, 21) +
         // 2 variance-moments ping-pong (bindings 22, 23 — 4a-deep).
@@ -87,7 +87,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[33]{};
+    VkDescriptorSetLayoutBinding bindings[34]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -329,10 +329,16 @@ void VulkanEngine::init_descriptors() {
     bindings[32] = bindings[31];
     bindings[32].binding = 32;
 
+    // Binding 33: bone palette of the skinned characters (cube_skin.vert; player_body.cpp).
+    bindings[33].binding = 33;
+    bindings[33].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[33].descriptorCount = 1;
+    bindings[33].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 33, .pBindings = bindings,
+        .bindingCount = 34, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -347,6 +353,28 @@ void VulkanEngine::init_descriptors() {
     };
     vk_check(vkAllocateDescriptorSets(device_, &ai, &scene_desc_set_),
              "scene desc set alloc");
+    {
+        // The bone palette exists from the start (the set must be complete whether or not a
+        // character is ever loaded): written by the CPU every frame, read by the vertex shader.
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size = sizeof(glm::vec4) * 3ull * kSkinBones * kSkinCharacters * kFrameOverlap;
+        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO;
+        aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo info{};
+        vk_check(vmaCreateBuffer(allocator_, &bci, &aci, &body_palette_buf_, &body_palette_alloc_, &info), "bone palette buffer");
+        body_palette_map_ = static_cast<glm::vec4*>(info.pMappedData);
+        VkDescriptorBufferInfo bi{ body_palette_buf_, 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = scene_desc_set_; w.dstBinding = 33;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w.pBufferInfo = &bi;
+        vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+    }
     log::info("descriptors created");
 }
 
@@ -354,6 +382,10 @@ void VulkanEngine::destroy_descriptors() {
     if (scene_desc_set_layout_) vkDestroyDescriptorSetLayout(device_, scene_desc_set_layout_, nullptr);
     if (scene_desc_pool_)       vkDestroyDescriptorPool(device_, scene_desc_pool_, nullptr);
     if (scene_ubo_buffer_)      vmaDestroyBuffer(allocator_, scene_ubo_buffer_, scene_ubo_alloc_);
+    if (body_palette_buf_)      vmaDestroyBuffer(allocator_, body_palette_buf_, body_palette_alloc_);
+    body_palette_buf_ = VK_NULL_HANDLE;
+    body_palette_alloc_ = nullptr;
+    body_palette_map_ = nullptr;
     scene_desc_set_layout_ = VK_NULL_HANDLE;
     scene_desc_pool_ = VK_NULL_HANDLE;
     scene_desc_set_ = VK_NULL_HANDLE;

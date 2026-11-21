@@ -99,6 +99,27 @@ void VulkanEngine::init_pipeline() {
         }
     }
 
+    // Skinned characters: the same pipelines with cube_skin.vert and a second vertex stream
+    // (bone indices and weights, packed as floats in a Vertex).
+    skin_vert_module_ = vkpipe::load_shader_module(device_, sd + "/cube_skin.vert.spv");
+    if (skin_vert_module_) {
+        vkpipe::GraphicsPipelineConfig scfg = cfg;
+        scfg.vert = skin_vert_module_;
+        VkVertexInputBindingDescription sb = vb;
+        sb.binding = 1;
+        scfg.vbindings.push_back(sb);
+        VkVertexInputAttributeDescription s0 = a0, s1 = a1, s2 = a2;
+        s0.location = 3; s0.binding = 1;
+        s1.location = 4; s1.binding = 1;
+        s2.location = 5; s2.binding = 1;
+        scfg.vattrs = { a0, a1, a2, s0, s1, s2 };
+        pipeline_skin_ = vkpipe::build_graphics_pipeline(device_, scfg);
+        if (frag_gbuf_module_) {
+            scfg.frag = frag_gbuf_module_;
+            pipeline_skin_gbuf_ = vkpipe::build_graphics_pipeline(device_, scfg);
+        }
+    }
+
     // Depth-only pre-pass pipeline. draw() runs render_world_depth_pass()
     // before the color pass to populate depth_image_ so the color pass's
     // depth_compare=LESS_OR_EQUAL early-rejects occluded fragments before
@@ -1446,6 +1467,11 @@ void VulkanEngine::destroy_grass_pipeline() {
 
 void VulkanEngine::destroy_pipeline() {
     if (pipeline_)         vkDestroyPipeline(device_, pipeline_, nullptr);
+    if (pipeline_skin_)      vkDestroyPipeline(device_, pipeline_skin_, nullptr);
+    if (pipeline_skin_gbuf_) vkDestroyPipeline(device_, pipeline_skin_gbuf_, nullptr);
+    if (skin_vert_module_)   vkDestroyShaderModule(device_, skin_vert_module_, nullptr);
+    pipeline_skin_ = pipeline_skin_gbuf_ = VK_NULL_HANDLE;
+    skin_vert_module_ = VK_NULL_HANDLE;
     if (pipeline_gbuf_)    vkDestroyPipeline(device_, pipeline_gbuf_, nullptr);
     if (frag_gbuf_module_) vkDestroyShaderModule(device_, frag_gbuf_module_, nullptr);
     if (frag_gbuf_terrain_module_) vkDestroyShaderModule(device_, frag_gbuf_terrain_module_, nullptr);

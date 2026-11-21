@@ -213,7 +213,7 @@ Measured against the baseline (same machine, body shown from outside, running):
 
 | | Before | After |
 |---|---|---|
-| `player body` per frame (animation + skinning) | 0.80 - 0.90 ms | 0.75 - 0.85 ms (animation 0.02 - 0.35 ms, skinning ~0.6 ms) |
+| `player body` per frame (animation + skinning) | 0.80 - 0.90 ms | 0.08 - 0.40 ms on the CPU (animation only); skinning on the GPU, ~0.01 ms a body |
 | Data in memory | ~46 MB (frames stored twice for the mirror) | 24.5 MB (12.9 MB clips + 11.6 MB database; mirror searched, not stored) |
 | Search | every 0.2 s, scalar | every 0.1 s, AVX2: 0.2 - 0.45 ms over 79,210 frames x 2 |
 | Tests | none | 70 |
