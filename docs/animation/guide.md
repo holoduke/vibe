@@ -99,6 +99,7 @@ prediction follows.
 | `QLIKE_TEST_MOVE=1` | The player moves by itself on a 9 s loop of real key input: forward, jump, sprint, strafe, back, a turning arc |
 | `QLIKE_ANIM_LOD=<0..3>` | Force other players' level of detail |
 | `QLIKE_MESH_LOD=<0..2>` | Force which mesh every soldier is drawn with |
+| `QLIKE_NO_BODY_SHADOW=1` | Soldiers cast no shadow (comparison) |
 | `QLIKE_ANIM_LOG=1` | Per-frame animation cost, level counts, network bytes, and what each remote player's animator is doing, in the log |
 | `QLIKE_NET_PORT=<n>` | Another discovery port: test instances do not meet real games |
 | `QLIKE_CFG=<file>` | Another settings file (captures without touching the player's own) |
@@ -168,7 +169,10 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   the GPU (`cube_skin.vert`); the body and the head each have three meshes (109k / 28k / 9k
   triangles together), chosen by height on screen (`body_mesh_lod`: full above 300 px, the middle
   one above 100). Motion vectors of a body come from its model matrix, not its previous pose.
-  Bodies cast no shadows (as before).
+  Bodies cast sun and flashlight shadows through the small-object shadow map
+  (`draw_skinned_shadows` in `clutter_shadow.cpp`, `skin_shadow.vert`): on the ground and on
+  plants within 32 m of the camera, refreshed every other frame; not on walls, props or each
+  other (those receive ray-traced shadows, and the soldiers are not in the ray-tracing scene).
 - **G6 - the head** is a mesh of its own (`soldier_head*.qchar`: head, eyes, M1 helmet), drawn on
   other players and the fallen, never on the player himself. No brows, lashes or teeth; the
   face does not move.

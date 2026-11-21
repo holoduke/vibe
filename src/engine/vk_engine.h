@@ -2100,6 +2100,11 @@ private:
     VkPipelineLayout clutter_shadow_layout_ = VK_NULL_HANDLE;
     VkPipeline     clutter_shadow_pipeline_ = VK_NULL_HANDLE;
     VkShaderModule clutter_shadow_vert_ = VK_NULL_HANDLE;
+    // The soldiers (the player's own body, other players, the fallen) into the same maps:
+    // skin_shadow.vert on the world pipeline layout (it reads the bone palette).
+    VkPipeline     skin_shadow_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule skin_shadow_vert_ = VK_NULL_HANDLE;
+    void draw_skinned_shadows(VkCommandBuffer cmd, const glm::mat4& light_vp, bool with_local);
     glm::mat4      clutter_shadow_vp_{0.0f};
     void init_clutter_shadow();
     void destroy_clutter_shadow();
