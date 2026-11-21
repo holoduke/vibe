@@ -178,3 +178,59 @@ inline float joint_error(const Transform& a, const Transform& b) {
 }
 
 }  // namespace fx
+
+#include "anim/offline/motion_build.h"
+
+namespace fx {
+
+// A clip whose root travels at `vel` (character frame: x right, z back) while facing -Z; the
+// thighs swing along the travel direction. `hop`: the body leaves the ground in the middle.
+inline RawClip make_move_clip(const SkeletonDef& s, const char* name, int frames, float rate, glm::vec2 vel, uint32_t tags,
+                              bool hop = false) {
+    RawClip c = make_clip(s, name, frames, rate, 0.0f);
+    c.info.tags = tags;
+    const int hips = s.find("Hips"), lu = s.find("LeftUpLeg"), ru = s.find("RightUpLeg");
+    const float speed = glm::length(vel);
+    const glm::vec3 axis = speed > 1e-4f ? glm::normalize(glm::vec3(-vel.y, 0.0f, vel.x)) : glm::vec3(1, 0, 0);
+    for (int f = 0; f < frames; ++f) {
+        const float t = float(f) / rate;
+        c.at(f, 0).t = glm::vec3(vel.x, 0.0f, vel.y) * t;
+        const float ph = 6.2831853f * 1.5f * t, amp = (speed > 0.0f && !hop) ? 0.45f : 0.0f;     // (the hop slides on still legs: its feet are down outside the flight)
+        c.at(f, lu).r = glm::angleAxis(amp * std::sin(ph), axis);
+        c.at(f, ru).r = glm::angleAxis(-amp * std::sin(ph), axis);
+        if (tags & kTagCrouch) c.at(f, hips).t.y -= 0.25f;
+        if (hop && f >= frames / 3 && f < 2 * frames / 3) {
+            const float u = float(f - frames / 3) / float(frames / 3);
+            c.at(f, hips).t.y += 0.08f + 0.5f * 4.0f * u * (1.0f - u);
+        }
+    }
+    label_contacts(s, c);
+    return c;
+}
+
+struct MotionFixture {
+    SkeletonDef          skel = make_skeleton();
+    std::vector<RawClip> clips;
+    MotionDatabase       db;
+    std::vector<uint8_t> blob;
+    MotionFixture() {
+        clips.push_back(make_move_clip(skel, "idle", 120, 30.0f, { 0.0f, 0.0f }, kTagLocomotion | kTagIdle));
+        clips.push_back(make_move_clip(skel, "walk_f", 300, 30.0f, { 0.0f, -1.0f }, kTagLocomotion));
+        clips.push_back(make_move_clip(skel, "run_f", 300, 30.0f, { 0.0f, -2.0f }, kTagLocomotion));
+        clips.push_back(make_move_clip(skel, "walk_b", 300, 30.0f, { 0.0f, 0.8f }, kTagLocomotion));
+        clips.push_back(make_move_clip(skel, "strafe_r", 300, 30.0f, { 1.2f, 0.0f }, kTagLocomotion));
+        clips.push_back(make_move_clip(skel, "crouch_f", 200, 30.0f, { 0.0f, -0.7f }, kTagCrouch));
+        clips.push_back(make_move_clip(skel, "hop", 150, 30.0f, { 0.0f, -0.2f }, kTagJump, true));
+        std::string why;
+        if (!build_motion_database(skel, clips, MotionBuildParams{}, blob, nullptr, &why)) throw std::runtime_error(why);
+        if (!db.load(blob.data(), blob.size(), skel.rig_id(), &why)) throw std::runtime_error(why);
+    }
+    int range_named(const char* name) const {
+        for (size_t i = 0; i < clips.size(); ++i)
+            if (clips[i].info.name == name) return int(i);
+        return -1;
+    }
+    const char* clip_of(int frame) const { return frame < 0 ? "none" : clips[size_t(db.range_of(uint32_t(frame)).clip)].info.name.c_str(); }
+};
+
+}  // namespace fx

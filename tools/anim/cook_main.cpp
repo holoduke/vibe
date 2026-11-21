@@ -7,6 +7,7 @@
 // motion-matching database. The raw capture files are not part of the repository: download
 // 100STYLE (CC BY 4.0) from https://www.ianxmason.com/100style/.
 #include "anim/offline/cook.h"
+#include "anim/offline/motion_build.h"
 #include "game/player.h"
 
 #include <cstdio>
@@ -49,6 +50,10 @@ int main(int argc, char** argv) {
     std::printf("clips: %zu, %zu frames, %.2f MB compressed (%.1f bytes per frame)\n", asset.clips.size(), frames,
                 double(clip_bytes) / 1048576.0, double(clip_bytes) / double(frames));
 
+    if (!anim::offline::build_motion_database(skel, cooked.raw, anim::offline::MotionBuildParams{}, asset.motion_blob, log, &why)) {
+        std::fprintf(stderr, "motion database failed: %s\n", why.c_str());
+        return 1;
+    }
     if (!asset.save(out.c_str(), &why)) { std::fprintf(stderr, "%s: %s\n", out.c_str(), why.c_str()); return 1; }
     std::printf("wrote %s (%.2f MB)\n", out.c_str(), double(asset.serialize().size()) / 1048576.0);
     return 0;

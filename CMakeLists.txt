@@ -309,6 +309,10 @@ add_library(qlike_anim STATIC
     src/anim/skeleton_def.cpp
     src/anim/asset.cpp
     src/anim/ozz_runtime.cpp
+    src/anim/motion_db.cpp
+    src/anim/trajectory.cpp
+    src/anim/motion_matcher.cpp
+    src/anim/inertializer.cpp
 )
 target_link_libraries(qlike_anim PUBLIC qlike_core PRIVATE ozz_animation ozz_base)
 
@@ -318,6 +322,7 @@ add_library(qlike_anim_offline STATIC
     src/anim/offline/raw_clip.cpp
     src/anim/offline/retarget.cpp
     src/anim/offline/cook.cpp
+    src/anim/offline/motion_build.cpp
 )
 target_link_libraries(qlike_anim_offline PUBLIC qlike_anim PRIVATE ozz_animation_offline ozz_animation ozz_base)
 
