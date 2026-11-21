@@ -1320,7 +1320,9 @@ private:
         bool          present = false;                 // has a current state: can be hit, whether drawn or not
         glm::vec3     foot_last{1e9f};                 // footprints in the snow
         bool          corpse = false;                  // drawn as a body on the ground: head, no weapon
-        bool          die = false;                     // killed: the next pose becomes a ragdoll (ragdoll.cpp)
+        bool          die = false;                     // killed: the body buckles where it stands, then is a ragdoll (ragdoll.cpp)
+        float         dying_t = -1.0f;                 // seconds since the kill while the body still stands (-1: alive)
+        net::PlayerState dying_st{};                   // where and how they were then (they themselves respawn elsewhere at once)
         glm::vec3     hit_pos{0.0f}, hit_dir{0.0f};    // the last shot that hit them
         float         hit_power = 0.0f, hit_age = 1e9f;
         bool          foot_left = false;

@@ -467,6 +467,11 @@ void CharacterAnimator::pelvis_and_warp(const CharacterAnimationInput& in, glm::
     pose_[size_t(hips)].t.y -= drop + std::max(dip_, 0.0f);
     pose_[size_t(hips)].t.z += 0.10f * std::clamp(in.crouch, 0.0f, 1.0f);
     dbg_.pelvis_offset = -(drop + std::max(dip_, 0.0f));
+    if (in.dying > 0.0f) {
+        const float d = std::clamp(in.dying, 0.0f, 1.0f);
+        pose_[size_t(hips)].t.y -= 0.38f * d * d;                       // (slow to start, then it goes)
+        pose_[size_t(hips)].t.z += 0.10f * d;
+    }
 
     // Orientation warp: hips and legs turn to the way the character really goes; the spine
     // turns back in three steps so the chest stays on the aim.
@@ -569,7 +574,7 @@ void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
         }
         const float speed = glm::length(glm::vec2(in.velocity.x, in.velocity.z));
         const bool moving = speed > 0.6f;
-        const bool busy = in.aiming || since_shot_ < 1.6f || reload_w_ > 0.05f || held_ != in.held || in.swimming || !in.grounded;
+        const bool busy = in.dying > 0.0f || in.aiming || since_shot_ < 1.6f || reload_w_ > 0.05f || held_ != in.held || in.swimming || !in.grounded;
         const float want = busy ? 0.0f : 1.0f;
         gaze_w_ += (want - gaze_w_) * (1.0f - std::exp(-dt / (busy ? 0.08f : 0.35f)));
         // what to look at next
@@ -666,6 +671,18 @@ void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
             rotate_in_model(rig[Role::Spine1], glm::angleAxis(0.045f * shift_, glm::vec3(0.0f, 0.0f, 1.0f)));
         }
         if (still > 1e-3f) rotate_in_model(rig[Role::Spine2], rot_x(0.012f * still * std::sin(time_ * 1.7f + float(in.variation & 7u))));
+    }
+    if (in.dying > 0.0f) {
+        const float d = smooth01(std::clamp(in.dying, 0.0f, 1.0f));
+        glm::vec2 hd(in.hit_dir.x, in.hit_dir.z);
+        const float hl = glm::length(hd);
+        hd = hl > 1e-4f ? hd / hl : glm::vec2(0.0f, -1.0f);
+        // (shot from the front: over backward; from behind: folding forward; from a side: toward the other)
+        const glm::quat fold = glm::angleAxis(-0.30f * hd.x * d, glm::vec3(0.0f, 0.0f, 1.0f)) * rot_x((hd.y > 0.0f ? 0.42f : -0.60f) * std::abs(hd.y) * d - 0.12f * d);
+        rotate_in_model(rig[Role::Spine], glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), fold, 0.5f));
+        rotate_in_model(rig[Role::Spine2], glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), fold, 0.5f));
+        rotate_in_model(rig[Role::Neck], rot_x(-0.25f * d));
+        rotate_in_model(rig[Role::Head], rot_x(-0.35f * d) * glm::angleAxis(0.20f * hd.x * d, glm::vec3(0.0f, 0.0f, 1.0f)));
     }
     // A hit: the torso gives the way the shot went and comes back (a look only: the controller
     // is not moved, the aim is not thrown).
@@ -815,7 +832,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
     const Rig& rig = rt.rig();
     // ---- the weapon's frame: the view frame (gameplay aim), moved by recoil, reload and equip ----
     const float kick = held_ == HeldItem::Rifle ? recoil_curve(recoil_t_, weapon.recoil_duration) : 0.0f;
-    const float lowered = 1.0f - smooth01(equip_t_);
+    const float lowered = std::max(1.0f - smooth01(equip_t_), smooth01(std::clamp(in.dying, 0.0f, 1.0f)));
     const float tilt = held_ == HeldItem::Rifle ? reload_w_ * smooth01(std::min(reload_u_ / 0.12f, (1.0f - reload_u_) / 0.12f)) : 0.0f;
     // (the turn is about the right hand's grip, so the hand stays on it)
     const glm::vec3 pivot = weapon.grip_r;

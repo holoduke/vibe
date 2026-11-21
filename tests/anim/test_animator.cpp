@@ -1087,3 +1087,40 @@ TEST_CASE("animator: aiming brings the weapon to the middle of the player's own 
     for (int i = 0; i < 60; ++i) seen.update(in);
     CHECK(seen.muzzle_position().x > 0.08f);
 }
+
+TEST_CASE("animator: dying, the body buckles the way the shot went, without a jump", "[anim][animator]") {
+    fx::SetFixture f;
+    const Rig& rig = f.set.runtime->rig();
+    for (float from_front : { 1.0f, -1.0f }) {
+        CharacterAnimator a(f.set);
+        CharacterAnimationInput in;
+        in.dt = 1.0f / 60.0f;
+        in.ground_height = flat_ground;
+        in.eye_local = glm::vec3(0.0f, 1.6f, -0.11f);
+        for (int i = 0; i < 60; ++i) a.update(in);
+        const glm::vec3 hips0(a.model()[size_t(rig[Role::Hips])][3]), head0(a.model()[size_t(rig[Role::Head])][3]);
+        const glm::vec3 foot0(a.model()[size_t(rig[Role::LeftFoot])][3]);
+        in.hit_dir = glm::vec3(0.0f, 0.0f, from_front);        // +z: the shot travelled toward their back (it came from the front)
+        glm::vec3 prev = head0;
+        float worst_step = 0.0f;
+        const int frames = 23;                                  // 0.38 s
+        for (int i = 1; i <= frames; ++i) {
+            in.dying = float(i) / float(frames);
+            a.update(in);
+            REQUIRE(pose_is_valid(a.model()));
+            const glm::vec3 h(a.model()[size_t(rig[Role::Head])][3]);
+            worst_step = std::max(worst_step, glm::length(h - prev));
+            prev = h;
+        }
+        const glm::vec3 hips1(a.model()[size_t(rig[Role::Hips])][3]), head1(a.model()[size_t(rig[Role::Head])][3]);
+        const glm::vec3 foot1(a.model()[size_t(rig[Role::LeftFoot])][3]);
+        INFO((from_front > 0.0f ? "shot from the front" : "shot from behind") << ": hips " << hips1.y - hips0.y << " m, head by "
+             << head1.x - head0.x << " " << head1.y - head0.y << " " << head1.z - head0.z << ", worst step " << worst_step);
+        CHECK(hips1.y < hips0.y - 0.25f);                       // the legs gave
+        CHECK(head1.y < head0.y - 0.30f);                       // the head went down with them, and more
+        CHECK((head1.z - head0.z) * from_front > 0.05f);        // backward when shot from the front, forward when from behind
+        CHECK(glm::length(glm::vec2(foot1.x - foot0.x, foot1.z - foot0.z)) < 0.08f);   // on feet that stayed where they stood
+        CHECK(worst_step < 0.06f);                              // a fall, not a cut
+        CHECK(a.muzzle_position().y < 1.25f);                   // the weapon is out of the aim
+    }
+}

@@ -224,8 +224,10 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 - **Reload.** Still procedural: the weapon tilts, the support hand goes to the magazine, takes it
   down and comes back with one (`magazine_in_hand`, drawn as a plain box by `draw_viewmodel`).
   Cosmetic: the laser has no magazine to empty.
-- **Death** is a ragdoll started from the pose and speed of that moment. Making it hold itself for a
-  moment by damping its joints was tried: the body reaches the ground at the same time either way.
-  A stagger needs joints driven toward a pose (powered ragdoll), which is not built.
+- **Death.** A killed player's body stands for 0.38 s more where it was hit (`MpAvatar::dying_t`; they
+  themselves respawn at once) and buckles: `CharacterAnimationInput::dying` 0 -> 1 lets the legs give,
+  folds the torso the way the last shot went, drops the head and lets the weapon sink. Then it is
+  a ragdoll, started from that pose and speed (`QLIKE_DYING=<s>`, 0 = straight to the ragdoll).
+  Not a powered ragdoll: nothing reacts to the ground during the buckle.
 - **G9 — one weapon definition** (`default_rifle()`); `WeaponDef` holds grips, muzzle, recoil
   and reload timing per weapon, but the game has one gun model. No ADS in the game, so none here.

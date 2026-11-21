@@ -396,6 +396,11 @@ void VulkanEngine::update_player_body(float dt) {
     in.shot_seq = body_shot_seq_;
     in.reload_seq = body_reload_seq_;
     in.aiming = body_aim_;
+    {   // (QLIKE_TEST_RAGDOLL: the 23 frames before it the body buckles, as a killed player's does)
+        static const int kRagAt = int(env_float("QLIKE_TEST_RAGDOLL", -1.0f));
+        const int to_go = kRagAt - int(frame_number_);
+        if (kRagAt >= 0 && to_go >= 0 && to_go < 23) { in.dying = 1.0f - float(to_go) / 23.0f; in.hit_dir = dir_to_model(fwd); in.first_person = false; }
+    }
     in.hit_seq = body_hit_seq_;
     in.hit_dir = dir_to_model(body_hit_dir_);
     in.reloading = body_reload_left_ > 0.0f;

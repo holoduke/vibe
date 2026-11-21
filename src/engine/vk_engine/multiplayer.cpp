@@ -202,9 +202,26 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         a.palette_prev = a.fresh_pose ? -1 : a.palette;       // (a pose from nowhere has no motion)
         a.palette = -1;
         if (!a.animator) { a.animator = std::make_unique<anim::CharacterAnimator>(anim_set_); apply_anim_tuning(a.animator->tuning); a.fresh_pose = true; }
-        const net::PlayerState& s = a.st;
+        // Killed: for a moment the body still stands where it was hit and buckles (they themselves
+        // are at their spawn already); then it is the physics'. Until then it is posed from the
+        // state it had, slowing down.
+        static const float kDying = std::getenv("QLIKE_DYING") ? float(std::atof(std::getenv("QLIKE_DYING"))) : 0.38f;
+        if (a.die && a.dying_t < 0.0f && kDying > 0.0f && !a.fresh_pose) { a.die = false; a.dying_t = 0.0f; a.dying_st = a.st; }
+        if (a.dying_t >= 0.0f) {
+            a.dying_t += dt;
+            net::PlayerState& d = a.dying_st;
+            const float k = std::exp(-dt * 5.0f);
+            d.vx *= k; d.vz *= k;
+            if (d.flags & net::kFlagGround) d.vy = 0.0f; else d.vy -= game_.gravity * dt;
+            d.px += d.vx * dt; d.py += d.vy * dt; d.pz += d.vz * dt;
+            d.flags = uint8_t(d.flags & ~(net::kFlagAim | net::kFlagReload | net::kFlagTeleport));
+            if (a.dying_t >= kDying) { a.die = true; }                  // hand over below, with this pose
+        }
+        const bool dying = a.dying_t >= 0.0f;
+        const net::PlayerState& s = dying ? a.dying_st : a.st;
         anim::CharacterAnimationInput in;
         const net::RemoteFrame rf = net::remote_animation_input(s, in);
+        if (dying) in.dying = glm::clamp(a.dying_t / std::max(kDying, 1e-3f), 0.0f, 1.0f);
         const glm::vec3 eye = rf.eye;
         const glm::mat4 model = rf.model;
 
@@ -244,7 +261,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
             in.hit_dir = glm::vec3(a.hit_dir.x * cy + a.hit_dir.z * sy, a.hit_dir.y, a.hit_dir.x * sy - a.hit_dir.z * cy);
             in.hit_dir.z = -in.hit_dir.z;
         }
-        in.teleported = a.teleported || a.fresh_pose;
+        in.teleported = (a.teleported || a.fresh_pose) && !dying;        // (the respawn is not this body's)
         a.teleported = false;
         in.lod = a.lod;
 
@@ -279,7 +296,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         MpAvatar& a = *r.a;
         anim::CharacterAnimationInput& in = r.in;
         const net::RemoteFrame& rf = r.rf;
-        const net::PlayerState& s = a.st;
+        const net::PlayerState& s = a.dying_t >= 0.0f ? a.dying_st : a.st;
         const glm::vec3 eye = rf.eye;
         const glm::mat4 model = rf.model;
         if (r.skip) {
@@ -293,6 +310,9 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         a.fresh_pose = false;
         a.model = model;
         if (a.die) {
+            const bool was_dying = a.dying_t >= 0.0f;
+            a.dying_t = -1.0f;
+            if (was_dying) { a.fresh_pose = true; a.teleported = true; }      // (the living player is somewhere else by now)
             // Killed: this pose, with the speed they had, goes to the physics; the push comes
             // from the shot that did it (if we saw it), at the part of the body it hit.
             a.die = false;

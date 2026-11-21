@@ -134,6 +134,9 @@ struct CharacterAnimationInput {
     uint32_t  shot_seq = 0;              // counts shots; a change kicks the recoil
     uint32_t  reload_seq = 0;            // counts reload starts
     uint32_t  hit_seq = 0;               // counts hits taken; a change makes the body flinch
+    // Killed: 0 -> 1 over the moment before the body is the physics' (a ragdoll). The legs give,
+    // the torso goes the way the last shot went (hit_dir), the head drops, the weapon sinks.
+    float     dying = 0.0f;
     glm::vec3 hit_dir{0.0f, 0.0f, 1.0f};  // model space: the way the shot travelled
     float     hit_power = 1.0f;          // 1 = an ordinary hit
     bool      reloading = false;         // false while a reload runs = it was interrupted
