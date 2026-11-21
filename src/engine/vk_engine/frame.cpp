@@ -330,6 +330,7 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     prof_begin_frame(frame.command_buffer, gpu_query_slot);
     current_frame_view_ = compute_frame_view();
     if (flashlight_on_) flash_pos_ = current_frame_view_.eye_pos + flash_off_;   // ride on the interpolated camera
+    finish_terrain_raymarch_pipeline(0);   // (variants of the terrain shader still compiling on a first start)
     update_player_body(last_frame_dt_);
     mp_pose_avatars(last_frame_dt_);       // the other players (multiplayer)
     corpses_update(last_frame_dt_);        // the fallen (ragdoll.cpp)

@@ -304,6 +304,7 @@ void VulkanEngine::init() {
     init_vegetation_pipelines();
     init_clutter_shadow();
     init_imgui();
+    finish_terrain_raymarch_pipeline(1);     // the terrain shaders, compiled in the background since init_terrain_raymarch_pipeline
     update_scene_ubo();
     present_loader_frame("Ready",                 1.00f);
     // Loader frames advanced frame_number_ — reset so --frames N and

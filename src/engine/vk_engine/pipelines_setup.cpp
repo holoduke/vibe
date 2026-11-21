@@ -12,8 +12,12 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
+#include <future>
+#include <thread>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -268,27 +272,57 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
     // takes the per-pixel rate from the attachment bound at draw begin.
     cfg.enable_vrs = vrs_supported_;
 
-    terrain_raymarch_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    // Three builds, each on a thread of its own (see the header): collected by
+    // finish_terrain_raymarch_pipeline().
+    const VkDevice dev = device_;
+    auto build = [dev](vkpipe::GraphicsPipelineConfig c) {
+        return std::async(std::launch::async, [dev, c]() { return vkpipe::build_graphics_pipeline(dev, c); });
+    };
+    terrain_rm_build_[0] = build(cfg);
     {
         // No snow, no winter code: a build of the same shader without it (0.2 - 0.4 ms).
         terrain_raymarch_summer_module_ = vkpipe::load_shader_module(device_, sd + "/terrain_raymarch_summer.frag.spv");
         if (terrain_raymarch_summer_module_) {
             vkpipe::GraphicsPipelineConfig su = cfg;
             su.frag = terrain_raymarch_summer_module_;
-            terrain_raymarch_summer_pipeline_ = vkpipe::build_graphics_pipeline(device_, su);
+            terrain_rm_build_[1] = build(su);
         }
     }
     {
         vkpipe::GraphicsPipelineConfig lr = cfg;
         lr.color_formats = { scene_color_format_, motion_vec_format_ };
         lr.enable_vrs = false;
-        terrain_raymarch_lr_pipeline_ = vkpipe::build_graphics_pipeline(device_, lr);
+        terrain_rm_build_[2] = build(lr);
     }
-    log::infof("terrain raymarch pipeline built (vrs=%s)",
-               vrs_supported_ ? "on" : "off");
+}
+
+void VulkanEngine::finish_terrain_raymarch_pipeline(int mode) {
+    if (!terrain_rm_build_[0].valid() && !terrain_rm_build_[1].valid() && !terrain_rm_build_[2].valid()) return;
+    VkPipeline* dst[3] = { &terrain_raymarch_pipeline_, &terrain_raymarch_summer_pipeline_, &terrain_raymarch_lr_pipeline_ };
+    const auto t0 = std::chrono::steady_clock::now();
+    for (;;) {
+        int left = 0;
+        for (int i = 0; i < 3; ++i) {
+            if (!terrain_rm_build_[i].valid()) continue;
+            if (terrain_rm_build_[i].wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) *dst[i] = terrain_rm_build_[i].get();
+            else if (mode == 2 || i == 0) ++left;
+        }
+        if (left == 0 || mode == 0) break;
+        // Still compiling: this only happens on a first start (or after a driver update).
+        const float s = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+        char label[160];
+        std::snprintf(label, sizeof(label), "Preparing shaders for your graphics card - first start only (%d s)", int(s));
+        present_loader_frame(s > 1.5f ? label : "Ready", 0.97f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (mode == 0) return;
+    const float s = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+    log::infof("terrain raymarch pipeline built (vrs=%s; waited %.1f s after the rest of the start-up)",
+               vrs_supported_ ? "on" : "off", s);
 }
 
 void VulkanEngine::destroy_terrain_raymarch_pipeline() {
+    finish_terrain_raymarch_pipeline();          // (a build still running must not outlive its shader modules)
     if (terrain_raymarch_lr_pipeline_) {
         vkDestroyPipeline(device_, terrain_raymarch_lr_pipeline_, nullptr);
         terrain_raymarch_lr_pipeline_ = VK_NULL_HANDLE;

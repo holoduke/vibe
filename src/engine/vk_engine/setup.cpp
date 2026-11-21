@@ -595,10 +595,13 @@ void VulkanEngine::recreate_swapchain() {
     deferred_desc_sig_ = 0;   // handles may be recreated (even at the same address)
     uint32_t w = 0, h = 0;
     window_->framebuffer_size(w, h);
+    const double wait_t0 = glfwGetTime();
     while (w == 0 || h == 0) {
         glfwWaitEvents();
         window_->framebuffer_size(w, h);
     }
+    if (glfwGetTime() - wait_t0 > 1.0)
+        log::infof("waited %.0f s for the window to have a size (minimised, or the screen locked / asleep)", glfwGetTime() - wait_t0);
     vkDeviceWaitIdle(device_);
     destroy_swapchain();
     destroy_depth_image();

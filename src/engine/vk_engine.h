@@ -513,6 +513,14 @@ private:
     VkShaderModule  terrain_raymarch_vert_module_ = VK_NULL_HANDLE;
     VkShaderModule  terrain_raymarch_frag_module_ = VK_NULL_HANDLE;
     void init_terrain_raymarch_pipeline();
+    // The terrain shaders are by far the largest: on a first start the graphics driver takes
+    // a minute or more to compile each (after that they come from the pipeline cache). They
+    // are compiled side by side on their own threads while the rest of the start-up goes on;
+    // finish_terrain_raymarch_pipeline() collects them, keeping the loading screen alive.
+    std::future<VkPipeline> terrain_rm_build_[3];
+    // (mode 0: take what is ready, never wait - every frame; 1: wait for the main one, which can
+    // stand in for the other two; 2: wait for all.)
+    void finish_terrain_raymarch_pipeline(int mode = 2);
     void destroy_terrain_raymarch_pipeline();
 
     // Rasterised water plane (mesh-terrain mode). A real plane mesh at
