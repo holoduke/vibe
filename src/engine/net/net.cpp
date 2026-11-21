@@ -180,13 +180,14 @@ void Session::add_snap(uint32_t id, uint32_t t, const PlayerState& s, double now
     if (id == 0 || id == id_) return;
     RemotePlayer& p = player(id);
     p.last_rx = now;
-    if (!p.buf.add(t, s)) ++stats_.dropped_states;
+    if (!p.buf.add(t, s, uint32_t(std::max(0.0, d_->server_now_ms)))) ++stats_.dropped_states;
 }
 
-void Session::interpolate(uint32_t rt, double now) {
+void Session::interpolate(uint32_t session_now, double now) {
     for (auto& p : players_) {
         p.fresh = !p.buf.snaps.empty() && (now - p.last_rx) < 2.0;
-        const SnapBuffer::Sample s = p.buf.sample(rt);
+        const uint32_t delay = p.buf.delay_ms();
+        const SnapBuffer::Sample s = p.buf.sample(session_now > delay ? session_now - delay : 0u);
         if (!s.valid) continue;
         p.state = s.s;
         p.teleported = s.teleported;
@@ -227,7 +228,12 @@ bool Session::take_world(WorldState& out) {
 
 std::vector<Event> Session::take_events() {
     std::vector<Event> out;
-    gate_.release(render_t_, out);
+    const uint32_t now_ms = uint32_t(std::max(0.0, d_->server_now_ms));
+    gate_.release([&](uint32_t from) {
+        uint32_t delay = kInterpDelayMs;
+        for (const auto& p : players_) if (p.id == from) delay = p.buf.delay_ms();
+        return now_ms > delay ? now_ms - delay : 0u;
+    }, out);
     return out;
 }
 
@@ -423,7 +429,7 @@ void Session::update(double now, const PlayerState& local) {
     const double server_now = role_ == Role::Client ? local_ms + d_->offset_ms : local_ms;
     d_->server_now_ms = server_now;
     render_t_ = uint32_t(std::max(0.0, server_now - double(kInterpDelayMs)));
-    interpolate(render_t_, now);
+    interpolate(uint32_t(std::max(0.0, server_now)), now);
 }
 
 }  // namespace qlike::net

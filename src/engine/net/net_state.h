@@ -15,7 +15,8 @@
 namespace qlike::net {
 
 constexpr uint8_t  kProtocolVersion = 2;       // 2: packed state with weapon / input / shot counter, stamped events
-constexpr uint32_t kInterpDelayMs = 100;       // remote players are shown this far in the past
+constexpr uint32_t kInterpDelayMs = 100;       // remote players are shown at least this far in the past
+constexpr uint32_t kMaxInterpDelayMs = 500;    // ... and at most this far, however slow the link
 constexpr uint32_t kMaxExtrapolateMs = 250;    // nothing newer: carry on along the last velocity this long at most
 constexpr float    kTeleportDistance = 6.0f;   // metres between two states that is a jump, not a movement
 
@@ -117,10 +118,21 @@ struct Snap { uint32_t t; PlayerState s; };
 struct SnapBuffer {
     std::deque<Snap> snaps;
     uint32_t dropped = 0;                      // late, duplicated or insane states thrown away
+    float    lag_ms = 0.0f;                    // how old states are when they arrive (rises at once, falls slowly)
 
-    // false: not stored (out of order, duplicate, or not sane).
-    bool add(uint32_t t, const PlayerState& s) {
+    // How far in the past this player is shown: far enough that two states normally lie on
+    // either side of the moment (so it is interpolated, not guessed), on a slow link too.
+    uint32_t delay_ms() const {
+        return std::clamp(uint32_t(lag_ms) + 50u, kInterpDelayMs, kMaxInterpDelayMs);
+    }
+
+    // `now`: the session clock at arrival. false: not stored (out of order, duplicate, or not sane).
+    bool add(uint32_t t, const PlayerState& s, uint32_t now) {
         if (!state_is_sane(s)) { ++dropped; return false; }
+        {
+            const float lag = float(std::min(now > t ? now - t : 0u, 2000u));
+            lag_ms = lag > lag_ms ? lag : lag_ms + (lag - lag_ms) * 0.01f;
+        }
         if (!snaps.empty()) {
             const uint32_t last = snaps.back().t;
             if (t <= last) {
@@ -191,11 +203,14 @@ public:
     // Events whose time has come at render time `rt` (session ms). Only shots wait for the
     // picture; hits, deaths and leaves are gameplay and pass at once. Nothing waits longer than
     // `max_hold_ms` (clocks that disagree must not hold an event back).
-    void release(uint32_t rt, std::vector<Event>& out, uint32_t max_hold_ms = 400) {
+    // `rt_of(sender id)`: the session time that sender is shown at.
+    template <typename RtOf>
+    void release(RtOf&& rt_of, std::vector<Event>& out, uint32_t max_hold_ms = kMaxInterpDelayMs + 100) {
         size_t keep = 0;
         for (size_t i = 0; i < queue_.size(); ++i) {
             const Event& e = queue_[i];
             const bool timed = e.kind == Event::Fire;
+            const uint32_t rt = timed ? uint32_t(rt_of(e.from)) : 0u;
             const bool due = !timed || e.t <= rt || e.t - rt > max_hold_ms;
             if (due) out.push_back(e);
             else queue_[keep++] = e;

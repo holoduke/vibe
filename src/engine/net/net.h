@@ -117,7 +117,7 @@ private:
     RemotePlayer& player(uint32_t id);
     void remove_player(uint32_t id);
     void add_snap(uint32_t id, uint32_t t, const PlayerState& s, double now);
-    void interpolate(uint32_t render_t, double now);
+    void interpolate(uint32_t session_now, double now);
     void to_solo(const char* why);
 };
 

@@ -8,6 +8,7 @@
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
 #include "engine/net/net.h"
+#include "engine/net/net_anim.h"
 #include "anim/anim_lod.h"
 #include "engine/audio.h"
 #include "engine/cpu_prof.h"
@@ -87,9 +88,7 @@ void VulkanEngine::mp_update(float dt) {
     ls.health = uint8_t(glm::clamp(mp_health_, 0.0f, 100.0f));
     ls.weapon = uint8_t(weapon_);
     // The movement keys: what this player wants, so others can predict starts, stops and turns as the controller will make them.
-    ls.move = uint8_t((last_pin_.fwd ? net::kMoveFwd : 0) | (last_pin_.back ? net::kMoveBack : 0) | (last_pin_.left ? net::kMoveLeft : 0) |
-                      (last_pin_.right ? net::kMoveRight : 0) | (last_pin_.sprint ? net::kMoveSprint : 0) | (last_pin_.jump ? net::kMoveJump : 0) |
-                      (last_pin_.crawl ? net::kMoveCrawl : 0));
+    ls.move = net::move_bits(last_pin_);
     ls.shot_seq = uint16_t(body_shot_seq_);
     net_->update(glfwGetTime(), ls);
 
@@ -212,15 +211,10 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         if (!a.mapped[slot]) continue;
         if (!a.animator) { a.animator = std::make_unique<anim::CharacterAnimator>(anim_set_); apply_anim_tuning(a.animator->tuning); a.fresh_pose = true; }
         const net::PlayerState& s = a.st;
-        const float yaw = s.yaw, pitch = s.pitch, crouch = glm::clamp(s.crouch, 0.0f, 1.0f);
-        const glm::vec3 fwd(std::sin(yaw), 0.0f, -std::cos(yaw)), right(std::cos(yaw), 0.0f, std::sin(yaw));
-        const float eye_off = game::Player::kEyeOffsetStand + (game::Player::kEyeOffsetCrawl - game::Player::kEyeOffsetStand) * crouch;
-        const float eye_h = game::Player::kHalfExtents.y + eye_off;
-        const glm::vec3 eye = glm::vec3(s.px, s.py, s.pz) + glm::vec3(0.0f, eye_off, 0.0f);
-        // (the same stance as the body they see themselves: the eye a little in front of the neck)
-        const float back = 0.11f + 0.17f * glm::smoothstep(0.15f, 1.25f, -pitch) + 0.25f * crouch;
-        const glm::vec3 feet = eye - glm::vec3(0.0f, eye_h, 0.0f) - fwd * back;
-        const glm::mat4 model(glm::vec4(right, 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f), glm::vec4(-fwd, 0.0f), glm::vec4(feet, 1.0f));
+        anim::CharacterAnimationInput in;
+        const net::RemoteFrame rf = net::remote_animation_input(s, in);
+        const glm::vec3 eye = rf.eye;
+        const glm::mat4 model = rf.model;
 
         // Level of detail: by size on screen, whether in view, and whether we are fighting them.
         anim::LodInput li;
@@ -237,33 +231,11 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         static const int kForceLod = std::getenv("QLIKE_ANIM_LOD") ? std::atoi(std::getenv("QLIKE_ANIM_LOD")) : -1;
         a.lod = kForceLod >= 0 ? glm::clamp(kForceLod, 0, 3) : anim::select_lod(li);
 
-        anim::CharacterAnimationInput in;
         in.dt = dt;
-        in.position = feet;
-        in.velocity = glm::vec3(s.vx, s.vy, s.vz);
-        in.facing_yaw = yaw;
-        in.aim_pitch = pitch;
-        in.grounded = (s.flags & net::kFlagGround) != 0 && !(s.flags & net::kFlagSwim);
-        in.swimming = (s.flags & net::kFlagSwim) != 0;
-        in.wants_jump = (s.move & net::kMoveJump) != 0;
-        in.crouch = crouch;
-        in.eye_local = glm::vec3(0.0f, eye_h, -back);
-        {
-            glm::vec3 wish(0.0f);
-            if (s.move & net::kMoveFwd) wish += fwd;
-            if (s.move & net::kMoveBack) wish -= fwd;
-            if (s.move & net::kMoveRight) wish += right;
-            if (s.move & net::kMoveLeft) wish -= right;
-            if (glm::dot(wish, wish) > 1e-6f)
-                in.desired_velocity = glm::normalize(wish) * game::kPlayerMove.max_walk_speed * ((s.move & net::kMoveSprint) ? 1.5f : (s.move & net::kMoveCrawl) ? 0.4f : 1.0f);
-        }
-        in.held = (s.flags & net::kFlagTorch) ? anim::HeldItem::None : (s.weapon == 1 ? anim::HeldItem::Tablet : anim::HeldItem::Rifle);
-        in.shot_seq = s.shot_seq;
-        const bool reloading = (s.flags & net::kFlagReload) != 0;
+        const bool reloading = in.reloading;
         if (reloading && !a.was_reloading) ++a.reload_seq;          // a reload began (the flag is state: it survives lost packets)
         a.was_reloading = reloading;
         in.reload_seq = a.reload_seq;
-        in.reloading = reloading;
         in.teleported = a.teleported || a.fresh_pose;
         a.teleported = false;
         in.lod = a.lod;
@@ -297,10 +269,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
                          in.velocity, seen ? a.hit_pos : eye - glm::vec3(0.0f, 0.4f, 0.0f),
                          seen ? a.hit_dir : glm::vec3(0.0f), seen ? std::max(a.hit_power, 0.5f) : 0.0f);
         }
-        // Their camera: where their gun and head are drawn from.
-        const float cp = std::cos(pitch), sp = std::sin(pitch);
-        const glm::vec3 f(fwd.x * cp, sp, fwd.z * cp), u = glm::cross(right, f);
-        a.view_inv = glm::mat4(glm::vec4(right, 0.0f), glm::vec4(u, 0.0f), glm::vec4(-f, 0.0f), glm::vec4(eye, 1.0f));
+        a.view_inv = rf.view_inv;          // their camera: where their gun and head are drawn from
         a.eye = eye;
         a.drawn = a.lod < 3;
     }
