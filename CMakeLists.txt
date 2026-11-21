@@ -369,6 +369,7 @@ add_library(qlike_engine STATIC
     src/engine/vk_engine/flashlight.cpp
     src/engine/vk_engine/player_body.cpp
     src/engine/vk_engine/ragdoll.cpp
+    src/engine/vk_engine/body_rt.cpp
     src/engine/net/net.cpp
     src/engine/cluster_lod.cpp
     src/engine/vk_engine/cluster_draw.cpp

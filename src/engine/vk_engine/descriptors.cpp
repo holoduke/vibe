@@ -360,6 +360,13 @@ void VulkanEngine::init_descriptors() {
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bci.size = sizeof(glm::vec4) * 3ull * kSkinBones * kSkinCharacters * kFrameOverlap;
         bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        // (also read on the compute queue: the ray-tracing copies of the soldiers, body_rt.cpp)
+        const uint32_t palette_families[2] = { graphics_queue_family_, compute_queue_family_ };
+        if (compute_queue_distinct_) {
+            bci.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            bci.queueFamilyIndexCount = 2;
+            bci.pQueueFamilyIndices = palette_families;
+        }
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;
         aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;

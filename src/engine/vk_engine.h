@@ -1217,7 +1217,34 @@ private:
     struct SkinMesh { Mesh rest{}, skin{}; uint32_t index_count = 0, vertex_count = 0; };
     static constexpr int kBodyLods = 3;
     SkinMesh      body_lod_[kBodyLods], head_lod_[kBodyLods];
-    bool load_skin_mesh(const char* file, SkinMesh& out, bool with_bones);
+    bool load_skin_mesh(const char* file, SkinMesh& out, bool with_bones, bool rt_part = false);
+    // The soldiers in the ray-traced scene (vk_engine/body_rt.cpp): the nearest few get a copy,
+    // skinned by a compute pass and rebuilt into a BLAS every frame, one set per frame in flight.
+    static constexpr uint32_t kRtBodies = 6;
+    struct RtBody { VkAccelerationStructureKHR as = VK_NULL_HANDLE; VkBuffer buf = VK_NULL_HANDLE, scratch = VK_NULL_HANDLE;
+                    VmaAllocation alloc = nullptr, scratch_alloc = nullptr; VkDeviceAddress addr = 0, scratch_addr = 0; };
+    struct RtBodyInstance { glm::mat4 model, prev_model; VkDeviceAddress blas; };
+    std::vector<Vertex>   body_rt_rest_, body_rt_skin_;      // the level 2 body + head, merged (CPU copy for the upload)
+    std::vector<uint32_t> body_rt_idx_;
+    uint32_t      body_rt_verts_ = 0, body_rt_tris_ = 0;
+    VkBuffer      body_rt_rest_buf_ = VK_NULL_HANDLE, body_rt_skin_buf_ = VK_NULL_HANDLE, body_rt_index_buf_ = VK_NULL_HANDLE;
+    VmaAllocation body_rt_rest_alloc_ = nullptr, body_rt_skin_alloc_ = nullptr, body_rt_index_alloc_ = nullptr;
+    VkDeviceAddress body_rt_index_addr_ = 0;
+    VkBuffer      body_rt_out_buf_[kFrameOverlap]{};         // skinned positions, kRtBodies x vertices
+    VmaAllocation body_rt_out_alloc_[kFrameOverlap]{};
+    VkDeviceAddress body_rt_out_addr_[kFrameOverlap]{};
+    RtBody        body_rt_[kFrameOverlap][kRtBodies]{};
+    VkDescriptorSetLayout body_rt_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool body_rt_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet  body_rt_set_[kFrameOverlap]{};
+    VkPipelineLayout body_rt_layout_ = VK_NULL_HANDLE;
+    VkPipeline       body_rt_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule   body_rt_module_ = VK_NULL_HANDLE;
+    std::vector<RtBodyInstance> body_rt_list_;               // this frame's, for rebuild_tlas
+    void init_body_rt();
+    void destroy_body_rt();
+    void record_body_rt(VkCommandBuffer cmd);
+    void pose_characters_for_frame();                        // camera of the frame + every soldier's pose (before the TLAS build)
     int  body_mesh_lod(glm::vec3 pos, int previous) const;    // by height on screen
     bool          body_front_ = false;                // QLIKE_BODY_FRONT: the local body is looked at from outside (head drawn)
     // The bone palette: three rows (a 3x4 matrix, rest -> posed, model space) per bone, for every

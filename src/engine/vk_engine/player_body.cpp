@@ -50,7 +50,7 @@ int VulkanEngine::body_bone(const char* name) const {
 
 // Reads one .qchar. with_bones: this is the file the skeleton is taken from (and the scale that
 // puts the model's eyes at the player's eye height); every other file must be on that skeleton.
-bool VulkanEngine::load_skin_mesh(const char* file, SkinMesh& out, bool with_bones) {
+bool VulkanEngine::load_skin_mesh(const char* file, SkinMesh& out, bool with_bones, bool rt_part) {
     std::string path;
     for (const char* dir : { "assets/character/", "../assets/character/" }) {
         std::ifstream t(std::string(dir) + file, std::ios::binary);
@@ -117,12 +117,18 @@ bool VulkanEngine::load_skin_mesh(const char* file, SkinMesh& out, bool with_bon
     for (uint32_t i = 0; i < nv; ++i)
         stream[i] = { glm::vec3(fv[i].p[0], fv[i].p[1], fv[i].p[2]) * body_scale_, glm::vec3(fv[i].n[0], fv[i].n[1], fv[i].n[2]), glm::vec2(fv[i].uv[0], fv[i].uv[1]) };
     out.rest = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_, stream.data(), nv, idx.data(), ni);
+    const uint32_t rt_base = uint32_t(body_rt_rest_.size());
+    if (rt_part) {                      // part of the mesh the ray tracer gets (body_rt.cpp)
+        body_rt_rest_.insert(body_rt_rest_.end(), stream.begin(), stream.end());
+        for (uint32_t i : idx) body_rt_idx_.push_back(rt_base + i);
+    }
     for (uint32_t i = 0; i < nv; ++i) {
         float b[4], w[4];
         for (int k = 0; k < 4; ++k) { b[k] = float(std::min<uint8_t>(fv[i].b[k], uint8_t(nb - 1))); w[k] = fv[i].w[k] / 255.0f; }
         stream[i] = { glm::vec3(b[0], b[1], b[2]), glm::vec3(b[3], w[0], w[1]), glm::vec2(w[2], w[3]) };
     }
     out.skin = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_, stream.data(), nv, idx.data(), 3);
+    if (rt_part) body_rt_skin_.insert(body_rt_skin_.end(), stream.begin(), stream.end());
     out.index_count = ni;
     out.vertex_count = nv;
     return true;
@@ -136,10 +142,12 @@ void VulkanEngine::init_player_body() {
     }
     const uint32_t nb = uint32_t(body_bones_.size());
     load_skin_mesh("soldier_fp_lod1.qchar", body_lod_[1], false);
-    load_skin_mesh("soldier_fp_lod2.qchar", body_lod_[2], false);
+    body_rt_rest_.clear(); body_rt_skin_.clear(); body_rt_idx_.clear();
+    load_skin_mesh("soldier_fp_lod2.qchar", body_lod_[2], false, true);
     load_skin_mesh("soldier_head.qchar", head_lod_[0], false);
     load_skin_mesh("soldier_head_lod1.qchar", head_lod_[1], false);
-    load_skin_mesh("soldier_head_lod2.qchar", head_lod_[2], false);
+    load_skin_mesh("soldier_head_lod2.qchar", head_lod_[2], false, true);
+    init_body_rt();
     log::infof("[body] triangles by level of detail: body %u / %u / %u, head %u / %u / %u (0 = file missing: the level before is drawn)",
                body_lod_[0].index_count / 3, body_lod_[1].index_count / 3, body_lod_[2].index_count / 3,
                head_lod_[0].index_count / 3, head_lod_[1].index_count / 3, head_lod_[2].index_count / 3);
@@ -220,6 +228,7 @@ void VulkanEngine::apply_anim_tuning(anim::AnimTuning& t) const {
 }
 
 void VulkanEngine::destroy_player_body() {
+    destroy_body_rt();
     for (SkinMesh* set : { body_lod_, head_lod_ })
         for (int i = 0; i < kBodyLods; ++i) {
             destroy_mesh(allocator_, set[i].rest);

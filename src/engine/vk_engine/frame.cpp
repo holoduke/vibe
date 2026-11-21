@@ -107,6 +107,9 @@ void VulkanEngine::draw(uint32_t img_index) {
     begin_frame_uploads();
     hitch_draw_[0] = dz_mark();
 
+    // The frame's camera and every soldier's pose: the TLAS build skins their ray-tracing copies.
+    { CPU_SCOPE("poses"); pose_characters_for_frame(); }
+
     // ---------- Compute queue: per-frame TLAS rebuild ----------
     { CPU_SCOPE("tlas"); submit_tlas_build(frame); }
     hitch_draw_[1] = dz_mark();
@@ -257,6 +260,17 @@ void VulkanEngine::draw(uint32_t img_index) {
 // (submit_tlas_build: the compute-queue TLAS rebuild) in frame order.
 // ---------------------------------------------------------------------
 
+// Capture per-frame camera state once for all render passes, and pose every soldier with it.
+// Before the TLAS build: the nearest soldiers are in the ray-traced scene (body_rt.cpp), and
+// their copies are skinned from this frame's poses.
+void VulkanEngine::pose_characters_for_frame() {
+    current_frame_view_ = compute_frame_view();
+    if (flashlight_on_) flash_pos_ = current_frame_view_.eye_pos + flash_off_;   // ride on the interpolated camera
+    update_player_body(last_frame_dt_);
+    mp_pose_avatars(last_frame_dt_);       // the other players (multiplayer)
+    corpses_update(last_frame_dt_);        // the fallen (ragdoll.cpp)
+}
+
 void VulkanEngine::submit_tlas_build(FrameData& frame) {
     // Recorded onto a separate compute command buffer and submitted on the
     // compute queue (or graphics queue if hardware lacks a dedicated compute
@@ -328,12 +342,8 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     // (terrain raymarch LR, depth pre-pass, color pass). Replaces three
     // identical aspect/lerp/view/proj/Halton-jitter rebuilds per frame.
     prof_begin_frame(frame.command_buffer, gpu_query_slot);
-    current_frame_view_ = compute_frame_view();
-    if (flashlight_on_) flash_pos_ = current_frame_view_.eye_pos + flash_off_;   // ride on the interpolated camera
+    // (the frame's camera and the soldiers' poses: pose_characters_for_frame, before the TLAS build)
     finish_terrain_raymarch_pipeline(0);   // (variants of the terrain shader still compiling on a first start)
-    update_player_body(last_frame_dt_);
-    mp_pose_avatars(last_frame_dt_);       // the other players (multiplayer)
-    corpses_update(last_frame_dt_);        // the fallen (ragdoll.cpp)
     // Scene UBO + per-pass UBOs: staged after this frame's camera so
     // camera_pos / jitter are current, then copied in one batch before any
     // pass reads them (frames in flight - see frame_upload.cpp).
