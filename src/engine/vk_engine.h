@@ -1250,7 +1250,7 @@ private:
     void body_fk();
     void body_ik(int a, int b, int c, glm::vec3 target, glm::vec3 pole);
     void update_player_body(float dt);
-    void draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp);
+    void draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam);
 
     bool prev_weapon_key_[2]{};
     bool airstrike_click_ = false;

@@ -514,7 +514,7 @@ void VulkanEngine::update_player_body(float dt) {
     }
 }
 
-void VulkanEngine::draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp) {
+void VulkanEngine::draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     if (!mp_draw_ && !body_drawn_) return;
     const uint32_t slot = frame_number_ % kFrameOverlap;
     VkDeviceSize off = 0;
@@ -522,7 +522,10 @@ void VulkanEngine::draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp) {
     vkCmdBindIndexBuffer(cmd, body_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
     PushConstants pc{};
     const glm::mat4 bm = mp_draw_ ? mp_draw_->model : body_model_;
-    pc.mvp = vp * bm;
+    // `vp` is relative to `cam` (draw_viewmodel): so is the matrix it multiplies; the lighting keeps the world one.
+    glm::mat4 bm_rel = bm;
+    bm_rel[3] = glm::vec4(glm::vec3(bm[3]) - cam, 1.0f);
+    pc.mvp = vp * bm_rel;
     pc.model = bm;
     pc.prev_mvp = pc.mvp;                  // rides on the camera: no motion vectors
     if (mp_draw_) {

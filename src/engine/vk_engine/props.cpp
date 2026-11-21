@@ -1059,7 +1059,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
                                              glm::vec3(0.0f, 0.0f, kick));
     glm::mat4 view_inv_recoil = view_inv * recoil_offset;
     if (!mp_draw_) body_recoil_ = kick;
-    draw_player_body(cmd, vp);
+    draw_player_body(cmd, vp, cam);        // (vp is camera-relative here: the body's world matrix has to be too)
     if (mp_draw_) {
         // The soldier mesh has no head (first person): a simple head and helmet for the others.
         const glm::mat4 hb = view_inv * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.09f));
