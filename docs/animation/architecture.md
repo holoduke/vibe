@@ -199,8 +199,13 @@ struct; it is deterministic for a given input sequence; no allocation in `update
 ### Result (2026-11-21)
 
 The game runs on the new system; `engine/motion_match.*`, `tools/anim/build_motion_db.py` and
-`assets/character/motion.qmm` are gone. Build: `./build.ps1 -Config Release -Test` - 100 tests
-(30 existing + 70 in `qlike_anim_tests`), all passing.
+`assets/character/motion.qmm` are gone. Build: `./build.ps1 -Config Release -Test` - 101 tests
+(30 existing + 71 in `qlike_anim_tests`), all passing. The animation library and its tests also
+build and pass in Debug (MSVC checked iterators); the whole game was only built in Release.
+
+Second pass, same day: skinning moved to the GPU (`cube_skin.vert`); a real two-instance run with
+a player moving by itself; and the fast gaits measured and reworked (`performance.md`, "Foot slide
+and joint rates").
 
 | Area | Files |
 |---|---|
