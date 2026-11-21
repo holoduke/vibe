@@ -53,13 +53,20 @@ An animator's `update` is safe on any thread as long as one thread at a time use
 
 ```powershell
 ./build.ps1 -Config Release
-./build/vibe_animcook.exe C:/path/to/100STYLE assets/character/soldier_fp.qchar assets/character/soldier.qanim
+./build/vibe_animcook.exe C:/path/to/100STYLE assets/character/soldier_fp.qchar assets/character/soldier.qanim --cmu C:/path/to/cmu/bvh
 ```
 
 Two seconds. Imports the takes listed in `default_style100_sources()` (`offline/cook.cpp`),
 retargets them to the soldier, validates every clip (bone lengths, speeds, contacts, rates) and
 refuses the cook on an error, compresses with ozz, builds the motion database. The raw capture
 is not in the repository: 100STYLE, CC BY 4.0, https://www.ianxmason.com/100style/.
+
+`--cmu <dir>` adds the runs of the CMU Graphics Lab Motion Capture Database (the takes listed in
+`default_cmu_sources()`, as `09_01.bvh` ... in that directory; BVH conversions of the database are
+widely mirrored, the originals are at http://mocap.cs.cmu.edu). They are the only fast running the
+asset has (3.4 - 4.2 m/s on the soldier); without them the fastest take is 2 m/s. Each is a second
+or two long (`kTagShortTake`: the search continues its end at its last pace). The steady ones are
+also cooked played backward, as the fast back-pedal nobody captured (`--no-reversed` leaves that out).
 
 Re-cook when: the character mesh / skeleton is re-exported (the asset's rig id must match; the
 game says so in the log and draws no body otherwise), the ozz version changes, or the database
@@ -152,15 +159,13 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 
 ## Known gaps
 
-- **G1 - speed.** The fastest takes of the capture sustain about 2.0 m/s forward, 1.4 sideways and
-  1.5 backward (`MotionDatabase::cruise_speed`); the game walks at 8 and sprints at 12. Playback
-  rate (to 1.5x) and stride (to 4.5x) make up the difference: a foot on the ground travels back
-  as fast as the ground does for as long as the leg reaches, then leaves the ground. Measured
-  (`vibe_animbench <asset> slide`, table in `performance.md`): the planted foot slides 0 - 1 % of
-  the body's speed at the crawl pace, 9 - 12 % walking and sprinting forward, diagonally and
-  sideways, 19 - 25 % backward. Sideways above 5.5 m/s is a run on legs turned to the side
-  (`strafe_run_speed`), not a sidestep. A sprint and a fast back-pedal capture with clear rights
-  would close the rest.
+- **G1 - speed.** The capture sustains 3.4 m/s forward (CMU runs), 3.4 backward (the same runs played
+  backward: a stand-in, not a captured back-pedal) and 1.4 sideways; the game walks at 8 and sprints
+  at 12. Playback rate (to 1.5x) and stride (1.7x at 8 m/s, 2.4x at 12) make up the difference. A
+  planted foot slides 8 - 11 % of the body's speed forward, diagonally and sideways (sideways above
+  5.5 m/s is a run on legs turned to the side), 14 - 18 % backward, 0 - 1 % at the crawl pace
+  (`vibe_animbench <asset> slide`, table in `performance.md`). A real sprint (8 m/s and more) and a
+  real fast back-pedal would close the rest.
 - **G2 — no captured aiming, firing, reload, fall or hard landing.** These are procedural
   layers; the landing uses the two-foot-jump capture's own landing.
 - **G3 — stops.** No distance matching; a stop is found by the search (the StartStop takes help).
@@ -196,7 +201,8 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 - **Reload.** Still procedural: the weapon tilts, the support hand goes to the magazine, takes it
   down and comes back with one (`magazine_in_hand`, drawn as a plain box by `draw_viewmodel`).
   Cosmetic: the laser has no magazine to empty.
-- **Backward at speed** is the weakest direction (19 - 25 % slide). A faster playback rate for the
-  back-pedal was tried and made the sprint worse (32 %); it needs captured data.
+- **Death** is a ragdoll started from the pose and speed of that moment. Making it hold itself for a
+  moment by damping its joints was tried: the body reaches the ground at the same time either way.
+  A stagger needs joints driven toward a pose (powered ragdoll), which is not built.
 - **G9 — one weapon definition** (`default_rifle()`); `WeaponDef` holds grips, muzzle, recoil
   and reload timing per weapon, but the game has one gun model. No ADS in the game, so none here.

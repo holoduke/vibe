@@ -2,6 +2,8 @@
 
 #include "anim/runtime.h"
 
+#include <algorithm>
+#include <cstdlib>
 #include <ozz/animation/offline/animation_builder.h>
 #include <ozz/animation/offline/animation_optimizer.h>
 #include <ozz/animation/offline/raw_animation.h>
@@ -202,6 +204,71 @@ bool cook_style100(const std::string& dir, const SkeletonDef& skel, const std::v
         }
     }
     if (asset.clips.empty()) return fail("no clips were imported");
+    return true;
+}
+
+std::vector<TakeSource> default_cmu_sources(bool with_reversed) {
+    const uint32_t run = kTagLocomotion | kTagShortTake;
+    std::vector<TakeSource> v;
+    auto add = [&](const char* id) { v.push_back({ std::string(id) + ".bvh", std::string("cmu_") + id, run }); };
+    for (const char* id : { "09_01", "09_02", "09_03", "09_04", "09_05", "09_06", "09_07", "09_08", "09_09", "09_10", "09_11" }) add(id);   // run, 3.2 - 3.4 m/s
+    for (const char* id : { "16_35", "16_36", "16_45", "16_46", "16_55", "16_56" }) add(id);                                                // jog 2.6, run 3.4 - 4.0
+    for (const char* id : { "16_37", "16_39", "16_48", "16_49" }) add(id);                                                                    // veering left / right
+    for (const char* id : { "16_08", "16_57" }) add(id);                                                                                      // run to a sudden stop
+    for (const char* id : { "35_17", "35_18", "35_19", "35_20", "35_21", "35_22", "35_23", "35_24", "35_25", "35_26" }) add(id);            // run / jog, 3.0 - 3.4
+    // Nobody captured a fast back-pedal. The steady runs played backward stand in for one: the
+    // same steps, the body travelling the other way (a stretched 1.5 m/s back-pedal is the alternative).
+    if (with_reversed)
+        for (const char* id : { "09_01", "09_02", "09_03", "09_04", "09_05", "09_06", "09_07", "09_08", "09_09", "09_10", "09_11", "16_35", "16_36", "16_45", "16_46",
+                                "35_17", "35_18", "35_19", "35_20", "35_21", "35_22", "35_23", "35_24", "35_25", "35_26" })
+            v.push_back({ std::string(id) + ".bvh", std::string("cmu_") + id + "_back", run, true });
+    return v;
+}
+
+bool cook_takes(const std::string& dir, const std::vector<TakeSource>& sources, const SkeletonDef& skel, const RetargetParams& rp,
+                const CompressParams& cp, const std::string& provenance, const std::string& licence, AnimAsset& asset,
+                CookedClips& cooked, const CookLog& log, std::string* why) {
+    auto fail = [&](const std::string& m) { if (why) *why = m; return false; };
+    int added = 0;
+    for (const TakeSource& src : sources) {
+        Bvh bvh;
+        std::string e;
+        if (!load_bvh(dir + "/" + src.file, bvh, &e)) { if (log) log("skipped " + src.file + ": " + e); continue; }
+        RawClip clip;
+        if (!retarget_bvh(bvh, 0, bvh.frames, skel, rp, clip, &e)) return fail(src.file + ": " + e);
+        if (src.reversed) {
+            // The frames in the opposite order: the body travels backward on the same steps.
+            const size_t J = size_t(clip.joints);
+            for (int a = 0, b = clip.frames - 1; a < b; ++a, --b) {
+                std::swap_ranges(clip.local.begin() + ptrdiff_t(size_t(a) * J), clip.local.begin() + ptrdiff_t(size_t(a + 1) * J), clip.local.begin() + ptrdiff_t(size_t(b) * J));
+                std::swap(clip.contact[size_t(a) * 2], clip.contact[size_t(b) * 2]);
+                std::swap(clip.contact[size_t(a) * 2 + 1], clip.contact[size_t(b) * 2 + 1]);
+            }
+        }
+        clip.info.name = src.name;
+        clip.info.loop = false;
+        clip.info.tags = src.tags;
+        clip.info.provenance = provenance + " " + src.file + (src.reversed ? " (played backward)" : "");
+        clip.info.licence = licence;
+        const ClipReport rep = validate_clip(skel, clip);
+        if (!rep.ok) return fail(clip.info.name + ": " + rep.errors);
+        std::vector<uint8_t> blob;
+        if (!build_runtime_clip(skel, clip, cp, blob, why)) return false;
+        if (log) {
+            char line[256];
+            std::snprintf(line, sizeof(line), "%-16s %6d frames %6.1f s  speed mean %.2f max %.2f m/s  contact %2.0f%%/%2.0f%%  %7zu bytes%s%s",
+                          clip.info.name.c_str(), clip.frames, clip.info.duration, rep.mean_speed, rep.max_speed,
+                          100.0f * rep.contact_left, 100.0f * rep.contact_right, blob.size(),
+                          rep.warnings.empty() ? "" : "  WARN: ", rep.warnings.c_str());
+            log(line);
+        }
+        asset.clips.push_back(clip.info);
+        asset.clip_blobs.push_back(std::move(blob));
+        cooked.raw.push_back(std::move(clip));
+        cooked.reports.push_back(rep);
+        ++added;
+    }
+    if (log) log("added " + std::to_string(added) + " of " + std::to_string(sources.size()) + " takes from " + dir);
     return true;
 }
 

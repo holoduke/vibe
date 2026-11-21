@@ -28,11 +28,19 @@ struct RetargetParams {
     glm::dmat3 axes{1.0};        // capture axes -> character axes (a rotation)
     float      out_rate = 30.0f; // Hz; the source rate must be a whole multiple
     float      root_smooth_s = 0.20f;
+    // Which of the lower ankle's heights over the take is the ground: the middle one for takes that
+    // mostly stand or walk, a low one for runs (their feet are in the air most of the time).
+    float      ground_percentile = 0.5f;
+    ContactParams contact;       // when a foot counts as on the ground
     std::string leg_upper = "LeftKnee", leg_lower = "LeftAnkle";      // capture joints whose offsets are the leg's two bones
 };
 
 // The mapping for the 100STYLE capture skeleton (+Z forward, +X left, centimetres).
 RetargetParams style100_params();
+
+// The mapping for the CMU Graphics Lab motion capture skeleton in its usual BVH conversion
+// (+Z forward, +X left, units of about 5.6 cm; the scale comes from the legs).
+RetargetParams cmu_params();
 
 // Frames [first, end) of the capture, resampled to params.out_rate. `skel` in metres.
 bool retarget_bvh(const Bvh& bvh, int first, int end, const SkeletonDef& skel, const RetargetParams& params, RawClip& out,

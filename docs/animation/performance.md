@@ -78,18 +78,18 @@ long enough for the stride).
 
 | pace | direction | speed m/s | clip | clip speed | rate | stride | slide m/s while down | share of speed | foot on the ground while down | locked | fastest joint rad/s |
 |---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|
-| crawl key | forward | 3.2 | Crouched_TR1 | 1.36 | 1.50 | 1.57 | 0.00 | 0 % | 100 % | 24 % | 17 RightToeBase at 2.48 s |
-| crawl key | diagonal | 3.2 | Crouched_TR1 | 1.36 | 1.50 | 1.57 | 0.00 | 0 % | 100 % | 24 % | 17 LeftToeBase at 2.08 s |
-| crawl key | sideways | 3.2 | Crouched_TR1 | 1.37 | 1.50 | 1.56 | 0.00 | 0 % | 90 % | 20 % | 19 RightForeArm at 3.00 s |
-| crawl key | backward | 3.2 | Crouched_BR | 1.04 | 1.50 | 2.08 | 0.02 | 1 % | 82 % | 33 % | 28 RightLeg at 2.65 s |
-| walk | forward | 8.0 | Neutral_FR | 1.87 | 1.50 | 2.85 | 0.74 | 9 % | 100 % | 0 % | 26 LeftLeg at 2.88 s |
-| walk | diagonal | 8.0 | Neutral_FR | 1.87 | 1.50 | 2.85 | 0.74 | 9 % | 100 % | 0 % | 26 RightLeg at 5.13 s |
-| walk | sideways | 8.0 | Neutral_FR | 1.87 | 1.50 | 2.85 | 0.90 | 11 % | 100 % | 0 % | 27 LeftLeg at 4.32 s |
-| walk | backward | 8.0 | Rushed_BW | 1.42 | 1.50 | 3.76 | 2.00 | 25 % | 65 % | 0 % | 31 RightUpLeg at 2.78 s |
-| sprint | forward | 12.0 | Neutral_FR | 1.87 | 1.50 | 4.27 | 1.25 | 10 % | 88 % | 0 % | 35 RightLeg at 3.15 s |
-| sprint | diagonal | 12.0 | Neutral_FR | 1.87 | 1.50 | 4.27 | 1.25 | 10 % | 88 % | 0 % | 35 RightLeg at 4.20 s |
-| sprint | sideways | 12.0 | Neutral_FR | 1.87 | 1.50 | 4.27 | 1.43 | 12 % | 81 % | 0 % | 36 RightLeg at 3.95 s |
-| sprint | backward | 12.0 | Rushed_BR | 1.63 | 1.50 | 4.50 | 2.23 | 19 % | 100 % | 0 % | 38 LeftUpLeg at 2.65 s |
+| crawl key | forward | 3.2 | Crouched_TR1 | 1.36 | 1.50 | 1.57 | 0.00 | 0 % | 100 % | 24 % | 17 LeftToeBase at 3.28 s |
+| crawl key | diagonal | 3.2 | Crouched_TR1 | 0.96 | 1.50 | 2.23 | 0.02 | 1 % | 74 % | 43 % | 19 RightLeg at 7.12 s |
+| crawl key | sideways | 3.2 | Crouched_TR1 | 1.37 | 1.50 | 1.56 | 0.00 | 0 % | 90 % | 20 % | 14 RightToeBase at 3.12 s |
+| crawl key | backward | 3.2 | Crouched_BR | 1.05 | 1.50 | 2.05 | 0.01 | 0 % | 83 % | 33 % | 28 LeftLeg at 2.05 s |
+| walk | forward | 8.0 | cmu_35_18 | 3.15 | 1.50 | 1.69 | 0.75 | 9 % | 71 % | 0 % | 24 LeftForeArm at 3.50 s |
+| walk | diagonal | 8.0 | cmu_35_18 | 3.15 | 1.50 | 1.69 | 0.76 | 10 % | 71 % | 0 % | 23 LeftForeArm at 4.32 s |
+| walk | sideways | 8.0 | cmu_35_17 | 3.15 | 1.50 | 1.69 | 0.91 | 11 % | 70 % | 0 % | 23 LeftForeArm at 3.30 s |
+| walk | backward | 8.0 | cmu_35_19_back | 3.18 | 1.50 | 1.68 | 1.44 | 18 % | 49 % | 0 % | 20 LeftLeg at 2.18 s |
+| sprint | forward | 12.0 | cmu_35_19 | 3.37 | 1.50 | 2.37 | 1.00 | 8 % | 54 % | 0 % | 26 RightLeg at 2.13 s |
+| sprint | diagonal | 12.0 | cmu_35_19 | 3.37 | 1.50 | 2.37 | 1.00 | 8 % | 54 % | 0 % | 26 RightLeg at 2.45 s |
+| sprint | sideways | 12.0 | cmu_35_19 | 3.37 | 1.50 | 2.37 | 1.13 | 9 % | 54 % | 0 % | 26 RightLeg at 2.68 s |
+| sprint | backward | 12.0 | cmu_35_19_back | 3.35 | 1.50 | 2.39 | 1.66 | 14 % | 53 % | 0 % | 29 LeftLeg at 3.23 s |
 
 Before this pass (same tool, the asset without the Rushed takes, 2026-11-21): walk 32 % forward,
 98 % diagonal, 79 % sideways, 87 % backward; sprint 55 / 87 / 86 / 92 %; and at those paces an
@@ -104,6 +104,8 @@ upper arm or a knee turning at 100 - 184 rad/s for a frame (a visible snap). Wha
   back, the hips come down up to 10 cm;
 - the knee points where the hips face while the capture has the leg straight; arms on a weapon
   are solved from the rest pose, not from the captured arm swing; the chest keeps 35 % of its lean;
+- the CMU runs (3.4 - 4.2 m/s) are in the asset: at 8 m/s the stride is stretched 1.7x instead of
+  2.9x, at 12 m/s 2.4x instead of 4.3x; played backward they replace a back-pedal stretched 3.7x;
 - sideways faster than 5.5 m/s is run, not side-stepped: the forward run on legs turned up to 83
   degrees to the side, the torso twisted back onto the aim (the captured sidestep is 1.4 m/s; stretched
   to 8 - 12 it slid 25 - 43 %).
@@ -113,8 +115,8 @@ upper arm or a knee turning at 100 - 184 rad/s for a frame (a visible snap). Wha
 | | |
 |---|---|
 | Asset on disk | 24.2 MB |
-| Clips in memory (ozz, compressed) | 14.4 MB for 87,224 frames x 53 joints: 173 bytes per frame (raw: 1,484) |
-| Motion database | 12.3 MB (32 floats per frame, padded for AVX; the mirrored half is not stored) |
+| Clips in memory (ozz, compressed) | 15.0 MB for 89,508 frames x 53 joints: 175 bytes per frame (raw: 1,484) |
+| Motion database | 12.7 MB (32 floats per frame, padded for AVX; the mirrored half is not stored) |
 | Per character | ~16 kB of pose buffers plus two sampling caches |
 | Before this work | ~46 MB (every frame stored twice) |
 

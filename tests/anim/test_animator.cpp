@@ -750,7 +750,7 @@ TEST_CASE("real asset: steady crawl, walk and sprint in every direction", "[anim
     }
     // (the capture's pace per direction is what the request is mapped onto)
     CHECK(set.db.cruise_speed(false, 0) > 1.5f);
-    CHECK(set.db.cruise_speed(false, 0) < 3.3f);
+    CHECK(set.db.cruise_speed(false, 0) < 4.6f);            // (2.0 with 100STYLE alone, 3.4 with the CMU runs)
     CHECK(set.db.cruise_speed(false, 2) > 0.8f);
     CHECK(set.db.cruise_speed(false, 2) < set.db.cruise_speed(false, 0));
     const Rig& rig = set.runtime->rig();

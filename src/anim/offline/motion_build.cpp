@@ -49,6 +49,9 @@ bool build_motion_features(const SkeletonDef& skel, const std::vector<RawClip>& 
             return (x[size_t(b)] - x[size_t(a)]) * (out.rate / float(b - a));
         };
         const uint32_t first = uint32_t(out.info.size());
+        const bool short_take = (c.info.tags & kTagShortTake) != 0;
+        glm::vec3 end_vel(0.0f);
+        if (short_take && n > 8) end_vel = (rp[N - 1] - rp[N - 7]) * (out.rate / 6.0f);
         for (int f = 0; f < n; ++f) {
             const size_t i = static_cast<size_t>(f);
             const glm::quat inv = glm::inverse(rr[i]);
@@ -60,8 +63,12 @@ bool build_motion_features(const SkeletonDef& skel, const std::vector<RawClip>& 
             put3(9, inv * ddt(pr, f));
             put3(12, inv * ddt(ph, f));
             for (int h = 0; h < MotionSchema::kHorizons; ++h) {
-                const int ix = std::min(f + int(std::lround(p.horizons[h] * out.rate)), n - 1);
-                const glm::vec3 tp = inv * (rp[size_t(ix)] - rp[i]), td = inv * fw[size_t(ix)];
+                const int want = f + int(std::lround(p.horizons[h] * out.rate));
+                const int ix = std::min(want, n - 1);
+                glm::vec3 future = rp[size_t(ix)];
+                // (a short take goes on beyond its end at the pace it ends with)
+                if (short_take && want > n - 1) future += end_vel * (float(want - (n - 1)) / out.rate);
+                const glm::vec3 tp = inv * (future - rp[i]), td = inv * fw[size_t(ix)];
                 feat[15 + 2 * h] = tp.x; feat[16 + 2 * h] = tp.z;
                 feat[21 + 2 * h] = td.x; feat[22 + 2 * h] = td.z;
             }
@@ -84,7 +91,7 @@ bool build_motion_features(const SkeletonDef& skel, const std::vector<RawClip>& 
         rg.count = uint32_t(n);
         rg.tags = c.info.tags;
         rg.head = uint32_t(std::max(p.head_frames, 0));
-        rg.tail = uint32_t(std::lround(max_h * out.rate)) + 1u;
+        rg.tail = short_take ? 6u : uint32_t(std::lround(max_h * out.rate)) + 1u;
         out.ranges.push_back(rg);
 
         // Flights: both feet off the ground for a while, hips clearly above where they stand.

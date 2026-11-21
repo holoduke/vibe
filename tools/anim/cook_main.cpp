@@ -18,15 +18,19 @@ using namespace qlike;
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        std::fprintf(stderr, "usage: vibe_animcook <100STYLE dir> <soldier_fp.qchar> <out.qanim> [--rate HZ] [--no-optimize]\n");
+        std::fprintf(stderr, "usage: vibe_animcook <100STYLE dir> <soldier_fp.qchar> <out.qanim> [--cmu <dir of CMU .bvh>] [--no-reversed] [--rate HZ] [--no-optimize]\n");
         return 2;
     }
     const std::string dir = argv[1], qchar = argv[2], out = argv[3];
     anim::offline::RetargetParams rp = anim::offline::style100_params();
     anim::offline::CompressParams cp;
+    std::string cmu_dir;
+    bool reversed = true;
     for (int i = 4; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--rate") && i + 1 < argc) rp.out_rate = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--no-optimize")) cp.optimize = false;
+        else if (!std::strcmp(argv[i], "--cmu") && i + 1 < argc) cmu_dir = argv[++i];
+        else if (!std::strcmp(argv[i], "--no-reversed")) reversed = false;
         else { std::fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
     }
     std::string why;
@@ -43,6 +47,16 @@ int main(int argc, char** argv) {
     if (!anim::offline::cook_style100(dir, skel, anim::offline::default_style100_sources(), rp, cp, asset, cooked, log, &why)) {
         std::fprintf(stderr, "cook failed: %s\n", why.c_str());
         return 1;
+    }
+    if (!cmu_dir.empty()) {
+        anim::offline::RetargetParams crp = anim::offline::cmu_params();
+        crp.out_rate = rp.out_rate;
+        if (!anim::offline::cook_takes(cmu_dir, anim::offline::default_cmu_sources(reversed), skel, crp, cp, "CMU Graphics Lab Motion Capture Database",
+                                       "free to use and to include in products (mocap.cs.cmu.edu; created with funding from NSF EIA-0196217)",
+                                       asset, cooked, log, &why)) {
+            std::fprintf(stderr, "cook failed: %s\n", why.c_str());
+            return 1;
+        }
     }
     size_t clip_bytes = 0, frames = 0;
     for (const auto& b : asset.clip_blobs) clip_bytes += b.size();

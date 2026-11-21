@@ -501,3 +501,28 @@ TEST_CASE("anim inertializer: quaternion double cover and odd steps are harmless
     fresh.apply(b, 0.016f, 0.1f, out);
     CHECK(out[0].t == b[0].t);
 }
+
+TEST_CASE("anim motion: a short take is continued at its last pace and can be jumped to almost to its end", "[anim][motion]") {
+    using namespace offline;
+    const SkeletonDef skel = fx::make_skeleton();
+    // the same 1.2 s run twice: once as an ordinary clip, once marked as a short take
+    std::vector<RawClip> clips;
+    clips.push_back(fx::make_move_clip(skel, "plain", 36, 30.0f, { 0.0f, -3.0f }, kTagLocomotion));
+    clips.push_back(fx::make_move_clip(skel, "short", 36, 30.0f, { 0.0f, -3.0f }, kTagLocomotion | kTagShortTake));
+    std::vector<uint8_t> blob;
+    std::string why;
+    REQUIRE(build_motion_database(skel, clips, MotionBuildParams{}, blob, nullptr, &why));
+    MotionDatabase db;
+    REQUIRE(db.load(blob.data(), blob.size(), skel.rig_id(), &why));
+    const MotionRange& plain = db.ranges()[0];
+    const MotionRange& shrt = db.ranges()[1];
+    CHECK(plain.count <= plain.head + plain.tail + 5);       // a second of future is cut off: next to nothing is left
+    CHECK(shrt.count >= shrt.head + shrt.tail + 25);         // nearly all of it can be jumped to
+    // one second ahead of a frame near the end: 3 m straight on, although the clip ends in 0.3 s
+    float raw[MotionSchema::kFeat];
+    db.raw_features(shrt.first + shrt.count - shrt.tail - 1, false, raw);
+    CHECK(std::abs(raw[19]) < 0.05f);
+    CHECK(std::abs(raw[20] + 3.0f) < 0.1f);
+    db.raw_features(plain.first + plain.count - 8, false, raw);
+    CHECK(raw[20] > -1.0f);                                  // the ordinary clip's path just stops there
+}

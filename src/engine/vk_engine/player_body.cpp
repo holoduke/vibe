@@ -325,7 +325,9 @@ void VulkanEngine::update_player_body(float dt) {
     // QLIKE_BODY_STRAFE=<m/s> adds a sideways speed (to the right), QLIKE_BODY_AIR=<m/s> holds it
     // in the air rising at that speed, QLIKE_BODY_FIRE=<shots/s> fires, QLIKE_BODY_RELOAD=1 reloads
     // in a loop.
-    static const float kWalk = env_float("QLIKE_BODY_WALK", -1.0f), kStrafe = env_float("QLIKE_BODY_STRAFE", 0.0f);
+    // (QLIKE_BODY_WALKBACK=<m/s>: backward at that speed)
+    static const float kWalkBack = env_float("QLIKE_BODY_WALKBACK", 0.0f);
+    static const float kWalk = kWalkBack > 0.0f ? 0.0f : env_float("QLIKE_BODY_WALK", -1.0f), kStrafe = env_float("QLIKE_BODY_STRAFE", 0.0f);
     static const float kAir = env_float("QLIKE_BODY_AIR", 1e9f), kFire = env_float("QLIKE_BODY_FIRE", 0.0f);
     static const bool kReload = std::getenv("QLIKE_BODY_RELOAD") != nullptr;
     const bool hooked = kWalk >= 0.0f || kAir < 1e8f;
@@ -353,7 +355,7 @@ void VulkanEngine::update_player_body(float dt) {
         }
     }
     if (hooked) {
-        in.velocity = (kWalk >= 0.0f ? fwd * kWalk + right * kStrafe : glm::vec3(0.0f)) + glm::vec3(0.0f, kAir < 1e8f ? kAir : 0.0f, 0.0f);
+        in.velocity = (kWalk >= 0.0f ? fwd * (kWalk - kWalkBack) + right * kStrafe : glm::vec3(0.0f)) + glm::vec3(0.0f, kAir < 1e8f ? kAir : 0.0f, 0.0f);
         in.desired_velocity = glm::vec3(in.velocity.x, 0.0f, in.velocity.z);
         in.grounded = kAir > 1e8f;
         in.swimming = false;

@@ -66,7 +66,37 @@ RetargetParams style100_params() {
     return p;
 }
 
-bool retarget_bvh(const Bvh& bvh, int first, int end, const SkeletonDef& skel, const RetargetParams& params, RawClip& out,
+RetargetParams cmu_params() {
+    RetargetParams p;
+    p.axes = glm::dmat3(-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0);       // +z forward, +x left -> -z forward, +x right
+    p.leg_upper = "LeftLeg";            // (the joint whose offset is the thigh)
+    // Runs: the ground is where the feet are lowest, and a foot on the ground still rolls over
+    // its toes at a metre a second.
+    p.ground_percentile = 0.06f;
+    p.contact.max_speed = 1.5f;
+    p.contact.max_height = 0.09f;
+    p.contact.smooth_sigma = 0.6f;
+    p.leg_lower = "LeftFoot";
+    p.map = {
+        { "Hips", "Hips", "", "" }, { "Spine", "LowerBack", "", "" }, { "Spine1", "Spine", "", "" },
+        { "Spine2", "Spine1", "", "" }, { "Neck", "Neck", "", "" }, { "Head", "Head", "", "" },
+    };
+    for (const char* S : { "Left", "Right" }) {
+        const std::string s(S);
+        p.map.push_back({ s + "Shoulder", s + "Shoulder", s + "Arm", s + "Arm" });
+        p.map.push_back({ s + "Arm", s + "Arm", s + "ForeArm", s + "ForeArm" });
+        p.map.push_back({ s + "ForeArm", s + "ForeArm", s + "Hand", s + "Hand" });
+        p.map.push_back({ s + "Hand", s + "Hand", s + "HandMiddle1", s + "HandIndex1" });
+        p.map.push_back({ s + "UpLeg", s + "UpLeg", s + "Leg", s + "Leg" });
+        p.map.push_back({ s + "Leg", s + "Leg", s + "Foot", s + "Foot" });
+        p.map.push_back({ s + "Foot", s + "Foot", s + "ToeBase", s + "ToeBase" });
+        p.map.push_back({ s + "ToeBase", s + "ToeBase", "TAIL", "END" });
+    }
+    return p;
+}
+
+bool retarget_bvh(const Bvh& bvh, int first, int end,
+ const SkeletonDef& skel, const RetargetParams& params, RawClip& out,
                   std::string* why) {
     out = RawClip{};
     auto fail = [&](const std::string& s) { if (why) *why = s; out = RawClip{}; return false; };
@@ -159,8 +189,9 @@ bool retarget_bvh(const Bvh& bvh, int first, int end, const SkeletonDef& skel, c
             fk(f, glm::dmat3(1.0), glm::dvec3(0.0));
             low[size_t(f)] = std::min(Pb[size_t(la)].y, Pb[size_t(ra)].y);
         }
-        std::nth_element(low.begin(), low.begin() + n / 2, low.end());
-        const double lift = double(skel.rest_pos[size_t(la)].y) - low[size_t(n / 2)];
+        const int at = std::clamp(int(double(n) * double(params.ground_percentile)), 0, n - 1);
+        std::nth_element(low.begin(), low.begin() + at, low.end());
+        const double lift = double(skel.rest_pos[size_t(la)].y) - low[size_t(at)];
         for (auto& h : hips_w) h.y += lift;
     }
     // ---- the root ----
@@ -209,7 +240,7 @@ bool retarget_bvh(const Bvh& bvh, int first, int end, const SkeletonDef& skel, c
             out.at(f, j) = t;
         }
     }
-    label_contacts(skel, out);
+    label_contacts(skel, out, params.contact);
     return true;
 }
 
