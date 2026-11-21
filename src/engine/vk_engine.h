@@ -32,6 +32,7 @@
 #include "engine/aa_vehicle.h"
 #include "engine/rocket_sim.h"
 #include "engine/globe.h"
+#include "engine/motion_match.h"
 #include "engine/texture.h"   // for BackgroundDecodeHandle
 #include "engine/vk_engine/settings_types.h"  // RtSettings / GameSettings
 #include "game/level.h"
@@ -1175,6 +1176,21 @@ private:
     // posed with IK every frame and skinned on the CPU. ----
     struct BodyBone { std::string name; int parent = -1; glm::vec3 head{0.0f}, tail{0.0f}; };
     struct BodyVert { glm::vec3 pos, nrm; glm::vec2 uv; uint8_t bone[4]; float weight[4]; };
+    // Movement from motion capture (motion matching, engine/motion_match.h): the state of one
+    // character - where it is in the database, how the clip is fitted to the real speed and
+    // direction, and the feet it has planted.
+    struct BodyAnim {
+        MotionState ms;
+        float rate = 1.0f, stride = 1.0f, warp = 0.0f, turn = 0.0f, prev_yaw = 0.0f;
+        bool  has_yaw = false;
+        struct Lock { bool on = false, broken = false; glm::vec3 world{0.0f}, off{0.0f}, off_v{0.0f}; } lock[2];
+    };
+    MotionDB         body_motion_;
+    std::vector<int> body_motion_bone_;                // database bone -> soldier bone
+    MotionPose       body_pose_;
+    BodyAnim         body_anim_local_;
+    BodyAnim*        body_anim_ = &body_anim_local_;   // whose movement update_player_body is working on
+    void body_leg_fit(int up, int lo, int ft, glm::vec3 target);
     std::vector<BodyBone> body_bones_;
     std::vector<BodyVert> body_verts_;
     std::vector<Vertex>   body_skinned_;
@@ -1206,6 +1222,7 @@ private:
         float         phase = 0.0f, move = 0.0f, air = 0.0f, recoil_t = 0.0f, muzzle_t = 0.0f;
         bool          drawn = false, fresh_pose = true;
         glm::vec3     foot_last{1e9f};                 // footprints in the snow
+        BodyAnim      anim;                            // their movement (motion matching state)
         bool          foot_left = false;
         net::PlayerState st{};                         // interpolated state this frame
     };

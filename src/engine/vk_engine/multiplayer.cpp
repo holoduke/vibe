@@ -196,7 +196,9 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         body_phase_ = a.phase; body_move_ = a.move; body_air_ = a.air; body_dir_ = a.dir; body_root_off_ = a.root;
         body_recoil_ = recoil_kick(a.recoil_t, kRecoilDuration, kRecoilStroke);
         mp_pose_dst_ = static_cast<Vertex*>(a.mapped[slot]);
+        body_anim_ = &a.anim;
         update_player_body(dt);
+        body_anim_ = &body_anim_local_;
         mp_pose_dst_ = nullptr;
         a.prev_model = a.fresh_pose ? body_model_ : a.model;
         a.fresh_pose = false;

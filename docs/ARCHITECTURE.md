@@ -53,7 +53,8 @@ Everything is in `namespace qlike`. Runtime files live in the project root:
 | Castle meshes, props, doors, lanterns, flags | `castle_mesh.cpp`, `props.cpp`, `world.cpp`, `world_textures.cpp` |
 | Launch site, rocket, its flight (orbit and back), launch button | `rocket.cpp`, `engine/rocket_sim.cpp` (the flight, no engine dependencies), models: `tools/rocket/make_rocket.py` |
 | Combat: gun, projectiles, airstrike, jets, AA | `combat.cpp`, `aa.cpp`, `fx.cpp` |
-| Player body (soldier, hands, walk cycle) | `player_body.cpp`, `flashlight.cpp` |
+| Player body (soldier, hands on the gun) | `player_body.cpp`, `flashlight.cpp` |
+| Character movement: motion matching on motion capture (search, inertialisation) | `engine/motion_match.cpp`; database built by `tools/anim/build_motion_db.py` into `assets/character/motion.qmm` |
 | LAN multiplayer: discovery, host election, snapshots, interpolation | `src/engine/net/net.h`, `net.cpp` (ENet; no engine types) |
 | Multiplayer game side: other players (avatars), their shots, hits, health, HUD | `multiplayer.cpp` |
 | In-game HUD (health, weapon, slots, frame rate); fonts are loaded in `ui_setup.cpp` | `ui_gamehud.cpp` |
@@ -99,7 +100,8 @@ its local variables and are not self-contained.
 | A HUD element | `ui_hud.cpp` |
 | Editor items | `veg_zones.cpp` (`kItems`) |
 | Gun, bullets, fire rate | `combat.cpp`; bolt glow: `fx.cpp` |
-| Hands, arms, walking animation | `player_body.cpp` |
+| Hands, arms; how the captured movement is fitted (speed, stride, direction, planted feet) | `player_body.cpp` |
+| Which captured frame is played next | `engine/motion_match.cpp` |
 | Player speed, jump, crouch | `src/game/player.cpp` |
 | Anti-aircraft vehicles | `aa.cpp` |
 | Loading screen | `loader_screen.cpp`, art in `assets/loader/loading_bg.jpg` |
@@ -220,3 +222,21 @@ What is still missing (in the order to build):
 2. **Camera-relative rendering**: positions are plain floats; above ~1000 km (and for anything drawn near the camera at height) precision runs out. Render relative to the camera, keep world positions in doubles on the CPU.
 3. **Depth range**: the projection is 0.05 .. 1500 m (also in `fsr3.cpp`, `dlss.cpp`, several shaders). Move to reversed-Z with the far plane at infinity before anything real is drawn far away.
 4. Other planets / a moon as bodies, and gravity that points at the planet's centre.
+
+## Character movement (motion matching)
+
+The soldier's hips, spine and legs are not animated by clips in a state machine: `engine/motion_match.cpp`
+searches a database of motion capture several times a second for the frame that best continues the
+current pose and the path of the next second, and hides the jump by inertialisation.
+
+- **Data**: `assets/character/motion.qmm`, built by `tools/anim/build_motion_db.py` from the 100STYLE
+  set (CC BY 4.0; the raw BVH files are not in the repo - download from the dataset's page). Styles are
+  tags: 0 = Neutral, 1 = Crouched. To add one (Zombie, Old, Drunk...), pass it to the tool and pick the
+  tag in `update_player_body`. Mirrored copies are made at load.
+- **Fitting to the game** (`player_body.cpp`): the game moves at 8 m/s, the capture at 2. The query asks
+  for the capture's equivalent speed; playback rate (to 1.6x) and stride length (to 2.4x) then make the
+  feet cover the real speed. Orientation warping turns the legs to the real direction of travel while
+  the chest faces the view. Feet in contact are locked in the world below 4 m/s.
+- **Still by hand**: the arms (IK to the weapon), the pose in the air, crouch depth.
+- `QLIKE_BODY_FRONT=<m>` + `QLIKE_BODY_TURN=<deg>` show the body from outside; `QLIKE_BODY_WALK` /
+  `QLIKE_BODY_STRAFE` drive it; `QLIKE_BODY_PROCEDURAL=1` gives the old walk cycle.
