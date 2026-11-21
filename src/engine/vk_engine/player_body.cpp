@@ -257,23 +257,45 @@ float VulkanEngine::anim_ground_height(float x, float z, float feet_y) const {
 // Leaves the pose in body_R_ / body_P_ (model space) for whoever needs it next (a ragdoll
 // taking over).
 void VulkanEngine::pose_character(anim::CharacterAnimator& a, anim::CharacterAnimationInput& in, int* palette, std::vector<glm::vec4>* keep) {
+    PoseJob job{ &a, &in };
+    pose_update_all(&job, 1);
+    pose_finish(a, in, palette, keep);
+}
+
+void VulkanEngine::pose_update_all(PoseJob* jobs, int count) {
+    if (count <= 0) return;
     static const auto ground_cb = [](void* user, float x, float z) -> float {
         const GroundProbe* p = static_cast<const GroundProbe*>(user);
         return p->engine->anim_ground_height(x, z, p->feet_y);
     };
-    GroundProbe probe{ this, in.position.y };
-    // (level floors are known within the broadphase's reach of the local player; further out a
-    // character's feet stay level rather than follow terrain that may lie under a floor)
-    const glm::vec2 dc(in.position.x - near_static_center_.x, in.position.z - near_static_center_.y);
-    if (glm::dot(dc, dc) < 20.0f * 20.0f) { in.ground_height = ground_cb; in.ground_user = &probe; }
-    in.gravity = game_.gravity;
-    in.stand_eye_height = game::Player::kHalfExtents.y + game::Player::kEyeOffsetStand;
+    GroundProbe probes[1 + net::kMaxPlayers];
+    count = std::min(count, int(std::size(probes)));
+    for (int i = 0; i < count; ++i) {
+        anim::CharacterAnimationInput& in = *jobs[i].in;
+        probes[i] = GroundProbe{ this, in.position.y };
+        // (level floors are known within the broadphase's reach of the local player; further out a
+        // character's feet stay level rather than follow terrain that may lie under a floor)
+        const glm::vec2 dc(in.position.x - near_static_center_.x, in.position.z - near_static_center_.y);
+        if (glm::dot(dc, dc) < 20.0f * 20.0f) { in.ground_height = ground_cb; in.ground_user = &probes[i]; }
+        in.gravity = game_.gravity;
+        in.stand_eye_height = game::Player::kHalfExtents.y + game::Player::kEyeOffsetStand;
+        ++anim_lod_count_[glm::clamp(in.lod, 0, 3)];
+    }
     const double t0 = now_ms();
-    a.update(in);
-    const double t1 = now_ms();
-    anim_ms_ += float(t1 - t0);
-    ++anim_lod_count_[glm::clamp(in.lod, 0, 3)];
+    static const bool kSerial = std::getenv("QLIKE_ANIM_SERIAL") != nullptr;       // A/B: one after the other
+    if (count == 1 || kSerial) {
+        for (int i = 0; i < count; ++i) jobs[i].animator->update(*jobs[i].in);
+    } else {
+        jobs::parallel_for(count, 1, [&](int begin, int end) {
+            for (int i = begin; i < end; ++i) jobs[i].animator->update(*jobs[i].in);
+        });
+    }
+    anim_ms_ += float(now_ms() - t0);          // (wall time: what the frame waits for)
+}
+
+void VulkanEngine::pose_finish(anim::CharacterAnimator& a, const anim::CharacterAnimationInput& in, int* palette, std::vector<glm::vec4>* keep) {
     if (in.lod >= 3) return;
+    const double t1 = now_ms();
     const std::span<const glm::mat4> m = a.model();
     const size_t nb = std::min(body_bones_.size(), m.size());
     for (size_t i = 0; i < nb; ++i) {
@@ -292,6 +314,7 @@ void VulkanEngine::update_player_body(float dt) {
     body_drawn_ = false;
     anim_ms_ = skin_ms_ = 0.0f;
     body_palette_used_ = 0;                // (first of the frame's three: this, mp_pose_avatars, corpses_update)
+    body_palette_prev_ = body_palette_;
     body_palette_ = -1;
     for (int& c : anim_lod_count_) c = 0;
     // The cosmetic reload runs out by itself; firing ends it at once (combat.cpp).
@@ -534,7 +557,7 @@ int VulkanEngine::body_push_pose(std::vector<glm::vec4>* keep) {
 
 int VulkanEngine::body_push_rows(const std::vector<glm::vec4>& rows) {
     if (!body_palette_map_ || rows.empty() || body_palette_used_ >= kSkinCharacters) return -1;
-    const uint32_t slot = frame_number_ % kFrameOverlap;
+    const uint32_t slot = frame_number_ % kPaletteSlots;
     const uint32_t first = (slot * kSkinCharacters + body_palette_used_++) * kSkinBones * 3;
     std::memcpy(body_palette_map_ + first, rows.data(), std::min<size_t>(rows.size(), kSkinBones * 3) * sizeof(glm::vec4));
     return int(first);
@@ -558,6 +581,7 @@ void VulkanEngine::draw_player_body(
 VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     if (!mp_draw_ && !body_drawn_) return;
     const int palette = mp_draw_ ? mp_draw_->palette : body_palette_;
+    const int palette_prev = mp_draw_ ? mp_draw_->palette_prev : body_palette_prev_;
     if (palette < 0 || !skin_pipeline()) return;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skin_pipeline());
     // Which mesh: the player's own body is always the full one; others by their size on screen.
@@ -601,7 +625,8 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     pc.emissive = glm::vec4(0.0f);
     // albedo = the soldier atlas, sampled with the mesh UVs (marker -8, cube.frag)
     pc.tex_params = glm::vec4(float(kTexSoldier), -8.0f, 1.0f, 0.0f);
-    pc.grass_params = glm::vec4(0.0f, float(palette), 0.0f, 0.0f);          // .y: first palette row (cube_skin.vert)
+    // .y: first palette row; .z: 1 + last frame's (cube_skin.vert: the limbs' own motion)
+    pc.grass_params = glm::vec4(0.0f, float(palette), palette_prev >= 0 ? float(palette_prev + 1) : 0.0f, 0.0f);
     vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
     draw_mesh(*body);
     if (head) draw_mesh(*head);

@@ -14,30 +14,30 @@ allocations made inside `update` over the measured frames.
 
 | characters | levels | threads | ms / frame p50 | p95 | p99 | us / character (mean) | allocations in update |
 |---:|---|---:|---:|---:|---:|---:|---:|
-| 1 | all 0 (full) | 1 | 0.011 | 0.334 | 0.467 | 52.31 | 0 |
-| 8 | all 0 (full) | 1 | 0.267 | 0.901 | 1.317 | 43.79 | 0 |
-| 16 | all 0 (full) | 1 | 0.661 | 1.504 | 1.898 | 47.06 | 0 |
-| 32 | all 0 (full) | 1 | 1.479 | 2.437 | 2.922 | 47.38 | 0 |
-| 64 | all 0 (full) | 1 | 3.051 | 4.543 | 4.882 | 47.19 | 0 |
-| 64 | all 1 | 1 | 1.645 | 2.961 | 3.606 | 27.73 | 0 |
-| 64 | all 2 | 1 | 1.214 | 2.574 | 3.253 | 20.91 | 0 |
-| 64 | all 3 (unseen) | 1 | 0.005 | 0.005 | 0.005 | 0.08 | 0 |
-| 64 | all 0 (full) | 16 | 1.094 | 1.589 | 1.991 | 17.47 | - |
-| 128 | all 0 (full) | 1 | 5.972 | 8.480 | 10.725 | 48.28 | 0 |
-| 128 | mix 8/24/64/rest | 1 | 2.231 | 3.765 | 4.268 | 18.43 | 0 |
-| 128 | all 0 (full) | 16 | 1.599 | 2.192 | 2.437 | 12.69 | - |
-| 256 | all 0 (full) | 1 | 12.275 | 16.425 | 21.005 | 48.61 | 0 |
-| 256 | mix 8/24/64/rest | 1 | 2.246 | 3.757 | 4.309 | 9.30 | 0 |
-| 256 | all 0 (full) | 16 | 2.292 | 3.125 | 3.490 | 9.11 | - |
-| 512 | all 0 (full) | 1 | 24.990 | 29.254 | 35.015 | 48.09 | 0 |
-| 512 | mix 8/24/64/rest | 1 | 2.321 | 3.771 | 4.508 | 4.73 | 0 |
-| 512 | all 0 (full) | 16 | 3.860 | 4.629 | 5.180 | 7.53 | - |
-| 1000 | all 0 (full) | 1 | 49.018 | 55.274 | 66.117 | 49.04 | 0 |
-| 1000 | all 1 | 1 | 28.305 | 35.889 | 47.056 | 28.88 | 0 |
-| 1000 | all 2 | 1 | 20.988 | 30.238 | 46.110 | 21.88 | 0 |
-| 1000 | all 3 (unseen) | 1 | 0.087 | 0.094 | 0.112 | 0.09 | 0 |
-| 1000 | mix 8/24/64/rest | 1 | 2.333 | 3.861 | 4.682 | 2.46 | 0 |
-| 1000 | all 0 (full) | 16 | 6.898 | 8.324 | 9.735 | 6.95 | - |
+| 1 | all 0 (full) | 1 | 0.012 | 0.046 | 0.088 | 18.71 | 0 |
+| 8 | all 0 (full) | 1 | 0.135 | 0.355 | 0.522 | 20.81 | 0 |
+| 16 | all 0 (full) | 1 | 0.321 | 0.652 | 0.948 | 22.78 | 0 |
+| 32 | all 0 (full) | 1 | 0.693 | 1.190 | 1.648 | 22.73 | 0 |
+| 64 | all 0 (full) | 1 | 1.350 | 2.282 | 2.573 | 22.50 | 0 |
+| 64 | all 1 | 1 | 1.077 | 1.741 | 2.132 | 18.02 | 0 |
+| 64 | all 2 | 1 | 0.879 | 1.299 | 1.772 | 14.54 | 0 |
+| 64 | all 3 (unseen) | 1 | 0.005 | 0.006 | 0.007 | 0.08 | 0 |
+| 64 | all 0 (full) | 16 | 0.614 | 1.173 | 1.742 | 10.70 | - |
+| 128 | all 0 (full) | 1 | 2.683 | 4.056 | 4.570 | 21.97 | 0 |
+| 128 | mix 8/24/64/rest | 1 | 1.538 | 2.378 | 2.678 | 12.63 | 0 |
+| 128 | all 0 (full) | 16 | 0.753 | 1.385 | 1.792 | 6.56 | - |
+| 256 | all 0 (full) | 1 | 5.447 | 7.360 | 7.732 | 21.84 | 0 |
+| 256 | mix 8/24/64/rest | 1 | 1.477 | 2.180 | 2.548 | 6.03 | 0 |
+| 256 | all 0 (full) | 16 | 1.116 | 1.906 | 2.369 | 4.73 | - |
+| 512 | all 0 (full) | 1 | 11.012 | 13.849 | 14.990 | 21.87 | 0 |
+| 512 | mix 8/24/64/rest | 1 | 1.497 | 2.063 | 2.468 | 3.01 | 0 |
+| 512 | all 0 (full) | 16 | 1.709 | 2.358 | 2.640 | 3.51 | - |
+| 1000 | all 0 (full) | 1 | 22.579 | 27.053 | 29.325 | 23.01 | 0 |
+| 1000 | all 1 | 1 | 19.006 | 22.568 | 23.877 | 19.35 | 0 |
+| 1000 | all 2 | 1 | 14.767 | 17.498 | 20.000 | 15.04 | 0 |
+| 1000 | all 3 (unseen) | 1 | 0.089 | 0.093 | 0.101 | 0.09 | 0 |
+| 1000 | mix 8/24/64/rest | 1 | 1.511 | 1.995 | 2.449 | 1.55 | 0 |
+| 1000 | all 0 (full) | 16 | 2.938 | 3.664 | 4.149 | 2.98 | - |
 
 Reading it:
 
@@ -48,6 +48,13 @@ Reading it:
   costs **2.3 ms p50 / 4.7 ms p99 on one thread whether 128 or 1,000 players are replicated**.
 - Spread over 16 threads, 1,000 fully animated characters take 6.9 ms p50.
 - **No allocations** in the update at any count.
+
+The pose search does not look at every frame any more: the database keeps, per block of 32
+frames, the least and greatest of every feature, and a block that cannot beat the best match so
+far is skipped whole. Same result (the tests compare it with the plain search); in this benchmark
+it looks at 5 % of the rows, and a fully animated character costs 19 - 23 us instead of 48 - 56.
+In the game the other players' animators are updated together on the job threads
+(`pose_update_all`; `QLIKE_ANIM_SERIAL=1` for one after the other).
 
 ## In the game
 
@@ -109,6 +116,10 @@ upper arm or a knee turning at 100 - 184 rad/s for a frame (a visible snap). Wha
 - sideways faster than 5.5 m/s is run, not side-stepped: the forward run on legs turned up to 83
   degrees to the side, the torso twisted back onto the aim (the captured sidestep is 1.4 m/s; stretched
   to 8 - 12 it slid 25 - 43 %).
+
+Measured for the ray-traced copies (`QLIKE_BODY_RT_TEST=5`: six soldiers skinned and rebuilt
+every frame): 7.7 ms a frame with them and without, 0.13 ms of CPU against 0.09 for the TLAS
+build. Nothing to optimise there at six.
 
 ## Memory
 

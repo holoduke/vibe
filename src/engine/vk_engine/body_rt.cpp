@@ -229,6 +229,15 @@ void VulkanEngine::record_body_rt(VkCommandBuffer cmd) {
             if (a.id && a.drawn) add(a.model, a.prev_model, a.palette);
     for (const Corpse& c : corpses_)
         if (c.rag && c.av.drawn) add(c.av.model, c.av.model, c.av.palette);
+    // Test hook: QLIKE_BODY_RT_TEST=<n> adds n copies of the nearest soldier, a metre apart (the cost of n more).
+    static const int kTest = std::getenv("QLIKE_BODY_RT_TEST") ? std::atoi(std::getenv("QLIKE_BODY_RT_TEST")) : 0;
+    for (int i = 0; i < kTest && nc > 0 && nc < int(std::size(cand)); ++i) {
+        cand[nc] = cand[0];
+        cand[nc].model[3].x += float(i + 1);
+        cand[nc].prev = cand[nc].model;
+        cand[nc].d2 += float(i + 1);
+        ++nc;
+    }
     if (nc == 0) return;
     std::sort(cand, cand + nc, [](const Cand& a, const Cand& b) { return a.d2 < b.d2; });
     const uint32_t n = uint32_t(std::min(nc, int(kRtBodies)));

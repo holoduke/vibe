@@ -173,9 +173,10 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 - **G4 — ground under remote players** far from the local one is the terrain only when in the air
   (time to contact may be late over a floor) and level when grounded.
 - **G5 - at most 48 skinned characters are drawn in a frame** (`kSkinCharacters`). Skinning is on
-  the GPU (`cube_skin.vert`); the body and the head each have three meshes (109k / 28k / 9k
-  triangles together), chosen by height on screen (`body_mesh_lod`: full above 300 px, the middle
-  one above 100). Motion vectors of a body come from its model matrix, not its previous pose.
+  the GPU (`cube_skin.vert`); the body and the head each have three meshes (75k / 28k / 9k
+  triangles together; the full level has its boots and vest at half the density they were built with), chosen by height on screen (`body_mesh_lod`: full above 300 px, the middle
+  one above 100). A limb's motion vector comes from its pose of the frame before (the bone palette keeps three
+  frames: `kPaletteSlots`), so a moving arm does not smear under temporal upscaling.
   Shadows: the six soldiers nearest the camera within 40 m are in the ray-traced scene
   (`body_rt.cpp`: a 9k-triangle copy each, skinned by `skin_rt.comp` and rebuilt into a BLAS
   every frame), so they shadow walls, props, each other and themselves, and show in reflections
@@ -196,8 +197,9 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   player's own view, and only there: the weapon in the middle of the screen, its top under the
   crosshair (`WeaponDef::ads_shift_fp`; `QLIKE_ADS="x,y,z"` to try other places). Without the aim
   the rifle is at the ready: lower (at the ribs from outside, lower right and a little canted in
-  the player's view), pointing where the view does all the same (`ready_*`). A stance only: the
-  shot goes where the crosshair is either way, and there is no zoom or change of speed.
+  the player's view), pointing where the view does all the same (`ready_*`). Aiming also narrows
+  the view from 80 to 62 degrees (`QLIKE_AIM_FOV`; the mouse turns the view correspondingly less).
+  The shot goes where the crosshair is either way; there is no change of spread or speed.
   A shot's tracer starts at the muzzle of the weapon as held (`weapon_fire_offset`), the player's
   own and other players' alike.
 - **Idle life.** Not aiming, a soldier seen from outside looks about (`idle_look`), the way a head

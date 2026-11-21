@@ -71,7 +71,14 @@ VulkanEngine::FrameView VulkanEngine::compute_frame_view() {
     // under the camera inside 1.5 km and the full one (raymarch_far) beyond, the border between the
     // two sweeping over the land while climbing. Airborne, the LOD distances move out of range.
     rm_air_lod_k_ = 1.0f + 40.0f * glm::smoothstep(80.0f, 350.0f, fv.eye_pos.y - rt_.water_level);
-    fv.proj = glm::perspective(glm::radians(80.0f), aspect, 0.05f, view_far_);
+    // Aiming narrows the view a little (QLIKE_AIM_FOV=<degrees>, default 62; 80 = no zoom).
+    {
+        static const float kAimFov = glm::clamp(std::getenv("QLIKE_AIM_FOV") ? float(std::atof(std::getenv("QLIKE_AIM_FOV"))) : 62.0f, 20.0f, 80.0f);
+        const float dtz = glm::clamp(last_frame_dt_, 0.0f, 0.1f);
+        aim_zoom_ += ((body_aim_ ? 1.0f : 0.0f) - aim_zoom_) * (1.0f - std::exp(-dtz / 0.07f));
+        view_fov_deg_ = glm::mix(80.0f, kAimFov, glm::smoothstep(0.0f, 1.0f, aim_zoom_));
+    }
+    fv.proj = glm::perspective(glm::radians(view_fov_deg_), aspect, 0.05f, view_far_);
     fv.proj[1][1] *= -1.0f;
     if (rt_.taa_jitter_enabled || rt_.fsr2_enabled) {
         auto halton = [](int b, int i) {

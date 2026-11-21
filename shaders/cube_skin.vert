@@ -4,7 +4,8 @@
 // Skinned characters (the soldier: the local body, other players, the fallen). The rest-pose
 // mesh and its bone indices / weights are static buffers; the pose is a palette of 3x4 matrices
 // (model space, rest -> posed) in one storage buffer, written once a frame for every drawn
-// character (player_body.cpp: body_push_pose). pc.grass_params.y = this character's first row.
+// character (player_body.cpp: body_push_pose). pc.grass_params.y = this character's first row;
+// .z = 1 + its first row of the frame before (0 = none): where the vertex was, for the motion vector.
 // Same outputs as cube.vert: the fragment shaders do not know the difference.
 
 layout(location = 0) in vec3 inPosition;
@@ -58,6 +59,18 @@ void main() {
         n += vec3(dot(r0.xyz, inNormal), dot(r1.xyz, inNormal), dot(r2.xyz, inNormal)) * w;
     }
     n = normalize(n);
+    // The same vertex in last frame's pose: a moving arm has motion of its own, not only the body's.
+    vec3 p_prev = p;
+    if (pc.grass_params.z > 0.5) {
+        const int pbase = int(pc.grass_params.z - 0.5);
+        p_prev = vec3(0.0);
+        for (int k = 0; k < 4; ++k) {
+            const float w = weight[k];
+            if (w <= 0.0) continue;
+            const int r = pbase + int(bone[k] + 0.5) * 3;
+            p_prev += vec3(dot(bone_rows[r], rest), dot(bone_rows[r + 1], rest), dot(bone_rows[r + 2], rest)) * w;
+        }
+    }
 
     gl_Position = pc.mvp * vec4(p, 1.0);
     const vec4 wp = pc.model * vec4(p, 1.0);
@@ -71,5 +84,5 @@ void main() {
     vObjectPos = p;
     vObjectNormal = n;
     vVegInfo = vec4(0.0);
-    vPrevClip = pc.prev_mvp * vec4(p, 1.0);
+    vPrevClip = pc.prev_mvp * vec4(p_prev, 1.0);
 }

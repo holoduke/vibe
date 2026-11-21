@@ -1211,6 +1211,12 @@ private:
     anim::AnimationSet anim_set_;
     std::unique_ptr<anim::CharacterAnimator> body_animator_;      // the local player's
     void pose_character(anim::CharacterAnimator& a, anim::CharacterAnimationInput& in, int* palette, std::vector<glm::vec4>* keep = nullptr);
+    // The same in two steps, for several characters at once: every animator updated (on the job
+    // threads: an animator touches nothing but itself and the shared, read-only set), then each
+    // pose taken over in turn (pose_finish: the palette and the scratch pose are the engine's).
+    struct PoseJob { anim::CharacterAnimator* animator; anim::CharacterAnimationInput* in; };
+    void pose_update_all(PoseJob* jobs, int count);
+    void pose_finish(anim::CharacterAnimator& a, const anim::CharacterAnimationInput& in, int* palette, std::vector<glm::vec4>* keep = nullptr);
     float anim_ground_height(float x, float z, float feet_y) const;   // what a foot at (x, z) stands on
     void apply_anim_tuning(anim::AnimTuning& t) const; // QLIKE_ANIM_TUNE
     void anim_debug_overlay();                         // QLIKE_ANIM_DEBUG=1 / the menu: chosen clip, costs, contacts, IK targets
@@ -1271,11 +1277,15 @@ private:
     // The bone palette: three rows (a 3x4 matrix, rest -> posed, model space) per bone, for every
     // character drawn this frame, one region per frame in flight. Binding 33 of the scene set.
     static constexpr uint32_t kSkinBones = 64, kSkinCharacters = 48;
+    // Regions of the palette: a frame reads its own and the one before (motion vectors) while the
+    // next frame's is being written - one more than the frames in flight.
+    static constexpr uint32_t kPaletteSlots = kFrameOverlap + 1;
     VkBuffer      body_palette_buf_ = VK_NULL_HANDLE;
     VmaAllocation body_palette_alloc_ = nullptr;
     glm::vec4*    body_palette_map_ = nullptr;
     uint32_t      body_palette_used_ = 0;             // characters pushed this frame
     int           body_palette_ = -1;                 // the local body: its first row this frame
+    int           body_palette_prev_ = -1;            //   ... and last frame (-1: none)
     std::vector<glm::vec4> body_rows_;
     int  body_push_pose(std::vector<glm::vec4>* keep = nullptr);     // body_R_ / body_P_ -> palette; first row, or -1 when full
     int  body_push_rows(const std::vector<glm::vec4>& rows);
@@ -1290,6 +1300,7 @@ private:
     struct MpAvatar {                                  // another player, as drawn here
         uint32_t      id = 0;                          // 0 = free slot
         int           palette = -1;                    // this frame's first row in the bone palette; -1 = not drawn
+        int           palette_prev = -1;               // last frame's (the motion of the limbs); -1 = none
         std::vector<glm::vec4> pose_rows;              // the last pose (re-sent on a frame that is not posed)
         glm::mat4     model{1.0f}, prev_model{1.0f}, view_inv{1.0f};
         glm::vec3     eye{0.0f};
@@ -1494,6 +1505,10 @@ private:
     // Far plane and how far objects are drawn. 1500 m on the ground and up to 1 km altitude (unchanged);
     // from the air they grow, so trees and buildings stay visible below (world_render.cpp).
     float view_far_ = 1500.0f, object_far_ = 1450.0f;
+    // The vertical field of view of the frame, degrees: 80, narrower while aiming (right mouse).
+    // Everything that needs the angle reads this (projection, upscalers, level-of-detail maths).
+    float view_fov_deg_ = 80.0f;
+    float aim_zoom_ = 0.0f;                            // 0 .. 1, eased
     float rm_air_lod_k_ = 1.0f;        // scales the terrain march's LOD distances (world_render.cpp)
     int   veg_tlas_cache_season_ = -1; // season state the ray-traced vegetation records were made for
     Wx    mp_host_tgt_{};             // multiplayer client: the weather target the host decided

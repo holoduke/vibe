@@ -362,7 +362,7 @@ void VulkanEngine::init_descriptors() {
         // character is ever loaded): written by the CPU every frame, read by the vertex shader.
         VkBufferCreateInfo bci{};
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size = sizeof(glm::vec4) * 3ull * kSkinBones * kSkinCharacters * kFrameOverlap;
+        bci.size = sizeof(glm::vec4) * 3ull * kSkinBones * kSkinCharacters * kPaletteSlots;
         bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         // (also read on the compute queue: the ray-tracing copies of the soldiers, body_rt.cpp)
         const uint32_t palette_families[2] = { graphics_queue_family_, compute_queue_family_ };

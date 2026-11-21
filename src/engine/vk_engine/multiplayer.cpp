@@ -187,6 +187,9 @@ void VulkanEngine::mp_pose_avatars(float dt) {
     dt = glm::clamp(dt, 0.0f, 0.1f);
     const glm::vec3 cam = current_frame_view_.eye_pos;
     const float tan_half = current_frame_view_.proj[1][1] != 0.0f ? 1.0f / std::abs(current_frame_view_.proj[1][1]) : 0.7f;
+    struct Posed { MpAvatar* a; anim::CharacterAnimationInput in; net::RemoteFrame rf; bool skip; };
+    Posed posed[net::kMaxPlayers];
+    int n_posed = 0;
     for (auto& a : mp_avatars_) {
         a.drawn = false;
         a.present = false;
@@ -196,6 +199,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         a.muzzle_t = std::max(0.0f, a.muzzle_t - dt);
         a.combat_t += dt;
         a.hit_age += dt;
+        a.palette_prev = a.fresh_pose ? -1 : a.palette;       // (a pose from nowhere has no motion)
         a.palette = -1;
         if (!a.animator) { a.animator = std::make_unique<anim::CharacterAnimator>(anim_set_); apply_anim_tuning(a.animator->tuning); a.fresh_pose = true; }
         const net::PlayerState& s = a.st;
@@ -250,13 +254,38 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         if (skip) {
             a.skipped = 1;
             a.skip_dt = dt;
-            a.palette = body_push_rows(a.pose_rows);
         } else {
             in.dt = dt + a.skip_dt;
             a.skipped = 0;
             a.skip_dt = 0.0f;
             if (a.lod >= 3) a.pose_rows.clear();
-            pose_character(*a.animator, in, a.lod >= 3 ? nullptr : &a.palette, &a.pose_rows);
+        }
+        Posed& r = posed[n_posed++];
+        r.a = &a;
+        r.in = in;
+        r.rf = rf;
+        r.skip = skip;
+    }
+    // Every animator that has a pose to make this frame, at once (job threads), ...
+    {
+        PoseJob jobs[net::kMaxPlayers];
+        int nj = 0;
+        for (int i = 0; i < n_posed; ++i) if (!posed[i].skip) jobs[nj++] = { posed[i].a->animator.get(), &posed[i].in };
+        pose_update_all(jobs, nj);
+    }
+    // ... then each taken over in turn: palette, where what they carry is, a death.
+    for (int pi = 0; pi < n_posed; ++pi) {
+        Posed& r = posed[pi];
+        MpAvatar& a = *r.a;
+        anim::CharacterAnimationInput& in = r.in;
+        const net::RemoteFrame& rf = r.rf;
+        const net::PlayerState& s = a.st;
+        const glm::vec3 eye = rf.eye;
+        const glm::mat4 model = rf.model;
+        if (r.skip) {
+            a.palette = body_push_rows(a.pose_rows);
+        } else {
+            pose_finish(*a.animator, in, a.lod >= 3 ? nullptr : &a.palette, &a.pose_rows);
             a.weapon_offset = a.animator->weapon_offset();
             a.fire_offset = a.animator->weapon_fire_offset();
         }

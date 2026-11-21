@@ -206,7 +206,7 @@ void VulkanEngine::cull_clusters(VkCommandBuffer cmd) {
     struct { glm::vec4 planes[6]; glm::vec4 cam; glm::uvec4 range; glm::vec4 params; glm::mat4 prev_vp; glm::vec4 hiz; } pc{};
     for (int i = 0; i < 6; ++i) pc.planes[i] = fv.frustum.planes[i];
     // Detail for the OUTPUT resolution, like the vegetation.
-    const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(80.0f) * 0.5f));
+    const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(view_fov_deg_) * 0.5f));
     pc.cam = glm::vec4(fv.eye_pos, ppr);
     pc.range = glm::uvec4(veg_cluster_first_, veg_cluster_count_, cl_vis_base_, cl_cmd_cap_);
     // One pixel of error at detail 1; the vegetation detail slider scales it.
@@ -489,7 +489,7 @@ void VulkanEngine::cull_static_clusters(VkCommandBuffer cmd) {
     scl_ready_ = false;
     if (!scl_pipeline_ || !scl_hiz_bound_ || scl_total_ == 0) return;
     const FrameView& fv = current_frame_view_;
-    const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(80.0f) * 0.5f));
+    const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(view_fov_deg_) * 0.5f));
     stream_static_clusters(fv.eye_pos, ppr);
     glm::uvec4 loaded(0u);
     for (size_t pi = 0; pi < scl_parts_.size(); ++pi)

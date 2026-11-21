@@ -319,5 +319,10 @@ int main(int argc, char** argv) {
             std::fflush(stdout);
         }
     }
+    {
+        const double looked = double(set.db.rows_looked_at()), skipped = double(set.db.rows_skipped());
+        std::printf("\npose searches looked at %.0f %% of the rows they could have (whole blocks skipped by their bounds)\n",
+                    100.0 * looked / std::max(looked + skipped, 1.0));
+    }
     return 0;
 }

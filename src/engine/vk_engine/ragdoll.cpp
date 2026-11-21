@@ -158,6 +158,8 @@ void VulkanEngine::corpses_update(float dt) {
     const size_t nb = body_bones_.size();
     for (Corpse& c : corpses_) {
         if (!c.rag) continue;
+        c.av.palette_prev = c.age > 0.0f ? c.av.palette : -1;
+        c.av.palette = -1;
         c.age += dt;
         if (c.age > kLife) {
             physics_->remove_ragdoll(c.rag);

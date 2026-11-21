@@ -235,7 +235,7 @@ void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
     // 80° vertical FOV, 0.05/1500 near/far (see world.cpp).
     d.cameraNear              = 0.05f;
     d.cameraFar               = view_far_;
-    d.cameraFovAngleVertical  = glm::radians(80.0f);
+    d.cameraFovAngleVertical  = glm::radians(view_fov_deg_);
     d.viewSpaceToMetersFactor = 1.0f;
 
     FfxErrorCode rc = ffxFsr2ContextDispatch(ctx, &d);

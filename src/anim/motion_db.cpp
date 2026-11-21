@@ -152,6 +152,18 @@ bool MotionDatabase::load(const uint8_t* data, size_t size, uint64_t rig_id, std
     for (const MotionJump& j : jumps_)
         if (!(j.takeoff < j.land && j.land < frames_ && j.apex >= j.takeoff && j.apex <= j.land && range_of_[j.takeoff] == range_of_[j.land]))
             return fail("motion database: bad jump entry");
+    // The boxes the search prunes with.
+    {
+        const uint32_t S = uint32_t(MotionSchema::kStride), blocks = (frames_ + kBlock - 1) / kBlock;
+        block_lo_.assign(size_t(blocks) * S, 1e30f);
+        block_hi_.assign(size_t(blocks) * S, -1e30f);
+        for (uint32_t f = 0; f < frames_; ++f) {
+            const float* r = row(f);
+            float* lo = &block_lo_[size_t(f / kBlock) * S];
+            float* hi = &block_hi_[size_t(f / kBlock) * S];
+            for (uint32_t k = 0; k < S; ++k) { lo[k] = std::min(lo[k], r[k]); hi[k] = std::max(hi[k], r[k]); }
+        }
+    }
     // What pace each direction of the capture sustains (see cruise_speed).
     for (int stance = 0; stance < 2; ++stance) {
         std::vector<float> sp[3];
@@ -231,6 +243,26 @@ inline float row_cost(const float* f, const float* q, const float* w) {
 #endif
 }
 
+// The least a row inside the box [lo, hi] can cost.
+inline float box_cost(const float* lo, const float* hi, const float* q, const float* w) {
+#if defined(__AVX2__)
+    __m256 acc = _mm256_setzero_ps();
+    const __m256 zero = _mm256_setzero_ps();
+    for (int k = 0; k < MotionSchema::kStride; k += 8) {
+        const __m256 qq = _mm256_loadu_ps(q + k);
+        const __m256 d = _mm256_max_ps(zero, _mm256_max_ps(_mm256_sub_ps(_mm256_loadu_ps(lo + k), qq), _mm256_sub_ps(qq, _mm256_loadu_ps(hi + k))));
+        acc = _mm256_add_ps(acc, _mm256_mul_ps(_mm256_mul_ps(d, d), _mm256_loadu_ps(w + k)));
+    }
+    const __m128 s = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+    const __m128 h = _mm_add_ps(s, _mm_movehl_ps(s, s));
+    return _mm_cvtss_f32(_mm_add_ss(h, _mm_shuffle_ps(h, h, 1)));
+#else
+    float c = 0.0f;
+    for (int k = 0; k < MotionSchema::kStride; ++k) { const float d = std::max(0.0f, std::max(lo[k] - q[k], q[k] - hi[k])); c += d * d * w[k]; }
+    return c;
+#endif
+}
+
 bool range_allowed(const MotionRange& r, const MotionQuery& q) {
     return (r.tags & q.require_tags) == q.require_tags && (r.tags & q.exclude_tags) == 0 && r.count > r.head + r.tail;
 }
@@ -258,17 +290,29 @@ MotionMatch MotionDatabase::search(const MotionQuery& q) const {
     const Prepared p = prepare(*this, q);
     float best = 1e30f;
     int best_frame = -1, best_mirror = 0;
+    uint64_t looked = 0, skipped = 0;
     for (const MotionRange& r : ranges_) {
         if (!range_allowed(r, q)) continue;
         const uint32_t a = r.first + r.head, b = r.first + r.count - r.tail;
         for (int m = 0; m < 2; ++m) {
-            const float* f = row(a);
-            for (uint32_t i = a; i < b; ++i, f += MotionSchema::kStride) {
-                const float c = row_cost(f, p.q[m], p.w);
-                if (c < best) { best = c; best_frame = int(i); best_mirror = m; }
+            // block by block: a block whose box cannot beat the best so far is skipped whole
+            // (with a hair of margin for rounding, so nothing that could win is ever skipped)
+            for (uint32_t i0 = a; i0 < b;) {
+                const uint32_t blk = i0 / kBlock, i1 = std::min(b, (blk + 1) * kBlock);
+                const size_t at = size_t(blk) * size_t(MotionSchema::kStride);
+                if (box_cost(&block_lo_[at], &block_hi_[at], p.q[m], p.w) * 0.9999f >= best) { skipped += i1 - i0; i0 = i1; continue; }
+                const float* f = row(i0);
+                for (uint32_t i = i0; i < i1; ++i, f += MotionSchema::kStride) {
+                    const float c = row_cost(f, p.q[m], p.w);
+                    if (c < best) { best = c; best_frame = int(i); best_mirror = m; }
+                }
+                looked += i1 - i0;
+                i0 = i1;
             }
         }
     }
+    rows_looked_at_.v.fetch_add(looked, std::memory_order_relaxed);
+    rows_skipped_.v.fetch_add(skipped, std::memory_order_relaxed);
     if (best_frame < 0) return MotionMatch{};
     return cost(q, uint32_t(best_frame), best_mirror != 0);
 }

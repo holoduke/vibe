@@ -492,6 +492,11 @@ void VulkanEngine::run(const RunOptions& opts) {
                    : (ema_fps_ * 0.9f + (1.0f / frame_dt) * 0.1f);
 
         InputFrame in = window_->consume_input();
+        {   // zoomed in (aiming), the same hand movement turns the view less: the picture moves as much as ever
+            const double zoom_k = double(std::tan(glm::radians(view_fov_deg_) * 0.5f) / std::tan(glm::radians(80.0f) * 0.5f));
+            in.mouse_dx *= zoom_k;
+            in.mouse_dy *= zoom_k;
+        }
         // Typing into a text field (a preset name in the edit panel): the
         // keys belong to the text, not to movement / E / Q / R.
         if (imgui_initialized_ && ImGui::GetIO().WantTextInput) {

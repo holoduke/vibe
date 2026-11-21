@@ -319,9 +319,10 @@ def export(fname, head, ratio, weld=0.0):
     log("wrote", path, "vertices", len(out_v), "triangles", len(out_i) // 3, "bytes", os.path.getsize(path))
 
 
-# Level 0 of the body is the mesh as built (it fills the player's own view). The helmet is far
-# denser than anything that will ever look at it: a third of it at level 0.
-export("soldier_fp.qchar", False, lambda low: 1.0)
+# Level 0 is what the player sees of himself and what stands right in front of him. The boots
+# and the vest are modelled far denser than that needs (30k and 37k triangles of 79k): half of
+# them here. The helmet: a third (below that its netting loses its texture coordinates).
+export("soldier_fp.qchar", False, lambda low: 0.45 if "boots" in low else 0.55 if "vest" in low else 1.0)
 export("soldier_fp_lod1.qchar", False, lambda low: 0.30)
 export("soldier_fp_lod2.qchar", False, lambda low: 0.09)
 export("soldier_head.qchar", True, lambda low: 0.30 if "helmet" in low else 1.0)

@@ -24,6 +24,8 @@
 // Rows are padded to kStride floats so four AVX registers cover a row.
 #include "anim/types.h"
 
+#include <atomic>
+
 namespace qlike::anim {
 
 enum FeatureGroup : int { kFootPos, kFootVel, kHipVel, kTrajPos, kTrajDir, kFeatureGroups };
@@ -118,6 +120,22 @@ private:
     std::vector<uint32_t>        range_of_;
     std::vector<MotionJump>      jumps_;
     float    cruise_[2][3] = {};
+    // Per block of kBlock frames: the least and the greatest of every (normalised) feature. A
+    // block whose box is further from the query than the best match so far holds nothing better
+    // and is skipped whole (search); the result is the same as looking at every frame.
+    static constexpr uint32_t kBlock = 32;
+    std::vector<float> block_lo_, block_hi_;           // blocks x kStride
+    struct Counter {                                   // (an atomic that a database can be copied with)
+        std::atomic<uint64_t> v{0};
+        Counter() = default;
+        Counter(const Counter& o) : v(o.v.load(std::memory_order_relaxed)) {}
+        Counter& operator=(const Counter& o) { v.store(o.v.load(std::memory_order_relaxed), std::memory_order_relaxed); return *this; }
+    };
+    mutable Counter rows_looked_at_, rows_skipped_;
+public:
+    // (how much of the database the searches so far had to look at: benchmark, tests)
+    uint64_t rows_looked_at() const { return rows_looked_at_.v.load(std::memory_order_relaxed); }
+    uint64_t rows_skipped() const { return rows_skipped_.v.load(std::memory_order_relaxed); }
 };
 
 // What the offline build hands over; serialised into the asset's motion block.
