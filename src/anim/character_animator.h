@@ -72,7 +72,8 @@ struct AnimTuning {
     float stride_reach = 0.72f;                        // a striding foot goes this share of the leg's length from the hip at most
     float stride_leg = 0.90f;                          // ... and is lifted off the ground where the leg would be longer than this share
     float stride_drop = 0.04f, max_stride_drop = 0.10f;// metres the hips come down per unit of extra stride, and at most
-    float max_orient_warp = 1.05f;       // radians the legs may turn away from the capture's travel direction
+    float max_orient_warp = 1.45f;       // radians the legs may turn away from the capture's travel direction
+    float strafe_run_speed = 5.5f;       // m/s: faster than this sideways, the legs run forward turned to the side (no sidestep)
     float lean_strength = 1.0f;          // 0 = none
     float accel_lean = 0.012f;           // radians per m/s^2 (turning at speed is an acceleration too)
     float speed_lean = 0.010f;           // radians per m/s, into the direction of travel
@@ -180,7 +181,7 @@ private:
     glm::vec3 prev_vel_{0.0f}, accel_{0.0f};
     float  rate_ = 1.0f, stride_ = 1.0f, warp_ = 0.0f;
     float  snap_axis_ = 0.0f;            // the captured direction (a multiple of 90 degrees) a diagonal request is turned onto
-    bool   snap_on_ = false;
+    bool   snap_on_ = false, strafe_run_ = false;
     float  lean_roll_ = 0.0f, lean_roll_v_ = 0.0f, lean_pitch_ = 0.0f, lean_pitch_v_ = 0.0f;
     float  dip_ = 0.0f, dip_v_ = 0.0f, pelvis_ik_ = 0.0f, pelvis_ik_v_ = 0.0f;
     float  air_blend_ = 0.0f, time_ = 0.0f, stand_hips_ = 0.0f;

@@ -231,7 +231,7 @@ Measured against the baseline (same machine, body shown from outside, running):
 |---|---|---|
 | 1 | Builds cleanly, existing tests green | pass |
 | 2 | Demo map showcase | not built as a map; every listed movement runs in the scenario tests and can be shown with the `QLIKE_BODY_*` hooks |
-| 3 | No obvious foot sliding in planted phases | pass below 4 m/s (locks, < 1.5 cm in tests) and at the crawl pace (0 - 1 %). At walk and sprint: 9 - 10 % of the body's speed forward and diagonally, 19 - 25 % backward, **25 - 43 % sideways** (measured, `performance.md`; bounded by the `[asset]` test). Not zero: the capture tops out near 2 m/s (gap G1) |
+| 3 | No obvious foot sliding in planted phases | pass below 4 m/s (locks, < 1.5 cm in tests) and at the crawl pace (0 - 1 %). At walk and sprint: 9 - 12 % of the body's speed forward, diagonally and sideways (a strafe run), **19 - 25 % backward** (measured, `performance.md`; bounded by the `[asset]` test). Not zero: the capture tops out near 2 m/s (gap G1) |
 | 4 | No pops, NaNs, oscillation | pass in tests (joint rates bounded, 0 invalid poses, switch rate bounded at 5 - 10 Hz input), and on the real asset at walk and sprint in every direction (fastest joint 17 - 38 rad/s; it was 100 - 184 until the arm and knee solves were fixed) |
 | 5 | Input never delayed or altered | pass: controller trajectories bit-identical with and without animation |
 | 6 | Debug tools | pass (`QLIKE_ANIM_DEBUG=1`) |

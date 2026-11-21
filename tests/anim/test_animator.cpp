@@ -139,12 +139,26 @@ TEST_CASE("animator: idle, run, stop, strafe pick the fitting captures", "[anim]
     CHECK(a.debug().stride > 1.5f);                    // ... and with longer strides
     CHECK(a.debug().rate <= a.tuning.max_rate + 1e-4f);
     CHECK(a.debug().stride <= a.tuning.max_stride + 1e-4f);
+    // Sideways at this pace is run, not side-stepped: the forward run on legs turned to the side,
+    // one way for right and the other for left.
+    run(sim, a, w, 0.5f, [](float, game::PlayerInput& in, Sim&, CharacterAnimationInput&) { in.right = true; }, k60);
+    CHECK(clip_name(f, a) == "run_f");
+    const float warp_right = a.debug().warp;
+    CHECK(std::abs(warp_right) > 1.1f);
+    CHECK(std::abs(warp_right) <= a.tuning.max_orient_warp + 1e-3f);
+    run(sim, a, w, 0.5f, [](float, game::PlayerInput& in, Sim&, CharacterAnimationInput&) { in.left = true; }, k60);
+    CHECK(clip_name(f, a) == "run_f");
+    CHECK(a.debug().warp * warp_right < -1.0f);
+    // The sidestep itself (as below the strafe-run pace): the capture as it is to the right,
+    // mirrored to the left.
+    a.tuning.strafe_run_speed = 1e9f;
     run(sim, a, w, 0.5f, [](float, game::PlayerInput& in, Sim&, CharacterAnimationInput&) { in.right = true; }, k60);
     CHECK(clip_name(f, a) == "strafe_r");
     CHECK_FALSE(a.debug().mirrored);
     run(sim, a, w, 0.5f, [](float, game::PlayerInput& in, Sim&, CharacterAnimationInput&) { in.left = true; }, k60);
     CHECK(clip_name(f, a) == "strafe_r");
     CHECK(a.debug().mirrored);
+    a.tuning.strafe_run_speed = AnimTuning{}.strafe_run_speed;
     run(sim, a, w, 0.5f, [](float, game::PlayerInput& in, Sim&, CharacterAnimationInput&) { in.back = true; }, k60);
     CHECK(clip_name(f, a) == "walk_b");
     run(sim, a, w, 0.8f, [](float, game::PlayerInput&, Sim&, CharacterAnimationInput&) {}, k60);
@@ -745,9 +759,10 @@ TEST_CASE("real asset: steady crawl, walk and sprint in every direction", "[anim
     const Case cases[] = {
         { "crawl forward", true, false, false, false, true, 0.06f },   { "crawl diagonal", true, false, true, false, true, 0.06f },
         { "crawl backward", false, true, false, false, true, 0.06f },  { "walk forward", true, false, false, false, false, 0.16f },
-        { "walk diagonal", true, false, true, false, false, 0.16f },   { "walk sideways", false, false, true, false, false, 0.35f },
+        { "walk diagonal", true, false, true, false, false, 0.16f },   { "walk sideways", false, false, true, false, false, 0.18f },
         { "walk backward", false, true, false, false, false, 0.35f },  { "sprint forward", true, false, false, true, false, 0.20f },
         { "sprint diagonal", true, false, true, true, false, 0.20f },  { "sprint backward", false, true, false, true, false, 0.30f },
+        { "sprint sideways", false, false, true, true, false, 0.20f },
     };
     for (const Case& c : cases) {
         Sim sim;

@@ -120,7 +120,7 @@ void CharacterAnimator::reset() {
     rate_ = stride_ = 1.0f;
     warp_ = lean_roll_ = lean_roll_v_ = lean_pitch_ = lean_pitch_v_ = 0.0f;
     snap_axis_ = 0.0f;
-    snap_on_ = false;
+    snap_on_ = strafe_run_ = false;
     dip_ = dip_v_ = pelvis_ik_ = pelvis_ik_v_ = 0.0f;
     for (Lock& l : lock_) l = Lock{};
     recoil_t_ = 0.0f; reload_t_ = -1.0f; reload_w_ = 0.0f; equip_t_ = 1.0f;
@@ -355,6 +355,12 @@ void CharacterAnimator::lower_body(const CharacterAnimationInput& in, glm::vec2 
             const float ang = std::atan2(v_local.x, v_local.y);
             float axis = std::round(ang / kQuarter) * kQuarter;
             if (snap_on_ && std::abs(wrap_angle(ang - snap_axis_)) < 0.96f) axis = snap_axis_;       // 55 degrees
+            // A fast sidestep is not something legs do: the capture's sidestep is 1.4 m/s, and at
+            // 8 the feet would have to cross four times a second, a stride each. At speed the
+            // character runs instead, on legs turned the way it goes, the torso twisted back
+            // onto the aim (forward when it goes sideways or ahead, backward otherwise).
+            strafe_run_ = in.crouch < 0.5f && speed > (strafe_run_ ? tuning.strafe_run_speed - 1.0f : tuning.strafe_run_speed);
+            if (strafe_run_ && std::abs(std::abs(axis) - kQuarter) < 0.1f) axis = std::abs(ang) > kQuarter - 0.09f ? 2.0f * kQuarter : 0.0f;
             snap_axis_ = axis;
             snap_on_ = true;
             const float w = wrap_angle(ang - axis), c = std::cos(-w), sn = std::sin(-w);
@@ -364,6 +370,7 @@ void CharacterAnimator::lower_body(const CharacterAnimationInput& in, glm::vec2 
             for (int h = 0; h < MotionSchema::kHorizons; ++h) mi.traj.pos[h] = turn(mi.traj.pos[h]);
         } else {
             snap_on_ = false;
+            strafe_run_ = false;
         }
         mi.require_tags = in.crouch > 0.5f ? uint32_t(kTagCrouch) : uint32_t(kTagLocomotion);
         // Standing still with no input is the idle, nothing else: a walk frozen in mid-step is not standing.

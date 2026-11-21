@@ -155,9 +155,10 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   rate (to 1.5x) and stride (to 4.5x) make up the difference: a foot on the ground travels back
   as fast as the ground does for as long as the leg reaches, then leaves the ground. Measured
   (`vibe_animbench <asset> slide`, table in `performance.md`): the planted foot slides 0 - 1 % of
-  the body's speed at the crawl pace, 9 % walking and 10 % sprinting forward or diagonally,
-  19 - 25 % backward, 25 - 43 % sideways. Sideways is the weak one: a sidestep cannot be lengthened
-  the way a forward step can. A sprint and a fast sidestep capture with clear rights would close it.
+  the body's speed at the crawl pace, 9 - 12 % walking and sprinting forward, diagonally and
+  sideways, 19 - 25 % backward. Sideways above 5.5 m/s is a run on legs turned to the side
+  (`strafe_run_speed`), not a sidestep. A sprint and a fast back-pedal capture with clear rights
+  would close the rest.
 - **G2 — no captured aiming, firing, reload, fall or hard landing.** These are procedural
   layers; the landing uses the two-foot-jump capture's own landing.
 - **G3 — stops.** No distance matching; a stop is found by the search (the StartStop takes help).

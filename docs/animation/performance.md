@@ -84,11 +84,11 @@ long enough for the stride).
 | crawl key | backward | 3.2 | Crouched_BR | 1.04 | 1.50 | 2.08 | 0.02 | 1 % | 82 % | 33 % | 28 RightLeg at 2.65 s |
 | walk | forward | 8.0 | Neutral_FR | 1.87 | 1.50 | 2.85 | 0.74 | 9 % | 100 % | 0 % | 26 LeftLeg at 2.88 s |
 | walk | diagonal | 8.0 | Neutral_FR | 1.87 | 1.50 | 2.85 | 0.74 | 9 % | 100 % | 0 % | 26 RightLeg at 5.13 s |
-| walk | sideways | 8.0 | Neutral_SR | 1.45 | 1.50 | 3.71 | 2.00 | 25 % | 56 % | 0 % | 21 LeftLeg at 3.27 s |
+| walk | sideways | 8.0 | Neutral_FR | 1.87 | 1.50 | 2.85 | 0.90 | 11 % | 100 % | 0 % | 27 LeftLeg at 4.32 s |
 | walk | backward | 8.0 | Rushed_BW | 1.42 | 1.50 | 3.76 | 2.00 | 25 % | 65 % | 0 % | 31 RightUpLeg at 2.78 s |
 | sprint | forward | 12.0 | Neutral_FR | 1.87 | 1.50 | 4.27 | 1.25 | 10 % | 88 % | 0 % | 35 RightLeg at 3.15 s |
 | sprint | diagonal | 12.0 | Neutral_FR | 1.87 | 1.50 | 4.27 | 1.25 | 10 % | 88 % | 0 % | 35 RightLeg at 4.20 s |
-| sprint | sideways | 12.0 | Neutral_SR | 1.44 | 1.50 | 4.50 | 5.13 | 43 % | 36 % | 0 % | 22 LeftLeg at 2.92 s |
+| sprint | sideways | 12.0 | Neutral_FR | 1.87 | 1.50 | 4.27 | 1.43 | 12 % | 81 % | 0 % | 36 RightLeg at 3.95 s |
 | sprint | backward | 12.0 | Rushed_BR | 1.63 | 1.50 | 4.50 | 2.23 | 19 % | 100 % | 0 % | 38 LeftUpLeg at 2.65 s |
 
 Before this pass (same tool, the asset without the Rushed takes, 2026-11-21): walk 32 % forward,
@@ -103,7 +103,10 @@ upper arm or a knee turning at 100 - 184 rad/s for a frame (a visible snap). Wha
 - stride to 4.5x; a foot that would go beyond the leg leaves the ground instead of being held
   back, the hips come down up to 10 cm;
 - the knee points where the hips face while the capture has the leg straight; arms on a weapon
-  are solved from the rest pose, not from the captured arm swing; the chest keeps 35 % of its lean.
+  are solved from the rest pose, not from the captured arm swing; the chest keeps 35 % of its lean;
+- sideways faster than 5.5 m/s is run, not side-stepped: the forward run on legs turned up to 83
+  degrees to the side, the torso twisted back onto the aim (the captured sidestep is 1.4 m/s; stretched
+  to 8 - 12 it slid 25 - 43 %).
 
 ## Memory
 
