@@ -178,7 +178,25 @@ FetchContent_Declare(meshoptimizer
     GIT_TAG v1.0
     GIT_SHALLOW TRUE)
 
-FetchContent_MakeAvailable(glfw glm vk_bootstrap vma Catch2 JoltPhysics imgui tinygltf tinyexr miniaudio fastnoiselite enet meshoptimizer)
+# ozz-animation - skeletons, compressed clips, sampling, blending, local-to-model, IK jobs (MIT).
+# The character animation library (src/anim) is built on it; it is hidden behind
+# anim::IAnimationRuntime. Only the runtime and the offline builders are built.
+set(ozz_build_tools OFF CACHE BOOL "" FORCE)
+set(ozz_build_fbx OFF CACHE BOOL "" FORCE)
+set(ozz_build_gltf OFF CACHE BOOL "" FORCE)
+set(ozz_build_data OFF CACHE BOOL "" FORCE)
+set(ozz_build_samples OFF CACHE BOOL "" FORCE)
+set(ozz_build_howtos OFF CACHE BOOL "" FORCE)
+set(ozz_build_tests OFF CACHE BOOL "" FORCE)
+set(ozz_build_simd_ref OFF CACHE BOOL "" FORCE)
+set(ozz_build_postfix OFF CACHE BOOL "" FORCE)
+set(ozz_build_msvc_rt_dll ON CACHE BOOL "" FORCE)
+FetchContent_Declare(ozz
+    GIT_REPOSITORY https://github.com/guillaumeblanc/ozz-animation.git
+    GIT_TAG 0.17.0
+    GIT_SHALLOW TRUE)
+
+FetchContent_MakeAvailable(glfw glm vk_bootstrap vma Catch2 JoltPhysics imgui tinygltf tinyexr miniaudio fastnoiselite enet meshoptimizer ozz)
 
 # AMD FidelityFX-FSR2 — vendored as a git submodule under
 # external/FidelityFX-FSR2 (MIT license; LICENSE.txt preserved). Use as-is
@@ -283,6 +301,28 @@ target_compile_definitions(qlike_core PUBLIC
     # The scalar path with /arch:AVX2 + /fp:fast gets auto-vectorised
     # by the compiler anyway.
 )
+
+# qlike_anim: character animation (skeleton + clip runtime on ozz, motion matching, layers, IK).
+# No Vulkan, no engine headers; tests and the cook tool link it directly.
+add_library(qlike_anim STATIC
+    src/anim/types.cpp
+    src/anim/skeleton_def.cpp
+    src/anim/asset.cpp
+    src/anim/ozz_runtime.cpp
+)
+target_link_libraries(qlike_anim PUBLIC qlike_core PRIVATE ozz_animation ozz_base)
+
+# Offline half: importers, retargeting, cooking (never linked into the game).
+add_library(qlike_anim_offline STATIC
+    src/anim/offline/bvh.cpp
+    src/anim/offline/raw_clip.cpp
+    src/anim/offline/retarget.cpp
+    src/anim/offline/cook.cpp
+)
+target_link_libraries(qlike_anim_offline PUBLIC qlike_anim PRIVATE ozz_animation_offline ozz_animation ozz_base)
+
+add_executable(vibe_animcook tools/anim/cook_main.cpp)
+target_link_libraries(vibe_animcook PRIVATE qlike_anim_offline)
 
 # qlike_engine: rendering, windowing, Vulkan. Depends on qlike_core.
 add_library(qlike_engine STATIC
