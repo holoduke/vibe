@@ -1200,6 +1200,8 @@ private:
     void anim_debug_overlay();                         // QLIKE_ANIM_DEBUG=1 / the menu: chosen clip, costs, contacts, IK targets
     bool anim_debug_ = false;
     game::PlayerInput last_pin_{};                     // the movement keys of the last tick (what the player wants)
+    uint32_t  body_hit_seq_ = 0;                       // hits the local player took (his own body flinches)
+    glm::vec3 body_hit_dir_{0.0f, 0.0f, 1.0f};         //   world: the way the last one travelled
     uint32_t  body_shot_seq_ = 0, body_reload_seq_ = 0;    // count the local player's shots / reloads
     float     body_reload_left_ = 0.0f;                // seconds of reload left (cosmetic: firing ends it)
     bool      prev_reload_key_ = false;
@@ -1278,6 +1280,7 @@ private:
         int           lod = 0, skipped = 0;            // animation level of detail; frames since the last pose
         int           mesh_lod = 0;                    // which mesh is drawn (by size on screen)
         uint32_t      reload_seq = 0;
+        uint32_t      hit_seq = 0;                     // counts the hits seen on them (their body flinches)
         bool          was_reloading = false;
         float         combat_t = 1e9f;                 // seconds since they shot or were shot at by us
         float         skip_dt = 0.0f;                  // time not yet given to the animator (a skipped frame)

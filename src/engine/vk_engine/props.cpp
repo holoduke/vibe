@@ -1118,6 +1118,15 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
         box(glm::vec3(0.094f, 0.004f, -0.142f), glm::vec3(0.010f, 0.010f, 0.010f), glm::vec4(scr, 1.0f), scr * lum, true);             // antenna LED
         return;
     }
+    // Reloading: the magazine in the support hand (out on the way down, a fresh one back up).
+    {
+        const anim::CharacterAnimator* an = mp_draw_ ? mp_draw_->animator.get() : (game_.player_body ? body_animator_.get() : nullptr);
+        if (an && an->magazine_in_hand())
+            draw_part(cube_mesh_, view_inv_recoil * glm::translate(glm::mat4(1.0f), an->magazine_position() + glm::vec3(0.0f, 0.045f, 0.0f)) *
+                                  glm::rotate(glm::mat4(1.0f), glm::radians(8.0f), glm::vec3(1.0f, 0.0f, 0.0f)) *
+                                  glm::scale(glm::mat4(1.0f), glm::vec3(0.028f, 0.105f, 0.050f)),
+                      glm::vec4(0.09f, 0.10f, 0.11f, 1.0f), glm::vec3(0.0f), false);
+    }
     if (!viewmodel_gltf_.empty()) {
         glm::mat4 root = view_inv_recoil * viewmodel_root_offset_;
         for (const auto& vm : viewmodel_gltf_) {

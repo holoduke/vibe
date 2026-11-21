@@ -121,6 +121,8 @@ void CharacterAnimator::reset() {
     warp_ = lean_roll_ = lean_roll_v_ = lean_pitch_ = lean_pitch_v_ = 0.0f;
     snap_axis_ = 0.0f;
     snap_on_ = strafe_run_ = false;
+    flinch_pitch_ = flinch_pitch_v_ = flinch_roll_ = flinch_roll_v_ = 0.0f;
+    mag_visible_ = false;
     dip_ = dip_v_ = pelvis_ik_ = pelvis_ik_v_ = 0.0f;
     for (Lock& l : lock_) l = Lock{};
     recoil_t_ = 0.0f; reload_t_ = -1.0f; reload_w_ = 0.0f; equip_t_ = 1.0f;
@@ -210,7 +212,7 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
         yaw_rate_ = 0.0f;
         accel_ = glm::vec3(0.0f);
         for (Lock& l : lock_) l = Lock{};
-        if (!started_) { shot_seq_ = in.shot_seq; reload_seq_ = in.reload_seq; held_ = in.held; }
+        if (!started_) { shot_seq_ = in.shot_seq; reload_seq_ = in.reload_seq; hit_seq_ = in.hit_seq; held_ = in.held; }
     }
     if (dt > 1e-4f) {
         const float yr = std::clamp(wrap_angle(in.facing_yaw - prev_yaw_) / dt, -12.0f, 12.0f);
@@ -529,8 +531,40 @@ void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
     if (!in.first_person) {
         rotate_in_model(rig[Role::Neck], rot_x(0.20f * pitch));
         rotate_in_model(rig[Role::Head], rot_x(0.30f * pitch));
+        // Aiming a rifle, the head leans over to the stock and down to the sights.
+        const float sight = held_ == HeldItem::Rifle ? tuning.head_to_sights * smooth01(equip_t_) * (1.0f - reload_w_) : 0.0f;
+        if (sight > 1e-3f) {
+            rotate_in_model(rig[Role::Neck], glm::angleAxis(-0.10f * sight, glm::vec3(0.0f, 0.0f, 1.0f)));
+            rotate_in_model(rig[Role::Head], glm::angleAxis(-0.12f * sight, glm::vec3(0.0f, 0.0f, 1.0f)) * rot_x(-0.07f * sight));
+        }
+    }
+    // A hit: the torso gives the way the shot went and comes back (a look only: the controller
+    // is not moved, the aim is not thrown).
+    {
+        const float dt = std::clamp(in.dt, 0.0f, 0.1f);
+        if (in.hit_seq != hit_seq_) {
+            hit_seq_ = in.hit_seq;
+            const float kHalf = 0.09f;
+            const float peak = tuning.flinch * std::clamp(in.hit_power, 0.2f, 2.0f);
+            const float kickv = peak * (4.0f * 0.69314718f / kHalf * 0.5f) * 2.7182818f;
+            glm::vec2 d(in.hit_dir.x, in.hit_dir.z);
+            const float dl = glm::length(d);
+            d = dl > 1e-4f ? d / dl : glm::vec2(0.0f, 1.0f);
+            flinch_pitch_v_ = std::clamp(flinch_pitch_v_ + d.y * kickv, -3.0f * kickv, 3.0f * kickv);
+            flinch_roll_v_ = std::clamp(flinch_roll_v_ + d.x * kickv, -3.0f * kickv, 3.0f * kickv);
+            dip_v_ += 0.03f * (4.0f * 0.69314718f / kDipHalflife * 0.5f) * 2.7182818f;
+        }
+        decay_spring(flinch_pitch_, flinch_pitch_v_, 0.09f, dt);
+        decay_spring(flinch_roll_, flinch_roll_v_, 0.09f, dt);
+        if (std::abs(flinch_pitch_) + std::abs(flinch_roll_) > 1e-4f) {
+            const float share = in.first_person ? 0.35f : 1.0f;          // (from the player's own eyes: a nudge of the arms, not a lurch)
+            const glm::quat q = glm::angleAxis(-flinch_roll_ * share, glm::vec3(0.0f, 0.0f, 1.0f)) * rot_x(flinch_pitch_ * share);
+            rotate_in_model(rig[Role::Spine1], q);
+            if (!in.first_person) rotate_in_model(rig[Role::Head], glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), q, 0.6f));
+        }
     }
 }
+
 
 void CharacterAnimator::feet(const CharacterAnimationInput& in, glm::vec2 v_local, float speed, float accel) {
     const IAnimationRuntime& rt = *set_.runtime;
@@ -683,7 +717,14 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
         W[3] += glm::vec4(anchor - butt, 0.0f);
         off = glm::inverse(V) * W;
     }
+    // The tablet likewise: seen from outside it is held in front of the chest, not at the eye.
+    if (!in.first_person && held_ == HeldItem::Tablet && tuning.shoulder_weapon) {
+        const glm::vec3 anchor = glm::vec3(model_[size_t(rig[Role::Neck])][3]) + weapon.tablet_chest;
+        W[3] += glm::vec4(anchor - glm::vec3(W * glm::vec4(weapon.tablet_centre, 1.0f)), 0.0f);
+        off = glm::inverse(V) * W;
+    }
     weapon_offset_ = off;
+    mag_visible_ = false;
     const glm::mat3 Wr(W), Vr(V);
     auto wpt = [&](glm::vec3 v) { return glm::vec3(W * glm::vec4(v, 1.0f)); };
     muzzle_pos_ = wpt(weapon.muzzle);
@@ -727,6 +768,9 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
                 else if (u < 0.75f) path = glm::mix(d, m, smooth01((u - 0.45f) / 0.30f));
                 else path = glm::mix(m, a, smooth01((u - 0.75f) / 0.25f));
                 grip = glm::mix(grip, wpt(path), reload_w_);
+                // (the magazine: out with the hand on its way down, a fresh one back up with it)
+                mag_visible_ = reload_w_ > 0.5f && u >= 0.25f && u <= 0.75f;
+                mag_pos_ = path;
             }
             a1 = glm::normalize(Wr * weapon.l_fingers);
             n1 = glm::normalize(Wr * weapon.l_palm);
@@ -734,7 +778,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
             grip_thumb = true;
         } else if (held_ == HeldItem::Tablet && side == 1) {
             // The tablet lies on the right hand.
-            grip = wpt(glm::vec3(0.170f, -0.200f, -0.375f));
+            grip = wpt(weapon.tablet_centre + glm::vec3(0.015f, -0.035f, 0.025f));
             a1 = glm::normalize(Vr * glm::vec3(-0.35f, 0.55f, -0.75f));
             n1 = glm::normalize(Vr * glm::vec3(-0.25f, 0.70f, 0.65f));
             curl[0] = 0.25f; curl[1] = 0.3f; curl[2] = 0.2f;

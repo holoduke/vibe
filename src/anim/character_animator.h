@@ -55,12 +55,14 @@ struct WeaponDef {
     glm::vec3 l_fingers{0.95f, 0.20f, -0.35f}, l_palm{0.05f, 1.0f, 0.15f};
     glm::vec3 muzzle{0.18f, -0.18f, -0.72f};
     glm::vec3 butt{0.172f, -0.175f, 0.03f};                // the end of the stock (weapon frame)
-    glm::vec3 shoulder_offset{-0.035f, -0.015f, -0.07f};   // where the butt sits from the right shoulder joint (aim frame: +x right, -z forward)
+    glm::vec3 shoulder_offset{-0.035f, 0.020f, -0.07f};    // where the butt sits from the right shoulder joint (aim frame: +x right, -z forward)
     float     recoil_stroke = 0.05f;     // metres the weapon comes back
     float     recoil_duration = 0.14f;
     float     recoil_pitch = 0.035f;     // radians the muzzle climbs
     float     reload_time = 1.5f;        // seconds
     glm::vec3 reload_hand{0.10f, -0.42f, -0.16f};      // where the support hand fetches the magazine
+    glm::vec3 tablet_centre{0.155f, -0.165f, -0.40f};   // the tablet in the weapon frame (as drawn)
+    glm::vec3 tablet_chest{0.10f, -0.20f, -0.30f};      // ... and from the neck joint when seen from outside (model axes)
 };
 const WeaponDef& default_rifle();
 
@@ -80,6 +82,8 @@ struct AnimTuning {
     float accel_lean = 0.012f;           // radians per m/s^2 (turning at speed is an acceleration too)
     float speed_lean = 0.010f;           // radians per m/s, into the direction of travel
     float max_lean = 0.22f;
+    float flinch = 0.22f;                // radians the torso gives under an ordinary hit (0 = none)
+    float head_to_sights = 1.0f;         // seen from outside: the head leans to the stock (0 = stays upright)
     float chest_keep = 0.35f;            // share of the torso's lean away from its rest place that is kept (1 = all of it)
     float spine_pitch_share = 0.30f;     // share of the aim pitch taken by the spine (third person)
     float spine_pitch_share_fp = 0.10f;  // ... when seen from the character's own eyes
@@ -115,6 +119,9 @@ struct CharacterAnimationInput {
     glm::vec3 torch_pos{0.0f}, torch_fwd{0.0f, 0.0f, -1.0f}, torch_right{1.0f, 0.0f, 0.0f};   // model space, HeldItem::Torch
     uint32_t  shot_seq = 0;              // counts shots; a change kicks the recoil
     uint32_t  reload_seq = 0;            // counts reload starts
+    uint32_t  hit_seq = 0;               // counts hits taken; a change makes the body flinch
+    glm::vec3 hit_dir{0.0f, 0.0f, 1.0f};  // model space: the way the shot travelled
+    float     hit_power = 1.0f;          // 1 = an ordinary hit
     bool      reloading = false;         // false while a reload runs = it was interrupted
     bool      first_person = false;
     bool      teleported = false;        // position jumped: drop every world-space memory
@@ -156,6 +163,10 @@ public:
     const glm::mat4& weapon_offset() const { return weapon_offset_; }
     // Model-space muzzle position and direction (effects; never hit registration).
     glm::vec3 muzzle_position() const { return muzzle_pos_; }
+    // The magazine in the support hand through the middle of a reload: its place in the weapon
+    // frame (drawn at view * weapon_offset * this), and whether there is one to draw.
+    bool      magazine_in_hand() const { return mag_visible_; }
+    glm::vec3 magazine_position() const { return mag_pos_; }
     glm::vec3 muzzle_direction() const { return muzzle_dir_; }
     const AnimDebug& debug() const { return dbg_; }
     const AnimationSet& set() const { return set_; }
@@ -194,6 +205,10 @@ private:
     HeldItem held_ = HeldItem::Rifle;
     glm::mat4 weapon_offset_{1.0f};
     glm::vec3 muzzle_pos_{0.0f}, muzzle_dir_{0.0f, 0.0f, -1.0f};
+    glm::vec3 mag_pos_{0.0f};
+    bool      mag_visible_ = false;
+    uint32_t  hit_seq_ = 0;
+    float     flinch_pitch_ = 0.0f, flinch_pitch_v_ = 0.0f, flinch_roll_ = 0.0f, flinch_roll_v_ = 0.0f;
     AnimDebug dbg_;
 };
 

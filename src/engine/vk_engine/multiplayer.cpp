@@ -120,9 +120,12 @@ void VulkanEngine::mp_update(float dt) {
                 if (a.id == e.to) {
                     a.hit_pos = glm::vec3(e.a[0], e.a[1], e.a[2]); a.hit_dir = glm::vec3(e.b[0], e.b[1], e.b[2]);
                     a.hit_power = e.v / kHitDamage; a.hit_age = 0.0f;
+                    ++a.hit_seq;
                 }
             if (e.to == net_->id() && mp_health_ > 0.0f) {
                 mp_health_ -= e.v;
+                ++body_hit_seq_;
+                body_hit_dir_ = glm::vec3(e.b[0], e.b[1], e.b[2]);
                 mp_hurt_ = 1.0f;
                 if (audio_) audio_->play_local(ClipID::Impact, 0.8f);
                 if (mp_health_ <= 0.0f) {
@@ -219,6 +222,13 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         if (reloading && !a.was_reloading) ++a.reload_seq;          // a reload began (the flag is state: it survives lost packets)
         a.was_reloading = reloading;
         in.reload_seq = a.reload_seq;
+        in.hit_seq = a.hit_seq;
+        in.hit_power = a.hit_power;
+        {   // (world -> their model space: +x their right, -z the way they face)
+            const float sy = std::sin(s.yaw), cy = std::cos(s.yaw);
+            in.hit_dir = glm::vec3(a.hit_dir.x * cy + a.hit_dir.z * sy, a.hit_dir.y, a.hit_dir.x * sy - a.hit_dir.z * cy);
+            in.hit_dir.z = -in.hit_dir.z;
+        }
         in.teleported = a.teleported || a.fresh_pose;
         a.teleported = false;
         in.lod = a.lod;
@@ -381,6 +391,7 @@ bool VulkanEngine::mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
         const glm::vec3 bd = glm::normalize(b - a + glm::vec3(1e-6f, 0.0f, 0.0f));
         e.b[0] = bd.x; e.b[1] = bd.y; e.b[2] = bd.z;
         av.hit_pos = hit; av.hit_dir = bd; av.hit_power = 1.0f; av.hit_age = 0.0f; av.combat_t = 0.0f;
+        ++av.hit_seq;
         net_->send_event(e);
         mp_hitmark_ = 0.25f;
         return true;

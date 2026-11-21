@@ -842,3 +842,62 @@ TEST_CASE("animator: seen from outside the rifle's butt is in the shoulder; the 
     for (int i = 0; i < 40; ++i) plain.update(in);
     CHECK(glm::length(plain.muzzle_position() - (in.eye_local + plain.weapon.muzzle)) < 1e-4f);
 }
+
+TEST_CASE("animator: a hit makes the torso give and come back; the aim is not thrown", "[anim][animator]") {
+    fx::SetFixture f;
+    const Rig& rig = f.set.runtime->rig();
+    CharacterAnimationInput in;
+    in.dt = 1.0f / 60.0f;
+    in.ground_height = flat_ground;
+    in.eye_local = glm::vec3(0.0f, 1.6f, -0.11f);
+    for (bool own : { false, true }) {
+        in.first_person = own;
+        in.hit_seq = 0;
+        CharacterAnimator a(f.set);
+        for (int i = 0; i < 60; ++i) a.update(in);
+        const glm::vec3 head0(a.model()[size_t(rig[Role::Head])][3]);
+        const glm::vec3 aim0 = a.muzzle_direction();
+        in.hit_seq = 1;
+        in.hit_dir = glm::vec3(0.0f, 0.0f, 1.0f);          // from the front: travelling toward the back
+        float peak = 0.0f, worst_aim = 0.0f;
+        glm::vec3 at_peak(0.0f);
+        for (int i = 0; i < 20; ++i) {
+            a.update(in);
+            REQUIRE(pose_is_valid(a.model()));
+            const glm::vec3 d = glm::vec3(a.model()[size_t(rig[Role::Head])][3]) - head0;
+            if (glm::length(d) > peak) { peak = glm::length(d); at_peak = d; }
+            worst_aim = std::max(worst_aim, glm::length(a.muzzle_direction() - aim0));
+        }
+        INFO((own ? "own view" : "seen from outside") << ": head moved " << peak << " m, by " << at_peak.x << " " << at_peak.y << " " << at_peak.z);
+        CHECK(peak > (own ? 0.005f : 0.02f));            // it shows
+        CHECK(peak < 0.25f);                             // and is a flinch, not a fall
+        CHECK(at_peak.z > 0.0f);                         // backward: the way the shot went
+        CHECK(worst_aim < 1e-4f);                        // the weapon stays on the view
+        for (int i = 0; i < 60; ++i) a.update(in);       // the same hit number again is not a new hit
+        CHECK(glm::length(glm::vec3(a.model()[size_t(rig[Role::Head])][3]) - head0) < 0.01f);
+    }
+}
+
+TEST_CASE("animator: the magazine is in the support hand through the middle of a reload only", "[anim][animator]") {
+    fx::SetFixture f;
+    CharacterAnimator a(f.set);
+    CharacterAnimationInput in;
+    in.dt = 1.0f / 60.0f;
+    in.ground_height = flat_ground;
+    for (int i = 0; i < 30; ++i) a.update(in);
+    CHECK_FALSE(a.magazine_in_hand());
+    in.reload_seq = 1;
+    in.reloading = true;
+    int with = 0, frames = 0;
+    bool first = false, last = false;
+    for (float t = 0.0f; t < a.weapon.reload_time + 0.5f; t += in.dt, ++frames) {
+        a.update(in);
+        if (frames == 2) first = a.magazine_in_hand();
+        if (a.magazine_in_hand()) ++with;
+        last = a.magazine_in_hand();
+    }
+    CHECK_FALSE(first);                                  // not while the hand is still on its way
+    CHECK_FALSE(last);                                   // gone when the reload is over
+    CHECK(with > 20);
+    CHECK(with < frames * 2 / 3);
+}

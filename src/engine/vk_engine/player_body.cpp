@@ -368,6 +368,8 @@ void VulkanEngine::update_player_body(float dt) {
     }
     in.shot_seq = body_shot_seq_;
     in.reload_seq = body_reload_seq_;
+    in.hit_seq = body_hit_seq_;
+    in.hit_dir = dir_to_model(body_hit_dir_);
     in.reloading = body_reload_left_ > 0.0f;
     // A respawn or a jump to another place: nothing remembered in world space survives it.
     static glm::vec3 last_feet(1e9f);

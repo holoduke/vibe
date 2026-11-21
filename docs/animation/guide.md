@@ -186,7 +186,17 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 - **G8 — reload is cosmetic** (the laser has no magazine); weapon switching has an equip layer
   but no captured draw / holster.
 - **Third person hold.** Seen from outside, the rifle is moved so its butt sits in the right shoulder
-  (`WeaponDef::butt`, `shoulder_offset`; `AnimTuning::shoulder_weapon`); the player himself sees it
-  where his view has it. The tablet and the torch are still placed from the view for everybody.
+  (`WeaponDef::butt`, `shoulder_offset`; `AnimTuning::shoulder_weapon`) and the head leans to the
+  stock (`head_to_sights`); the tablet is held in front of the chest (`tablet_chest`). The player
+  himself sees both where his view has them. A torch is not shown on other players.
+- **Hits.** `hit_seq` / `hit_dir` / `hit_power` in the input: the torso gives the way the shot went
+  and comes back within a quarter of a second (`AnimTuning::flinch`); the weapon stays on the
+  aim. Death is a ragdoll started from the pose and speed of that moment (`ragdoll.cpp`); there
+  is no captured death or stagger.
+- **Reload.** Still procedural: the weapon tilts, the support hand goes to the magazine, takes it
+  down and comes back with one (`magazine_in_hand`, drawn as a plain box by `draw_viewmodel`).
+  Cosmetic: the laser has no magazine to empty.
+- **Backward at speed** is the weakest direction (19 - 25 % slide). A faster playback rate for the
+  back-pedal was tried and made the sprint worse (32 %); it needs captured data.
 - **G9 — one weapon definition** (`default_rifle()`); `WeaponDef` holds grips, muzzle, recoil
   and reload timing per weapon, but the game has one gun model. No ADS in the game, so none here.
