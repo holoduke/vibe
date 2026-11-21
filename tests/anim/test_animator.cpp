@@ -833,8 +833,9 @@ TEST_CASE("animator: seen from outside the rifle's butt is in the shoulder; the 
     CharacterAnimator own(f.set);
     in.first_person = true;
     for (int i = 0; i < 40; ++i) own.update(in);
-    CHECK(glm::length(own.muzzle_position() - (in.eye_local + own.weapon.muzzle)) < 1e-4f);
-    CHECK(glm::length(glm::vec3(own.weapon_offset()[3])) < 1e-5f);
+    // (aiming, in his own view the weapon comes to the middle of the screen: nobody else sees that)
+    CHECK(glm::length(own.muzzle_position() - (in.eye_local + own.weapon.muzzle + own.weapon.ads_shift_fp)) < 1e-4f);
+    CHECK(std::abs(own.muzzle_position().x) < 0.03f);
     // and with the switch off, third person is the same as that
     CharacterAnimator plain(f.set);
     plain.tuning.shoulder_weapon = false;
@@ -902,7 +903,7 @@ TEST_CASE("animator: the magazine is in the support hand through the middle of a
     CHECK(with < frames * 2 / 3);
 }
 
-TEST_CASE("animator: aiming the rifle is on the view; at the ready it hangs, and comes level for a shot from the hip", "[anim][animator]") {
+TEST_CASE("animator: aiming the rifle is up; at the ready it is lower and points the same way", "[anim][animator]") {
     fx::SetFixture f;
     CharacterAnimationInput in;
     in.dt = 1.0f / 60.0f;
@@ -917,7 +918,7 @@ TEST_CASE("animator: aiming the rifle is on the view; at the ready it hangs, and
         for (int i = 0; i < 40; ++i) a.update(in);
         const glm::vec3 muzzle_aim = a.muzzle_position();
         CHECK(glm::length(a.muzzle_direction() - fwd) < 1e-3f);          // aiming: along the view
-        // let go of the aim: the weapon comes down and its muzzle sinks, without a jump
+        // let go of the aim: the weapon comes down, without a jump, and goes on pointing where the view does
         in.aiming = false;
         float worst_step = 0.0f;
         glm::vec3 prev = a.muzzle_position();
@@ -928,7 +929,7 @@ TEST_CASE("animator: aiming the rifle is on the view; at the ready it hangs, and
         }
         INFO((own ? "own view" : "seen from outside") << ": muzzle " << a.muzzle_position().y - muzzle_aim.y << " m lower, direction y " << a.muzzle_direction().y);
         CHECK(a.muzzle_position().y < muzzle_aim.y - 0.04f);             // lower
-        CHECK(a.muzzle_direction().y < -0.08f);                          // and pointing down
+        CHECK(glm::length(a.muzzle_direction() - fwd) < 1e-3f);          // and still on the view's line
         CHECK(worst_step < 0.07f);                                       // eased, not snapped (the muzzle travels 0.4 m)
         // a shot from the hip: level again at once, and it stays so for a moment
         in.shot_seq = 1;
@@ -936,7 +937,7 @@ TEST_CASE("animator: aiming the rifle is on the view; at the ready it hangs, and
         CHECK(std::abs(a.muzzle_direction().y) < 0.05f);
         CHECK(a.muzzle_position().y < muzzle_aim.y - 0.03f);             // (still from the hip, not from the shoulder)
         for (int i = 0; i < 90; ++i) a.update(in);
-        CHECK(a.muzzle_direction().y < -0.08f);                          // then it sinks again
+        CHECK(glm::length(a.muzzle_direction() - fwd) < 1e-3f);          // and stays so
         // aim again: back where it was
         in.aiming = true;
         for (int i = 0; i < 60; ++i) a.update(in);
@@ -957,8 +958,8 @@ TEST_CASE("animator: a shot from the hip leaves a level weapon that points where
         in.shot_seq = 0;
         CharacterAnimator a(f.set);
         for (int i = 0; i < 120; ++i) a.update(in);
-        // at the ready the weapon hangs; where a shot would leave from is level all the same
-        CHECK(a.muzzle_direction().y < -0.08f);
+        // at the ready the weapon points where the view does, and that is where a shot leaves from
+        CHECK(glm::length(a.muzzle_direction() - glm::vec3(0.0f, 0.0f, -1.0f)) < 1e-3f);
         const glm::mat4 V(glm::vec4(1, 0, 0, 0), glm::vec4(0, 1, 0, 0), glm::vec4(0, 0, 1, 0), glm::vec4(in.eye_local, 1.0f));
         const glm::mat4 fire = V * a.weapon_fire_offset();
         const glm::vec3 fire_dir = glm::normalize(glm::mat3(fire) * glm::vec3(0.0f, 0.0f, -1.0f));
@@ -1058,4 +1059,31 @@ TEST_CASE("animator: not aiming, the head looks about - at somebody, to a side, 
     INFO("moving: nothing " << c4[0] << ", glance " << c4[1] << ", looking " << c4[2] << "; widest " << w4);
     CHECK(c4[0] > c4[1] + c4[3]);      // mostly looking where it goes
     CHECK(c4[1] + c4[2] + c4[3] > 300);
+}
+
+TEST_CASE("animator: aiming brings the weapon to the middle of the player's own view only", "[anim][animator]") {
+    fx::SetFixture f;
+    CharacterAnimationInput in;
+    in.dt = 1.0f / 60.0f;
+    in.ground_height = flat_ground;
+    in.eye_local = glm::vec3(0.0f, 1.6f, -0.11f);
+    // his own view: beside the eye at the ready, under the crosshair when aiming
+    in.first_person = true;
+    in.aiming = false;
+    CharacterAnimator own(f.set);
+    for (int i = 0; i < 60; ++i) own.update(in);
+    CHECK(own.muzzle_position().x > 0.12f);
+    in.aiming = true;
+    for (int i = 0; i < 60; ++i) own.update(in);
+    CHECK(std::abs(own.muzzle_position().x) < 0.03f);                       // on the centre line
+    CHECK(own.muzzle_position().y < in.eye_local.y - 0.05f);                // below the eye: the sights, not the barrel, are at the crosshair
+    CHECK(glm::length(own.muzzle_direction() - glm::vec3(0.0f, 0.0f, -1.0f)) < 1e-3f);
+    // and a shot leaves from there
+    const glm::mat4 V(glm::vec4(1, 0, 0, 0), glm::vec4(0, 1, 0, 0), glm::vec4(0, 0, 1, 0), glm::vec4(in.eye_local, 1.0f));
+    CHECK(glm::length(glm::vec3(V * own.weapon_fire_offset() * glm::vec4(own.weapon.muzzle, 1.0f)) - own.muzzle_position()) < 1e-3f);
+    // everybody else: in the shoulder, to the right of the centre line, as before
+    in.first_person = false;
+    CharacterAnimator seen(f.set);
+    for (int i = 0; i < 60; ++i) seen.update(in);
+    CHECK(seen.muzzle_position().x > 0.08f);
 }

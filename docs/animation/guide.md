@@ -192,12 +192,14 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 - **G8 — reload is cosmetic** (the laser has no magazine); weapon switching has an equip layer
   but no captured draw / holster.
 - **Aim and ready.** Right mouse is the aim (`CharacterAnimationInput::aiming`, replicated as
-  `kFlagAim`): the rifle in the shoulder, the head on the sights; in the player's own view where
-  it always was. Without it the rifle is carried at the ready: lower and canted, the muzzle down
-  (`WeaponDef::ready_*`); a shot from the hip brings it level for `hip_fire_hold` seconds. A stance
-  only: the shot goes where the crosshair is either way, and there is no zoom or change of speed.
-  A shot's tracer starts at the muzzle of the weapon as held (`weapon_fire_offset`: this stance,
-  level, before the recoil), the player's own and other players' alike.
+  `kFlagAim`). Seen from outside: the rifle in the shoulder, the head on the sights. In the
+  player's own view, and only there: the weapon in the middle of the screen, its top under the
+  crosshair (`WeaponDef::ads_shift_fp`; `QLIKE_ADS="x,y,z"` to try other places). Without the aim
+  the rifle is at the ready: lower (at the ribs from outside, lower right and a little canted in
+  the player's view), pointing where the view does all the same (`ready_*`). A stance only: the
+  shot goes where the crosshair is either way, and there is no zoom or change of speed.
+  A shot's tracer starts at the muzzle of the weapon as held (`weapon_fire_offset`), the player's
+  own and other players' alike.
 - **Idle life.** Not aiming, a soldier seen from outside looks about (`idle_look`), the way a head
   does: mostly at rest (never quite still), now and then a look to a side, at the nearest other
   soldier (`look_at`, chosen in `mp_pose_avatars`) or a slow sweep across the view; up or down

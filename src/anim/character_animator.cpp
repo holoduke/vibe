@@ -835,6 +835,9 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
         return glm::translate(glm::mat4(1.0f), p) * glm::mat4_cast(q) * glm::translate(glm::mat4(1.0f), -p);
     };
     const glm::vec3 kUp(0.0f, 1.0f, 0.0f), kBack(0.0f, 0.0f, 1.0f);
+    // (the player's own view, aiming: to the middle of the screen)
+    const float ads = in.first_person && held_ == HeldItem::Rifle ? smooth01(aim_w_) * (1.0f - lowered) * (1.0f - reload_w_) : 0.0f;
+    if (ads > 1e-4f) off = glm::translate(glm::mat4(1.0f), weapon.ads_shift_fp * ads) * off;
     if (ready > 1e-4f) {
         if (in.first_person) {
             off = glm::translate(glm::mat4(1.0f), weapon.ready_shift_fp * ready) * off *
@@ -875,6 +878,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
     // level by the time the shot shows: the shot itself brings it up.)
     {
         glm::mat4 f = offset_for(0.0f);
+        if (ads > 1e-4f) f = glm::translate(glm::mat4(1.0f), weapon.ads_shift_fp * ads) * f;
         if (ready > 1e-4f && in.first_person)
             f = glm::translate(glm::mat4(1.0f), weapon.ready_shift_fp * ready) * f * about(weapon.grip_r, glm::angleAxis(weapon.ready_roll_fp * ready, kBack));
         glm::mat4 Wf = V * f;

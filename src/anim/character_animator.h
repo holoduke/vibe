@@ -61,13 +61,17 @@ struct WeaponDef {
     float     recoil_pitch = 0.035f;     // radians the muzzle climbs
     float     reload_time = 1.5f;        // seconds
     glm::vec3 reload_hand{0.10f, -0.42f, -0.16f};      // where the support hand fetches the magazine
-    // At the ready (not aiming), seen from outside: the butt comes down from the shoulder to the
-    // ribs and the muzzle drops and swings in across the body.
+    // At the ready (not aiming) the weapon points where the view does, like the aimed one: only
+    // lower. Seen from outside the butt comes down from the shoulder to the ribs; in the player's
+    // own view it sits lower and a little canted. (ready_pitch / ready_yaw let the muzzle hang
+    // while nothing is fired; 0 = it never does. It read as a weapon pointing the wrong way.)
     glm::vec3 ready_shift{0.015f, -0.135f, 0.015f};     // aim frame, added to shoulder_offset
-    float     ready_pitch = -0.40f, ready_yaw = 0.30f;  // radians: muzzle down, and to the left
-    // ... and in the player's own view: lower, canted, the muzzle a little down.
+    float     ready_pitch = 0.0f, ready_yaw = 0.0f;     // radians: muzzle down, and to the left
     glm::vec3 ready_shift_fp{0.020f, -0.045f, 0.030f};
-    float     ready_pitch_fp = -0.13f, ready_yaw_fp = 0.10f, ready_roll_fp = -0.14f;
+    float     ready_pitch_fp = 0.0f, ready_yaw_fp = 0.0f, ready_roll_fp = -0.07f;
+    // Aiming, in the player's own view only: the weapon comes to the middle of the screen, its
+    // sights under the crosshair. Nobody else sees this: for them it is in the shoulder.
+    glm::vec3 ads_shift_fp{-0.158f, 0.052f, -0.120f};
     float     hip_fire_hold = 0.7f;     // seconds a weapon fired from the hip stays level before it sinks again
     glm::vec3 tablet_centre{0.155f, -0.165f, -0.40f};   // the tablet in the weapon frame (as drawn)
     glm::vec3 tablet_chest{0.10f, -0.20f, -0.30f};      // ... and from the neck joint when seen from outside (model axes)

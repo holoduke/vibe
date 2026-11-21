@@ -381,6 +381,11 @@ void VulkanEngine::update_player_body(float dt) {
     in.teleported = glm::length(feet - last_feet) > 6.0f + 2.0f * glm::length(player_.velocity) * dt;
     last_feet = feet;
 
+    // (QLIKE_ADS="x,y,z": where the aimed weapon goes in the player's own view, metres from its usual place)
+    if (static const char* e = std::getenv("QLIKE_ADS"); e) {
+        glm::vec3 v = body_animator_->weapon.ads_shift_fp;
+        if (std::sscanf(e, "%f,%f,%f", &v.x, &v.y, &v.z) == 3) body_animator_->weapon.ads_shift_fp = v;
+    }
     pose_character(*body_animator_, in, &body_palette_);
     body_weapon_offset_ = body_animator_->weapon_offset();
     body_fire_offset_ = body_animator_->weapon_fire_offset();
