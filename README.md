@@ -1,8 +1,10 @@
-# Vibe
+# Vibe - an open-world Vulkan game engine with ray tracing, written by AI
 
-A ray-traced open-world engine and its first-person game, written in C++ and Vulkan 1.3, entirely by AI.
+Vibe is an open-source 3D game engine and first-person game in C++20 and Vulkan 1.3, written
+entirely by AI (vibe coding with Claude Code): hardware ray tracing, a ray-marched procedural
+planet, motion-matched characters and LAN multiplayer, with no Unreal, Unity or Godot underneath.
 
-![The castle](docs/screenshots/castle.png)
+![Vibe game engine: a ray-traced castle in an open world (Vulkan, C++)](docs/screenshots/castle.png)
 
 An open world on a full-size planet where you can walk, swim and fly from a castle courtyard
 up to orbit, launch a rocket, and play together over LAN multiplayer, with day and night, four
@@ -10,11 +12,11 @@ seasons and live weather.
 
 | | |
 |---|---|
-| ![Stone bridge](docs/screenshots/bridge.png) | ![Night](docs/screenshots/night.png) |
-| ![Autumn](docs/screenshots/autumn.png) | ![Winter](docs/screenshots/winter.png) |
-| ![Storm](docs/screenshots/storm.png) | ![Spring](docs/screenshots/spring.png) |
-| ![Sea at sunset](docs/screenshots/sea.png) | ![Beyond home](docs/screenshots/wild.png) |
-| ![From 1300 m](docs/screenshots/high.png) | ![From orbit](docs/screenshots/planet.png) |
+| ![Stone bridge with ray-traced shadows](docs/screenshots/bridge.png) | ![Night with moonlight and lamps](docs/screenshots/night.png) |
+| ![Autumn season](docs/screenshots/autumn.png) | ![Winter with snow](docs/screenshots/winter.png) |
+| ![Storm weather with volumetric clouds](docs/screenshots/storm.png) | ![Spring](docs/screenshots/spring.png) |
+| ![Procedural sea at sunset](docs/screenshots/sea.png) | ![Beyond home](docs/screenshots/wild.png) |
+| ![From 1300 m](docs/screenshots/high.png) | ![The procedural planet from orbit](docs/screenshots/planet.png) |
 
 ## The technology
 
