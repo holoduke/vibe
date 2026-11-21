@@ -1773,6 +1773,7 @@ private:
     bool prev_cam_key_ = false;
     // The globe (engine/globe.h; vk_engine/rocket.cpp): the player's chart follows them round the planet.
     bool wv_nf_ok() const;
+    float veg_lod_res_scale() const;
     void record_nf_upload(VkCommandBuffer cmd, uint32_t slot);
     bool clutter_shadow_skip_ = false;                   // this frame the small plants' shadow maps keep last frame's
     bool globe_moved_player_ = false;                    // a re-anchoring changed the player's coordinates this frame

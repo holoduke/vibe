@@ -352,7 +352,7 @@ void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
     const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(80.0f) * 0.5f));
     pc.cam = glm::vec4(fv.eye_pos, ppr);
     const uint32_t regular = veg_cluster_count_ ? veg_cluster_first_ : veg_count_;     // (clustered rocks: cull_clusters)
-    pc.params = glm::vec4(float(regular), object_far_, std::max(0.25f, rt_.veg_lod_bias),
+    pc.params = glm::vec4(float(regular), object_far_, std::max(0.25f, rt_.veg_lod_bias) * veg_lod_res_scale(),
                           (veg_hiz_ready_ && !std::getenv("QLIKE_NO_HIZ")) ? 1.0f : 0.0f);
     {
         // Camera cut (teleport, respawn, big snap turn): last frame's Hi-Z
@@ -380,6 +380,16 @@ void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
     mb.dstStageMask  = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
     mb.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
     vkCmdPipelineBarrier2(cmd, &dep);
+}
+
+// The detail level of a tree is chosen by its size in pixels of the final picture. The picture
+// is drawn smaller and upscaled (render scale): triangles finer than the pixels they are
+// rasterised to cost their full price and show nothing. So the size is counted mostly in the
+// pixels actually drawn - three quarters of the way from output to render resolution (the
+// upscaler does win back some detail finer than a drawn pixel, from the frames before).
+float VulkanEngine::veg_lod_res_scale() const {
+    const float rs = glm::clamp(float(render_extent_.height) / float(std::max(1u, swapchain_extent_.height)), 0.25f, 1.0f);
+    return glm::mix(1.0f, rs, 0.75f);
 }
 
 void VulkanEngine::draw_vegetation(VkCommandBuffer cmd, bool depth_only) {
@@ -567,7 +577,7 @@ void VulkanEngine::collect_veg_rt_instances(glm::vec3 eye, uint32_t cap,
     // with a finer shape in the TLAS than on screen, the extra leaf clumps
     // of the fine model shadowed the coarse crown in black patches.
     const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(80.0f) * 0.5f)) *
-                      std::max(0.25f, rt_.veg_lod_bias);
+                      std::max(0.25f, rt_.veg_lod_bias) * veg_lod_res_scale();
     for (const auto& c : cand) {
         const auto& v = veg_inst_cpu_[c.second];
         const size_t a = size_t(v.rot_arch_phase.y + 0.5f);
