@@ -37,6 +37,8 @@ inline SkeletonDef make_skeleton() {
         const int fa = add((S + "ForeArm").c_str(), ar, { x * 0.35f, 1.19f, -0.02f }, { x * 0.5f, -0.5f, -0.7f });
         const int hd = add((S + "Hand").c_str(), fa, { x * 0.48f, 1.06f, -0.20f }, { x * 0.3f, -0.4f, -0.8f });
         add((S + "HandMiddle1").c_str(), hd, { x * 0.52f, 1.01f, -0.28f }, { x * 0.3f, -0.4f, -0.8f });
+        add((S + "HandIndex1").c_str(), hd, { x * 0.50f, 1.02f, -0.29f }, { x * 0.3f, -0.4f, -0.8f });
+        add((S + "HandPinky1").c_str(), hd, { x * 0.54f, 0.99f, -0.25f }, { x * 0.3f, -0.4f, -0.8f });
     }
     const int neck = add("Neck", sp2, { 0, 1.48f, -0.01f }, up);
     add("Head", neck, { 0, 1.57f, -0.04f }, up);
@@ -195,7 +197,9 @@ inline RawClip make_move_clip(const SkeletonDef& s, const char* name, int frames
     for (int f = 0; f < frames; ++f) {
         const float t = float(f) / rate;
         c.at(f, 0).t = glm::vec3(vel.x, 0.0f, vel.y) * t;
-        const float ph = 6.2831853f * 1.5f * t, amp = (speed > 0.0f && !hop) ? 0.45f : 0.0f;     // (the hop slides on still legs: its feet are down outside the flight)
+        // (the swing is sized so the standing foot is still on the ground while the body passes over it;
+        // the hop slides on still legs: its feet are down outside the flight)
+        const float ph = 6.2831853f * 1.5f * t, amp = (speed > 0.0f && !hop) ? std::min(0.196f * speed, 0.5f) : 0.0f;
         c.at(f, lu).r = glm::angleAxis(amp * std::sin(ph), axis);
         c.at(f, ru).r = glm::angleAxis(-amp * std::sin(ph), axis);
         if (tags & kTagCrouch) c.at(f, hips).t.y -= 0.25f;
@@ -231,6 +235,33 @@ struct MotionFixture {
         return -1;
     }
     const char* clip_of(int frame) const { return frame < 0 ? "none" : clips[size_t(db.range_of(uint32_t(frame)).clip)].info.name.c_str(); }
+};
+
+}  // namespace fx
+
+#include "anim/character_animator.h"
+
+namespace fx {
+
+// A complete animation set (runtime clips + motion database) from the synthetic clips.
+struct SetFixture {
+    MotionFixture m;
+    AnimAsset     asset;
+    AnimationSet  set;
+    SetFixture() {
+        std::string why;
+        asset.skeleton = m.skel;
+        asset.runtime_format = runtime_format_name();
+        if (!build_runtime_skeleton(m.skel, asset.skeleton_blob, &why)) throw std::runtime_error(why);
+        for (const RawClip& c : m.clips) {
+            std::vector<uint8_t> blob;
+            if (!build_runtime_clip(m.skel, c, CompressParams{}, blob, &why)) throw std::runtime_error(why);
+            asset.clips.push_back(c.info);
+            asset.clip_blobs.push_back(std::move(blob));
+        }
+        asset.motion_blob = m.blob;
+        if (!set.init(asset, &why)) throw std::runtime_error(why);
+    }
 };
 
 }  // namespace fx

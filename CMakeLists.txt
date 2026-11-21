@@ -313,6 +313,8 @@ add_library(qlike_anim STATIC
     src/anim/trajectory.cpp
     src/anim/motion_matcher.cpp
     src/anim/inertializer.cpp
+    src/anim/airborne.cpp
+    src/anim/character_animator.cpp
 )
 target_link_libraries(qlike_anim PUBLIC qlike_core PRIVATE ozz_animation ozz_base)
 

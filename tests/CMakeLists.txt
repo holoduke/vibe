@@ -18,6 +18,7 @@ add_executable(qlike_anim_tests
     anim/test_runtime.cpp
     anim/test_import.cpp
     anim/test_motion.cpp
+    anim/test_animator.cpp
 )
 target_link_libraries(qlike_anim_tests PRIVATE
     qlike_anim_offline
