@@ -185,5 +185,8 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   (`captures/mp_moving.png`).
 - **G8 — reload is cosmetic** (the laser has no magazine); weapon switching has an equip layer
   but no captured draw / holster.
+- **Third person hold.** Seen from outside, the rifle is moved so its butt sits in the right shoulder
+  (`WeaponDef::butt`, `shoulder_offset`; `AnimTuning::shoulder_weapon`); the player himself sees it
+  where his view has it. The tablet and the torch are still placed from the view for everybody.
 - **G9 — one weapon definition** (`default_rifle()`); `WeaponDef` holds grips, muzzle, recoil
   and reload timing per weapon, but the game has one gun model. No ADS in the game, so none here.

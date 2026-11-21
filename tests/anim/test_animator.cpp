@@ -811,3 +811,34 @@ TEST_CASE("real asset: steady crawl, walk and sprint in every direction", "[anim
         CHECK(contact_frames[1] > 10);
     }
 }
+
+TEST_CASE("animator: seen from outside the rifle's butt is in the shoulder; the player's own view is unchanged", "[anim][animator]") {
+    fx::SetFixture f;
+    const Rig& rig = f.set.runtime->rig();
+    CharacterAnimationInput in;
+    in.dt = 1.0f / 60.0f;
+    in.ground_height = flat_ground;
+    in.eye_local = glm::vec3(0.0f, 1.6f, -0.11f);
+    // third person, level aim, no recoil: the weapon frame has the view's axes, so the butt is
+    // the muzzle minus their difference
+    CharacterAnimator outside(f.set);
+    for (int i = 0; i < 40; ++i) outside.update(in);
+    const glm::vec3 butt = outside.muzzle_position() - (outside.weapon.muzzle - outside.weapon.butt);
+    const glm::vec3 shoulder(outside.model()[size_t(rig[Role::RightArm])][3]);
+    INFO("butt " << butt.x << " " << butt.y << " " << butt.z << ", shoulder " << shoulder.x << " " << shoulder.y << " " << shoulder.z);
+    // (placed against the shoulder as the body has it before the arms are fitted; the shoulder
+    // girdle then gives a few centimetres toward the grips)
+    CHECK(glm::length(butt - (shoulder + outside.weapon.shoulder_offset)) < 0.05f);
+    // first person: where the view has it, whatever the body does
+    CharacterAnimator own(f.set);
+    in.first_person = true;
+    for (int i = 0; i < 40; ++i) own.update(in);
+    CHECK(glm::length(own.muzzle_position() - (in.eye_local + own.weapon.muzzle)) < 1e-4f);
+    CHECK(glm::length(glm::vec3(own.weapon_offset()[3])) < 1e-5f);
+    // and with the switch off, third person is the same as that
+    CharacterAnimator plain(f.set);
+    plain.tuning.shoulder_weapon = false;
+    in.first_person = false;
+    for (int i = 0; i < 40; ++i) plain.update(in);
+    CHECK(glm::length(plain.muzzle_position() - (in.eye_local + plain.weapon.muzzle)) < 1e-4f);
+}

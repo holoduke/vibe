@@ -654,13 +654,15 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
     const float kick = held_ == HeldItem::Rifle ? recoil_curve(recoil_t_, weapon.recoil_duration) : 0.0f;
     const float lowered = 1.0f - smooth01(equip_t_);
     const float tilt = held_ == HeldItem::Rifle ? reload_w_ * smooth01(std::min(reload_u_ / 0.12f, (1.0f - reload_u_) / 0.12f)) : 0.0f;
-    glm::mat4 off(1.0f);
-    off[3] = glm::vec4(0.0f, -0.22f * lowered - 0.03f * tilt, kick * weapon.recoil_stroke, 1.0f);
-    const glm::quat rq = rot_x(kick * weapon.recoil_pitch - 0.5f * lowered + 0.22f * tilt) * glm::angleAxis(0.45f * tilt, glm::vec3(0.0f, 0.0f, 1.0f));
     // (the turn is about the right hand's grip, so the hand stays on it)
     const glm::vec3 pivot = weapon.grip_r;
-    off = off * glm::translate(glm::mat4(1.0f), pivot) * glm::mat4_cast(rq) * glm::translate(glm::mat4(1.0f), -pivot);
-    weapon_offset_ = off;
+    auto offset_for = [&](float k) {
+        glm::mat4 o(1.0f);
+        o[3] = glm::vec4(0.0f, -0.22f * lowered - 0.03f * tilt, k * weapon.recoil_stroke, 1.0f);
+        const glm::quat rq = rot_x(k * weapon.recoil_pitch - 0.5f * lowered + 0.22f * tilt) * glm::angleAxis(0.45f * tilt, glm::vec3(0.0f, 0.0f, 1.0f));
+        return o * glm::translate(glm::mat4(1.0f), pivot) * glm::mat4_cast(rq) * glm::translate(glm::mat4(1.0f), -pivot);
+    };
+    glm::mat4 off = offset_for(kick);
     dbg_.recoil = kick;
     dbg_.reload = reload_t_ >= 0.0f ? reload_u_ : 0.0f;
     dbg_.equip = lowered;
@@ -668,7 +670,20 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
     const float p = in.aim_pitch;
     const glm::vec3 cam_f(0.0f, std::sin(p), -std::cos(p)), cam_u(0.0f, std::cos(p), std::sin(p));
     const glm::mat4 V(glm::vec4(1.0f, 0.0f, 0.0f, 0.0f), glm::vec4(cam_u, 0.0f), glm::vec4(-cam_f, 0.0f), glm::vec4(in.eye_local, 1.0f));
-    const glm::mat4 W = V * off;
+    glm::mat4 W = V * off;
+    // Seen from outside, a rifle is held into the shoulder. The frame above is the one the
+    // player sees his own weapon in: beside and below the eye, which on a body is a rifle
+    // floating in front of the face at arm's length. For everybody else the weapon keeps its
+    // direction (the aim) and is moved so that its butt sits in the right shoulder.
+    if (!in.first_person && held_ == HeldItem::Rifle && tuning.shoulder_weapon) {
+        const glm::vec3 shoulder(model_[size_t(rig[Role::RightArm])][3]);
+        const glm::vec3 anchor = shoulder + glm::mat3(V) * weapon.shoulder_offset;
+        // (where the butt is without the recoil: the kick still drives the weapon back from there)
+        const glm::vec3 butt(V * offset_for(0.0f) * glm::vec4(weapon.butt, 1.0f));
+        W[3] += glm::vec4(anchor - butt, 0.0f);
+        off = glm::inverse(V) * W;
+    }
+    weapon_offset_ = off;
     const glm::mat3 Wr(W), Vr(V);
     auto wpt = [&](glm::vec3 v) { return glm::vec3(W * glm::vec4(v, 1.0f)); };
     muzzle_pos_ = wpt(weapon.muzzle);

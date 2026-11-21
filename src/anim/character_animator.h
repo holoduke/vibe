@@ -54,6 +54,8 @@ struct WeaponDef {
     glm::vec3 r_fingers{-0.10f, 0.25f, -1.0f}, r_palm{-1.0f, 0.0f, 0.10f};          // direction of the fingers, palm normal
     glm::vec3 l_fingers{0.95f, 0.20f, -0.35f}, l_palm{0.05f, 1.0f, 0.15f};
     glm::vec3 muzzle{0.18f, -0.18f, -0.72f};
+    glm::vec3 butt{0.172f, -0.175f, 0.03f};                // the end of the stock (weapon frame)
+    glm::vec3 shoulder_offset{-0.035f, -0.015f, -0.07f};   // where the butt sits from the right shoulder joint (aim frame: +x right, -z forward)
     float     recoil_stroke = 0.05f;     // metres the weapon comes back
     float     recoil_duration = 0.14f;
     float     recoil_pitch = 0.035f;     // radians the muzzle climbs
@@ -90,6 +92,7 @@ struct AnimTuning {
     float max_land_dip = 0.28f;
     float airborne_pose_strength = 1.0f; // 0 = keep standing pose in the air (comparison)
     float air_sway = 1.0f;               // movement of the limbs through a long fall
+    bool  shoulder_weapon = true;        // seen from outside, the rifle's butt is in the shoulder (off: where the player's own view has it)
     bool  stride_warp = true, orient_warp = true, foot_ik = true, foot_lock = true, hand_ik = true;
 };
 
