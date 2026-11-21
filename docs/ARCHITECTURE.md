@@ -256,3 +256,18 @@ physics sleeps). Up to 6 bodies, 25 s each. The parts of one body do not collide
 Each ragdoll has a floor slab of its own at the height the game's terrain function gives, so it
 also works beyond the home tile. Test: `QLIKE_TEST_RAGDOLL=<frame>` (+ `_Y` hit height, `_POWER`)
 with `QLIKE_BODY_FRONT`; `QLIKE_RAGDOLL_DEBUG=1` logs positions.
+
+## First start: shaders compile while you play
+
+The terrain shader is ~10 MB of SPIR-V; a driver needs a minute or more to compile it the first
+time (afterwards it comes from `vibe_pipeline.cache` / the driver's cache). The game does not wait:
+
+- `terrain_raymarch_lite.frag.spv` (`-DQLIKE_LITE`, built from the same source): the same march and
+  normal, so the ground is where it belongs, with the simplest shading (`lite_out`, the two
+  `#ifdef QLIKE_LITE` blocks in `main`). Compiles in ~5 s. Drawn until the full one is ready.
+- The full pipeline and its two variants (summer, low-res) build on their own threads from
+  `init_terrain_raymarch_pipeline`; `finish_terrain_raymarch_pipeline(0)` polls them every frame and
+  the draw switches the moment the main one arrives. A HUD line says so meanwhile.
+- The water-plane shader (mesh terrain only) also builds on a thread and is never waited for.
+- `QLIKE_LITE_TERRAIN=1` shows the lite build. When adding heavy code to the terrain shader, keep it
+  after the lite blocks' `return` so the lite build stays small.

@@ -56,7 +56,13 @@ bool rm_far_chart() { return scene.globe_info.x > 0.5; }
 //   1 close-up ground textures   2 stones in the normal      4 the ground's own sun shadow
 //   8 grass blade shadows       16 small plants' shadow map  32 ray-traced object shadows
 // 512 screen-space normal      1024 close-range ground relief   32768 stones in the march
+#ifdef QLIKE_LITE
+// The "first start" build of this shader (see QLIKE_LITE in terrain_raymarch.frag): the sections
+// in QLIKE_LITE_MASK are compiled out for good.
+#define RMDBG(bit) (((QLIKE_LITE_MASK) & (bit)) != 0)
+#else
 #define RMDBG(bit) ((int(scene.globe_info.w) & (bit)) != 0)
+#endif
 // Distance from home for the rules that tell home's lakes from the open sea (a far chart is far).
 float rm_home_dist(vec2 wp) { return rm_far_chart() ? 1.0e9 : length(wp); }
 // A chart position's ground point, as an offset (m) from the chart origin's ground point, in

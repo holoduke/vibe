@@ -552,7 +552,7 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     // the main resolution. Compose pass at the start of the world color
     // pass below upscales it into scene_color/depth with depth-aware
     // composite so cube/castle/dyn-props (drawn afterwards) layer on top.
-    if (tr_use_lowres() && terrain_raymarch_pipeline_) {
+    if (tr_use_lowres() && (terrain_raymarch_pipeline_ || terrain_raymarch_lite_lr_pipeline_)) {
         vkinit::transition_image(frame.command_buffer, tr_lr_color_image_,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);

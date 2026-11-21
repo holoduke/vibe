@@ -304,7 +304,9 @@ void VulkanEngine::init() {
     init_vegetation_pipelines();
     init_clutter_shadow();
     init_imgui();
-    finish_terrain_raymarch_pipeline(1);     // the terrain shaders, compiled in the background since init_terrain_raymarch_pipeline
+    // (The terrain shaders go on compiling in the background; the game starts on the lite build:
+    // finish_terrain_raymarch_pipeline(0) in the frame takes them over when they are ready.)
+    if (!terrain_raymarch_lite_pipeline_) finish_terrain_raymarch_pipeline(1);
     update_scene_ubo();
     present_loader_frame("Ready",                 1.00f);
     // Loader frames advanced frame_number_ — reset so --frames N and
@@ -1391,6 +1393,16 @@ void VulkanEngine::run(const RunOptions& opts) {
             ImGui::NewFrame();
             build_hud_ui();
             mp_hud();
+            if (terrain_shaders_compiling()) {
+                // First start: say why the ground looks plain for a minute.
+                ImDrawList* dl = ImGui::GetForegroundDrawList();
+                const ImVec2 disp = ImGui::GetIO().DisplaySize;
+                const char* msg = "Preparing the detailed terrain for your graphics card - first start only";
+                const ImVec2 ts = ImGui::CalcTextSize(msg);
+                const ImVec2 p0((disp.x - ts.x) * 0.5f, disp.y * 0.06f);
+                dl->AddRectFilled(ImVec2(p0.x - 14.0f, p0.y - 8.0f), ImVec2(p0.x + ts.x + 14.0f, p0.y + ts.y + 8.0f), IM_COL32(0, 0, 0, 150), 6.0f);
+                dl->AddText(p0, IM_COL32(255, 255, 255, 230), msg);
+            }
             build_menu_ui();
             ImGui::Render();
         }

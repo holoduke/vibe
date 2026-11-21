@@ -272,6 +272,18 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
     // takes the per-pixel rate from the attachment bound at draw begin.
     cfg.enable_vrs = vrs_supported_;
 
+    // The small first-start build: ready at once, drawn until the full shader is.
+    terrain_raymarch_lite_module_ = vkpipe::load_shader_module(device_, sd + "/terrain_raymarch_lite.frag.spv");
+    if (terrain_raymarch_lite_module_) {
+        vkpipe::GraphicsPipelineConfig li = cfg;
+        li.frag = terrain_raymarch_lite_module_;
+        terrain_raymarch_lite_pipeline_ = vkpipe::build_graphics_pipeline(device_, li);
+        if (rt_.terrain_raymarch_scale < 0.999f) {       // (the low-resolution terrain pass, when it is in use: a second compile)
+            li.color_formats = { scene_color_format_, motion_vec_format_ };
+            li.enable_vrs = false;
+            terrain_raymarch_lite_lr_pipeline_ = vkpipe::build_graphics_pipeline(device_, li);
+        }
+    }
     // Three builds, each on a thread of its own (see the header): collected by
     // finish_terrain_raymarch_pipeline().
     const VkDevice dev = device_;
@@ -297,7 +309,11 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
 }
 
 void VulkanEngine::finish_terrain_raymarch_pipeline(int mode) {
+    if (terrain_water_build_.valid() &&
+        (mode == 2 || terrain_water_build_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready))
+        terrain_water_pipeline_ = terrain_water_build_.get();
     if (!terrain_rm_build_[0].valid() && !terrain_rm_build_[1].valid() && !terrain_rm_build_[2].valid()) return;
+    const bool was = terrain_rm_build_[0].valid();
     VkPipeline* dst[3] = { &terrain_raymarch_pipeline_, &terrain_raymarch_summer_pipeline_, &terrain_raymarch_lr_pipeline_ };
     const auto t0 = std::chrono::steady_clock::now();
     for (;;) {
@@ -307,7 +323,10 @@ void VulkanEngine::finish_terrain_raymarch_pipeline(int mode) {
             if (terrain_rm_build_[i].wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) *dst[i] = terrain_rm_build_[i].get();
             else if (mode == 2 || i == 0) ++left;
         }
-        if (left == 0 || mode == 0) break;
+        if (left == 0 || mode == 0) {
+            if (was && !terrain_rm_build_[0].valid()) log::info("terrain raymarch: the full shader is compiled - in use from this frame");
+            break;
+        }
         // Still compiling: this only happens on a first start (or after a driver update).
         const float s = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
         char label[160];
@@ -323,6 +342,11 @@ void VulkanEngine::finish_terrain_raymarch_pipeline(int mode) {
 
 void VulkanEngine::destroy_terrain_raymarch_pipeline() {
     finish_terrain_raymarch_pipeline();          // (a build still running must not outlive its shader modules)
+    if (terrain_raymarch_lite_pipeline_)    vkDestroyPipeline(device_, terrain_raymarch_lite_pipeline_, nullptr);
+    if (terrain_raymarch_lite_lr_pipeline_) vkDestroyPipeline(device_, terrain_raymarch_lite_lr_pipeline_, nullptr);
+    if (terrain_raymarch_lite_module_)      vkDestroyShaderModule(device_, terrain_raymarch_lite_module_, nullptr);
+    terrain_raymarch_lite_pipeline_ = terrain_raymarch_lite_lr_pipeline_ = VK_NULL_HANDLE;
+    terrain_raymarch_lite_module_ = VK_NULL_HANDLE;
     if (terrain_raymarch_lr_pipeline_) {
         vkDestroyPipeline(device_, terrain_raymarch_lr_pipeline_, nullptr);
         terrain_raymarch_lr_pipeline_ = VK_NULL_HANDLE;
@@ -451,12 +475,14 @@ void VulkanEngine::init_terrain_water_pipeline() {
     cfg.alpha_blend_color0_only = true;
     cfg.enable_vrs = vrs_supported_;
 
-    terrain_water_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
-    log::infof("rasterised water-plane pipeline built (vrs=%s)",
-               vrs_supported_ ? "on" : "off");
+    // (Only drawn with the mesh terrain; another large shader. Built on a thread, never waited
+    // for: the draw skips it until it is there.)
+    const VkDevice dev = device_;
+    terrain_water_build_ = std::async(std::launch::async, [dev, cfg]() { return vkpipe::build_graphics_pipeline(dev, cfg); });
 }
 
 void VulkanEngine::destroy_terrain_water_pipeline() {
+    if (terrain_water_build_.valid()) terrain_water_pipeline_ = terrain_water_build_.get();
     if (terrain_water_pipeline_) {
         vkDestroyPipeline(device_, terrain_water_pipeline_, nullptr);
         terrain_water_pipeline_ = VK_NULL_HANDLE;

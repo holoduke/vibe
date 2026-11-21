@@ -507,6 +507,12 @@ private:
     VkPipeline      terrain_raymarch_pipeline_   = VK_NULL_HANDLE;
     VkPipeline      terrain_raymarch_summer_pipeline_ = VK_NULL_HANDLE;   // the same without winter code: bound while there is no snow
     VkShaderModule  terrain_raymarch_summer_module_ = VK_NULL_HANDLE;
+    // The small "first start" build of the terrain shader (QLIKE_LITE): drawn until the driver
+    // has compiled the full one.
+    VkShaderModule  terrain_raymarch_lite_module_ = VK_NULL_HANDLE;
+    VkPipeline      terrain_raymarch_lite_pipeline_ = VK_NULL_HANDLE, terrain_raymarch_lite_lr_pipeline_ = VK_NULL_HANDLE;
+    std::future<VkPipeline> terrain_water_build_;      // the water-plane shader (mesh terrain only): never waited for
+    bool terrain_shaders_compiling() const { return terrain_rm_build_[0].valid(); }
     // Low-res variant: colour + motion only (the low-res pass has 2
     // attachments), no VRS (the VRS image is laid out for full res).
     VkPipeline      terrain_raymarch_lr_pipeline_ = VK_NULL_HANDLE;
@@ -518,8 +524,8 @@ private:
     // are compiled side by side on their own threads while the rest of the start-up goes on;
     // finish_terrain_raymarch_pipeline() collects them, keeping the loading screen alive.
     std::future<VkPipeline> terrain_rm_build_[3];
-    // (mode 0: take what is ready, never wait - every frame; 1: wait for the main one, which can
-    // stand in for the other two; 2: wait for all.)
+    // (mode 0: take what is ready, never wait - every frame, the game runs on the lite build
+    // meanwhile; 1: wait for the main one; 2: wait for all - before they are destroyed.)
     void finish_terrain_raymarch_pipeline(int mode = 2);
     void destroy_terrain_raymarch_pipeline();
 

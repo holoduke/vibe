@@ -133,7 +133,8 @@ void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                        terrain_raymarch_lr_pipeline_ ? terrain_raymarch_lr_pipeline_
-                                                     : terrain_raymarch_pipeline_);
+                       : terrain_raymarch_pipeline_  ? terrain_raymarch_pipeline_
+                                                     : terrain_raymarch_lite_lr_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                              pipeline_layout_, 0, 1, &scene_desc_set_,
                              0, nullptr);
@@ -565,7 +566,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // hardware depth-tested against the mesh depth written just above, so
     // hills occlude the water exactly like in the FBM path.
     if (rt_.terrain_raymarch_enabled
-        && terrain_raymarch_pipeline_ != VK_NULL_HANDLE
+        && (terrain_raymarch_pipeline_ != VK_NULL_HANDLE || terrain_raymarch_lite_pipeline_ != VK_NULL_HANDLE)
         && !tr_use_lowres()) {
         // Procedural FBM ray-marched terrain — fullscreen draw, frag
         // writes hit-point depth so rasterised cubes / castle / dyn-
@@ -574,7 +575,11 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         // sky pass to fill those pixels.
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           (env_snow_ * 255.0f < 1.0f && terrain_raymarch_summer_pipeline_ && !std::getenv("QLIKE_NO_SUMMER_SHADER"))
-                              ? terrain_raymarch_summer_pipeline_ : terrain_raymarch_pipeline_);
+                              ? terrain_raymarch_summer_pipeline_
+                              : terrain_raymarch_pipeline_ ? terrain_raymarch_pipeline_ : terrain_raymarch_lite_pipeline_);
+        // (QLIKE_LITE_TERRAIN=1: look at the first-start build)
+        static const bool kForceLite = std::getenv("QLIKE_LITE_TERRAIN") != nullptr;
+        if (kForceLite && terrain_raymarch_lite_pipeline_) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrain_raymarch_lite_pipeline_);
         PushConstants pc{};
         pc.mvp = vp;
         // Reuse cached inverse from FrameView (was glm::inverse(vp) each

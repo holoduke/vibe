@@ -637,6 +637,19 @@ add_custom_command(
 list(APPEND COMPILED_SHADERS ${TR_SUMMER_SPV})
 
 # Water surface pass: same source as the ray-marched terrain, water branch.
+# The "first start" build of the terrain shader: small, compiled by the driver in a moment; the
+# game runs on it while the full shader compiles in the background (see QLIKE_LITE in the shader).
+set(TR_LITE_SPV "${SHADER_OUTPUT_DIR}/terrain_raymarch_lite.frag.spv")
+add_custom_command(
+    OUTPUT ${TR_LITE_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DQLIKE_LITE=1 -DQLIKE_LITE_MASK=65023 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_LITE_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader terrain_raymarch_lite.frag (first-start variant)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${TR_LITE_SPV})
+
 set(WATER_SPV "${SHADER_OUTPUT_DIR}/water.frag.spv")
 add_custom_command(
     OUTPUT ${WATER_SPV}

@@ -613,6 +613,26 @@ vec3 sample_sky(vec3 dir) {
 #include "terrain_rm_heightfield.glsl"   // Terrain height (FBM + ground relief) and the ray march against it
 #include "terrain_rm_shading_helpers.glsl"   // Normal, terrain / grass shadows, road weights, ground material, reflection marches
 #include "terrain_rm_water.glsl"   // Water: flow, normals, foam pattern, ripples
+#ifdef QLIKE_LITE
+// The "first start" build of this shader (terrain_raymarch_lite.frag.spv). The full shader is so
+// large that a graphics driver needs a minute or more to compile it the first time; the game
+// does not wait for that. It starts on this build - the same ground, found by the same march,
+// so everything standing on it is where it belongs - shaded in the simplest way (slope and
+// height give the colour, sun and sky the light, flat water), and switches to the full shader
+// the moment the driver has it ready (finish_terrain_raymarch_pipeline).
+void lite_out(vec3 p, vec3 col) {
+    vec4 clip = pc.mvp * vec4(p, 1.0);
+    gl_FragDepth = min(clip.z / max(clip.w, 1e-4), 0.999989);
+    col = mix(col, scene.distance_fog_color.rgb, distanceFogAmount(p, scene.camera_pos.xyz));
+    outColor = vec4(col, 1.0);
+    outGBuffer0 = vec4(clamp(col, vec3(0.0), vec3(1.0)), 8.0 / 255.0);
+    outGBuffer1 = vec4(0.5, 0.5, 0.7, 0.0);
+    vec4 prev_clip = pc.prev_mvp * vec4(p, 1.0);
+    outMotion = (clip.w > 0.0 && prev_clip.w > 0.0)
+        ? (clip.xy / clip.w - prev_clip.xy / prev_clip.w) * 0.5 - scene.restir_params.zw : vec2(0.0);
+}
+#endif
+
 void main() {
     g_far_chart = scene.globe_info.x > 0.5;
     nf_setup();
@@ -777,6 +797,16 @@ void main() {
 
     // === Water surface shading ===========================================
     if (t_water > 0.0) {
+#ifdef QLIKE_LITE
+        {
+            vec3 wp = ro + rd * t_water;
+            float fres = 0.03 + 0.97 * pow(1.0 - clamp(-rd.y, 0.0, 1.0), 5.0);
+            vec3 sky_l = scene.sky_color.rgb * 0.55 + scene.sun_color.rgb * 0.10;
+            vec3 deep_l = scene.water_color.rgb * (scene.sun_color.rgb * scene.sun_color.a * max(scene.sun_direction.y, 0.0) * 0.6 + scene.sky_color.rgb * 0.5);
+            lite_out(wp, mix(deep_l, sky_l, fres) * mix(0.96, 1.04, noise2(wp.xz * 0.7 + scene.water_params.w * 0.4)));
+            return;
+        }
+#endif
 #ifndef QLIKE_WATER
         vec3 wpos = ro + rd * t_water;
 #else /* QLIKE_WATER */
@@ -1805,6 +1835,26 @@ void main() {
             discard;
         }
     }
+#ifdef QLIKE_LITE
+    {
+        vec3 n_l = calcNormal(pos, t);
+        float up_l = n_l.y, wl = scene.water_params.y;
+        float v_l = noise2(pos.xz * 0.06) * 0.6 + noise2(pos.xz * 0.9) * 0.4;
+        vec3 grass_l = mix(vec3(0.060, 0.105, 0.030), vec3(0.105, 0.135, 0.045), v_l);
+        vec3 rock_l  = vec3(0.165, 0.155, 0.140) * mix(0.8, 1.15, v_l);
+        vec3 alb = mix(rock_l, grass_l, smoothstep(0.52, 0.74, up_l));
+        alb = mix(alb, vec3(0.27, 0.235, 0.165), (1.0 - smoothstep(wl + 0.3, wl + 1.6, pos.y)) * float(scene.water_params.x > 0.5));
+        alb = mix(alb, vec3(0.80, 0.83, 0.88), smoothstep(0.55, 0.75, up_l) * max(g_snow, smoothstep(250.0, 330.0, pos.y + 40.0 * v_l)));
+        vec2 ruv_l, rdir_l;
+        vec2 road_l = g_far_chart ? vec2(0.0) : roadWeights(pos.xz, ruv_l, rdir_l);
+        alb = mix(alb, vec3(0.115, 0.095, 0.070), road_l.y);
+        alb = mix(alb, vec3(0.20, 0.20, 0.19) * mix(0.85, 1.1, noise2(pos.xz * 5.0)), road_l.x);
+        float dif_l = max(dot(n_l, scene.sun_direction.xyz), 0.0) * sun_horizon_lit(u_sun_horizon, pos);
+        vec3 lin_l = dif_l * scene.sun_color.rgb * scene.sun_color.a + (0.45 + 0.35 * up_l) * scene.sky_color.rgb * 0.75;
+        lite_out(pos, alb * lin_l);
+        return;
+    }
+#endif
     // Castle road: cobble normal map in road space, before any lighting.
     vec2 rm_road_uv, rm_road_dir;
     vec2 rm_road = roadWeights(pos.xz, rm_road_uv, rm_road_dir);
