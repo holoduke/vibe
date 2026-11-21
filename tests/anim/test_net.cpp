@@ -42,7 +42,7 @@ struct Sender {
         s.px = p.position.x; s.py = p.position.y; s.pz = p.position.z;
         s.vx = p.velocity.x; s.vy = p.velocity.y; s.vz = p.velocity.z;
         s.yaw = p.yaw; s.pitch = p.pitch; s.crouch = p.crouch_factor;
-        s.flags = uint8_t((p.on_ground ? kFlagGround : 0) | (torch ? kFlagTorch : 0) | (reloading ? kFlagReload : 0) | (teleport ? kFlagTeleport : 0));
+        s.flags = uint8_t((p.on_ground ? kFlagGround : 0) | (torch ? kFlagTorch : 0) | (reloading ? kFlagReload : 0) | (teleport ? kFlagTeleport : 0) | kFlagAim);     // (aiming: the weapon is on the view)
         s.weapon = weapon;
         s.move = move_bits(pin);
         s.shot_seq = shots;
@@ -452,6 +452,11 @@ TEST_CASE("net: respawn, late join, weapon switch and reload as seen by an obser
     CHECK(in.held == HeldItem::Rifle);
     CHECK(in.reloading);
     CHECK(in.grounded);
+    CHECK_FALSE(in.aiming);                        // at the ready unless they hold the aim
+    s.flags = kFlagAim | kFlagGround;
+    remote_animation_input(s, in);
+    CHECK(in.aiming);
+    CHECK_FALSE(in.reloading);
     CHECK_FALSE(in.first_person);
     // their camera looks where they look
     s.yaw = 0.7f; s.pitch = -0.4f;

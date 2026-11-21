@@ -101,6 +101,7 @@ prediction follows.
 | `QLIKE_BODY_FRONT=<m>`, `QLIKE_BODY_TURN=<deg>` | Stand the local body in front of the camera, turned |
 | `QLIKE_BODY_WALK=<m/s>`, `QLIKE_BODY_STRAFE=<m/s>`, `QLIKE_BODY_AIR=<m/s>` | Drive it |
 | `QLIKE_BODY_FIRE=<shots/s>`, `QLIKE_BODY_RELOAD=1` | Fire / reload in a loop |
+| `QLIKE_TEST_AIM=1` | Hold the aim (right mouse) |
 | `QLIKE_BODY_REST=1` | Rest pose |
 | `QLIKE_BODY_CROWD=<n>` | Draw the local body n more times (GPU cost of n skinned characters) |
 | `QLIKE_TEST_MOVE=1` | The player moves by itself on a 9 s loop of real key input: forward, jump, sprint, strafe, back, a turning arc |
@@ -190,6 +191,11 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   (`captures/mp_moving.png`).
 - **G8 — reload is cosmetic** (the laser has no magazine); weapon switching has an equip layer
   but no captured draw / holster.
+- **Aim and ready.** Right mouse is the aim (`CharacterAnimationInput::aiming`, replicated as
+  `kFlagAim`): the rifle in the shoulder, the head on the sights; in the player's own view where
+  it always was. Without it the rifle is carried at the ready: lower and canted, the muzzle down
+  (`WeaponDef::ready_*`); a shot from the hip brings it level for `hip_fire_hold` seconds. A stance
+  only: the shot goes where the crosshair is either way, and there is no zoom or change of speed.
 - **Third person hold.** Seen from outside, the rifle is moved so its butt sits in the right shoulder
   (`WeaponDef::butt`, `shoulder_offset`; `AnimTuning::shoulder_weapon`) and the head leans to the
   stock (`head_to_sights`); the tablet is held in front of the chest (`tablet_chest`). The player

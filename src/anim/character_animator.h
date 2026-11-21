@@ -61,6 +61,14 @@ struct WeaponDef {
     float     recoil_pitch = 0.035f;     // radians the muzzle climbs
     float     reload_time = 1.5f;        // seconds
     glm::vec3 reload_hand{0.10f, -0.42f, -0.16f};      // where the support hand fetches the magazine
+    // At the ready (not aiming), seen from outside: the butt comes down from the shoulder to the
+    // ribs and the muzzle drops and swings in across the body.
+    glm::vec3 ready_shift{0.015f, -0.135f, 0.015f};     // aim frame, added to shoulder_offset
+    float     ready_pitch = -0.40f, ready_yaw = 0.30f;  // radians: muzzle down, and to the left
+    // ... and in the player's own view: lower, canted, the muzzle a little down.
+    glm::vec3 ready_shift_fp{0.020f, -0.045f, 0.030f};
+    float     ready_pitch_fp = -0.13f, ready_yaw_fp = 0.10f, ready_roll_fp = -0.14f;
+    float     hip_fire_hold = 0.7f;     // seconds a weapon fired from the hip stays level before it sinks again
     glm::vec3 tablet_centre{0.155f, -0.165f, -0.40f};   // the tablet in the weapon frame (as drawn)
     glm::vec3 tablet_chest{0.10f, -0.20f, -0.30f};      // ... and from the neck joint when seen from outside (model axes)
 };
@@ -123,6 +131,10 @@ struct CharacterAnimationInput {
     glm::vec3 hit_dir{0.0f, 0.0f, 1.0f};  // model space: the way the shot travelled
     float     hit_power = 1.0f;          // 1 = an ordinary hit
     bool      reloading = false;         // false while a reload runs = it was interrupted
+    // Aiming (the player holds the aim button): the rifle is up in the shoulder, the head on the
+    // sights. Not aiming it is carried at the ready - lower, canted, the muzzle down until a
+    // shot is fired from the hip. Default true: the stance everything had before there were two.
+    bool      aiming = true;
     bool      first_person = false;
     bool      teleported = false;        // position jumped: drop every world-space memory
     int       lod = 0;                   // 0 full .. 3 no pose (see anim_lod.h)
@@ -194,6 +206,8 @@ private:
     float  prev_yaw_ = 0.0f, yaw_rate_ = 0.0f;
     glm::vec3 prev_vel_{0.0f}, accel_{0.0f};
     float  rate_ = 1.0f, stride_ = 1.0f, warp_ = 0.0f;
+    float  aim_w_ = 1.0f;                // 1 = aiming, 0 = at the ready
+    float  since_shot_ = 1e9f;           // seconds: a weapon fired from the hip stays level for a moment
     float  snap_axis_ = 0.0f;            // the captured direction (a multiple of 90 degrees) a diagonal request is turned onto
     bool   snap_on_ = false, strafe_run_ = false;
     float  lean_roll_ = 0.0f, lean_roll_v_ = 0.0f, lean_pitch_ = 0.0f, lean_pitch_v_ = 0.0f;

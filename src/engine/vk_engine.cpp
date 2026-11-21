@@ -719,6 +719,9 @@ void VulkanEngine::run(const RunOptions& opts) {
             body_reload_left_ = body_animator_->weapon.reload_time;
         }
         prev_reload_key_ = in.brush_mode_next;
+        // Right mouse: aim. (Test hook: QLIKE_TEST_AIM=1 holds it.)
+        static const bool kTestAim = std::getenv("QLIKE_TEST_AIM") != nullptr;
+        body_aim_ = state_ == State::Playing && !terrain_edit_mode_ && weapon_ == 0 && !flashlight_on_ && (in.alt_fire_held || kTestAim);
         if (state_ != State::Playing) last_pin_ = game::PlayerInput{};
         if (in.fly_key && !prev_fly_key_ && state_ == State::Playing) {
             fly_mode_ = !fly_mode_;

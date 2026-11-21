@@ -31,7 +31,7 @@ struct PlayerState {
     uint8_t move = 0;                          // kMove*: the movement keys held (what the player wants, for prediction)
     uint16_t shot_seq = 0;                     // shots fired so far (wraps): recoil survives a lost event
 };
-enum : uint8_t { kFlagGround = 1, kFlagSwim = 2, kFlagTorch = 4, kFlagReload = 8, kFlagTeleport = 16 };
+enum : uint8_t { kFlagGround = 1, kFlagSwim = 2, kFlagTorch = 4, kFlagReload = 8, kFlagTeleport = 16, kFlagAim = 32 };
 enum : uint8_t { kMoveFwd = 1, kMoveBack = 2, kMoveLeft = 4, kMoveRight = 8, kMoveSprint = 16, kMoveJump = 32, kMoveCrawl = 64 };
 
 // The wire form. Positions and velocities stay 32-bit floats: the world is a planet (positions

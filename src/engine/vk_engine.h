@@ -564,6 +564,22 @@ private:
     // terrain (gaps) or writes fake mid-depth halos.
     VkSampler       tr_lr_depth_sampler_ = VK_NULL_HANDLE;
 
+    // The terrain's low-resolution march ("march pre-pass", rt_.terrain_rm_prepass): one
+    // distance per block of pixels (R32F, render_extent_ / tr_march_div_) - how far a ray
+    // can go before the ground comes near. Drawn before the world pass by a cut-down build
+    // of the terrain shader (terrain_march_lo.frag.spv); the full-resolution terrain pass
+    // reads it (binding 34) and starts its march there. Made and resized with the tr_lr_*
+    // targets above.
+    VkImage         tr_march_image_ = VK_NULL_HANDLE;
+    VmaAllocation   tr_march_alloc_ = nullptr;
+    VkImageView     tr_march_view_  = VK_NULL_HANDLE;
+    VkExtent2D      tr_march_extent_{};
+    int             tr_march_div_   = 2;
+    VkShaderModule  tr_march_module_   = VK_NULL_HANDLE;
+    VkPipeline      tr_march_pipeline_ = VK_NULL_HANDLE;
+    bool tr_march_prepass_on() const;
+    void render_terrain_march_prepass(VkCommandBuffer cmd);
+
     // --- Attachment-based Variable Rate Shading (VK_KHR_fragment_shading_rate) ---
     // Small R8_UINT image sized at (render_extent + tile - 1) / tile. Each
     // texel encodes the shading rate for an N×N pixel block of the
@@ -1205,6 +1221,7 @@ private:
     uint32_t  body_shot_seq_ = 0, body_reload_seq_ = 0;    // count the local player's shots / reloads
     float     body_reload_left_ = 0.0f;                // seconds of reload left (cosmetic: firing ends it)
     bool      prev_reload_key_ = false;
+    bool      body_aim_ = false;                       // right mouse held: aiming (rifle in the shoulder); else at the ready
     glm::mat4 body_weapon_offset_{1.0f};               // recoil, reload, equip: what is carried is drawn at view * this
     float     anim_ms_ = 0.0f, skin_ms_ = 0.0f;        // this frame, all characters
     int       anim_lod_count_[4]{};

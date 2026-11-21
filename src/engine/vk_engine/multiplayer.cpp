@@ -82,7 +82,7 @@ void VulkanEngine::mp_update(float dt) {
     const bool jumped = mp_teleport_hold_ > 0.0f;
     mp_teleport_hold_ = std::max(0.0f, mp_teleport_hold_ - dt);
     ls.flags = uint8_t((player_.on_ground ? net::kFlagGround : 0) | (player_swimming_ ? net::kFlagSwim : 0) | (flashlight_on_ ? net::kFlagTorch : 0) |
-                       (body_reload_left_ > 0.0f ? net::kFlagReload : 0) | (jumped ? net::kFlagTeleport : 0));
+                       (body_reload_left_ > 0.0f ? net::kFlagReload : 0) | (body_aim_ ? net::kFlagAim : 0) | (jumped ? net::kFlagTeleport : 0));
     ls.health = uint8_t(glm::clamp(mp_health_, 0.0f, 100.0f));
     ls.weapon = uint8_t(weapon_);
     // The movement keys: what this player wants, so others can predict starts, stops and turns as the controller will make them.

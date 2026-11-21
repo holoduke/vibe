@@ -370,6 +370,7 @@ void VulkanEngine::update_player_body(float dt) {
     }
     in.shot_seq = body_shot_seq_;
     in.reload_seq = body_reload_seq_;
+    in.aiming = body_aim_;
     in.hit_seq = body_hit_seq_;
     in.hit_dir = dir_to_model(body_hit_dir_);
     in.reloading = body_reload_left_ > 0.0f;

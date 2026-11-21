@@ -901,3 +901,46 @@ TEST_CASE("animator: the magazine is in the support hand through the middle of a
     CHECK(with > 20);
     CHECK(with < frames * 2 / 3);
 }
+
+TEST_CASE("animator: aiming the rifle is on the view; at the ready it hangs, and comes level for a shot from the hip", "[anim][animator]") {
+    fx::SetFixture f;
+    CharacterAnimationInput in;
+    in.dt = 1.0f / 60.0f;
+    in.ground_height = flat_ground;
+    in.eye_local = glm::vec3(0.0f, 1.6f, -0.11f);
+    const glm::vec3 fwd(0.0f, 0.0f, -1.0f);
+    for (bool own : { false, true }) {
+        in.first_person = own;
+        in.shot_seq = 0;
+        in.aiming = true;
+        CharacterAnimator a(f.set);
+        for (int i = 0; i < 40; ++i) a.update(in);
+        const glm::vec3 muzzle_aim = a.muzzle_position();
+        CHECK(glm::length(a.muzzle_direction() - fwd) < 1e-3f);          // aiming: along the view
+        // let go of the aim: the weapon comes down and its muzzle sinks, without a jump
+        in.aiming = false;
+        float worst_step = 0.0f;
+        glm::vec3 prev = a.muzzle_position();
+        for (int i = 0; i < 60; ++i) {
+            a.update(in);
+            worst_step = std::max(worst_step, glm::length(a.muzzle_position() - prev));
+            prev = a.muzzle_position();
+        }
+        INFO((own ? "own view" : "seen from outside") << ": muzzle " << a.muzzle_position().y - muzzle_aim.y << " m lower, direction y " << a.muzzle_direction().y);
+        CHECK(a.muzzle_position().y < muzzle_aim.y - 0.04f);             // lower
+        CHECK(a.muzzle_direction().y < -0.08f);                          // and pointing down
+        CHECK(worst_step < 0.07f);                                       // eased, not snapped (the muzzle travels 0.4 m)
+        // a shot from the hip: level again at once, and it stays so for a moment
+        in.shot_seq = 1;
+        for (int i = 0; i < 14; ++i) a.update(in);
+        CHECK(std::abs(a.muzzle_direction().y) < 0.05f);
+        CHECK(a.muzzle_position().y < muzzle_aim.y - 0.03f);             // (still from the hip, not from the shoulder)
+        for (int i = 0; i < 90; ++i) a.update(in);
+        CHECK(a.muzzle_direction().y < -0.08f);                          // then it sinks again
+        // aim again: back where it was
+        in.aiming = true;
+        for (int i = 0; i < 60; ++i) a.update(in);
+        CHECK(glm::length(a.muzzle_position() - muzzle_aim) < 2e-3f);
+        CHECK(glm::length(a.muzzle_direction() - fwd) < 1e-3f);
+    }
+}

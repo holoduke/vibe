@@ -126,6 +126,7 @@ void CharacterAnimator::reset() {
     dip_ = dip_v_ = pelvis_ik_ = pelvis_ik_v_ = 0.0f;
     for (Lock& l : lock_) l = Lock{};
     recoil_t_ = 0.0f; reload_t_ = -1.0f; reload_w_ = 0.0f; equip_t_ = 1.0f;
+    aim_w_ = 1.0f; since_shot_ = 1e9f;
     stand_hips_ = set_.stand_hips;
     weapon_offset_ = glm::mat4(1.0f);
     dbg_ = AnimDebug{};
@@ -228,7 +229,11 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
     dbg_.speed = speed;
 
     // ---- weapon timers run at every level of detail: events are never lost ----
-    if (in.shot_seq != shot_seq_) { shot_seq_ = in.shot_seq; recoil_t_ = weapon.recoil_duration; }
+    if (in.shot_seq != shot_seq_) { shot_seq_ = in.shot_seq; recoil_t_ = weapon.recoil_duration; since_shot_ = 0.0f; }
+    since_shot_ += dt;
+    if (!started_) aim_w_ = in.aiming ? 1.0f : 0.0f;
+    // (up to the aim quickly, down from it at ease)
+    aim_w_ += ((in.aiming ? 1.0f : 0.0f) - aim_w_) * (1.0f - std::exp(-dt / (in.aiming ? 0.07f : 0.14f)));
     recoil_t_ = std::max(0.0f, recoil_t_ - dt);
     if (in.reload_seq != reload_seq_) { reload_seq_ = in.reload_seq; reload_t_ = 0.0f; }
     if (reload_t_ >= 0.0f) {
@@ -532,7 +537,7 @@ void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
         rotate_in_model(rig[Role::Neck], rot_x(0.20f * pitch));
         rotate_in_model(rig[Role::Head], rot_x(0.30f * pitch));
         // Aiming a rifle, the head leans over to the stock and down to the sights.
-        const float sight = held_ == HeldItem::Rifle ? tuning.head_to_sights * smooth01(equip_t_) * (1.0f - reload_w_) : 0.0f;
+        const float sight = held_ == HeldItem::Rifle ? tuning.head_to_sights * smooth01(equip_t_) * (1.0f - reload_w_) * smooth01(aim_w_) : 0.0f;
         if (sight > 1e-3f) {
             rotate_in_model(rig[Role::Neck], glm::angleAxis(-0.10f * sight, glm::vec3(0.0f, 0.0f, 1.0f)));
             rotate_in_model(rig[Role::Head], glm::angleAxis(-0.12f * sight, glm::vec3(0.0f, 0.0f, 1.0f)) * rot_x(-0.07f * sight));
@@ -697,6 +702,24 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
         return o * glm::translate(glm::mat4(1.0f), pivot) * glm::mat4_cast(rq) * glm::translate(glm::mat4(1.0f), -pivot);
     };
     glm::mat4 off = offset_for(kick);
+    // Aiming or at the ready. `ready`: how far the weapon is down from the aim; `sunk`: how far
+    // its muzzle hangs (not while a shot from the hip is fresh, a reload runs or it is being drawn).
+    const float ready = held_ == HeldItem::Rifle ? (1.0f - smooth01(aim_w_)) * (1.0f - lowered) : 0.0f;
+    const float level = 1.0f - smooth01(std::clamp((since_shot_ - weapon.hip_fire_hold) / 0.35f, 0.0f, 1.0f));
+    const float sunk = ready * (1.0f - level) * (1.0f - reload_w_);
+    auto about = [](glm::vec3 p, const glm::quat& q) {
+        return glm::translate(glm::mat4(1.0f), p) * glm::mat4_cast(q) * glm::translate(glm::mat4(1.0f), -p);
+    };
+    const glm::vec3 kUp(0.0f, 1.0f, 0.0f), kBack(0.0f, 0.0f, 1.0f);
+    if (ready > 1e-4f) {
+        if (in.first_person) {
+            off = glm::translate(glm::mat4(1.0f), weapon.ready_shift_fp * ready) * off *
+                  about(weapon.grip_r, glm::angleAxis(weapon.ready_yaw_fp * ready, kUp) * rot_x(weapon.ready_pitch_fp * sunk) *
+                                       glm::angleAxis(weapon.ready_roll_fp * ready, kBack));
+        } else {
+            off = off * about(weapon.butt, glm::angleAxis(weapon.ready_yaw * sunk, kUp) * rot_x(weapon.ready_pitch * sunk));
+        }
+    }
     dbg_.recoil = kick;
     dbg_.reload = reload_t_ >= 0.0f ? reload_u_ : 0.0f;
     dbg_.equip = lowered;
@@ -711,7 +734,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
     // direction (the aim) and is moved so that its butt sits in the right shoulder.
     if (!in.first_person && held_ == HeldItem::Rifle && tuning.shoulder_weapon) {
         const glm::vec3 shoulder(model_[size_t(rig[Role::RightArm])][3]);
-        const glm::vec3 anchor = shoulder + glm::mat3(V) * weapon.shoulder_offset;
+        const glm::vec3 anchor = shoulder + glm::mat3(V) * (weapon.shoulder_offset + weapon.ready_shift * ready);
         // (where the butt is without the recoil: the kick still drives the weapon back from there)
         const glm::vec3 butt(V * offset_for(0.0f) * glm::vec4(weapon.butt, 1.0f));
         W[3] += glm::vec4(anchor - butt, 0.0f);

@@ -64,6 +64,7 @@ inline RemoteFrame remote_animation_input(const PlayerState& s, anim::CharacterA
     in.held = s.weapon == 1 ? anim::HeldItem::Tablet : anim::HeldItem::Rifle;
     in.shot_seq = s.shot_seq;
     in.reloading = (s.flags & kFlagReload) != 0;
+    in.aiming = (s.flags & kFlagAim) != 0;
     return f;
 }
 
