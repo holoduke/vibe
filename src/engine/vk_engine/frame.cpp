@@ -659,22 +659,29 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         VkCommandBuffer c = frame.command_buffer;
         vkinit::transition_image(c, tr_march_image_, VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        vkinit::transition_image(c, tr_shade_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkClearValue mc{};
         mc.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };          // 0 = nothing known: march from the eye
         VkRenderingAttachmentInfo m_att =
             vkinit::color_attachment_info(tr_march_view_, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        // (second attachment: the sun-shadow terms at the march's hits - cleared to "not valid")
+        const VkRenderingAttachmentInfo m_atts[2] = {
+            m_att, vkinit::color_attachment_info(tr_shade_view_, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) };
         VkRenderingInfo m_ri{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .pNext = nullptr, .flags = 0,
             .renderArea = { {0, 0}, tr_march_extent_ },
             .layerCount = 1, .viewMask = 0,
-            .colorAttachmentCount = 1, .pColorAttachments = &m_att,
+            .colorAttachmentCount = 2, .pColorAttachments = m_atts,
             .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
         };
         vkCmdBeginRendering(c, &m_ri);
         render_terrain_march_prepass(c);
         vkCmdEndRendering(c);
         vkinit::transition_image(c, tr_march_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkinit::transition_image(c, tr_shade_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         prof_mark(c, "terrain_march_lo");
     }

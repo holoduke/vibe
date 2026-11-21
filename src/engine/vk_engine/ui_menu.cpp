@@ -784,6 +784,7 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SliderFloat("Fast final approach", &rt_.terrain_rm_converge, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("Normal detail limit (pixels)", &rt_.terrain_rm_normal_px, 0.0f, 4.0f, "%.1f");
         ImGui::Checkbox("Simpler relief under dense grass", &rt_.terrain_rm_relief_lite);
+        ImGui::Checkbox("Sun shadows at low resolution (needs the march first)", &rt_.terrain_rm_shade_lo);
         ImGui::TextDisabled("%s",
             "March first: one ray per block of pixels walks to the ground,\n"
             "every pixel then starts its own march there.\n"

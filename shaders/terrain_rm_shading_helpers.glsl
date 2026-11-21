@@ -27,6 +27,7 @@ float terrainCavityAO(vec2 p) {
 
 float grassEligibility(vec2 worldXZ, float terrainY);
 vec3 calcNormal(vec3 pos, float t) {
+    g_nb_ok = false;
     // From the air (hits of raymarch_far, beyond the normal range): the slope of the
     // landscape itself over about a pixel. The screen-space path below is too coarse out
     // there (the hit positions are only that exact) and left the ground a flat sheet.
@@ -85,12 +86,18 @@ vec3 calcNormal(vec3 pos, float t) {
     }
     g_pebN_h = -1.0; g_pebN_k = 0.0;   // -1: no stones looked up for this pixel
     g_peb_mode = -1;
-    float hC = terrainH_lod_pw(pos.xz, t, tpl);
-    float hR = terrainH_lod_pw(pos.xz + vec2(eps, 0.0), t, tpl);
-    float hU = terrainH_lod_pw(pos.xz + vec2(0.0, eps), t, tpl);
+    // (the landscape and the relief on it apart: see terrainB_lod_pw)
+    float bC = terrainB_lod_pw(pos.xz, t, tpl);
+    float bR = terrainB_lod_pw(pos.xz + vec2(eps, 0.0), t, tpl);
+    float bU = terrainB_lod_pw(pos.xz + vec2(0.0, eps), t, tpl);
+    g_nb = vec2(bC - bR, bC - bU) / eps; g_nb_h = bC; g_nb_ok = true;
+    float hC = bC + rm_ground_detail(pos.xz, t, bC) * (1.0 - tpl);
+    float hR = bR + rm_ground_detail(pos.xz + vec2(eps, 0.0), t, bR) * (1.0 - tpl);
+    float hU = bU + rm_ground_detail(pos.xz + vec2(0.0, eps), t, bU) * (1.0 - tpl);
     g_peb_mode = 0;
     g_rm_relief_lite = false;
     vec3 gN = vec3(hC - hR, eps, hC - hU) / eps;
+    g_nrm_plain = normalize(gN);
     if (t < 26.0 && tpl < 0.99 && !RMDBG(2)) {
         float pw = (1.0 - smoothstep(10.0, 26.0, t)) * (1.0 - tpl) * g_rm_detail_mul;
         // Under a dense lawn the stones cannot be seen: skip all their work

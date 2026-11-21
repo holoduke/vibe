@@ -519,6 +519,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_rm_converge", s.rt_.terrain_rm_converge);
     f("terrain_rm_normal_px", s.rt_.terrain_rm_normal_px);
     f("terrain_rm_relief_lite", s.rt_.terrain_rm_relief_lite);
+    f("terrain_rm_shade_lo", s.rt_.terrain_rm_shade_lo);
     f("render_scale", s.rt_.render_scale);
     f("fsr_min_render_scale", s.rt_.fsr_min_render_scale);
     f("quality_preset", s.rt_.quality_preset);

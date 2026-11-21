@@ -573,6 +573,10 @@ private:
     VkImage         tr_march_image_ = VK_NULL_HANDLE;
     VmaAllocation   tr_march_alloc_ = nullptr;
     VkImageView     tr_march_view_  = VK_NULL_HANDLE;
+    // The sun's shadow terms at that march's hits (RGBA16F, same size; binding 35).
+    VkImage         tr_shade_image_ = VK_NULL_HANDLE;
+    VmaAllocation   tr_shade_alloc_ = nullptr;
+    VkImageView     tr_shade_view_  = VK_NULL_HANDLE;
     VkExtent2D      tr_march_extent_{};
     int             tr_march_div_   = 2;
     VkShaderModule  tr_march_module_   = VK_NULL_HANDLE;

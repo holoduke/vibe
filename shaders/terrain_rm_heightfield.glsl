@@ -31,9 +31,14 @@ float rm_snow_on(float d, vec2 wp, float h, float road_keep) {
 // Set by calcNormal under a dense lawn (settings: simpler relief under grass): the main rills
 // only, as while marching - the side cracks and the soil texture's grain are hidden by the blades.
 bool g_rm_relief_lite = false;
+// Set by the low-resolution build while it looks for its block's hit: the landscape without
+// the close relief (a few FBM steps instead of the slow last stretch over rills and stones).
+// The hit then lies up to ~0.3 m under the drawn ground - near enough to ask "is the sun
+// blocked here", which is all it is used for.
+bool g_rm_no_relief = false;
 float rm_ground_detail(vec2 wp, float t, float h) {
     float w = 1.0 - smoothstep(10.0, 26.0, t);
-    if (w <= 0.0 || RMDBG(1024)) return 0.0;
+    if (w <= 0.0 || RMDBG(1024) || g_rm_no_relief) return 0.0;
     // Not on the road: the paving is flat (crouching on it showed the
     // rills as noise in the cobbles). In winter the snow still lies on it.
     float road_keep = 1.0;
@@ -218,7 +223,7 @@ float terrainM_lod(vec2 p, float ray_t) {
     // single texture-bandwidth win on terrain pixels.
     h += sampleHeightDelta(wp);   // (reverted 80 m gate — no near/far seam)
     if (g_rm_ray_y - h > 0.34) {
-        h += 0.30 * (1.0 - smoothstep(10.0, 26.0, ray_t)) * (1.0 - tpl);   // conservative bound
+        if (!g_rm_no_relief) h += 0.30 * (1.0 - smoothstep(10.0, 26.0, ray_t)) * (1.0 - tpl);   // conservative bound
     } else {
         h += rm_ground_detail(wp, ray_t, h) * (1.0 - tpl);
     }
@@ -231,7 +236,10 @@ float terrainM_lod(vec2 p, float ray_t) {
 // points within ~2 cm of each other — can compute plateauWeight
 // once and pass it in instead of recomputing the same value 3×.
 // Saves 2 × (2 abs + smoothstep) per shaded terrain pixel.
-float terrainH_lod_pw(vec2 p, float ray_t, float tpl) {
+// The landscape without the close-range relief (terrainB) and with it (terrainH). The normal
+// code reads the two apart: within a few centimetres the landscape is a plane, only the
+// relief on it changes - so its slope is worked out once and reused (calcNormal, g_nb).
+float terrainB_lod_pw(vec2 p, float ray_t, float tpl) {
     vec2 wp = p;
     p *= TERRAIN_SCALE;
     int oct_full = int(pc.tex_params.w);
@@ -262,8 +270,30 @@ float terrainH_lod_pw(vec2 p, float ray_t, float tpl) {
     float h = rm_world_h(a, wp);
     h = mix(h, pc.color.w, tpl);
     h += sampleHeightDelta(wp);   // (reverted 80 m gate — no near/far seam)
-    h += rm_ground_detail(wp, ray_t, h) * (1.0 - tpl);
     return h;
+}
+float terrainH_lod_pw(vec2 p, float ray_t, float tpl) {
+    float h = terrainB_lod_pw(p, ray_t, tpl);
+    return h + rm_ground_detail(p, ray_t, h) * (1.0 - tpl);
+}
+// The slope of the landscape under the relief at the pixel being shaded, left by calcNormal:
+// (-dh/dx, -dh/dz), its height, and whether it is valid for this pixel.
+vec2  g_nb = vec2(0.0);
+float g_nb_h = 0.0;
+bool  g_nb_ok = false;
+// ... and the normal of the surface itself there (landscape + relief, sand, snow), before
+// stones, grit and the paving's own relief are added to it: what the sand and the snow are
+// shaded with. It is the same three taps the pixel's normal is made from - they used to be
+// worked out a second time, four more taps of the whole landscape, for every sand or snow pixel.
+vec3  g_nrm_plain = vec3(0.0, 1.0, 0.0);
+// The surface's slope terms (h(x-e) - h(x+e), h(z-e) - h(z+e)) at spacing `e`, from the base
+// slope above plus four taps of the relief alone - what four taps of the whole landscape
+// gave (the sand's and the snow's own normals), without working the landscape out four times.
+vec2 rm_detail_slope(vec2 wp, float t, float e, float tpl) {
+    float k = 1.0 - tpl;
+    float dx0 = rm_ground_detail(wp - vec2(e, 0.0), t, g_nb_h), dx1 = rm_ground_detail(wp + vec2(e, 0.0), t, g_nb_h);
+    float dz0 = rm_ground_detail(wp - vec2(0.0, e), t, g_nb_h), dz1 = rm_ground_detail(wp + vec2(0.0, e), t, g_nb_h);
+    return vec2(dx0 - dx1, dz0 - dz1) * k + g_nb * (2.0 * e);
 }
 
 
@@ -631,6 +661,11 @@ float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone) {
     int   kSteps = int(pc.tex_params.x);
     float kStep  = abs(pc.emissive.x);
     float t_safe = t;
+    // (the same fast approach as the full march, aimed at where the clearance reaches the
+    // margin - without it a ray skimming the ground crept toward it in dozens of steps)
+    float conv = scene.rm_perf.z;
+    float h_last = 0.0, t_last = t;
+    bool  real_last = false;
     for (int i = 0; i < kSteps; i++) {
         vec3 pos = ro + t * rd;
         if (rd.y > 0.0 && pos.y > maxH) return 1e9;
@@ -647,10 +682,18 @@ float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone) {
             h = pos.y - terrainM_lod(pos.xz, t);
             g_rm_ray_y = -1e9;
         }
-        if (h < 3.0 * cone * t + 0.06) return t_safe;
+        float thr = 3.0 * cone * t + 0.06;
+        if (h < thr) return t_safe;
         if (t > t_limit) return 1e9;
         t_safe = t;
-        t += kStep * mix(1.0, 2.5, smoothstep(200.0, 600.0, t)) * h;
+        float adv = kStep * mix(1.0, 2.5, smoothstep(200.0, 600.0, t)) * h;
+        bool real = hm <= 0.75;
+        if (conv > 0.0 && real && real_last) {
+            float s = (h_last - h) / max(t - t_last, 1e-4);
+            if (s > 1e-3) adv = max(adv, min(min(0.7 * conv * (h - thr) / s, 10.0 * h), 0.5 + 0.04 * t));
+        }
+        real_last = real; h_last = h; t_last = t;
+        t += adv;
     }
     return t_safe;
 }

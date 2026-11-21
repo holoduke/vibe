@@ -67,7 +67,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 19 + kSpomMaterialCount },      // + the terrain's low-resolution march (34)
+            kTextureCount * 2 + 20 + kSpomMaterialCount },      // + the terrain's low-resolution march (34)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -87,7 +87,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[35]{};
+    VkDescriptorSetLayoutBinding bindings[36]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -338,11 +338,14 @@ void VulkanEngine::init_descriptors() {
     // init_terrain_raymarch_lowres) - the full-resolution terrain pass starts from it.
     bindings[34] = bindings[31];
     bindings[34].binding = 34;
+    // Binding 35: the sun-shadow terms at that march's hits (RGBA16F, the same size).
+    bindings[35] = bindings[31];
+    bindings[35].binding = 35;
 
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 35, .pBindings = bindings,
+        .bindingCount = 36, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -907,7 +910,8 @@ void VulkanEngine::update_scene_ubo() {
         }
     }
     // Raymarched terrain, speed settings (terrain_raymarch.frag; scene_ubo.glsl rm_perf).
-    data.rm_perf = glm::vec4((tr_march_prepass_on() ? 1.0f : 0.0f) + (rt_.terrain_rm_relief_lite ? 2.0f : 0.0f),
+    data.rm_perf = glm::vec4((tr_march_prepass_on() ? 1.0f : 0.0f) + (rt_.terrain_rm_relief_lite ? 2.0f : 0.0f) +
+                                 ((tr_march_prepass_on() && rt_.terrain_rm_shade_lo) ? 4.0f : 0.0f),
                              float(tr_march_div_),
                              rt_.terrain_rm_converge,
                              rt_.terrain_rm_normal_px);

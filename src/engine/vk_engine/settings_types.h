@@ -655,6 +655,7 @@ struct RtSettings {
         float terrain_rm_converge        = 0.8f;  // fast final approach to the ground (0 = off, the old small steps)
         float terrain_rm_normal_px       = 1.5f;  // normal: drop detail finer than this many pixels (0 = keep all)
         bool  terrain_rm_relief_lite     = true;  // under dense grass the normal reads the main rills only
+        bool  terrain_rm_shade_lo        = true;  // the sun's shadows on the ground: once per block of the low-resolution march, not per pixel
         // Specular reflection on flagged surfaces (the pedestal).
         bool  reflections_enabled = true;
         float reflection_strength = 0.5f;

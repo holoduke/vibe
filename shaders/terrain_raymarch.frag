@@ -31,7 +31,15 @@ layout(location = 3) in vec3 vWPos;
 #endif /* QLIKE_WATER */
 
 layout(location = 0) out vec4 outColor;
+#ifdef QLIKE_MARCH_ONLY
+// The low-resolution build (main: QLIKE_MARCH_ONLY) writes the sun-shadow terms of its hit
+// here: x self-shadow, y object shadow (both 0 lit .. 1 shadowed), z distance of the hit,
+// w 1 = valid.
+layout(location = 1) out vec4 outShadeLo;
+#define outMotion outShadeLo.xy
+#else
 layout(location = 1) out vec2 outMotion;
+#endif
 #ifndef QLIKE_WATER
 // G-buffer dual writes (deferred migration). Raymarched terrain
 // pixels carry material_id 8 = pre-shaded pass-through.
@@ -97,6 +105,8 @@ layout(set = 0, binding = 27) uniform sampler2D u_prepass_depth;
 // The low-resolution march (binding 34, R32F): for each block of pixels, how far a ray can
 // go before the ground comes near (terrain_rm_heightfield.glsl raymarch_lo).
 layout(set = 0, binding = 34) uniform sampler2D u_march_lo;
+// ... and the sun-shadow terms at those blocks' hits (binding 35, RGBA16F; see outShadeLo).
+layout(set = 0, binding = 35) uniform sampler2D u_shade_lo;
 // Fog wisp pattern (R8 256², REPEAT). One textureLod() replaces the
 // 3-octave noise2() weighted sum the fog density + godray probe
 // loops used to compute per-tap. UV maps q→texture as `q / 16.0` so
@@ -616,6 +626,174 @@ vec3 sample_sky(vec3 dir) {
 #include "terrain_rm_heightfield.glsl"   // Terrain height (FBM + ground relief) and the ray march against it
 #include "terrain_rm_shading_helpers.glsl"   // Normal, terrain / grass shadows, road weights, ground material, reflection marches
 #include "terrain_rm_water.glsl"   // Water: flow, normals, foam pattern, ripples
+// ---- The sun's shadow on the ground, as two functions ----
+// They are called for every pixel by the full pass, or - settings: 'sun shadows at low
+// resolution' - once per block of pixels by the low-resolution build, whose results the full
+// pass then reads back (main: u_shade_lo). Both return 0 lit .. 1 shadowed.
+// Terrain self-shadow: the walk over the baked heights, then the FBM march.
+float rm_self_shadow_base(vec3 pos, vec3 nor, vec3 sunDir) {
+    float self_shadow = 1.0;
+    {
+        float lit_g = 1.0;
+#ifndef QLIKE_WATER
+        if (distance(pos, scene.camera_pos.xyz) < 220.0) {
+            float tg = 0.10;
+            float g_top = terrainMaxHeight();
+            for (int i = 0; i < 30; ++i) {
+                vec3 q = pos + sunDir * tg;
+                if (q.y > g_top) break;
+                if (any(greaterThan(abs(q.xz), vec2(kHeightmapSide * 0.5 - 2.0)))) break;
+                float hg = q.y - meshHeight(q.xz);
+                lit_g = min(lit_g, smoothstep(-(0.10 + 0.02 * tg), -(0.02 + 0.004 * tg), hg));
+                if (lit_g < 0.01) break;
+                tg *= (i < 14) ? 1.5 : 1.22;
+            }
+        }
+#endif /* ! QLIKE_WATER */
+        // The FBM self-shadow march (the most expensive part of terrain
+        // shading) only where the heightmap walk left the point lit.
+        self_shadow = 1.0 - lit_g;
+        if (lit_g > 0.01)
+            self_shadow = max(self_shadow, 1.0 - calcShadow(pos + nor * 0.05, sunDir));
+    }
+    return self_shadow;
+}
+// Ray-traced shadow of objects (trees, castle, rocks): soft near the camera, one hard ray
+// further out. `self_shadow`: the ground's own shadow there (where that is full, no far ray).
+float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
+    float dyn_shadow = 0.0;
+    float cam_dist_pos = distance(pos, scene.camera_pos.xyz);
+    // Smooth-fade RT contributions across the LOD band rather than
+    // leaving a visible cliff. lod_far comes from the user slider
+    // (fog_band.w); lod_near is 60% of that. Effect ramps from 1.0
+    // inside lod_near, to 0.0 at lod_far. Far pixels early-out.
+    float lod_far  = max(50.0, scene.fog_band.w);
+    float lod_near = lod_far * 0.6;
+    float rt_lod_t = 1.0 - smoothstep(lod_near, lod_far, cam_dist_pos);
+    bool do_rt = rt_lod_t > 0.005 && !RMDBG(32);
+
+    // Gate on shadow_strength too — if the user dialled it to 0,
+    // dyn_shadow gets multiplied by 0 at line ~2082 anyway, so the
+    // 4 blocker rays + N_s shadow rays were burning BVH for nothing.
+    if (scene.rt_flags.x != 0 && do_rt &&
+        scene.rt_params.w > 1e-3) {
+        // base_softness from the global Shadow softness slider,
+        // scaled by the terrain-specific scale (terrain_params.w).
+        float base_softness = scene.rt_params.x;
+        if (scene.terrain_params.w > 0.0) {
+            base_softness *= max(0.05, scene.terrain_params.w);
+        }
+        // Sample count from global Shadow samples slider × near
+        // multiplier, but capped to 6 for the terrain shader. PCSS
+        // on terrain at the user's full slider (13+) was the dominant
+        // per-frame RT shadow cost and pushed total per-frame work
+        // over the GPU TDR threshold once the TLAS grew with streamed
+        // dyn-props. cube.frag PCSS still uses the full slider.
+        float near_mult = max(1.0, scene.terrain_extra.y);
+        int N_s_cap = max(2, int(scene.terrain_rt_extra.x));
+        int N_s = clamp(int(ceil(float(scene.rt_flags.y) * near_mult)),
+                        2, N_s_cap);
+
+        vec3 ref_l = abs(sunDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0)
+                                            : vec3(1.0, 0.0, 0.0);
+        vec3 tan_u = normalize(cross(ref_l, sunDir));
+        vec3 tan_v = cross(sunDir, tan_u);
+        // Bias along sun direction (NOT surface normal) — the FBM
+        // normal varies high-frequency per pixel; using it offsets
+        // each pixel's shadow cone slightly and produces dither.
+        vec3 origin = pos + sunDir * 0.1;
+        // Per-pixel + per-frame seed — TAA averages noisy samples.
+#ifndef QLIKE_WATER
+        // World-anchored seed. The per-pixel + per-frame seed relied on
+        // TAA to average it, but DLSS keeps it as detail: under tree
+        // canopies (wide penumbra, every pixel partly lit) the ground was
+        // a speckle that re-rolled every frame and crawled with the camera.
+        // Hash the ground position on a grid matched to the pixel
+        // footprint instead (power-of-two cell): the grain stays put on
+        // the ground like texture.
+        float rm_cell = exp2(ceil(log2(max(cam_dist_pos * 2.0 * scene.viewport.w, 1e-4))));
+        ivec3 rm_q = ivec3(floor((pos + vec3(0.0, 0.25 * rm_cell, 0.0)) / rm_cell));
+        uvec3 seed_base = rm_pcg3d(uvec3(rm_q) +
+                                   uvec3(0u, 0u, uint(int(log2(rm_cell)) + 64) * 7919u));
+        seed_base.z = 0u;
+        // ...except under DLSS Ray Reconstruction (rt_flags.x bit 1): a
+        // temporal denoiser needs noise that changes every frame; the
+        // frozen grain read as texture and stayed as a blocky speckle.
+        if ((scene.rt_flags.x & 2) != 0) seed_base = uvec3(gl_FragCoord.xy, scene.rt_flags.w);
+#else /* QLIKE_WATER */
+        uvec3 seed_base = uvec3(gl_FragCoord.xy, scene.rt_flags.w);
+#endif /* QLIKE_WATER */
+
+        // 1. Blocker search (4 rays, 4× softness cone).
+        const int kBlocker = 4;
+        float sum_t = 0.0;
+        int   hits  = 0;
+        for (int i = 0; i < kBlocker; ++i) {
+            float br1 = rmRand(seed_base + uvec3(i, 91u, 13u));
+            float br2 = rmRand(seed_base + uvec3(i, 19u, 71u));
+            float r   = sqrt(br1) * base_softness * 4.0;
+            float ph  = 6.28318530718 * br2;
+            vec3 j    = (cos(ph) * tan_u + sin(ph) * tan_v) * r;
+            vec3 d    = normalize(sunDir + j);
+            float t_b;
+            if (closest_hit_no_terrain(origin, d, 100.0, t_b)) {
+                sum_t += t_b;
+                ++hits;
+            }
+        }
+        if (hits > 0) {
+            // 2. Penumbra estimate (cube.frag formulation).
+            float avg_t = sum_t / float(hits);
+            float t_norm = avg_t * 0.1;
+            float curve_exp = mix(1.0, 3.0,
+                                   clamp(scene.rt_params2.w, 0.0, 1.0));
+            float scale = pow(max(t_norm, 0.0), curve_exp);
+            float penumbra = clamp(base_softness * scale * 0.6,
+                                    base_softness * 0.25,
+                                    base_softness * 6.0);
+
+            // 3. Stratified shadow rays.
+            int strata = int(ceil(sqrt(float(N_s))));
+            float inv = 1.0 / float(strata);
+            int taken = 0;
+            float blocked = 0.0;
+            for (int sy = 0; sy < strata && taken < N_s; ++sy) {
+                for (int sx = 0; sx < strata && taken < N_s; ++sx) {
+                    float r1 = rmRand(seed_base + uvec3(taken, 11u, 47u));
+                    float r2 = rmRand(seed_base + uvec3(taken, 53u, 23u));
+                    float u1 = (float(sx) + r1) * inv;
+                    float u2 = (float(sy) + r2) * inv;
+                    float r  = sqrt(u1) * penumbra;
+                    float ph = 6.28318530718 * u2;
+                    vec3 j   = (cos(ph) * tan_u + sin(ph) * tan_v) * r;
+                    vec3 d   = normalize(sunDir + j);
+                    if (any_hit_no_terrain(origin, d, 100.0)) blocked += 1.0;
+                    ++taken;
+                }
+            }
+            dyn_shadow = (blocked / float(taken)) * scene.rt_params.w;
+        }
+    }
+    // 4. Max-combine: the FBM self-shadow is the analogue of
+    //    cube.frag's heightmap bake — clean, no noise. Where the
+    //    surface is in self-shadow, we take that value verbatim.
+    //    Where it's lit, the RT cone fills in castle / cube
+    //    contributions. Result reads identical to the rasterised
+    //    terrain shadow path.
+    // Far field: beyond the soft RT shadow band (RT LOD distance) the object
+    // shadows (trees, castle, rocks) used to stop dead. Out to ~900 m one
+    // hard shadow ray per pixel keeps them - a penumbra is sub-pixel there
+    // anyway - blended in across the band.
+    if (scene.rt_flags.x != 0 && scene.rt_params.w > 1e-3 &&
+        rt_lod_t < 0.999 && cam_dist_pos < 900.0 && self_shadow < 0.99 && !RMDBG(32)) {
+        float far_w = 1.0 - smoothstep(700.0, 900.0, cam_dist_pos);
+        vec3  fo = pos + nor * (0.15 + cam_dist_pos * 0.002) + sunDir * (0.3 + cam_dist_pos * 0.002);
+        float far_sh = any_hit_no_terrain(fo, sunDir, 220.0) ? scene.rt_params.w * far_w : 0.0;
+        dyn_shadow = mix(far_sh, dyn_shadow, rt_lod_t);
+    }
+    return dyn_shadow;
+}
+
 #ifdef QLIKE_LITE
 // The "first start" build of this shader (terrain_raymarch_lite.frag.spv). The full shader is so
 // large that a graphics driver needs a minute or more to compile it the first time; the game
@@ -716,9 +894,62 @@ void main() {
     {
         // This build IS the low-resolution march: one distance per block of pixels, nothing else.
         bool  air_lo = ro.y > terrainMaxHeight() + 60.0;
+        // No further than the nearest object that covers the WHOLE block (the farthest of the
+        // depth pre-pass's pixels under it): the full pass does not march behind trees, rocks
+        // or walls either - without this the block's ray walked on to the ground behind them.
+        float t_lim = t_water_plane;
+        float t_obj_far = 1e9;
+        {
+            float dv = scene.rm_perf.y;
+            vec2 c = gl_FragCoord.xy * dv * scene.viewport.zw;            // the block's centre
+            vec2 o = (dv > 2.5 ? 0.25 * dv : 0.0) * scene.viewport.zw;     // (wider blocks: four gathers)
+            vec4 g0 = textureGather(u_prepass_depth, c - o, 0);
+            float zf = max(max(g0.x, g0.y), max(g0.z, g0.w));
+            if (dv > 2.5) {
+                vec4 g1 = textureGather(u_prepass_depth, c + o, 0), g2 = textureGather(u_prepass_depth, c + vec2(o.x, -o.y), 0),
+                     g3 = textureGather(u_prepass_depth, c + vec2(-o.x, o.y), 0);
+                zf = max(max(zf, max(max(g1.x, g1.y), max(g1.z, g1.w))),
+                         max(max(max(g2.x, g2.y), max(g2.z, g2.w)), max(max(g3.x, g3.y), max(g3.z, g3.w))));
+            }
+            if (zf < 0.99999) {
+                vec4 Pp = mix(vWNear, vWFar, zf);
+                t_obj_far = length(Pp.xyz / Pp.w) * 1.02 + 0.3;
+                if (t_lim < 0.0 || t_obj_far < t_lim) t_lim = t_obj_far;
+            }
+        }
         float r = (water_only || air_lo) ? 0.0
-                : raymarch_lo(ro, rd, t_water_plane, 1.68 * scene.viewport.w * scene.rm_perf.y * 0.75);
+                : raymarch_lo(ro, rd, t_lim, 1.68 * scene.viewport.w * scene.rm_perf.y * 0.75);
         outColor = vec4(r, 0.0, 0.0, 0.0);
+        // The sun's shadow at this block's hit (rm_perf.x bit 4): march on to the ground, and
+        // unless something stands in front of it there, work out the two shadow terms once
+        // for the whole block.
+        outShadeLo = vec4(0.0);
+        // (Not where an object stands in front of the ground - trees, rocks, the castle: the
+        // full pass does not shade the ground there either. The depth pre-pass tells, before
+        // any marching is done.)
+        bool  hidden = t_obj_far < r;
+        if ((int(scene.rm_perf.x) & 4) != 0 && r > 0.0 && r < 1e8 && !hidden) {
+            g_rm_no_relief = true;
+            float th = raymarch(ro, rd, min(t_lim > 0.0 ? t_lim : 1400.0, 1400.0), r);
+            g_rm_no_relief = false;
+            if (th > 0.0 && th < 1400.0 && (t_water_plane < 0.0 || th < t_water_plane)) {
+                vec3 sun = scene.sun_direction.xyz;
+                if (!hidden) {
+                    // (the baked landscape's normal: enough to tell which way the ground faces
+                    // and to lift the shadow rays off it; the point itself a little above the
+                    // relief-free hit, where the drawn ground is)
+                    vec3 ph = ro + rd * th + vec3(0.0, 0.12 * (1.0 - smoothstep(10.0, 26.0, th)), 0.0);
+                    vec3 nh = all(lessThan(abs(ph.xz), vec2(kHeightmapSide * 0.5 - 2.0))) ? meshNormal(ph.xz) : vec3(0.0, 1.0, 0.0);
+                    // (well turned from the sun: left to the pixels themselves - none of them
+                    // that is lit after all may inherit a block's "no light")
+                    if (dot(nh, sun) > -0.30) {
+                        float ss = RMDBG(4) ? 0.0 : rm_self_shadow_base(ph, nh, sun);
+                        float ds = rm_rt_sun_shadow(ph, nh, sun, ss);
+                        outShadeLo = vec4(ss, ds, th, 1.0);
+                    }
+                }
+            }
+        }
         return;
     }
 #endif
@@ -1941,6 +2172,35 @@ void main() {
         rm_road_uv += warp;
     }
     vec3 nor = calcNormal(pos, t);
+    // The sun-shadow terms from the low-resolution pass (settings: 'sun shadows at low
+    // resolution'): the four blocks round this pixel, each used only if its hit lies on this
+    // pixel's own surface - its distance must be what a neighbouring ray would find on the
+    // plane through this point. Where none qualifies (an edge, something in front, a ridge)
+    // the pixel works its shadows out itself, exactly as before.
+    bool lo_ok = false;
+    vec2 lo_sh = vec2(0.0);
+#if !defined(QLIKE_WATER) && !defined(QLIKE_MARCH_ONLY)
+    if ((int(scene.rm_perf.x) & 5) == 5 && pc.emissive.x < 0.0 && !water_only && t > 0.0 && t < 1400.0) {
+        float dv = scene.rm_perf.y;
+        vec2  tc = gl_FragCoord.xy / dv - 0.5;
+        ivec2 i0 = ivec2(floor(tc));
+        vec2  f  = fract(tc);
+        ivec2 mx = textureSize(u_shade_lo, 0) - 1;
+        vec3  Np = g_nb_ok ? g_nrm_plain : nor;
+        float cg  = max(abs(dot(rd, Np)), 0.04);
+        // (+ the relief the low-resolution hit leaves out, along this ray)
+        float tol = t * (1.6 * dv * 1.68 * scene.viewport.w / cg + 0.004) + 0.05 + 0.32 * (1.0 - smoothstep(10.0, 26.0, t)) / cg;
+        float ws = 0.0;
+        for (int k = 0; k < 4; ++k) {
+            ivec2 o = ivec2(k & 1, k >> 1);
+            vec4 s = texelFetch(u_shade_lo, clamp(i0 + o, ivec2(0), mx), 0);
+            float w = ((o.x == 1) ? f.x : 1.0 - f.x) * ((o.y == 1) ? f.y : 1.0 - f.y);
+            w *= (s.w > 0.5 && abs(s.z - t) < tol) ? 1.0 : 0.0;
+            lo_sh += s.xy * w; ws += w;
+        }
+        if (ws > 0.2) { lo_sh /= ws; lo_ok = true; }
+    }
+#endif
     float peb0_h = g_pebN_h, peb0_id = g_pebN_id, peb0_k = g_pebN_k, peb0_sz = g_pebN_sz;
     g_rm_detail_mul = 1.0;
     if (rm_road.x > 0.001) {
@@ -2117,9 +2377,13 @@ void main() {
             vec3 n_s = nor;
             if (t < 40.0) {
                 float se = max(0.006, t * 0.003), stpl = plateauWeight(pos.xz);
-                float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
-                float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
-                n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
+                if (g_nb_ok) {
+                    n_s = g_nrm_plain;
+                } else {
+                    float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
+                    float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
+                    n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
+                }
             }
             // the fine wind ripples (their slope from two more samples), where the sand has some depth
             float rip_f = (1.0 - smoothstep(6.0, 18.0, t)) * smoothstep(0.25, 0.7, sp) * smoothstep(0.30, 0.55, noise2(pos.xz * 0.9 + 31.0));
@@ -2149,9 +2413,13 @@ void main() {
                 vec3 n_s = nor;
                 if (t < 70.0) {
                     float se = max(0.02, t * 0.004), stpl = plateauWeight(pos.xz);
-                    float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
-                    float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
-                    n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
+                    if (g_nb_ok) {
+                        n_s = g_nrm_plain;
+                    } else {
+                        float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
+                        float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
+                        n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
+                    }
                 }
                 snow_cov *= smoothstep(0.35, 0.7, n_s.y);
                 // Fine grain of the snow surface (it is never a mirror-smooth sheet).
@@ -2198,29 +2466,7 @@ void main() {
     // front of a hill stayed sunlit at medium range and the ray-traced
     // object shadows (which ignore the terrain) were drawn onto it.
     float self_shadow = 1.0;
-    if (dif > 0.0 && !RMDBG(4)) {
-        float lit_g = 1.0;
-#ifndef QLIKE_WATER
-        if (distance(pos, scene.camera_pos.xyz) < 220.0) {
-            float tg = 0.10;
-            float g_top = terrainMaxHeight();
-            for (int i = 0; i < 30; ++i) {
-                vec3 q = pos + sunDir * tg;
-                if (q.y > g_top) break;
-                if (any(greaterThan(abs(q.xz), vec2(kHeightmapSide * 0.5 - 2.0)))) break;
-                float hg = q.y - meshHeight(q.xz);
-                lit_g = min(lit_g, smoothstep(-(0.10 + 0.02 * tg), -(0.02 + 0.004 * tg), hg));
-                if (lit_g < 0.01) break;
-                tg *= (i < 14) ? 1.5 : 1.22;
-            }
-        }
-#endif /* ! QLIKE_WATER */
-        // The FBM self-shadow march (the most expensive part of terrain
-        // shading) only where the heightmap walk left the point lit.
-        self_shadow = 1.0 - lit_g;
-        if (lit_g > 0.01)
-            self_shadow = max(self_shadow, 1.0 - calcShadow(pos + nor * 0.05, sunDir));
-    }
+    if (dif > 0.0 && !RMDBG(4)) self_shadow = lo_ok ? lo_sh.x : rm_self_shadow_base(pos, nor, sunDir);
 
 
     // Fake grass-cast shadow: probe the grass mask along the sun's
@@ -2309,134 +2555,12 @@ void main() {
     // budget bounded and prevents Windows TDR on a heavy view.
     float dyn_shadow = 0.0;
     float cam_dist_pos = distance(pos, scene.camera_pos.xyz);
-    // Smooth-fade RT contributions across the LOD band rather than
-    // leaving a visible cliff. lod_far comes from the user slider
-    // (fog_band.w); lod_near is 60% of that. Effect ramps from 1.0
-    // inside lod_near, to 0.0 at lod_far. Far pixels early-out.
     float lod_far  = max(50.0, scene.fog_band.w);
     float lod_near = lod_far * 0.6;
     float rt_lod_t = 1.0 - smoothstep(lod_near, lod_far, cam_dist_pos);
     bool do_rt = rt_lod_t > 0.005 && !RMDBG(32);
-
-    // Gate on shadow_strength too — if the user dialled it to 0,
-    // dyn_shadow gets multiplied by 0 at line ~2082 anyway, so the
-    // 4 blocker rays + N_s shadow rays were burning BVH for nothing.
-    if (dif > 0.0 && scene.rt_flags.x != 0 && do_rt &&
-        scene.rt_params.w > 1e-3) {
-        // base_softness from the global Shadow softness slider,
-        // scaled by the terrain-specific scale (terrain_params.w).
-        float base_softness = scene.rt_params.x;
-        if (scene.terrain_params.w > 0.0) {
-            base_softness *= max(0.05, scene.terrain_params.w);
-        }
-        // Sample count from global Shadow samples slider × near
-        // multiplier, but capped to 6 for the terrain shader. PCSS
-        // on terrain at the user's full slider (13+) was the dominant
-        // per-frame RT shadow cost and pushed total per-frame work
-        // over the GPU TDR threshold once the TLAS grew with streamed
-        // dyn-props. cube.frag PCSS still uses the full slider.
-        float near_mult = max(1.0, scene.terrain_extra.y);
-        int N_s_cap = max(2, int(scene.terrain_rt_extra.x));
-        int N_s = clamp(int(ceil(float(scene.rt_flags.y) * near_mult)),
-                        2, N_s_cap);
-
-        vec3 ref_l = abs(sunDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0)
-                                            : vec3(1.0, 0.0, 0.0);
-        vec3 tan_u = normalize(cross(ref_l, sunDir));
-        vec3 tan_v = cross(sunDir, tan_u);
-        // Bias along sun direction (NOT surface normal) — the FBM
-        // normal varies high-frequency per pixel; using it offsets
-        // each pixel's shadow cone slightly and produces dither.
-        vec3 origin = pos + sunDir * 0.1;
-        // Per-pixel + per-frame seed — TAA averages noisy samples.
-#ifndef QLIKE_WATER
-        // World-anchored seed. The per-pixel + per-frame seed relied on
-        // TAA to average it, but DLSS keeps it as detail: under tree
-        // canopies (wide penumbra, every pixel partly lit) the ground was
-        // a speckle that re-rolled every frame and crawled with the camera.
-        // Hash the ground position on a grid matched to the pixel
-        // footprint instead (power-of-two cell): the grain stays put on
-        // the ground like texture.
-        float rm_cell = exp2(ceil(log2(max(cam_dist_pos * 2.0 * scene.viewport.w, 1e-4))));
-        ivec3 rm_q = ivec3(floor((pos + vec3(0.0, 0.25 * rm_cell, 0.0)) / rm_cell));
-        uvec3 seed_base = rm_pcg3d(uvec3(rm_q) +
-                                   uvec3(0u, 0u, uint(int(log2(rm_cell)) + 64) * 7919u));
-        seed_base.z = 0u;
-        // ...except under DLSS Ray Reconstruction (rt_flags.x bit 1): a
-        // temporal denoiser needs noise that changes every frame; the
-        // frozen grain read as texture and stayed as a blocky speckle.
-        if ((scene.rt_flags.x & 2) != 0) seed_base = uvec3(gl_FragCoord.xy, scene.rt_flags.w);
-#else /* QLIKE_WATER */
-        uvec3 seed_base = uvec3(gl_FragCoord.xy, scene.rt_flags.w);
-#endif /* QLIKE_WATER */
-
-        // 1. Blocker search (4 rays, 4× softness cone).
-        const int kBlocker = 4;
-        float sum_t = 0.0;
-        int   hits  = 0;
-        for (int i = 0; i < kBlocker; ++i) {
-            float br1 = rmRand(seed_base + uvec3(i, 91u, 13u));
-            float br2 = rmRand(seed_base + uvec3(i, 19u, 71u));
-            float r   = sqrt(br1) * base_softness * 4.0;
-            float ph  = 6.28318530718 * br2;
-            vec3 j    = (cos(ph) * tan_u + sin(ph) * tan_v) * r;
-            vec3 d    = normalize(sunDir + j);
-            float t_b;
-            if (closest_hit_no_terrain(origin, d, 100.0, t_b)) {
-                sum_t += t_b;
-                ++hits;
-            }
-        }
-        if (hits > 0) {
-            // 2. Penumbra estimate (cube.frag formulation).
-            float avg_t = sum_t / float(hits);
-            float t_norm = avg_t * 0.1;
-            float curve_exp = mix(1.0, 3.0,
-                                   clamp(scene.rt_params2.w, 0.0, 1.0));
-            float scale = pow(max(t_norm, 0.0), curve_exp);
-            float penumbra = clamp(base_softness * scale * 0.6,
-                                    base_softness * 0.25,
-                                    base_softness * 6.0);
-
-            // 3. Stratified shadow rays.
-            int strata = int(ceil(sqrt(float(N_s))));
-            float inv = 1.0 / float(strata);
-            int taken = 0;
-            float blocked = 0.0;
-            for (int sy = 0; sy < strata && taken < N_s; ++sy) {
-                for (int sx = 0; sx < strata && taken < N_s; ++sx) {
-                    float r1 = rmRand(seed_base + uvec3(taken, 11u, 47u));
-                    float r2 = rmRand(seed_base + uvec3(taken, 53u, 23u));
-                    float u1 = (float(sx) + r1) * inv;
-                    float u2 = (float(sy) + r2) * inv;
-                    float r  = sqrt(u1) * penumbra;
-                    float ph = 6.28318530718 * u2;
-                    vec3 j   = (cos(ph) * tan_u + sin(ph) * tan_v) * r;
-                    vec3 d   = normalize(sunDir + j);
-                    if (any_hit_no_terrain(origin, d, 100.0)) blocked += 1.0;
-                    ++taken;
-                }
-            }
-            dyn_shadow = (blocked / float(taken)) * scene.rt_params.w;
-        }
-    }
-    // 4. Max-combine: the FBM self-shadow is the analogue of
-    //    cube.frag's heightmap bake — clean, no noise. Where the
-    //    surface is in self-shadow, we take that value verbatim.
-    //    Where it's lit, the RT cone fills in castle / cube
-    //    contributions. Result reads identical to the rasterised
-    //    terrain shadow path.
-    // Far field: beyond the soft RT shadow band (RT LOD distance) the object
-    // shadows (trees, castle, rocks) used to stop dead. Out to ~900 m one
-    // hard shadow ray per pixel keeps them - a penumbra is sub-pixel there
-    // anyway - blended in across the band.
-    if (dif > 0.0 && scene.rt_flags.x != 0 && scene.rt_params.w > 1e-3 &&
-        rt_lod_t < 0.999 && cam_dist_pos < 900.0 && self_shadow < 0.99 && !RMDBG(32)) {
-        float far_w = 1.0 - smoothstep(700.0, 900.0, cam_dist_pos);
-        vec3  fo = pos + nor * (0.15 + cam_dist_pos * 0.002) + sunDir * (0.3 + cam_dist_pos * 0.002);
-        float far_sh = any_hit_no_terrain(fo, sunDir, 220.0) ? scene.rt_params.w * far_w : 0.0;
-        dyn_shadow = mix(far_sh, dyn_shadow, rt_lod_t);
-    }
+    // (rm_rt_sun_shadow above: the soft band near the camera and the hard ray beyond it)
+    if (dif > 0.0) dyn_shadow = lo_ok ? lo_sh.y : rm_rt_sun_shadow(pos, nor, sunDir, self_shadow);
     // The stones cast shadows on the soil and on each other: a short walk
     // toward the sun over the stone heights.
     if (t < 6.0 && sunDir.y > 0.03 && self_shadow < 0.98 && peb0_h > -0.5) {
@@ -2535,6 +2659,9 @@ void main() {
     }
 
     vec3 mate = getMaterial(pos, nor) * rm_det_tint;
+#if !defined(QLIKE_LITE) && !defined(QLIKE_WATER)
+    if (RMDBG(256)) mate = lo_ok ? vec3(0.1, 0.8, 0.1) : vec3(0.9, 0.1, 0.1);    // profiling: green = sun shadows taken from the low-resolution pass
+#endif
     // The ground is darker where plants stand over it (leaf litter, damp soil,
     // less sky): a little under grass, more under bushes and trees, most where
     // both grow. Tree / bush cover is baked from the placed plants and blurred

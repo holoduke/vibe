@@ -311,7 +311,7 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
     if (tr_march_module_) {
         vkpipe::GraphicsPipelineConfig mo = cfg;
         mo.frag = tr_march_module_;
-        mo.color_formats = { VK_FORMAT_R32_SFLOAT };
+        mo.color_formats = { VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT };   // the march's distance, the shadow terms
         mo.depth_format = VK_FORMAT_UNDEFINED;
         mo.depth_test = false;
         mo.depth_write = false;
@@ -716,10 +716,18 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
             },
         };
         vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_march_view_), "tr_march view");
+        // The shadow terms: the same again in RGBA16F.
+        ici.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vk_check(vmaCreateImage(allocator_, &ici, &aci, &tr_shade_image_, &tr_shade_alloc_, nullptr), "tr_shade image");
+        vci.image = tr_shade_image_;
+        vci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_shade_view_), "tr_shade view");
         // In SHADER_READ_ONLY from the start: the terrain shader's binding must be valid
         // on frames the march is switched off (it is not read then).
         vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
             vkinit::transition_image(cb, tr_march_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            vkinit::transition_image(cb, tr_shade_image_, VK_IMAGE_LAYOUT_UNDEFINED,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         });
         VkDescriptorImageInfo mi{};
@@ -733,6 +741,9 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         mw.descriptorCount = 1;
         mw.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         mw.pImageInfo = &mi;
+        vkUpdateDescriptorSets(device_, 1, &mw, 0, nullptr);
+        mi.imageView = tr_shade_view_;
+        mw.dstBinding = 35;
         vkUpdateDescriptorSets(device_, 1, &mw, 0, nullptr);
     }
 
@@ -908,6 +919,15 @@ void VulkanEngine::recreate_vrs_attachment() {
 }
 
 void VulkanEngine::destroy_terrain_raymarch_lowres() {
+    if (tr_shade_view_) {
+        vkDestroyImageView(device_, tr_shade_view_, nullptr);
+        tr_shade_view_ = VK_NULL_HANDLE;
+    }
+    if (tr_shade_image_) {
+        vmaDestroyImage(allocator_, tr_shade_image_, tr_shade_alloc_);
+        tr_shade_image_ = VK_NULL_HANDLE;
+        tr_shade_alloc_ = nullptr;
+    }
     if (tr_march_view_) {
         vkDestroyImageView(device_, tr_march_view_, nullptr);
         tr_march_view_ = VK_NULL_HANDLE;
