@@ -171,4 +171,4 @@ Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMa
 
 The code and shaders written for this project are under the [MIT licence](LICENSE). Third-party
 material (motion capture, the sea wave function, character assets, textures, vendor libraries)
-keeps the licence of its source; see the list above and the notes in `LICENSE`.
+keeps the licence of its source; see the list above and [THIRD_PARTY.md](THIRD_PARTY.md).
