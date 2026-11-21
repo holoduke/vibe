@@ -977,7 +977,9 @@ TEST_CASE("animator: not aiming, the head looks about - at somebody, to a side, 
     fx::SetFixture f;
     const Rig& rig = f.set.runtime->rig();
     const int head = rig[Role::Head];
-    auto run_one = [&](uint32_t variation, bool moving, int counts[3], float& widest, float& highest, float& lowest, float& fastest, float& look_err) {
+    int changes = 0;
+    std::vector<float> rates;
+    auto run_one = [&](uint32_t variation, bool moving, int counts[4], float& widest, float& highest, float& lowest, float& fastest, float& look_err) {
         CharacterAnimator a(f.set);
         CharacterAnimationInput in;
         in.dt = 1.0f / 60.0f;
@@ -990,11 +992,15 @@ TEST_CASE("animator: not aiming, the head looks about - at somebody, to a side, 
         if (moving) { in.velocity = glm::vec3(0.0f, 0.0f, -8.0f); in.desired_velocity = in.velocity; }
         glm::quat prev(1.0f, 0.0f, 0.0f, 0.0f);
         std::vector<float> yaws;
-        for (int i = 0; i < 60 * 90; ++i) {
+        int last_mode = 0;
+        for (int i = 0; i < 60 * 180; ++i) {
             if (moving) in.position += in.velocity * in.dt;
             a.update(in);
             REQUIRE(pose_is_valid(a.model()));
             ++counts[a.gaze_mode()];
+            if (i > 0 && a.gaze_mode() != last_mode) ++changes;
+            last_mode = a.gaze_mode();
+            if (i > 0 && !moving) rates.push_back(std::abs(a.gaze_yaw() - yaws.back()) / in.dt);
             widest = std::max(widest, std::abs(a.gaze_yaw()));
             highest = std::max(highest, a.gaze_pitch());
             lowest = std::min(lowest, a.gaze_pitch());
@@ -1014,31 +1020,42 @@ TEST_CASE("animator: not aiming, the head looks about - at somebody, to a side, 
         CHECK(std::abs(a.gaze_pitch()) < 0.03f);
         return yaws;
     };
-    int c[3] = { 0, 0, 0 };
+    int c[4] = { 0, 0, 0, 0 };
     float widest = 0.0f, highest = 0.0f, lowest = 0.0f, fastest = 0.0f, look_err = 1e9f;
     const std::vector<float> a1 = run_one(7, false, c, widest, highest, lowest, fastest, look_err);
-    INFO("standing 90 s: nothing " << c[0] << ", glance " << c[1] << ", looking at them " << c[2] << " frames; widest " << widest
+    const int changes_standing = changes;
+    std::sort(rates.begin(), rates.end());
+    const float median_rate = rates[rates.size() / 2], p95_rate = rates[rates.size() * 95 / 100];
+    INFO("standing 180 s: at rest " << c[0] << ", to a side " << c[1] << ", looking at them " << c[2] << ", sweeping " << c[3] << " frames; " << changes_standing
+         << " changes; yaw rate median " << median_rate << ", 95 % below " << p95_rate << " rad/s; widest " << widest
          << " rad, up " << highest << ", down " << lowest << ", head at most " << fastest << " rad/s, nearest to them " << look_err << " rad");
     CHECK(c[0] > 300);                 // nothing for a while ...
     CHECK(c[1] > 300);                 // ... a look to a side ...
-    CHECK(c[2] > 300);                 // ... and at the other player, each some of the time
-    CHECK(widest > 0.5f);
-    CHECK(widest <= 1.26f);
-    CHECK(highest > 0.1f);             // up sometimes
-    CHECK(lowest < -0.08f);            // and down
+    CHECK(c[2] > 300);                 // ... at the other player ...
+    CHECK(c[3] > 300);                 // ... and a slow sweep, each some of the time
+    CHECK(c[0] > c[1]);                // at rest more than anything else to a side
+    CHECK(changes_standing >= 12);     // a new idea every few seconds ...
+    CHECK(changes_standing <= 60);     // ... not every second (3 minutes)
+    CHECK(median_rate < 0.08f);        // most of the time the head is all but still
+    CHECK(p95_rate < 0.9f);            // and its turns are unhurried: 50 degrees a second at the outside, nearly always
+    CHECK(widest > 0.4f);
+    CHECK(widest <= 1.06f);
     CHECK(look_err < 0.06f);           // when it looks at them, it looks at them
-    CHECK(fastest < 14.0f);            // a turn of the head, not a snap
+    CHECK(fastest < 6.0f);             // even the quick ones are a turn of the head, not a snap
     // the same character again does the same; another one does not
-    int c2[3] = { 0, 0, 0 }; float w2 = 0, h2 = 0, l2 = 0, f2 = 0, e2 = 1e9f;
+    int c2[4] = { 0, 0, 0, 0 }; float w2 = 0, h2 = 0, l2 = 0, f2 = 0, e2 = 1e9f;
     const std::vector<float> a2 = run_one(7, false, c2, w2, h2, l2, f2, e2);
     CHECK(a1 == a2);
-    int c3[3] = { 0, 0, 0 }; float w3 = 0, h3 = 0, l3 = 0, f3 = 0, e3 = 1e9f;
+    int c3[4] = { 0, 0, 0, 0 }; float w3 = 0, h3 = 0, l3 = 0, f3 = 0, e3 = 1e9f;
     const std::vector<float> a3 = run_one(8, false, c3, w3, h3, l3, f3, e3);
     CHECK(a1 != a3);
+    // up at the sky and down at the ground are rare: one of the two characters did each in three minutes
+    CHECK(std::max(highest, h3) > 0.1f);
+    CHECK(std::min(lowest, l3) < -0.08f);
     // on the move: still some of it, less far
-    int c4[3] = { 0, 0, 0 }; float w4 = 0, h4 = 0, l4 = 0, f4 = 0, e4 = 1e9f;
+    int c4[4] = { 0, 0, 0, 0 }; float w4 = 0, h4 = 0, l4 = 0, f4 = 0, e4 = 1e9f;
     run_one(7, true, c4, w4, h4, l4, f4, e4);
     INFO("moving: nothing " << c4[0] << ", glance " << c4[1] << ", looking " << c4[2] << "; widest " << w4);
-    CHECK(c4[0] > c4[1]);
-    CHECK(c4[1] > 100);
+    CHECK(c4[0] > c4[1] + c4[3]);      // mostly looking where it goes
+    CHECK(c4[1] + c4[2] + c4[3] > 300);
 }

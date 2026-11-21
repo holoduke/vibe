@@ -155,6 +155,7 @@ def flat_tile(color):
 
 
 GLOVE = flat_tile((0.016, 0.017, 0.016))
+SKIN = flat_tile((0.42, 0.26, 0.18))          # the base of the neck (linear: about the face's tone)
 
 # ---- meshes ----
 dg = bpy.context.evaluated_depsgraph_get()
@@ -280,6 +281,26 @@ def export(fname, head, ratio, weld=0.0):
         if wel:
             obj.modifiers.remove(wel)
 
+    if not head:
+        # The body has no head and its clothes are open at the collar: from the player's own
+        # eyes, looking down, that is a hole into an empty torso. Closed with the base of the
+        # neck: a slightly domed patch of skin inside the collar, carried by the neck joint.
+        ni = next(iter(NECK_BONES))
+        mwr = rig.matrix_world
+        c = to_game(mwr @ bones[ni].head_local)
+        cy = c[1] - 0.012
+        rx, rz, segs = 0.082, 0.098, 20
+        base = len(out_v)
+        uvc = (SKIN[0], 1.0 - SKIN[1])
+        w = ((ni, 0, 0, 0), (255, 0, 0, 0))
+        out_v.append(((c[0], cy + 0.018, c[2] - 0.004), (0.0, 1.0, 0.0), uvc, w[0], w[1]))
+        import math
+        for k in range(segs):
+            a = 2.0 * math.pi * k / segs
+            out_v.append(((c[0] + rx * math.cos(a), cy, c[2] - 0.004 + rz * math.sin(a)), (0.0, 1.0, 0.0), uvc, w[0], w[1]))
+        for k in range(segs):
+            # (wound to face up: counter-clockwise seen from above, +Y)
+            out_i.extend((base, base + 1 + (k + 1) % segs, base + 1 + k))
     # Blender winds counter-clockwise seen from outside; the axis change is a
     # rotation, so the winding is kept.
     path = os.path.join(OUT, fname)

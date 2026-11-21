@@ -129,6 +129,7 @@ void CharacterAnimator::reset() {
     aim_w_ = 1.0f; since_shot_ = 1e9f;
     rng_ = 0x9E3779B9u; rng_seeded_ = false;
     gaze_mode_ = 0; gaze_left_ = 0.0f; gaze_yaw_t_ = gaze_pitch_t_ = 0.0f;
+    gaze_half_ = 0.45f; gaze_sweep_ = gaze_sweep_to_ = 0.0f;
     gaze_yaw_ = gaze_yaw_v_ = gaze_pitch_ = gaze_pitch_v_ = gaze_w_ = 0.0f;
     shift_left_ = 3.0f; shift_t_ = shift_ = shift_v_ = 0.0f;
     weapon_fire_offset_ = glm::mat4(1.0f);
@@ -583,34 +584,66 @@ void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
             at_pitch = std::atan2(d.y, std::max(flat, 1e-3f)) - 0.8f * pitch;       // (the aim's pitch is in the neck already)
             can_see = flat > 0.4f && flat < 30.0f && std::abs(at_yaw) < 1.75f;
         }
+        // A head is heavy and mostly in no hurry. Small shifts of attention are made with the
+        // eyes; the head follows the larger ones, slowly, and holds for seconds. So: long rests,
+        // unhurried turns (a quick one only now and then, when something catches the eye), slow
+        // sweeps across the view, and small angles far more often than large ones.
         if (gaze_left_ <= 0.0f || (gaze_mode_ == 2 && !can_see)) {
             const float r = rnd();
-            const float p_look = can_see ? (moving ? 0.25f : 0.42f) : 0.0f;
-            const float p_glance = moving ? 0.30f : 0.36f;
+            const float p_look = can_see ? (moving ? 0.16f : 0.28f) : 0.0f;
+            const float p_side = moving ? 0.14f : 0.20f;
+            const float p_sweep = moving ? 0.10f : 0.18f;
+            // how quickly: mostly slow, sometimes ordinary, rarely quick
+            const float q = rnd();
+            const float slow = 0.45f + 0.25f * rnd(), ordinary = 0.27f + 0.10f * rnd(), quick = 0.13f + 0.04f * rnd();
+            gaze_sweep_ = 0.0f;
             if (r < p_look) {
-                gaze_mode_ = 2;
-                gaze_left_ = moving ? 1.0f + 1.5f * rnd() : 2.0f + 3.5f * rnd();
-            } else if (r < p_look + p_glance) {
+                gaze_mode_ = 2;                                             // somebody: a little more alert
+                gaze_half_ = q < 0.40f ? slow : q < 0.88f ? ordinary : quick;
+                gaze_left_ = moving ? 2.0f + 2.5f * rnd() : 3.5f + 5.0f * rnd();
+            } else if (r < p_look + p_side) {
                 gaze_mode_ = 1;
+                gaze_half_ = q < 0.68f ? slow : q < 0.94f ? ordinary : quick;
                 const float side = rnd() < 0.5f ? -1.0f : 1.0f;
-                gaze_yaw_t_ = side * (moving ? 0.26f + 0.60f * rnd() : 0.35f + 0.90f * rnd());
-                // mostly level; now and then up at the sky or down at the ground
+                const float far_look = rnd() < 0.2f ? 0.45f * rnd() : 0.0f;  // now and then well round
+                gaze_yaw_t_ = side * (0.20f + 0.40f * rnd() + far_look) * (moving ? 0.75f : 1.0f);
+                // level most of the time; sometimes up at the sky or down at the ground
                 const float v = rnd();
-                gaze_pitch_t_ = v < 0.15f ? 0.25f + 0.25f * rnd() : v < 0.32f ? -0.20f - 0.25f * rnd() : (rnd() - 0.5f) * 0.20f;
-                if (moving) gaze_pitch_t_ *= 0.4f;
-                gaze_left_ = moving ? 0.8f + 1.2f * rnd() : 1.0f + 2.4f * rnd();
+                gaze_pitch_t_ = v < 0.27f ? 0.15f + 0.22f * rnd() : v < 0.52f ? -0.14f - 0.22f * rnd() : (rnd() - 0.5f) * 0.12f;
+                if (moving) gaze_pitch_t_ *= 0.5f;
+                gaze_left_ = moving ? 1.8f + 2.2f * rnd() : 2.5f + 4.0f * rnd();
+            } else if (r < p_look + p_side + p_sweep) {
+                gaze_mode_ = 3;                                             // a slow look across, from where the head is
+                gaze_half_ = 0.30f;
+                const float side = gaze_yaw_ > 0.05f ? -1.0f : gaze_yaw_ < -0.05f ? 1.0f : (rnd() < 0.5f ? -1.0f : 1.0f);
+                gaze_sweep_to_ = side * (0.30f + 0.45f * rnd()) * (moving ? 0.7f : 1.0f);
+                gaze_sweep_ = 0.10f + 0.16f * rnd();                        // 6 - 15 degrees a second
+                gaze_yaw_t_ = gaze_yaw_;
+                gaze_pitch_t_ = (rnd() - 0.5f) * 0.10f;
+                gaze_left_ = std::abs(gaze_sweep_to_ - gaze_yaw_) / gaze_sweep_ + 0.8f + 1.5f * rnd();
             } else {
                 gaze_mode_ = 0;
-                gaze_left_ = moving ? 2.0f + 3.5f * rnd() : 1.5f + 3.0f * rnd();
+                gaze_half_ = q < 0.75f ? slow : ordinary;
+                gaze_left_ = moving ? 4.0f + 6.0f * rnd() : 3.0f + 6.0f * rnd();
             }
+        }
+        if (gaze_mode_ == 3) {
+            const float step = gaze_sweep_ * dt, d = gaze_sweep_to_ - gaze_yaw_t_;
+            gaze_yaw_t_ += std::clamp(d, -step, step);
         }
         float ty = 0.0f, tp = 0.0f;
         if (gaze_mode_ == 2) { ty = at_yaw; tp = at_pitch; }
-        else if (gaze_mode_ == 1) { ty = gaze_yaw_t_; tp = gaze_pitch_t_; }
-        ty = std::clamp(ty, -1.25f, 1.25f) * gaze_w_ * tuning.idle_look;
-        tp = std::clamp(tp, -0.50f, 0.55f) * gaze_w_ * tuning.idle_look;
-        spring_to(gaze_yaw_, gaze_yaw_v_, ty, 0.13f, dt);
-        spring_to(gaze_pitch_, gaze_pitch_v_, tp, 0.13f, dt);
+        else if (gaze_mode_ == 1 || gaze_mode_ == 3) { ty = gaze_yaw_t_; tp = gaze_pitch_t_; }
+        // (never quite still: a degree or two of drift)
+        const float ph = float(in.variation & 15u);
+        ty += 0.022f * std::sin(time_ * 0.31f + ph) + 0.012f * std::sin(time_ * 0.73f + 2.0f * ph);
+        tp += 0.010f * std::sin(time_ * 0.43f + 3.0f * ph);
+        ty = std::clamp(ty, -1.05f, 1.05f) * gaze_w_ * tuning.idle_look;
+        tp = std::clamp(tp, -0.45f, 0.45f) * gaze_w_ * tuning.idle_look;
+        // (the aim, a shot: the head is back on it at once, whatever its pace was)
+        const float half = busy ? 0.09f : gaze_half_;
+        spring_to(gaze_yaw_, gaze_yaw_v_, ty, half, dt);
+        spring_to(gaze_pitch_, gaze_pitch_v_, tp, half * 1.15f, dt);
         if (std::abs(gaze_yaw_) + std::abs(gaze_pitch_) > 1e-4f) {
             // the eyes lead, the neck follows, the chest gives a little (+yaw looks right: about -Y)
             const glm::vec3 kY(0.0f, 1.0f, 0.0f);

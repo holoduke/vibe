@@ -198,11 +198,17 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   only: the shot goes where the crosshair is either way, and there is no zoom or change of speed.
   A shot's tracer starts at the muzzle of the weapon as held (`weapon_fire_offset`: this stance,
   level, before the recoil), the player's own and other players' alike.
-- **Idle life.** Not aiming, a soldier seen from outside looks about (`idle_look`): at the nearest
-  other soldier (`look_at`, chosen in `mp_pose_avatars`), to a side, up or down, or nowhere for a
-  few seconds; less and less far while moving. Standing it breathes and shifts its weight
-  (`idle_sway`). Each character has its own sequence (`variation`), the same every run. All of it
-  stops for the aim, a shot or a reload.
+- **Idle life.** Not aiming, a soldier seen from outside looks about (`idle_look`), the way a head
+  does: mostly at rest (never quite still), now and then a look to a side, at the nearest other
+  soldier (`look_at`, chosen in `mp_pose_avatars`) or a slow sweep across the view; up or down
+  sometimes; less of all of it while moving. Turns are unhurried (most under 25 degrees a second),
+  held for seconds, small far more often than large; a quick one is the exception. Standing it
+  breathes and shifts its weight (`idle_sway`). Each character has its own sequence
+  (`variation`), the same every run. All of it stops at once for the aim, a shot or a reload.
+- **Looking down at oneself.** The body has no head and its clothes are open at the collar: the
+  export closes it with the base of the neck, and the body stands further behind the eye the
+  further down the view goes (`QLIKE_BODY_BACK`, `QLIKE_BODY_BACK_DOWN`), so straight down shows
+  chest and legs, not the inside of the torso.
 - **Third person hold.** Seen from outside, the rifle is moved so its butt sits in the right shoulder
   (`WeaponDef::butt`, `shoulder_offset`; `AnimTuning::shoulder_weapon`) and the head leans to the
   stock (`head_to_sights`); the tablet is held in front of the chest (`tablet_chest`). The player

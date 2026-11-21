@@ -309,7 +309,9 @@ void VulkanEngine::update_player_body(float dt) {
     const float look_down = glm::smoothstep(0.15f, 1.25f, -pitch);
     // The eye sits in front of the neck; further when looking down, so the view is never inside the chest.
     static const float kBack0 = env_float("QLIKE_BODY_BACK", 0.11f);
-    const float back = kBack0 + 0.17f * look_down + 0.25f * crouch;
+    // (looking down, the bottom of the view looks back past straight down: the body stays behind that)
+    static const float kBackDown = env_float("QLIKE_BODY_BACK_DOWN", 0.30f);
+    const float back = kBack0 + kBackDown * look_down + 0.25f * crouch;
     const glm::vec3 eye = current_frame_view_.eye_pos;
     const glm::vec3 feet = eye - glm::vec3(0.0f, eye_h, 0.0f) - fwd * back;
     // Model space: +X right, +Y up, -Z forward; the eye is at (0, eye_h, -back).

@@ -183,7 +183,8 @@ public:
     // Where the weapon is the moment a shot leaves it: as weapon_offset, but level (a weapon at
     // the ready comes level to fire) and before the recoil. What a tracer starts from.
     const glm::mat4& weapon_fire_offset() const { return weapon_fire_offset_; }
-    // What the head is doing (debug views, tests): 0 nothing, 1 a glance, 2 looking at look_at.
+    // What the head is doing (debug views, tests): 0 at rest, 1 looking to a side, 2 looking at
+    // look_at, 3 a slow sweep.
     int   gaze_mode() const { return gaze_mode_; }
     float gaze_yaw() const { return gaze_yaw_; }       // radians, + right
     float gaze_pitch() const { return gaze_pitch_; }   // radians, + up
@@ -241,6 +242,9 @@ private:
     int       gaze_mode_ = 0;
     float     gaze_left_ = 0.0f;                       // seconds until the next choice
     float     gaze_yaw_t_ = 0.0f, gaze_pitch_t_ = 0.0f;   // what a glance looks at
+    float     gaze_half_ = 0.45f;                      // how quickly this turn of the head is made (spring halflife, s)
+    float     gaze_sweep_ = 0.0f;                      // a sweep: radians a second, toward gaze_sweep_to_
+    float     gaze_sweep_to_ = 0.0f;
     float     gaze_yaw_ = 0.0f, gaze_yaw_v_ = 0.0f, gaze_pitch_ = 0.0f, gaze_pitch_v_ = 0.0f, gaze_w_ = 0.0f;
     float     shift_left_ = 3.0f, shift_t_ = 0.0f, shift_ = 0.0f, shift_v_ = 0.0f;
     float     rnd();                                   // 0 .. 1, this animator's own sequence
