@@ -163,7 +163,8 @@ Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMa
 - Player character: [MakeHuman / MPFB](https://static.makehumancommunity.org/) community assets;
   tactical vest by MindFront (CC-BY).
 - Character movement: motion capture from the 100STYLE dataset by Ian Mason, Sebastian Starke and Taku Komura
-  (CC BY 4.0, https://www.ianxmason.com/100style/), retargeted to the soldier (`tools/anim/build_motion_db.py`).
+  (CC BY 4.0, https://www.ianxmason.com/100style/), retargeted to the soldier (`tools/anim/cook_main.cpp`, see `docs/animation/`).
+- Skeletal animation runtime: ozz-animation by Guillaume Blanc (MIT, https://github.com/guillaumeblanc/ozz-animation).
 - Libraries: GLFW, glm, Dear ImGui, VMA, vk-bootstrap, Jolt Physics, meshoptimizer, miniaudio,
   NVIDIA Streamline, AMD FidelityFX.
 

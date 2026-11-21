@@ -331,6 +331,10 @@ target_link_libraries(qlike_anim_offline PUBLIC qlike_anim PRIVATE ozz_animation
 add_executable(vibe_animcook tools/anim/cook_main.cpp)
 target_link_libraries(vibe_animcook PRIVATE qlike_anim_offline)
 
+# What animation costs for 1 .. 1000 characters on this machine (docs/animation/performance.md).
+add_executable(vibe_animbench tools/anim/bench_main.cpp)
+target_link_libraries(vibe_animbench PRIVATE qlike_anim)
+
 # qlike_engine: rendering, windowing, Vulkan. Depends on qlike_core.
 add_library(qlike_engine STATIC
     src/engine/window.cpp

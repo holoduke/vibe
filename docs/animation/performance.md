@@ -1,0 +1,86 @@
+# Character animation — measurements
+
+Machine: AMD Ryzen 7 9800X3D (16 threads), Windows 11, MSVC Release (`/O2 /GL /arch:AVX2`).
+Date: 2026-11-21. Reproduce: `./build/vibe_animbench.exe assets/character/soldier.qanim 3`.
+
+No budgets are set here: they are the project owner's to decide against a target frame rate
+and player count. These are the costs to decide with.
+
+## Animation update (CPU, no skinning)
+
+Each character is a `CharacterAnimator` on the shipped asset, driven by the real controller
+with its own scripted input (runs, strafes, turns, jumps, shots). "allocations" counts heap
+allocations made inside `update` over the measured frames.
+
+| characters | levels | threads | ms / frame p50 | p95 | p99 | us / character (mean) | allocations in update |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | all 0 (full) | 1 | 0.011 | 0.334 | 0.467 | 52.31 | 0 |
+| 8 | all 0 (full) | 1 | 0.267 | 0.901 | 1.317 | 43.79 | 0 |
+| 16 | all 0 (full) | 1 | 0.661 | 1.504 | 1.898 | 47.06 | 0 |
+| 32 | all 0 (full) | 1 | 1.479 | 2.437 | 2.922 | 47.38 | 0 |
+| 64 | all 0 (full) | 1 | 3.051 | 4.543 | 4.882 | 47.19 | 0 |
+| 64 | all 1 | 1 | 1.645 | 2.961 | 3.606 | 27.73 | 0 |
+| 64 | all 2 | 1 | 1.214 | 2.574 | 3.253 | 20.91 | 0 |
+| 64 | all 3 (unseen) | 1 | 0.005 | 0.005 | 0.005 | 0.08 | 0 |
+| 64 | all 0 (full) | 16 | 1.094 | 1.589 | 1.991 | 17.47 | - |
+| 128 | all 0 (full) | 1 | 5.972 | 8.480 | 10.725 | 48.28 | 0 |
+| 128 | mix 8/24/64/rest | 1 | 2.231 | 3.765 | 4.268 | 18.43 | 0 |
+| 128 | all 0 (full) | 16 | 1.599 | 2.192 | 2.437 | 12.69 | - |
+| 256 | all 0 (full) | 1 | 12.275 | 16.425 | 21.005 | 48.61 | 0 |
+| 256 | mix 8/24/64/rest | 1 | 2.246 | 3.757 | 4.309 | 9.30 | 0 |
+| 256 | all 0 (full) | 16 | 2.292 | 3.125 | 3.490 | 9.11 | - |
+| 512 | all 0 (full) | 1 | 24.990 | 29.254 | 35.015 | 48.09 | 0 |
+| 512 | mix 8/24/64/rest | 1 | 2.321 | 3.771 | 4.508 | 4.73 | 0 |
+| 512 | all 0 (full) | 16 | 3.860 | 4.629 | 5.180 | 7.53 | - |
+| 1000 | all 0 (full) | 1 | 49.018 | 55.274 | 66.117 | 49.04 | 0 |
+| 1000 | all 1 | 1 | 28.305 | 35.889 | 47.056 | 28.88 | 0 |
+| 1000 | all 2 | 1 | 20.988 | 30.238 | 46.110 | 21.88 | 0 |
+| 1000 | all 3 (unseen) | 1 | 0.087 | 0.094 | 0.112 | 0.09 | 0 |
+| 1000 | mix 8/24/64/rest | 1 | 2.333 | 3.861 | 4.682 | 2.46 | 0 |
+| 1000 | all 0 (full) | 16 | 6.898 | 8.324 | 9.735 | 6.95 | - |
+
+Reading it:
+
+- One fully animated character costs about **48 microseconds** a frame on average; most of that
+  is the pose search (0.2 - 0.45 ms, ten times a second). p99 is higher because searches bunch up.
+- Level 1 is ~28 us, level 2 ~21 us, level 3 (not in view) 0.09 us.
+- A client's realistic mix in a crowd (8 full, 24 at level 1, 64 at level 2, the rest unseen)
+  costs **2.3 ms p50 / 4.7 ms p99 on one thread whether 128 or 1,000 players are replicated**.
+- Spread over 16 threads, 1,000 fully animated characters take 6.9 ms p50.
+- **No allocations** in the update at any count.
+
+## In the game
+
+| | |
+|---|---|
+| Local body, per frame (`player body` in the `[cpuprof]` line) | 0.75 - 0.85 ms, of which skinning 43,155 vertices on the CPU ~0.6 ms |
+| Two bodies in view (two-instance run, `QLIKE_ANIM_LOG=1`) | animation 0.03 ms, skinning 1.17 ms |
+| Pose search | 0.20 - 0.45 ms over 79,210 frames, both mirror halves; 0.005 ms while idle |
+
+**Skinning, not animation, is what limits how many characters can be drawn**: ~0.6 ms each on
+the CPU. Thirty-two drawn players would cost ~19 ms. Moving skinning to the vertex shader
+(the animator already produces a skinning palette: `IAnimationRuntime::skinning_matrices`) is the
+next step before any large player count; it was not done here because it changes the mesh
+pipeline and shaders, not the animation.
+
+## Memory
+
+| | |
+|---|---|
+| Asset on disk | 24.2 MB |
+| Clips in memory (ozz, compressed) | 12.9 MB for 80,101 frames x 53 joints: 168 bytes per frame (raw: 1,484) |
+| Motion database | 11.6 MB (32 floats per frame, padded for AVX; the mirrored half is not stored) |
+| Per character | ~16 kB of pose buffers plus two sampling caches |
+| Before this work | ~46 MB (every frame stored twice) |
+
+ACL was not evaluated: ozz's compression is 9:1 on this data and sampling is not on the profile.
+
+## Network (measured in a two-instance run)
+
+| | |
+|---|---|
+| A client sends | 44 bytes x 30 /s = 1.3 kB/s (measured 1.31) |
+| The host sends each client | (6 + 43 x players) bytes x 60 /s; two players: 5.5 kB/s (measured 5.66) |
+| Before (protocol 1) | 47 bytes per state; no weapon, keys or shot counter |
+
+Payload bytes as counted by `net::Session::stats()`; ENet and UDP headers come on top.

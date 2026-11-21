@@ -4,8 +4,10 @@ The MIT licence in `LICENSE` covers the source code and shaders written for this
 Third-party material keeps its own licence; see "Credits" in README.md. In
 particular:
 
-- Motion capture data (assets/character/motion.qmm): derived from the 100STYLE
-  dataset by Ian Mason, Sebastian Starke and Taku Komura, CC BY 4.0.
+- Motion capture data (assets/character/soldier.qanim): derived from the 100STYLE
+  dataset by Ian Mason, Sebastian Starke and Taku Komura, CC BY 4.0. Every clip in
+  the file carries its source take, frame range and licence.
+- ozz-animation (skeleton and clip runtime, fetched at build time): Guillaume Blanc, MIT.
 - Sea wave function: after "Seascape" by Alexander Alekseev (TDM),
   CC BY-NC-SA 3.0 (non-commercial, share-alike).
 - Character assets: MakeHuman / MPFB community assets (CC0, CC BY).

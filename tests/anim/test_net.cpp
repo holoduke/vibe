@@ -446,7 +446,7 @@ TEST_CASE("net: respawn, late join, weapon switch and reload as seen by an obser
     CHECK(in.held == HeldItem::Tablet);
     s.flags = kFlagTorch;
     remote_animation_input(s, in);
-    CHECK(in.held == HeldItem::None);
+    CHECK(in.held == HeldItem::Tablet);            // (a torch is not drawn for others: what they carry besides it is)
     s.weapon = 0; s.flags = kFlagReload | kFlagGround;
     remote_animation_input(s, in);
     CHECK(in.held == HeldItem::Rifle);

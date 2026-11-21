@@ -88,7 +88,7 @@ Consequences for the requirements document, which assumes a server-authoritative
 
 | Library | Decision | Licence | Notes |
 |---|---|---|---|
-| **ozz-animation 0.17.0** | Adopted: skeleton, clip storage + sampling, blending, local-to-model, two-bone / aim IK | MIT | `FetchContent`, tag pinned. Only `ozz_base`, `ozz_animation`, `ozz_animation_offline` are built (tools, samples, FBX, glTF, tests off). Hidden behind `anim::IAnimationRuntime`; no ozz header is included outside `src/anim/ozz_runtime.cpp` and `src/anim/offline/` |
+| **ozz-animation 0.17.0** | Adopted: skeleton, compressed clips + sampling, blending, local-to-model; its two-bone and aim IK jobs are available through the interface and tested. The animator fits limbs with its own roll-preserving solver (`CharacterAnimator::fit_limb`): ozz's two-bone job needs a fixed hinge axis per joint, which this rig (rest orientations all identity) does not give for arms | MIT | `FetchContent`, tag pinned. Only `ozz_base`, `ozz_animation`, `ozz_animation_offline` are built (tools, samples, FBX, glTF, tests off). Hidden behind `anim::IAnimationRuntime`; no ozz header is included outside `src/anim/ozz_runtime.cpp` and `src/anim/offline/` |
 | Assimp | Not adopted | BSD-3 | The only source format in use is BVH; a 150-line reader is more reliable than Assimp's BVH importer and adds no dependency. glTF is already covered by tinygltf should a rigged glTF source appear |
 | ACL | Not adopted | MIT | ozz's own compressed clips are measured first (section 7). A second sampling path is only justified by a measured need |
 | Motion matching, inertialisation, trajectory prediction, contacts, foot lock, warping, shooter layers | Written for this engine in `src/anim/` | MIT (project) | No suitable library |
@@ -107,7 +107,7 @@ version is checked at load).
 
 Not used: LaFAN1 (CC BY-NC-ND), any clip without a stated licence. 100STYLE has no aiming, firing,
 reload, fall or hard landing; those are layers and procedural phases here. Every cooked clip
-carries its source file, frame range and licence string in the asset (`ClipInfo::provenance`).
+carries its source file, frame range and licence string in the asset (`ClipInfo::provenance`, `ClipInfo::licence`).
 
 ## 4. Target architecture
 
@@ -162,18 +162,22 @@ struct; it is deterministic for a given input sequence; no allocation in `update
 | Phase | Content | State |
 |---|---|---|
 | 0 | This document, baseline | done |
-| 1 | ozz runtime behind `IAnimationRuntime`, importer + retarget + cook tool, tests | see status |
-| 2 | Motion database, search, trajectory prediction | |
-| 3 | Inertialisation, warps, transitions | |
-| 4 | Jumps, falls, landings | |
-| 5 | Foot / hand IK, aim, recoil, reload | |
-| 6 | Profiling, LOD, debug overlay, documentation | |
-| N0 - N5 | Replicated animation inputs, events, remote reconstruction, tests | |
-| S0 - S4 | Capacity audit, interest management, budgets, load tests | |
+| 1 | ozz runtime behind `IAnimationRuntime`, BVH import, retarget, validation, cook tool | done, tested |
+| 2 | Motion database, AVX2 exhaustive search, trajectory prediction from the controller's model | done, tested |
+| 3 | Inertialisation, orientation + stride warp, lean | done, tested. Distance matching for stops: not built (see gaps) |
+| 4 | Jumps, falls, landings from controller state | done, tested |
+| 5 | Foot locks, ground adaptation, pelvis compensation, weapon hands, aim, recoil, reload, equip | done, tested |
+| 6 | Benchmarks, levels of detail, debug overlay, documentation | done (`performance.md`, `guide.md`) |
+| N0 - N3 | Network audit; replicated aim / weapon / keys / shot counter; stamped, de-duplicated events | done, tested |
+| N4 | Interpolation that follows the link, loss / jitter / stall tests, net debug figures | done against a modelled link; see gaps |
+| N5 | Two-client acceptance from the observer's side | partly: one real two-instance run, standing and firing (`captures/mp_observer.png`) |
+| S0 | Capacity audit | written (`docs/network/1000_player_capacity_plan.md`); server-side measurements not possible on this netcode |
+| S1 - S4 | Interest management, bandwidth budgets, server scaling, load tests | not started: blocked on B1 |
+| S3 (client) | Animation levels of detail, per-level cost at 1 .. 1000 characters | done and measured |
 
 ## 7. Risks and open blockers
 
-- **B1 — authority model.** The requirements assume a dedicated authoritative server; the game is
+- **B1 - authority model (open, owner decision).** The requirements assume a dedicated authoritative server; the game is
   a LAN listen-host relay with client-authoritative movement and shooter-decided hits. Moving the
   movement simulation to the host is a gameplay / netcode project of its own and needs an owner
   decision (dedicated server? cheating in scope for a LAN game?). Animation work proceeds on the
@@ -190,4 +194,44 @@ struct; it is deterministic for a given input sequence; no allocation in `update
 
 ## 8. Status log
 
-(appended per phase: files, commands, results)
+### Result (2026-11-21)
+
+The game runs on the new system; `engine/motion_match.*`, `tools/anim/build_motion_db.py` and
+`assets/character/motion.qmm` are gone. Build: `./build.ps1 -Config Release -Test` - 100 tests
+(30 existing + 70 in `qlike_anim_tests`), all passing.
+
+| Area | Files |
+|---|---|
+| Library | `src/anim/` (types, skeleton_def, asset, runtime + ozz_runtime, motion_db, trajectory, motion_matcher, inertializer, airborne, character_animator, anim_lod) |
+| Offline | `src/anim/offline/` (bvh, raw_clip, retarget, cook, motion_build), `tools/anim/cook_main.cpp`, `tools/anim/bench_main.cpp` |
+| Engine | `vk_engine/player_body.cpp` (rewritten), `multiplayer.cpp`, `ragdoll.cpp`, `props.cpp`, `combat.cpp`, `vk_engine.cpp`, `vk_engine.h` |
+| Network | `engine/net/net_state.h` (new), `net_anim.h` (new), `net.h`, `net.cpp` |
+| Tests | `tests/anim/` (skeleton, runtime, import, motion, animator, net) |
+| Asset | `assets/character/soldier.qanim` (27 clips, 80,101 frames, 490 jumps; 24 MB) |
+
+Measured against the baseline (same machine, body shown from outside, running):
+
+| | Before | After |
+|---|---|---|
+| `player body` per frame (animation + skinning) | 0.80 - 0.90 ms | 0.75 - 0.85 ms (animation 0.02 - 0.35 ms, skinning ~0.6 ms) |
+| Data in memory | ~46 MB (frames stored twice for the mirror) | 24.5 MB (12.9 MB clips + 11.6 MB database; mirror searched, not stored) |
+| Search | every 0.2 s, scalar | every 0.1 s, AVX2: 0.2 - 0.45 ms over 79,210 frames x 2 |
+| Tests | none | 70 |
+
+### Acceptance criteria
+
+| # | Criterion | State |
+|---|---|---|
+| 1 | Builds cleanly, existing tests green | pass |
+| 2 | Demo map showcase | not built as a map; every listed movement runs in the scenario tests and can be shown with the `QLIKE_BODY_*` hooks |
+| 3 | No obvious foot sliding in planted phases | pass below 4 m/s (locks, < 1.5 cm in tests). **Fail above**: the capture tops out near 1.9 m/s, the game runs 8 - 12; feet slide at speed (gap G1) |
+| 4 | No pops, NaNs, oscillation | pass in tests (joint rates bounded, 0 invalid poses, switch rate bounded at 5 - 10 Hz input) |
+| 5 | Input never delayed or altered | pass: controller trajectories bit-identical with and without animation |
+| 6 | Debug tools | pass (`QLIKE_ANIM_DEBUG=1`) |
+| 7 | Automated tests | pass |
+| 8 | Benchmarks recorded, budgets agreed | recorded (`performance.md`); budgets are the owner's to set |
+| 9 | Licences and provenance | pass (per clip in the asset; `THIRD_PARTY.md`) |
+| 10 | Integration guide, quality gaps | `guide.md` |
+
+Judged by eye only from stills: nobody has watched this in motion yet. The tests prove it is
+continuous, bounded and responsive; they cannot say it looks good.

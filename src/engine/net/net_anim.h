@@ -60,8 +60,8 @@ inline RemoteFrame remote_animation_input(const PlayerState& s, anim::CharacterA
     in.desired_velocity = glm::vec3(0.0f);
     if (glm::dot(wish, wish) > 1e-6f)
         in.desired_velocity = glm::normalize(wish) * game::kPlayerMove.max_walk_speed * ((s.move & kMoveSprint) ? 1.5f : (s.move & kMoveCrawl) ? 0.4f : 1.0f);
-    // (a torch is not shown in other players' hands: the arms then swing free)
-    in.held = (s.flags & kFlagTorch) ? anim::HeldItem::None : (s.weapon == 1 ? anim::HeldItem::Tablet : anim::HeldItem::Rifle);
+    // (a torch is not drawn in other players' hands: they are shown with what they carry besides it)
+    in.held = s.weapon == 1 ? anim::HeldItem::Tablet : anim::HeldItem::Rifle;
     in.shot_seq = s.shot_seq;
     in.reloading = (s.flags & kFlagReload) != 0;
     return f;

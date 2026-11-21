@@ -190,7 +190,9 @@ void VulkanEngine::mp_pose_avatars(float dt) {
     const float tan_half = current_frame_view_.proj[1][1] != 0.0f ? 1.0f / std::abs(current_frame_view_.proj[1][1]) : 0.7f;
     for (auto& a : mp_avatars_) {
         a.drawn = false;
+        a.present = false;
         if (!a.id) continue;
+        a.present = true;
         a.recoil_t = std::max(0.0f, a.recoil_t - dt);
         a.muzzle_t = std::max(0.0f, a.muzzle_t - dt);
         a.combat_t += dt;
@@ -374,7 +376,8 @@ void VulkanEngine::mp_on_local_fire(glm::vec3 origin, glm::vec3 dir) {
 bool VulkanEngine::mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
     if (!net_) return false;
     for (auto& av : mp_avatars_) {
-        if (!av.id || !av.drawn) continue;
+        // (whether they are drawn has nothing to do with it: animation detail never decides a hit)
+        if (!av.id || !av.present) continue;
         const glm::vec3 c(av.st.px, av.st.py, av.st.pz);
         const float top = game::Player::kHalfExtents.y + 0.25f - 0.9f * av.st.crouch;     // up to the helmet
         float t = 0.0f;

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 
@@ -32,6 +33,14 @@ struct MsgWorld   { uint8_t type; WorldState w; };
 
 enum : uint8_t { kMsgState = 1, kMsgSnap = 2, kMsgEvent = 3, kMsgHello = 4, kMsgWorld = 5 };
 constexpr uint8_t kVersion = kProtocolVersion;
+
+// QLIKE_NET_PORT=<n>: another discovery port (game ports follow it), so test instances on a
+// machine or a network do not meet games that are being played.
+uint16_t discovery_port() {
+    static const uint16_t p = [] { const char* e = std::getenv("QLIKE_NET_PORT"); const int v = e ? std::atoi(e) : 0; return uint16_t(v > 1024 && v < 65000 ? v : kDiscoveryPort); }();
+    return p;
+}
+uint16_t game_port() { return uint16_t(discovery_port() == kDiscoveryPort ? kGamePort : discovery_port() + 1); }
 
 }  // namespace
 
@@ -123,7 +132,7 @@ bool Session::start(const std::string& player_name) {
     do { id_ = (uint32_t(rd()) << 1) ^ uint32_t(rd()) ^ uint32_t(GetTickCount64()); } while (id_ == 0);
 
     for (uint16_t k = 0; k < 8 && !d_->host; ++k) {
-        ENetAddress a; a.host = ENET_HOST_ANY; a.port = uint16_t(kGamePort + k);
+        ENetAddress a; a.host = ENET_HOST_ANY; a.port = uint16_t(game_port() + k);
         d_->host = enet_host_create(&a, kMaxPlayers, 2, 0, 0);
         if (d_->host) d_->port = a.port;
     }
@@ -134,7 +143,7 @@ bool Session::start(const std::string& player_name) {
         BOOL yes = TRUE;
         setsockopt(d_->disc, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes), sizeof(yes));
         setsockopt(d_->disc, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&yes), sizeof(yes));
-        sockaddr_in sa{}; sa.sin_family = AF_INET; sa.sin_addr.s_addr = INADDR_ANY; sa.sin_port = htons(kDiscoveryPort);
+        sockaddr_in sa{}; sa.sin_family = AF_INET; sa.sin_addr.s_addr = INADDR_ANY; sa.sin_port = htons(discovery_port());
         if (bind(d_->disc, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) != 0) {
             log::warnf("[net] discovery bind failed (%d)", WSAGetLastError());
             closesocket(d_->disc); d_->disc = INVALID_SOCKET;
@@ -370,7 +379,7 @@ void Session::update(double now, const PlayerState& local) {
                       uint8_t(role_ == Role::Solo ? 0 : (role_ == Role::Host ? 1 : 2)),
                       uint8_t(players_.size() + 1), d_->port, id_ };
             for (uint32_t addr : d_->bcast) {
-                sockaddr_in to{}; to.sin_family = AF_INET; to.sin_addr.s_addr = addr; to.sin_port = htons(kDiscoveryPort);
+                sockaddr_in to{}; to.sin_family = AF_INET; to.sin_addr.s_addr = addr; to.sin_port = htons(discovery_port());
                 sendto(d_->disc, reinterpret_cast<const char*>(&b), sizeof(b), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
             }
         }

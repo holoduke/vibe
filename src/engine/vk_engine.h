@@ -1240,6 +1240,7 @@ private:
         float         skip_dt = 0.0f;                  // time not yet given to the animator (a skipped frame)
         bool          teleported = false;              // their state jumped (respawn): told to the animator once
         bool          drawn = false, fresh_pose = true;
+        bool          present = false;                 // has a current state: can be hit, whether drawn or not
         glm::vec3     foot_last{1e9f};                 // footprints in the snow
         bool          corpse = false;                  // drawn as a body on the ground: head, no weapon
         bool          die = false;                     // killed: the next pose becomes a ragdoll (ragdoll.cpp)
