@@ -98,6 +98,7 @@ prediction follows.
 | `QLIKE_BODY_CROWD=<n>` | Draw the local body n more times (GPU cost of n skinned characters) |
 | `QLIKE_TEST_MOVE=1` | The player moves by itself on a 9 s loop of real key input: forward, jump, sprint, strafe, back, a turning arc |
 | `QLIKE_ANIM_LOD=<0..3>` | Force other players' level of detail |
+| `QLIKE_MESH_LOD=<0..2>` | Force which mesh every soldier is drawn with |
 | `QLIKE_ANIM_LOG=1` | Per-frame animation cost, level counts, network bytes, and what each remote player's animator is doing, in the log |
 | `QLIKE_NET_PORT=<n>` | Another discovery port: test instances do not meet real games |
 | `QLIKE_CFG=<file>` | Another settings file (captures without touching the player's own) |
@@ -162,11 +163,14 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 - **G3 — stops.** No distance matching; a stop is found by the search (the StartStop takes help).
 - **G4 — ground under remote players** far from the local one is the terrain only when in the air
   (time to contact may be late over a floor) and level when grounded.
-- **G5 — one mesh for every distance.** Skinning is on the GPU (`cube_skin.vert`, ~0.01 ms a
-  body), but every body is the full 43k-vertex mesh and at most 48 skinned characters are drawn
-  in a frame (`kSkinCharacters`). Motion vectors of a body come from its model matrix, not its
-  previous pose. Bodies cast no shadows (as before).
-- **G6 — third-person mesh.** The soldier has no head geometry (stand-in box for others).
+- **G5 - at most 48 skinned characters are drawn in a frame** (`kSkinCharacters`). Skinning is on
+  the GPU (`cube_skin.vert`); the body and the head each have three meshes (109k / 28k / 9k
+  triangles together), chosen by height on screen (`body_mesh_lod`: full above 300 px, the middle
+  one above 100). Motion vectors of a body come from its model matrix, not its previous pose.
+  Bodies cast no shadows (as before).
+- **G6 - the head** is a mesh of its own (`soldier_head*.qchar`: head, eyes, M1 helmet), drawn on
+  other players and the fallen, never on the player himself. No brows, lashes or teeth; the
+  face does not move.
 - **G7 — not watched in motion by a person.** Verified by tests, stills, and a two-instance run
   on the real netcode in which one instance walks, sprints, jumps, strafes, back-pedals and swims
   by itself (`QLIKE_TEST_MOVE=1`) and the other logs what its animator reconstructs

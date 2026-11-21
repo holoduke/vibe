@@ -216,6 +216,7 @@ void VulkanEngine::corpses_update(float dt) {
         e[3] = glm::vec4(pp[2] + Dh * (glm::vec3(c.eye0[3]) - (c.p0[2] - c.origin)), 1.0f);
         c.av.view_inv = e;
         c.av.eye = glm::vec3(e[3]);
+        c.av.mesh_lod = body_mesh_lod(c.av.eye, c.av.mesh_lod);
     }
 }
 

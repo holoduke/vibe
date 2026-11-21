@@ -254,6 +254,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         }
         a.view_inv = rf.view_inv;          // their camera: where their gun and head are drawn from
         a.eye = eye;
+        a.mesh_lod = body_mesh_lod(eye, a.mesh_lod);
         a.drawn = a.lod < 3 && a.palette >= 0;
     }
     if (std::getenv("QLIKE_ANIM_LOG") && frame_number_ % 20 == 0) {

@@ -1189,7 +1189,6 @@ private:
     // ---- The player's own body (player_body.cpp): a skinned soldier,
     // posed with IK every frame and skinned on the CPU. ----
     struct BodyBone { std::string name; int parent = -1; glm::vec3 head{0.0f}, tail{0.0f}; };
-    struct BodyVert { glm::vec3 pos, nrm; glm::vec2 uv; uint8_t bone[4]; float weight[4]; };
     // Animation (src/anim): one shared set (skeleton, clips, motion database) and one animator per
     // character. The animator turns controller state - or, for another player, the interpolated
     // network state - into joint matrices; pose_character sends them to the GPU, which skins (cube_skin.vert). See docs/animation.
@@ -1208,11 +1207,19 @@ private:
     float     anim_ms_ = 0.0f, skin_ms_ = 0.0f;        // this frame, all characters
     int       anim_lod_count_[4]{};
     std::vector<BodyBone> body_bones_;
-    std::vector<BodyVert> body_verts_;
     std::vector<glm::mat3> body_R_;
     std::vector<glm::vec3> body_P_;
-    Mesh          body_mesh_{};                       // rest pose + indices
-    Mesh          body_skin_mesh_{};                  // second vertex stream: bone indices and weights (as floats in a Vertex)
+    // A skinned mesh: two static vertex streams (the rest pose; bone indices and weights packed
+    // as floats in a Vertex) and its indices. The soldier's body has no head (the player looks
+    // out of it); the head, with helmet and eyes, is a mesh of its own, drawn on other players
+    // and the fallen. Both at three levels of detail (tools/character/export_fp.py); a level
+    // whose file is missing is the level before it.
+    struct SkinMesh { Mesh rest{}, skin{}; uint32_t index_count = 0, vertex_count = 0; };
+    static constexpr int kBodyLods = 3;
+    SkinMesh      body_lod_[kBodyLods], head_lod_[kBodyLods];
+    bool load_skin_mesh(const char* file, SkinMesh& out, bool with_bones);
+    int  body_mesh_lod(glm::vec3 pos, int previous) const;    // by height on screen
+    bool          body_front_ = false;                // QLIKE_BODY_FRONT: the local body is looked at from outside (head drawn)
     // The bone palette: three rows (a 3x4 matrix, rest -> posed, model space) per bone, for every
     // character drawn this frame, one region per frame in flight. Binding 33 of the scene set.
     static constexpr uint32_t kSkinBones = 64, kSkinCharacters = 48;
@@ -1227,8 +1234,6 @@ private:
     VkPipeline pipeline_skin_ = VK_NULL_HANDLE, pipeline_skin_gbuf_ = VK_NULL_HANDLE;
     VkShaderModule skin_vert_module_ = VK_NULL_HANDLE;
     VkPipeline skin_pipeline() const { return (pipeline_skin_gbuf_ && deferred_owns_lighting()) ? pipeline_skin_gbuf_ : pipeline_skin_; }
-    uint32_t      body_index_count_ = 0;
-    std::vector<uint32_t> body_dbg_idx_;
     float         body_scale_ = 1.0f;
     glm::mat4     body_model_{1.0f};
     bool          body_drawn_ = false;
@@ -1244,6 +1249,7 @@ private:
         float         settle = 0.0f, recoil_t = 0.0f, muzzle_t = 0.0f;
         std::unique_ptr<anim::CharacterAnimator> animator;
         int           lod = 0, skipped = 0;            // animation level of detail; frames since the last pose
+        int           mesh_lod = 0;                    // which mesh is drawn (by size on screen)
         uint32_t      reload_seq = 0;
         bool          was_reloading = false;
         float         combat_t = 1e9f;                 // seconds since they shot or were shot at by us

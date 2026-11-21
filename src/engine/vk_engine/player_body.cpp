@@ -48,16 +48,15 @@ int VulkanEngine::body_bone(const char* name) const {
     return -1;
 }
 
-void VulkanEngine::init_player_body() {
+// Reads one .qchar. with_bones: this is the file the skeleton is taken from (and the scale that
+// puts the model's eyes at the player's eye height); every other file must be on that skeleton.
+bool VulkanEngine::load_skin_mesh(const char* file, SkinMesh& out, bool with_bones) {
     std::string path;
-    for (const char* p : { "assets/character/soldier_fp.qchar", "../assets/character/soldier_fp.qchar" }) {
-        std::ifstream t(p, std::ios::binary);
-        if (t.good()) { path = p; break; }
+    for (const char* dir : { "assets/character/", "../assets/character/" }) {
+        std::ifstream t(std::string(dir) + file, std::ios::binary);
+        if (t.good()) { path = std::string(dir) + file; break; }
     }
-    if (path.empty()) {
-        log::info("[body] no assets/character/soldier_fp.qchar - no visible player body");
-        return;
-    }
+    if (path.empty()) return false;
     std::ifstream f(path, std::ios::binary);
     char magic[4]{};
     uint32_t nb = 0, nv = 0, ni = 0;
@@ -66,11 +65,11 @@ void VulkanEngine::init_player_body() {
     f.read(reinterpret_cast<char*>(&nv), 4);
     f.read(reinterpret_cast<char*>(&ni), 4);
     if (std::memcmp(magic, "QCH1", 4) != 0 || nb == 0 || nb > 255 || nv == 0 || nv > 2000000 || ni > 12000000) {
-        log::warn("[body] bad character file");
-        return;
+        log::warnf("[body] %s: bad character file", file);
+        return false;
     }
-    body_bones_.resize(nb);
-    for (BodyBone& b : body_bones_) {
+    std::vector<BodyBone> bones(nb);
+    for (BodyBone& b : bones) {
         char name[32]{};
         int32_t parent = -1;
         f.read(name, 32);
@@ -89,53 +88,64 @@ void VulkanEngine::init_player_body() {
     std::vector<uint32_t> idx(ni);
     f.read(reinterpret_cast<char*>(idx.data()), std::streamsize(ni) * 4);
     if (!f.good()) {
-        log::warn("[body] character file truncated");
+        log::warnf("[body] %s: truncated", file);
+        return false;
+    }
+    if (with_bones) {
+        body_bones_ = std::move(bones);
+        // Scale so the model's eyes are at the player's standing eye height.
+        float top = 0.0f;
+        for (const FileVert& v : fv) top = std::max(top, v.p[1]);
+        const int head = body_bone("Head");
+        // (the head is not in this mesh: its height is the neck joint plus a head)
+        const float model_eye = head >= 0 ? body_bones_[head].head.y + 0.035f : top + 0.13f;
+        const float stand_eye = game::Player::kHalfExtents.y + game::Player::kEyeOffsetStand;
+        body_scale_ = stand_eye / std::max(model_eye, 0.5f);
+        for (BodyBone& b : body_bones_) { b.head *= body_scale_; b.tail *= body_scale_; }
+        log::infof("[body] soldier: %u bones, scale %.3f (model eye %.3f m)", nb, body_scale_, model_eye);
+    } else {
+        bool same = bones.size() == body_bones_.size();
+        for (size_t i = 0; same && i < bones.size(); ++i) same = bones[i].name == body_bones_[i].name && bones[i].parent == body_bones_[i].parent;
+        if (!same) {
+            log::warnf("[body] %s is on another skeleton than the body: not used (export the character again)", file);
+            return false;
+        }
+    }
+    // Two static vertex streams: the rest pose, and each vertex's bones and weights. The GPU
+    // skins (cube_skin.vert) with the bone palette of the character being drawn.
+    std::vector<Vertex> stream(nv);
+    for (uint32_t i = 0; i < nv; ++i)
+        stream[i] = { glm::vec3(fv[i].p[0], fv[i].p[1], fv[i].p[2]) * body_scale_, glm::vec3(fv[i].n[0], fv[i].n[1], fv[i].n[2]), glm::vec2(fv[i].uv[0], fv[i].uv[1]) };
+    out.rest = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_, stream.data(), nv, idx.data(), ni);
+    for (uint32_t i = 0; i < nv; ++i) {
+        float b[4], w[4];
+        for (int k = 0; k < 4; ++k) { b[k] = float(std::min<uint8_t>(fv[i].b[k], uint8_t(nb - 1))); w[k] = fv[i].w[k] / 255.0f; }
+        stream[i] = { glm::vec3(b[0], b[1], b[2]), glm::vec3(b[3], w[0], w[1]), glm::vec2(w[2], w[3]) };
+    }
+    out.skin = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_, stream.data(), nv, idx.data(), 3);
+    out.index_count = ni;
+    out.vertex_count = nv;
+    return true;
+}
+
+void VulkanEngine::init_player_body() {
+    if (!load_skin_mesh("soldier_fp.qchar", body_lod_[0], true)) {
+        log::info("[body] no assets/character/soldier_fp.qchar - no visible player body");
         body_bones_.clear();
         return;
     }
-
-    // Scale so the model's eyes are at the player's standing eye height.
-    float top = 0.0f;
-    for (const FileVert& v : fv) top = std::max(top, v.p[1]);
-    const int head = body_bone("Head");
-    // (the head is not in the mesh: its height is the neck joint plus a head)
-    const float model_eye = head >= 0 ? body_bones_[head].head.y + 0.035f : top + 0.13f;
-    const float stand_eye = game::Player::kHalfExtents.y + game::Player::kEyeOffsetStand;
-    body_scale_ = stand_eye / std::max(model_eye, 0.5f);
-    for (BodyBone& b : body_bones_) { b.head *= body_scale_; b.tail *= body_scale_; }
-    body_verts_.resize(nv);
-    for (uint32_t i = 0; i < nv; ++i) {
-        BodyVert& o = body_verts_[i];
-        o.pos = glm::vec3(fv[i].p[0], fv[i].p[1], fv[i].p[2]) * body_scale_;
-        o.nrm = glm::vec3(fv[i].n[0], fv[i].n[1], fv[i].n[2]);
-        o.uv = glm::vec2(fv[i].uv[0], fv[i].uv[1]);
-        for (int k = 0; k < 4; ++k) {
-            o.bone[k] = std::min<uint8_t>(fv[i].b[k], uint8_t(nb - 1));
-            o.weight[k] = fv[i].w[k] / 255.0f;
-        }
-    }
-    body_index_count_ = ni;
-    body_dbg_idx_ = idx;
-
-    // Two static vertex streams: the rest pose, and each vertex's bones and weights. The GPU
-    // skins (cube_skin.vert) with the bone palette of the character being drawn.
-    {
-        std::vector<Vertex> rest(nv);
-        for (uint32_t i = 0; i < nv; ++i) rest[i] = { body_verts_[i].pos, body_verts_[i].nrm, body_verts_[i].uv };
-        body_mesh_ = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_,
-                                           rest.data(), nv, idx.data(), ni);
-        for (uint32_t i = 0; i < nv; ++i) {
-            const BodyVert& v = body_verts_[i];
-            rest[i] = { glm::vec3(v.bone[0], v.bone[1], v.bone[2]), glm::vec3(v.bone[3], v.weight[0], v.weight[1]), glm::vec2(v.weight[2], v.weight[3]) };
-        }
-        body_skin_mesh_ = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_,
-                                                rest.data(), nv, idx.data(), 3);
-    }
+    const uint32_t nb = uint32_t(body_bones_.size());
+    load_skin_mesh("soldier_fp_lod1.qchar", body_lod_[1], false);
+    load_skin_mesh("soldier_fp_lod2.qchar", body_lod_[2], false);
+    load_skin_mesh("soldier_head.qchar", head_lod_[0], false);
+    load_skin_mesh("soldier_head_lod1.qchar", head_lod_[1], false);
+    load_skin_mesh("soldier_head_lod2.qchar", head_lod_[2], false);
+    log::infof("[body] triangles by level of detail: body %u / %u / %u, head %u / %u / %u (0 = file missing: the level before is drawn)",
+               body_lod_[0].index_count / 3, body_lod_[1].index_count / 3, body_lod_[2].index_count / 3,
+               head_lod_[0].index_count / 3, head_lod_[1].index_count / 3, head_lod_[2].index_count / 3);
     if (nb > kSkinBones) log::warnf("[body] %u bones: more than the palette holds (%u)", nb, kSkinBones);
     body_R_.assign(nb, glm::mat3(1.0f));
     body_P_.assign(nb, glm::vec3(0.0f));
-    log::infof("[body] soldier: %u bones, %u vertices, %u triangles, scale %.3f (model eye %.3f m)",
-               nb, nv, ni / 3, body_scale_, model_eye);
 
     // Animation: the cooked asset (tools/anim/cook_main.cpp -> vibe_animcook). Its skeleton must
     // be this mesh's, joint for joint, or the skin would follow the wrong bones.
@@ -210,11 +220,14 @@ void VulkanEngine::apply_anim_tuning(anim::AnimTuning& t) const {
 }
 
 void VulkanEngine::destroy_player_body() {
-    destroy_mesh(allocator_, body_mesh_);
-    destroy_mesh(allocator_, body_skin_mesh_);
+    for (SkinMesh* set : { body_lod_, head_lod_ })
+        for (int i = 0; i < kBodyLods; ++i) {
+            destroy_mesh(allocator_, set[i].rest);
+            destroy_mesh(allocator_, set[i].skin);
+            set[i] = SkinMesh{};
+        }
     body_animator_.reset();
     body_bones_.clear();
-    body_verts_.clear();
 }
 
 // What a foot at world (x, z) stands on, for a character whose feet are at feet_y: the terrain,
@@ -360,6 +373,7 @@ void VulkanEngine::update_player_body(float dt) {
     // rest pose; QLIKE_BODY_DEBUG=1 logs what the animator is doing once a second.
     static const float kFront = env_float("QLIKE_BODY_FRONT", 0.0f), kTurn = glm::radians(env_float("QLIKE_BODY_TURN", 180.0f));
     static const bool kRest = std::getenv("QLIKE_BODY_REST") != nullptr, kDebug = std::getenv("QLIKE_BODY_DEBUG") != nullptr;
+    body_front_ = kFront > 0.0f;
     if (kFront > 0.0f) {
         const glm::mat4 T = glm::translate(glm::mat4(1.0f), glm::vec3(eye.x, eye.y - eye_h, eye.z) + fwd * kFront);
         body_model_ = T * glm::rotate(glm::mat4(1.0f), kTurn - yaw, glm::vec3(0, 1, 0));
@@ -504,15 +518,45 @@ int VulkanEngine::body_push_rows(const std::vector<glm::vec4>& rows) {
     return int(first);
 }
 
-void VulkanEngine::draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
+// Which of the soldier's meshes a character at `pos` (its eye) is drawn with: by its height on
+// screen, with a margin against flipping back and forth at a boundary.
+int VulkanEngine::body_mesh_lod(glm::vec3 pos, int previous) const {
+    const float tan_half = current_frame_view_.proj[1][1] != 0.0f ? 1.0f / std::abs(current_frame_view_.proj[1][1]) : 0.7f;
+    const float dist = std::max(glm::length(pos - current_frame_view_.eye_pos), 0.1f);
+    const float px = 1.8f / (dist * tan_half) * 0.5f * float(swapchain_extent_.height);
+    // full above 300 px, the middle one above 100
+    const float up = 1.12f, down = 0.89f;
+    int lod = px > 300.0f ? 0 : px > 100.0f ? 1 : 2;
+    if (lod < previous && px < (previous == 1 ? 300.0f : 100.0f) * up) lod = previous;       // not yet clearly bigger
+    if (lod > previous && px > (previous == 0 ? 300.0f : 100.0f) * down) lod = previous;     // not yet clearly smaller
+    return lod;
+}
+
+void VulkanEngine::draw_player_body(
+VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     if (!mp_draw_ && !body_drawn_) return;
     const int palette = mp_draw_ ? mp_draw_->palette : body_palette_;
     if (palette < 0 || !skin_pipeline()) return;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skin_pipeline());
-    const VkBuffer streams[2] = { body_mesh_.vertex_buffer, body_skin_mesh_.vertex_buffer };
-    const VkDeviceSize offs[2] = { 0, 0 };
-    vkCmdBindVertexBuffers(cmd, 0, 2, streams, offs);
-    vkCmdBindIndexBuffer(cmd, body_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+    // Which mesh: the player's own body is always the full one; others by their size on screen.
+    static const int kForceMesh = std::getenv("QLIKE_MESH_LOD") ? std::atoi(std::getenv("QLIKE_MESH_LOD")) : -1;
+    int lod = kForceMesh >= 0 ? kForceMesh : (mp_draw_ ? mp_draw_->mesh_lod : 0);
+    lod = glm::clamp(lod, 0, kBodyLods - 1);
+    auto level = [&](const SkinMesh* set) -> const SkinMesh* {
+        for (int i = lod; i >= 0; --i) if (set[i].index_count) return &set[i];
+        return nullptr;
+    };
+    const SkinMesh* body = level(body_lod_);
+    // The head: on everybody but the player himself (who looks out of it).
+    const SkinMesh* head = (mp_draw_ || body_front_) ? level(head_lod_) : nullptr;
+    if (!body) return;
+    auto draw_mesh = [&](const SkinMesh& m) {
+        const VkBuffer streams[2] = { m.rest.vertex_buffer, m.skin.vertex_buffer };
+        const VkDeviceSize offs[2] = { 0, 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 2, streams, offs);
+        vkCmdBindIndexBuffer(cmd, m.rest.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, m.index_count, 1, 0, 0, 0);
+    };
     PushConstants pc{};
     const glm::mat4 bm = mp_draw_ ? mp_draw_->model : body_model_;
     // `vp` is relative to `cam` (draw_viewmodel): so is the matrix it multiplies; the lighting keeps the world one.
@@ -537,7 +581,8 @@ void VulkanEngine::draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, co
     pc.tex_params = glm::vec4(float(kTexSoldier), -8.0f, 1.0f, 0.0f);
     pc.grass_params = glm::vec4(0.0f, float(palette), 0.0f, 0.0f);          // .y: first palette row (cube_skin.vert)
     vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
-    vkCmdDrawIndexed(cmd, body_index_count_, 1, 0, 0, 0);
+    draw_mesh(*body);
+    if (head) draw_mesh(*head);
     // Test hook: QLIKE_BODY_CROWD=<n> draws the local body n more times in a block ahead
     // (the same pose): what n skinned characters cost the GPU (gpu-passes: w_viewmodel).
     static const int kCrowd = std::getenv("QLIKE_BODY_CROWD") ? std::atoi(std::getenv("QLIKE_BODY_CROWD")) : 0;
@@ -552,7 +597,8 @@ void VulkanEngine::draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, co
             pc.prev_mvp = pc.mvp;
             pc.model = m;
             vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
-            vkCmdDrawIndexed(cmd, body_index_count_, 1, 0, 0, 0);
+            draw_mesh(*body);
+            if (head) draw_mesh(*head);
         }
     }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());      // (the caller goes on with rigid parts)

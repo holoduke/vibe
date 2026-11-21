@@ -76,8 +76,8 @@ ends somewhere between 32 and 64 players on bandwidth alone, before CPU is consi
 3. **Encoding.** Delta against the last acknowledged snapshot, change masks, quantised velocity
    near the ground (floats stay for flight), lower rates for far entities.
 4. **Client.** Skinning is on the GPU (done: it was ~0.6 ms of CPU a body, a wall at 20 - 30
-   drawn players); the body has no mesh levels of detail (79k triangles each) and the palette
-   holds 48 characters a frame; animation levels of detail exist and are measured; impostors or aggregate
+   drawn players); the soldier has three meshes by size on screen (109k / 28k / 9k triangles with
+   the head) and the palette holds 48 characters a frame; animation levels of detail exist and are measured; impostors or aggregate
    representations for hundreds in view are a design question.
 5. **Structures.** `kMaxPlayers`, the avatar array, one packet for all players, discovery by
    broadcast: all sized for a LAN.
@@ -115,7 +115,7 @@ The fields are the ones the animator already consumes; `net_anim.h` would not ch
 | 2 | Client prediction + reconciliation for the local player | controls feel unchanged; no divergence |
 | 3 | Server-side hit validation with proxy volumes and lag compensation | hits independent of any pose |
 | 4 | Interest grid, priorities, per-client budgets, delta encoding | bytes per client bounded in a 1,000-player hotspot |
-| 5 | GPU skinning (done); mesh levels of detail; crowd representation | frame time with 32 / 64 / 128 drawn |
+| 5 | GPU skinning (done); mesh levels of detail (done); crowd representation | frame time with 32 / 64 / 128 drawn |
 | 6 | 16 -> 64 -> 128 -> 256 -> 512 -> 1,000, dispersed, clustered, hotspot; 0 - 200 ms, 0 - 10 % loss | owner-set budgets, PASS / FAIL with evidence |
 
 Target hardware, tick rate, expected clustering and acceptable visual compromises in a hotspot

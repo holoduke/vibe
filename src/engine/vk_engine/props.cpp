@@ -1065,13 +1065,15 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
     glm::mat4 view_inv_recoil = view_inv * recoil_offset;
     draw_player_body(cmd, vp, cam);        // (vp is camera-relative here: the body's world matrix has to be too)
     if (mp_draw_) {
-        // The soldier mesh has no head (first person): a simple head and helmet for the others.
+        // The head is part of the skinned soldier (draw_player_body). Without its file: a box.
+        if (!head_lod_[0].index_count) {
         const glm::mat4 hb = view_inv * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.09f));
         draw_part(cube_mesh_, hb * glm::scale(glm::mat4(1.0f), glm::vec3(0.17f, 0.22f, 0.20f)),
                   glm::vec4(0.62f, 0.47f, 0.38f, 1.0f), glm::vec3(0.0f), false);
         draw_part(cube_mesh_, hb * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.075f, 0.01f)) *
                               glm::scale(glm::mat4(1.0f), glm::vec3(0.22f, 0.13f, 0.25f)),
                   glm::vec4(0.16f, 0.20f, 0.12f, 1.0f), glm::vec3(0.0f), false);
+        }
         if (mp_draw_->corpse) return;          // a body on the ground: no weapon in its hands
     }
 
