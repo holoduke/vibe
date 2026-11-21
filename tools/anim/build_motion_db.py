@@ -164,7 +164,8 @@ def mat_to_quat(R):
 
 def main():
     src_dir, qchar, out = sys.argv[1], sys.argv[2], sys.argv[3]
-    styles = sys.argv[4:] or ["Neutral", "Crouched"]
+    # a style may name the clips it wants: "TwoFootJump:FW,FR,BW,SW,ID"
+    styles = sys.argv[4:] or ["Neutral", "Crouched", "TwoFootJump:FW,FR,BW,SW,ID"]
     bones = read_qchar(qchar)
     bidx = {b[0]: i for i, b in enumerate(bones)}
     cuts = {}
@@ -180,7 +181,11 @@ def main():
     all_feat, all_hdr, all_quat, ranges = [], [], [], []
     total = 0
     for tag, style in enumerate(styles):
-        for kind in ("FW", "FR", "BW", "BR", "SW", "SR", "ID", "TR1", "TR2", "TR3"):
+        kinds = ("FW", "FR", "BW", "BR", "SW", "SR", "ID", "TR1", "TR2", "TR3")
+        if ":" in style:
+            style, ks = style.split(":", 1)
+            kinds = tuple(ks.split(","))
+        for kind in kinds:
             c0, c1 = cuts[style].get(kind + "_START", "N/A"), cuts[style].get(kind + "_STOP", "N/A")
             if c0 == "N/A" or c1 == "N/A":
                 continue

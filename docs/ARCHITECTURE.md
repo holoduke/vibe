@@ -237,6 +237,9 @@ current pose and the path of the next second, and hides the jump by inertialisat
   for the capture's equivalent speed; playback rate (to 1.6x) and stride length (to 2.4x) then make the
   feet cover the real speed. Orientation warping turns the legs to the real direction of travel while
   the chest faces the view. Feet in contact are locked in the world below 4 m/s.
-- **Still by hand**: the arms (IK to the weapon), the pose in the air, crouch depth.
+- **Jumps**: tag 2 = the "TwoFootJump" style. Its flights are found at load (`MotionDB::jumps`); in the air the
+  frame follows the vertical speed (push-off, top, reaching down), on touch-down the captured landing plays.
+  `QLIKE_BODY_AIR=<m/s>` poses the body in the air.
+- **Still by hand**: the arms (IK to the weapon), crouch depth.
 - `QLIKE_BODY_FRONT=<m>` + `QLIKE_BODY_TURN=<deg>` show the body from outside; `QLIKE_BODY_WALK` /
   `QLIKE_BODY_STRAFE` drive it; `QLIKE_BODY_PROCEDURAL=1` gives the old walk cycle.

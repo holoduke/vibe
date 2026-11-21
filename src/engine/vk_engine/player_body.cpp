@@ -295,10 +295,12 @@ void VulkanEngine::update_player_body(float dt) {
     // Test hook: QLIKE_BODY_WALK=<m/s> poses the body as if walking forward at that speed.
     // (QLIKE_BODY_STRAFE=<m/s> adds a sideways speed, to the right.)
     static const float kWalk = env_float("QLIKE_BODY_WALK", -1.0f), kStrafe = env_float("QLIKE_BODY_STRAFE", 0.0f);
-    const glm::vec3 vel = kWalk >= 0.0f ? fwd * kWalk + right * kStrafe : player_.velocity;
+    // (QLIKE_BODY_AIR=<m/s> poses it in the air, rising at that speed.)
+    static const float kAir = env_float("QLIKE_BODY_AIR", 1e9f);
+    const glm::vec3 vel = (kWalk >= 0.0f ? fwd * kWalk + right * kStrafe : player_.velocity) + glm::vec3(0.0f, kAir < 1e8f ? kAir : 0.0f, 0.0f);
     const glm::vec2 vm(glm::dot(vel, right), -glm::dot(vel, fwd));          // model x, z
     const float speed = glm::length(vm);
-    const bool grounded = (player_.on_ground && !player_swimming_) || kWalk >= 0.0f;
+    const bool grounded = ((player_.on_ground && !player_swimming_) || kWalk >= 0.0f) && kAir > 1e8f;
     const float ease = 1.0f - std::exp(-dt * 9.0f);
     body_air_ += ((grounded ? 0.0f : 1.0f) - body_air_) * (1.0f - std::exp(-dt * 7.0f));
     body_move_ += (glm::clamp(speed / 1.2f, 0.0f, 1.0f) - body_move_) * ease;
@@ -348,10 +350,52 @@ void VulkanEngine::update_player_body(float dt) {
         if (crouch > 0.5f)
             for (const MotionDB::Range& rg : body_motion_.ranges) if (rg.tag == 1) { mq.tag = 1; break; }
         mq.rate = an.rate;
-        motion_update(body_motion_, an.ms, mq, dt, body_pose_);
+        // Jumps: captured ones. In the air the frame follows the flight - push-off while rising
+        // fast, the top of the jump as the rise dies, reaching for the ground while falling -
+        // because the game's jump lasts far longer than a person's. On touching down the
+        // capture's landing plays out, then matching takes over again.
+        const bool airborne = !grounded && !player_swimming_;
+        if (!body_motion_.jumps.empty()) {
+            if (airborne) {
+                an.air_t += dt;
+                if (an.jstate != 1 && an.air_t > 0.05f) {
+                    an.jump = motion_find_jump(body_motion_, mq);
+                    an.jstate = an.jump >= 0 ? 1 : 0;
+                    if (an.jstate == 1) motion_goto(body_motion_, an.ms, int(body_motion_.jumps[an.jump].takeoff), 1.0f);
+                }
+            } else {
+                if (an.jstate == 1) {
+                    an.jstate = an.air_t > 0.20f ? 2 : 0;
+                    an.land_t = 0.0f;
+                    if (an.jstate == 2 && std::abs(an.ms.frame - int(body_motion_.jumps[an.jump].land)) > 2)
+                        motion_goto(body_motion_, an.ms, int(body_motion_.jumps[an.jump].land), 1.0f);
+                }
+                an.air_t = 0.0f;
+            }
+        }
+        if (an.jstate == 1) {
+            const MotionDB::Jump& jp = body_motion_.jumps[an.jump];
+            const float u = glm::clamp(0.5f - 0.5f * vel.y / 8.5f, 0.0f, 1.0f);
+            const float fpos = float(jp.takeoff) + u * float(jp.land - jp.takeoff - 1);
+            const float cur = float(an.ms.frame) + an.ms.frac;
+            // (no faster than three times the capture's own pace, so nothing snaps)
+            const float nf = cur + glm::clamp(fpos - cur, -dt * 90.0f, dt * 90.0f);
+            an.ms.frame = int(std::floor(nf));
+            an.ms.frac = nf - std::floor(nf);
+            motion_pose(body_motion_, an.ms, dt, body_pose_);
+        } else if (an.jstate == 2) {
+            an.land_t += dt;
+            an.ms.frac += dt * body_motion_.fps;
+            while (an.ms.frac >= 1.0f) { an.ms.frac -= 1.0f; ++an.ms.frame; }
+            motion_pose(body_motion_, an.ms, dt, body_pose_);
+            if (an.land_t > 0.28f) { an.jstate = 0; an.ms.since_search = 1e9f; }
+        } else {
+            motion_update(body_motion_, an.ms, mq, dt, body_pose_);
+        }
+        const bool jumping = an.jstate != 0;
         const float as = glm::length(body_pose_.root_vel);
         float rate_t = 1.0f, stride_t = 1.0f, warp_t = 0.0f;
-        if (speed > 0.3f && as > 0.3f) {
+        if (speed > 0.3f && as > 0.3f && !jumping) {
             rate_t = glm::clamp(speed / as, 0.75f, 1.6f);
             stride_t = glm::clamp(speed / (as * rate_t), 0.7f, 2.4f);
             // Orientation warping: the legs turn to the way we really go (a diagonal, say, on a
@@ -420,9 +464,11 @@ void VulkanEngine::update_player_body(float dt) {
             target += to_model(feet + lk.off);            // (the offset, turned into the body's frame)
             // In the air: legs hang, knees a little bent, one ahead of the other.
             const glm::vec3 air = body_bones_[ft].head + glm::vec3(0.0f, 0.16f, side == 0 ? -0.14f : 0.06f);
-            target = glm::mix(target, air, body_air_);
+            // (only without captured jumps: with them the capture has the legs)
+            const float air_k = body_motion_.jumps.empty() ? body_air_ : 0.0f;
+            target = glm::mix(target, air, air_k);
             body_leg_fit(up, lo, ft, target);
-            if (body_air_ > 0.01f) body_R_[ft] = rot_axis(glm::vec3(1, 0, 0), -0.35f * body_air_) * body_R_[ft];
+            if (air_k > 0.01f) body_R_[ft] = rot_axis(glm::vec3(1, 0, 0), -0.35f * air_k) * body_R_[ft];
         }
         body_fk();
     } else {

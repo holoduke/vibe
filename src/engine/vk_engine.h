@@ -1183,6 +1183,8 @@ private:
         MotionState ms;
         float rate = 1.0f, stride = 1.0f, warp = 0.0f, turn = 0.0f, prev_yaw = 0.0f;
         bool  has_yaw = false;
+        int   jump = -1, jstate = 0;          // captured jump in use; 0 on the ground, 1 in the air, 2 landing
+        float air_t = 0.0f, land_t = 0.0f;
         struct Lock { bool on = false, broken = false; glm::vec3 world{0.0f}, off{0.0f}, off_v{0.0f}; } lock[2];
     };
     MotionDB         body_motion_;

@@ -33,6 +33,11 @@ struct MotionDB {
     std::vector<float>       hdr;           // frames x 8: root vel x,z; turn rate; hip x,y,z; contact L,R
     std::vector<glm::quat>   rot;           // frames x bones: rotation from rest, root space
     std::vector<uint32_t>    range_of;      // frame -> its range
+    // Jumps (the style with tag kJumpTag is a person jumping with both feet): per jump the
+    // frame the feet push off and the frame they are back on the ground.
+    static constexpr uint32_t kJumpTag = 2;
+    struct Jump { uint32_t takeoff, land; };
+    std::vector<Jump>        jumps;
 
     bool load(const char* path);            // false (and empty) if the file is missing or bad
     bool ok() const { return frames > 0; }
@@ -61,6 +66,13 @@ struct MotionState {
     std::vector<glm::vec3> off_x, off_v;     // per bone: rotation offset (scaled axis-angle) and its rate
     glm::vec3 hip_x{0.0f}, hip_v{0.0f};
 };
+
+// The pieces, for movement that is steered directly (a jump: the frame follows the height of
+// the flight): jump to a frame (inertialised), and the pose at the state's frame.
+void motion_goto(const MotionDB& db, MotionState& st, int frame, float rate);
+void motion_pose(const MotionDB& db, MotionState& st, float dt, MotionPose& out);
+// The captured jump that goes most like the wanted velocity. -1: none in the database.
+int  motion_find_jump(const MotionDB& db, const MotionQuery& q);
 
 // Advances the state by dt and gives the pose.
 void motion_update(const MotionDB& db, MotionState& st, const MotionQuery& q, float dt, MotionPose& out);

@@ -109,7 +109,107 @@ bool MotionDB::load(const char* path) {
     range_of.resize(frames);
     for (uint32_t r = 0; r < ranges.size(); ++r)
         for (uint32_t i = ranges[r].first; i < ranges[r].end; ++i) range_of[i] = r;
+    // Jumps. In the game the body hangs under a camera that already rises and falls with the
+    // jump, so the capture's own rise is taken out of the hips: they stay at standing height
+    // through the flight and keep half of the dip of the push-off and the landing.
+    auto median_hip = [&](uint32_t tag) {
+        std::vector<float> ys;
+        for (const Range& r : ranges) if (r.tag == tag) for (uint32_t i = r.first; i < r.end; ++i) ys.push_back(hdr[size_t(i) * 8 + 4]);
+        if (ys.empty()) return 0.0f;
+        std::nth_element(ys.begin(), ys.begin() + ys.size() / 2, ys.end());
+        return ys[ys.size() / 2];
+    };
+    const float ref0 = median_hip(0), ref_j = median_hip(kJumpTag);
+    for (const Range& r : ranges) {
+        if (r.tag != kJumpTag) continue;
+        uint32_t i = r.first;
+        while (i < r.end) {
+            if (hdr[size_t(i) * 8 + 6] > 0.5f || hdr[size_t(i) * 8 + 7] > 0.5f) { ++i; continue; }
+            uint32_t e = i;
+            float top = -1e9f;
+            while (e < r.end && hdr[size_t(e) * 8 + 6] < 0.5f && hdr[size_t(e) * 8 + 7] < 0.5f) { top = std::max(top, hdr[size_t(e) * 8 + 4]); ++e; }
+            if (e - i >= 4 && top > ref_j + 0.06f && i >= r.first + 3 && e + 14 < r.end) jumps.push_back({ i, e });
+            i = e;
+        }
+        for (uint32_t k = r.first; k < r.end; ++k) {
+            float& y = hdr[size_t(k) * 8 + 4];
+            y = ref0 + 0.5f * std::min(y - ref_j, 0.0f);
+        }
+    }
     return true;
+}
+
+void motion_goto(const MotionDB& db, MotionState& st, int best_i, float rate) {
+    const uint32_t nb = db.bones;
+    const float fps = db.fps;
+    if (st.off_x.size() != nb) { st.off_x.assign(nb, glm::vec3(0.0f)); st.off_v.assign(nb, glm::vec3(0.0f)); }
+    best_i = glm::clamp(best_i, 0, int(db.frames) - 2);
+    if (st.frame >= 0) {
+        // Inertialise: carry the difference (pose and rate of change) over as an offset.
+        const int a = st.frame, b = best_i;
+        for (uint32_t k = 0; k < nb; ++k) {
+            const glm::quat qa0 = db.rot[size_t(a) * nb + k], qa1 = db.rot[size_t(a + 1) * nb + k];
+            const glm::quat qb0 = db.rot[size_t(b) * nb + k], qb1 = db.rot[size_t(b + 1) * nb + k];
+            glm::quat qa = glm::normalize(glm::mix(qa0, glm::dot(qa0, qa1) < 0.0f ? -qa1 : qa1, st.frac));
+            const glm::quat cur = from_sav(st.off_x[k]) * qa;
+            st.off_x[k] = to_sav(cur * glm::inverse(qb0));
+            st.off_v[k] += (to_sav(qa1 * glm::inverse(qa0)) - to_sav(qb1 * glm::inverse(qb0))) * fps * rate;
+        }
+        const float* ha = &db.hdr[size_t(a) * 8];
+        const float* ha1 = &db.hdr[size_t(a + 1) * 8];
+        const float* hb = &db.hdr[size_t(b) * 8];
+        const float* hb1 = &db.hdr[size_t(b + 1) * 8];
+        const glm::vec3 pa = glm::mix(glm::vec3(ha[3], ha[4], ha[5]), glm::vec3(ha1[3], ha1[4], ha1[5]), st.frac);
+        st.hip_x += pa - glm::vec3(hb[3], hb[4], hb[5]);
+        st.hip_v += ((glm::vec3(ha1[3], ha1[4], ha1[5]) - glm::vec3(ha[3], ha[4], ha[5])) -
+                     (glm::vec3(hb1[3], hb1[4], hb1[5]) - glm::vec3(hb[3], hb[4], hb[5]))) * fps * rate;
+    }
+    st.frame = best_i;
+    st.frac = 0.0f;
+}
+
+void motion_pose(const MotionDB& db, MotionState& st, float dt, MotionPose& out) {
+    const uint32_t nb = db.bones;
+    out.rot.resize(nb);
+    if (st.off_x.size() != nb) { st.off_x.assign(nb, glm::vec3(0.0f)); st.off_v.assign(nb, glm::vec3(0.0f)); }
+    if (st.frame < 0) {
+        for (auto& r : out.rot) r = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        return;
+    }
+    // The database's pose, plus what is left of the offsets.
+    const float kHalf = 0.10f;
+    const int a = st.frame;
+    for (uint32_t k = 0; k < nb; ++k) {
+        decay(st.off_x[k], st.off_v[k], kHalf, dt);
+        const glm::quat q0 = db.rot[size_t(a) * nb + k], q1 = db.rot[size_t(a + 1) * nb + k];
+        const glm::quat qd = glm::normalize(glm::mix(q0, glm::dot(q0, q1) < 0.0f ? -q1 : q1, st.frac));
+        out.rot[k] = from_sav(st.off_x[k]) * qd;
+    }
+    decay(st.hip_x, st.hip_v, kHalf, dt);
+    const float* h0 = &db.hdr[size_t(a) * 8];
+    const float* h1 = &db.hdr[size_t(a + 1) * 8];
+    out.hip = glm::mix(glm::vec3(h0[3], h0[4], h0[5]), glm::vec3(h1[3], h1[4], h1[5]), st.frac) + st.hip_x;
+    out.root_vel = glm::mix(glm::vec2(h0[0], h0[1]), glm::vec2(h1[0], h1[1]), st.frac);
+    out.contact[0] = h0[6];
+    out.contact[1] = h0[7];
+}
+
+int motion_find_jump(const MotionDB& db, const MotionQuery& q) {
+    // By the path of the next second alone (features 15..20): forwards, backwards, sideways, how fast.
+    int best_i = -1;
+    float best = 1e30f;
+    for (size_t j = 0; j < db.jumps.size(); ++j) {
+        const float* fp = &db.feat[size_t(db.jumps[j].takeoff) * MotionDB::kFeat];
+        float c = 0.0f;
+        for (int k = 0; k < 3; ++k) {
+            const float t = float(k + 1) / 3.0f;
+            const float dx = fp[15 + 2 * k] - (q.vel.x * t - db.feat_offset[15 + 2 * k]) / db.feat_scale[15 + 2 * k];
+            const float dz = fp[16 + 2 * k] - (q.vel.y * t - db.feat_offset[16 + 2 * k]) / db.feat_scale[16 + 2 * k];
+            c += dx * dx + dz * dz;
+        }
+        if (c < best) { best = c; best_i = int(j); }
+    }
+    return best_i;
 }
 
 void motion_update(const MotionDB& db, MotionState& st, const MotionQuery& q, float dt, MotionPose& out) {
@@ -181,51 +281,10 @@ void motion_update(const MotionDB& db, MotionState& st, const MotionQuery& q, fl
         // Stay where we are unless the jump is clearly better, and never for a hop of a few frames.
         const bool hop = st.frame >= 0 && best_i >= 0 && db.range_of[best_i] == db.range_of[st.frame] && std::abs(best_i - st.frame) < 8;
         if (best_i >= 0 && (st.frame < 0 || at_end || (!hop && best < cur_cost * 0.90f - 0.02f))) {
-            if (st.frame >= 0) {
-                // Inertialise: carry the difference (pose and rate of change) over as an offset.
-                const int a = st.frame, b = best_i;
-                for (uint32_t k = 0; k < nb; ++k) {
-                    const glm::quat qa0 = db.rot[size_t(a) * nb + k], qa1 = db.rot[size_t(a + 1) * nb + k];
-                    const glm::quat qb0 = db.rot[size_t(b) * nb + k], qb1 = db.rot[size_t(b + 1) * nb + k];
-                    glm::quat qa = glm::normalize(glm::mix(qa0, glm::dot(qa0, qa1) < 0.0f ? -qa1 : qa1, st.frac));
-                    const glm::quat cur = from_sav(st.off_x[k]) * qa;
-                    st.off_x[k] = to_sav(cur * glm::inverse(qb0));
-                    st.off_v[k] += (to_sav(qa1 * glm::inverse(qa0)) - to_sav(qb1 * glm::inverse(qb0))) * fps * q.rate;
-                }
-                const float* ha = &db.hdr[size_t(a) * 8];
-                const float* ha1 = &db.hdr[size_t(a + 1) * 8];
-                const float* hb = &db.hdr[size_t(b) * 8];
-                const float* hb1 = &db.hdr[size_t(b + 1) * 8];
-                const glm::vec3 pa = glm::mix(glm::vec3(ha[3], ha[4], ha[5]), glm::vec3(ha1[3], ha1[4], ha1[5]), st.frac);
-                st.hip_x += pa - glm::vec3(hb[3], hb[4], hb[5]);
-                st.hip_v += ((glm::vec3(ha1[3], ha1[4], ha1[5]) - glm::vec3(ha[3], ha[4], ha[5])) -
-                             (glm::vec3(hb1[3], hb1[4], hb1[5]) - glm::vec3(hb[3], hb[4], hb[5]))) * fps * q.rate;
-            }
-            st.frame = best_i;
-            st.frac = 0.0f;
+            motion_goto(db, st, best_i, q.rate);
         }
     }
-    if (st.frame < 0) {
-        for (auto& r : out.rot) r = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-        return;
-    }
-
-    // ---- the pose: the database's, plus what is left of the offsets ----
-    const float kHalf = 0.10f;
-    const int a = st.frame;
-    for (uint32_t k = 0; k < nb; ++k) {
-        decay(st.off_x[k], st.off_v[k], kHalf, dt);
-        const glm::quat q0 = db.rot[size_t(a) * nb + k], q1 = db.rot[size_t(a + 1) * nb + k];
-        const glm::quat qd = glm::normalize(glm::mix(q0, glm::dot(q0, q1) < 0.0f ? -q1 : q1, st.frac));
-        out.rot[k] = from_sav(st.off_x[k]) * qd;
-    }
-    decay(st.hip_x, st.hip_v, kHalf, dt);
-    const float* h0 = &db.hdr[size_t(a) * 8];
-    const float* h1 = &db.hdr[size_t(a + 1) * 8];
-    out.hip = glm::mix(glm::vec3(h0[3], h0[4], h0[5]), glm::vec3(h1[3], h1[4], h1[5]), st.frac) + st.hip_x;
-    out.root_vel = glm::mix(glm::vec2(h0[0], h0[1]), glm::vec2(h1[0], h1[1]), st.frac);
-    out.contact[0] = h0[6];
-    out.contact[1] = h0[7];
+    motion_pose(db, st, dt, out);
 }
 
 }  // namespace qlike
