@@ -1,6 +1,6 @@
 # Vibe - an open-world Vulkan game engine with ray tracing, written by AI
 
-Vibe is an open-source 3D game engine and first-person game in C++20 and Vulkan 1.3, written
+Vibe is a 3D game engine and first-person game in C++20 and Vulkan 1.3, written
 entirely by AI (vibe coding with Claude Code): hardware ray tracing, a ray-marched procedural
 planet, motion-matched characters and LAN multiplayer, with no Unreal, Unity or Godot underneath.
 
