@@ -30,7 +30,7 @@ float rm_snow_on(float d, vec2 wp, float h, float road_keep) {
 
 float rm_ground_detail(vec2 wp, float t, float h) {
     float w = 1.0 - smoothstep(10.0, 26.0, t);
-    if (w <= 0.0) return 0.0;
+    if (w <= 0.0 || RMDBG(1024)) return 0.0;
     // Not on the road: the paving is flat (crouching on it showed the
     // rills as noise in the cobbles). In winter the snow still lies on it.
     float road_keep = 1.0;
@@ -43,7 +43,9 @@ float rm_ground_detail(vec2 wp, float t, float h) {
             return rm_snow_on(0.0, wp, h, 0.0) * w;
         }
     }
-    float rsand = sand_road_h(wp) * (1.0 - road_keep);       // (the sand thins out over the verge)
+    // (only where there is road: this runs for every near step of the march, and the sand's
+    // noise was being worked out - and thrown away - over all the open ground)
+    float rsand = road_keep < 0.999 ? sand_road_h(wp) * (1.0 - road_keep) : 0.0;       // (the sand thins out over the verge)
     float wn = noise2(wp * 0.21);                      // one noise warps both axes
     vec2  q  = wp * 0.55 + vec2(wn, 1.0 - wn) * 1.7;
     float g1 = 1.0 - smoothstep(0.0, 0.22, abs(noise2(q) * 2.0 - 1.0));              // main rills
@@ -53,7 +55,7 @@ float rm_ground_detail(vec2 wp, float t, float h) {
     // hit point lands within ~5 cm of the full surface; the normal and the
     // shading (called without the flag) still use the full relief.
     if (g_rm_ray_y > -1e8) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
-                                              rm_pebbles_march(wp, t)) * road_keep + rsand, wp, h, road_keep) * w;
+                                              (RMDBG(32768) ? 0.0 : rm_pebbles_march(wp, t))) * road_keep + rsand, wp, h, road_keep) * w;
     float lod = log2(max(t * 2.0 * scene.viewport.w * 0.45 * 2048.0, 1.0));
     float disp = textureLod(u_normal[9], wp * 0.45, lod).a;
     float g2 = 1.0 - smoothstep(0.0, 0.25, abs(noise2(q * 2.7 + 3.1) * 2.0 - 1.0));  // side cracks

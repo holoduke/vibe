@@ -21,6 +21,8 @@
 // Budget: kWvPool instances at 32 bytes, plus the visible lists. One compute
 // thread per slot per frame in veg_cull.comp (an empty slot returns at once).
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_initializers.h"
+#include <cstring>
 
 #include <algorithm>
 #include <chrono>
@@ -98,6 +100,14 @@ struct VulkanEngine::WvState {
     glm::vec2 nf_job_center{0.0f}, nf_center{0.0f};
     const globe::Chart* nf_chart = nullptr;     // the chart the bake (or the job) was made in
     const globe::Chart* nf_job_chart = nullptr;
+    // The bake's texture is made once; later bakes are copied into it at the start of a frame
+    // (record_nf_upload), through one staging buffer per frame in flight - no waiting for the GPU.
+    VkImage        nf_image = VK_NULL_HANDLE;
+    VkBuffer       nf_stage[kFrameOverlap]{};
+    VmaAllocation  nf_stage_alloc[kFrameOverlap]{};
+    void*          nf_stage_map[kFrameOverlap]{};
+    std::vector<unsigned char> nf_pending;
+    bool           nf_upload_pending = false;
     // Read-only for the workers.
     std::vector<int> pines, broads, old_pines, old_broads, bushes;
     std::vector<float> arch_h;
@@ -148,6 +158,8 @@ void VulkanEngine::wv_shutdown() {
     wv_->cv.notify_all();
     for (auto& t : wv_->workers) if (t.joinable()) t.join();
     if (wv_->nf_active && wv_->nf_job.valid()) wv_->nf_job.wait();
+    for (uint32_t i = 0; i < kFrameOverlap; ++i)
+        if (wv_->nf_stage[i]) vmaDestroyBuffer(allocator_, wv_->nf_stage[i], wv_->nf_stage_alloc[i]);
     delete wv_;
     wv_ = nullptr;
 }
@@ -273,6 +285,35 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
 // 1 m, re-baked on background threads when the camera has moved 72 m from the last centre, and
 // swapped into normal-texture slot kTexVegShade (unused otherwise). Only near the ground and
 // outside (or near the edge of) the home tile, where the grass shader has its own baked heights.
+// A finished near-field bake goes into its texture here, with the frame's other uploads.
+void VulkanEngine::record_nf_upload(VkCommandBuffer cmd, uint32_t slot) {
+    if (!wv_ || !wv_->nf_upload_pending || !wv_->nf_image) return;
+    WvState& S = *wv_;
+    S.nf_upload_pending = false;
+    constexpr uint32_t N = 512;
+    if (S.nf_pending.size() != size_t(N) * N * 4) return;
+    slot %= kFrameOverlap;
+    if (!S.nf_stage[slot]) {
+        VkBufferCreateInfo bci{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        bci.size = VkDeviceSize(N) * N * 4;
+        bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VmaAllocationInfo ai{};
+        if (vmaCreateBuffer(allocator_, &bci, &aci, &S.nf_stage[slot], &S.nf_stage_alloc[slot], &ai) != VK_SUCCESS) return;
+        S.nf_stage_map[slot] = ai.pMappedData;
+    }
+    std::memcpy(S.nf_stage_map[slot], S.nf_pending.data(), S.nf_pending.size());
+    vmaFlushAllocation(allocator_, S.nf_stage_alloc[slot], 0, VK_WHOLE_SIZE);
+    vkinit::transition_image(cmd, S.nf_image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkBufferImageCopy reg{};
+    reg.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    reg.imageExtent = { N, N, 1 };
+    vkCmdCopyBufferToImage(cmd, S.nf_stage[slot], S.nf_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &reg);
+    vkinit::transition_image(cmd, S.nf_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
 void VulkanEngine::wv_nf_poll() {
     if (!wv_ || !scene_desc_set_) return;
     WvState& S = *wv_;
@@ -283,6 +324,15 @@ void VulkanEngine::wv_nf_poll() {
         const std::vector<unsigned char> px = S.nf_job.get();
         S.nf_active = false;
         if (S.nf_job_chart != &globe::current()) return;      // (baked for another part of the planet: re-anchored meanwhile)
+        if (S.nf_image) {
+            // (every bake after the first: into the texture that is already bound)
+            S.nf_pending = px;
+            S.nf_upload_pending = true;
+            S.nf_center = S.nf_job_center;
+            S.nf_chart = S.nf_job_chart;
+            S.nf_valid = true;
+            return;
+        }
         Texture2D t = upload_texture_from_pixels(device_, allocator_, graphics_queue_, graphics_queue_family_,
                                                  px.data(), N, N, VK_FORMAT_R8G8B8A8_UNORM, "near_ground");
         if (t.ok) {
@@ -290,6 +340,7 @@ void VulkanEngine::wv_nf_poll() {
             vkDeviceWaitIdle(device_);
             TextureSlot old = normal_textures_[kTexVegShade];
             normal_textures_[kTexVegShade] = { t.image, t.alloc, t.view };
+            S.nf_image = t.image;
             VkDescriptorImageInfo ii{ texture_sampler_, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
             VkWriteDescriptorSet w{};
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -308,6 +359,8 @@ void VulkanEngine::wv_nf_poll() {
     if (S.nf_active || !want) return;
     const glm::vec2 e2(eye.x, eye.z);
     if (S.nf_chart != &globe::current()) S.nf_valid = false;
+    // QLIKE_TEST_NF_REBAKE=1: bake again every few seconds (the in-frame upload path, without having to move).
+    { static const bool rb = std::getenv("QLIKE_TEST_NF_REBAKE") != nullptr; if (rb && frame_number_ % 200 == 0) S.nf_valid = false; }
     if (S.nf_valid && glm::distance(e2, S.nf_center) < 72.0f) return;
     const glm::vec2 c = glm::round(e2 / 64.0f) * 64.0f;
     S.nf_job_center = c;

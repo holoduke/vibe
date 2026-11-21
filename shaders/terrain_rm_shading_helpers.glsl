@@ -47,7 +47,7 @@ vec3 calcNormal(vec3 pos, float t) {
     // Threshold is pc.emissive.z (the existing lod_far_m). Past this we
     // already snap to lod_min_octaves on the FBM, so swapping the normal
     // method costs nothing visible.
-    if (t > pc.emissive.z) {
+    if (t > pc.emissive.z || RMDBG(512)) {
         vec3 dpdx = dFdx(pos);
         vec3 dpdy = dFdy(pos);
         vec3 Nfast = cross(dpdy, dpdx);
@@ -83,7 +83,7 @@ vec3 calcNormal(vec3 pos, float t) {
     float hU = terrainH_lod_pw(pos.xz + vec2(0.0, eps), t, tpl);
     g_peb_mode = 0;
     vec3 gN = vec3(hC - hR, eps, hC - hU) / eps;
-    if (t < 26.0 && tpl < 0.99) {
+    if (t < 26.0 && tpl < 0.99 && !RMDBG(2)) {
         float pw = (1.0 - smoothstep(10.0, 26.0, t)) * (1.0 - tpl) * g_rm_detail_mul;
         // Under a dense lawn the stones cannot be seen: skip all their work
         // there (most of the terrain).

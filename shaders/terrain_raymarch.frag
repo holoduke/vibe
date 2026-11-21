@@ -1938,7 +1938,7 @@ void main() {
         // repeats of either is ever in view, the two never line up, and the ground keeps
         // structure of about the same size on screen out to the end of the landscape.
         float dw = (1.0 - smoothstep(1300.0, 2600.0, t)) * (1.0 - rm_road.x);
-        if (dw > 0.01) {
+        if (dw > 0.01 && !RMDBG(1)) {
             const int kSoil = 9, kRock = 7;
             float rockw = 1.0 - smoothstep(0.5, 0.8, nor.y);
             float fp = t * 2.0 * scene.viewport.w;                       // ~metres per pixel
@@ -2093,7 +2093,7 @@ void main() {
     // front of a hill stayed sunlit at medium range and the ray-traced
     // object shadows (which ignore the terrain) were drawn onto it.
     float self_shadow = 1.0;
-    if (dif > 0.0) {
+    if (dif > 0.0 && !RMDBG(4)) {
         float lit_g = 1.0;
 #ifndef QLIKE_WATER
         if (distance(pos, scene.camera_pos.xyz) < 220.0) {
@@ -2139,7 +2139,7 @@ void main() {
 #ifndef QLIKE_WATER
     // Flowers / ferns / clutter rocks: dedicated small-caster depth map
     // around the camera (same test as deferred_lighting.frag).
-    if (scene.clutter_vp[3].w > 0.5 && dif > 0.0) {
+    if (scene.clutter_vp[3].w > 0.5 && dif > 0.0 && !RMDBG(16)) {
         vec4 lc = scene.clutter_vp * vec4(pos, 1.0);
         vec2 luv = lc.xy * 0.5 + 0.5;
         if (all(greaterThan(luv, vec2(0.002))) && all(lessThan(luv, vec2(0.998))) &&
@@ -2159,7 +2159,7 @@ void main() {
     // Exact blade shadows (same blade field as grass_raymarch.frag and
     // the mesh terrain in cube.frag): sphere-traced near the camera,
     // averaged mask darkening further out where blades are sub-pixel.
-    if (scene.grass_rm_params2.y > 0.5 && dif > 0.0 &&
+    if (scene.grass_rm_params2.y > 0.5 && dif > 0.0 && !RMDBG(8) &&
         !(scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 0.05)) {
         float gp = grassEligibility(pos.xz, pos.y);
         // Bare ground beside a grass patch is shaded by the blades that stand
@@ -2211,7 +2211,7 @@ void main() {
     float lod_far  = max(50.0, scene.fog_band.w);
     float lod_near = lod_far * 0.6;
     float rt_lod_t = 1.0 - smoothstep(lod_near, lod_far, cam_dist_pos);
-    bool do_rt = rt_lod_t > 0.005;
+    bool do_rt = rt_lod_t > 0.005 && !RMDBG(32);
 
     // Gate on shadow_strength too — if the user dialled it to 0,
     // dyn_shadow gets multiplied by 0 at line ~2082 anyway, so the
@@ -2326,7 +2326,7 @@ void main() {
     // hard shadow ray per pixel keeps them - a penumbra is sub-pixel there
     // anyway - blended in across the band.
     if (dif > 0.0 && scene.rt_flags.x != 0 && scene.rt_params.w > 1e-3 &&
-        rt_lod_t < 0.999 && cam_dist_pos < 900.0 && self_shadow < 0.99) {
+        rt_lod_t < 0.999 && cam_dist_pos < 900.0 && self_shadow < 0.99 && !RMDBG(32)) {
         float far_w = 1.0 - smoothstep(700.0, 900.0, cam_dist_pos);
         vec3  fo = pos + nor * (0.15 + cam_dist_pos * 0.002) + sunDir * (0.3 + cam_dist_pos * 0.002);
         float far_sh = any_hit_no_terrain(fo, sunDir, 220.0) ? scene.rt_params.w * far_w : 0.0;

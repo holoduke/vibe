@@ -344,6 +344,7 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     { CPU_SCOPE("+scene-ubo"); update_scene_ubo(); write_pass_ubos(); }
     flush_frame_uploads(frame.command_buffer);
     record_sun_horizon_upload(frame.command_buffer, gpu_query_slot);
+    record_nf_upload(frame.command_buffer, gpu_query_slot);
     record_tlas_publish(frame.command_buffer);   // this frame's TLAS -> tlas_
     prof_mark(frame.command_buffer, "uploads_tlas");
     // GPU vegetation: cull + LOD-select every instance, fill indirect draws.

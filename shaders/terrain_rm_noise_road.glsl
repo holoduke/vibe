@@ -50,6 +50,13 @@ const float TERRAIN_HEIGHT = 120.0;
 // coordinates: in home's chart they are home coordinates and everything is as it always was;
 // in a far chart (another part of the planet) the world is made from the point on the sphere.
 bool rm_far_chart() { return scene.globe_info.x > 0.5; }
+// Profiling: QLIKE_RM_SKIP=<mask> leaves a section of this shader out at run time (a real
+// branch on a uniform, so the compiler cannot fold the rest away - cutting the shader short
+// with an early return measures nothing: what no longer reaches the output is removed).
+//   1 close-up ground textures   2 stones in the normal      4 the ground's own sun shadow
+//   8 grass blade shadows       16 small plants' shadow map  32 ray-traced object shadows
+// 512 screen-space normal      1024 close-range ground relief   32768 stones in the march
+#define RMDBG(bit) ((int(scene.globe_info.w) & (bit)) != 0)
 // Distance from home for the rules that tell home's lakes from the open sea (a far chart is far).
 float rm_home_dist(vec2 wp) { return rm_far_chart() ? 1.0e9 : length(wp); }
 // A chart position's ground point, as an offset (m) from the chart origin's ground point, in
