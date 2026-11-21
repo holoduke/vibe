@@ -178,7 +178,25 @@ FetchContent_Declare(meshoptimizer
     GIT_TAG v1.0
     GIT_SHALLOW TRUE)
 
-FetchContent_MakeAvailable(glfw glm vk_bootstrap vma Catch2 JoltPhysics imgui tinygltf tinyexr miniaudio fastnoiselite enet meshoptimizer)
+# ozz-animation - skeletons, compressed clips, sampling, blending, local-to-model, IK jobs (MIT).
+# The character animation library (src/anim) is built on it; it is hidden behind
+# anim::IAnimationRuntime. Only the runtime and the offline builders are built.
+set(ozz_build_tools OFF CACHE BOOL "" FORCE)
+set(ozz_build_fbx OFF CACHE BOOL "" FORCE)
+set(ozz_build_gltf OFF CACHE BOOL "" FORCE)
+set(ozz_build_data OFF CACHE BOOL "" FORCE)
+set(ozz_build_samples OFF CACHE BOOL "" FORCE)
+set(ozz_build_howtos OFF CACHE BOOL "" FORCE)
+set(ozz_build_tests OFF CACHE BOOL "" FORCE)
+set(ozz_build_simd_ref OFF CACHE BOOL "" FORCE)
+set(ozz_build_postfix OFF CACHE BOOL "" FORCE)
+set(ozz_build_msvc_rt_dll ON CACHE BOOL "" FORCE)
+FetchContent_Declare(ozz
+    GIT_REPOSITORY https://github.com/guillaumeblanc/ozz-animation.git
+    GIT_TAG 0.17.0
+    GIT_SHALLOW TRUE)
+
+FetchContent_MakeAvailable(glfw glm vk_bootstrap vma Catch2 JoltPhysics imgui tinygltf tinyexr miniaudio fastnoiselite enet meshoptimizer ozz)
 
 # AMD FidelityFX-FSR2 — vendored as a git submodule under
 # external/FidelityFX-FSR2 (MIT license; LICENSE.txt preserved). Use as-is
@@ -284,6 +302,39 @@ target_compile_definitions(qlike_core PUBLIC
     # by the compiler anyway.
 )
 
+# qlike_anim: character animation (skeleton + clip runtime on ozz, motion matching, layers, IK).
+# No Vulkan, no engine headers; tests and the cook tool link it directly.
+add_library(qlike_anim STATIC
+    src/anim/types.cpp
+    src/anim/skeleton_def.cpp
+    src/anim/asset.cpp
+    src/anim/ozz_runtime.cpp
+    src/anim/motion_db.cpp
+    src/anim/trajectory.cpp
+    src/anim/motion_matcher.cpp
+    src/anim/inertializer.cpp
+    src/anim/airborne.cpp
+    src/anim/character_animator.cpp
+)
+target_link_libraries(qlike_anim PUBLIC qlike_core PRIVATE ozz_animation ozz_base)
+
+# Offline half: importers, retargeting, cooking (never linked into the game).
+add_library(qlike_anim_offline STATIC
+    src/anim/offline/bvh.cpp
+    src/anim/offline/raw_clip.cpp
+    src/anim/offline/retarget.cpp
+    src/anim/offline/cook.cpp
+    src/anim/offline/motion_build.cpp
+)
+target_link_libraries(qlike_anim_offline PUBLIC qlike_anim PRIVATE ozz_animation_offline ozz_animation ozz_base)
+
+add_executable(vibe_animcook tools/anim/cook_main.cpp)
+target_link_libraries(vibe_animcook PRIVATE qlike_anim_offline)
+
+# What animation costs for 1 .. 1000 characters on this machine (docs/animation/performance.md).
+add_executable(vibe_animbench tools/anim/bench_main.cpp)
+target_link_libraries(vibe_animbench PRIVATE qlike_anim)
+
 # qlike_engine: rendering, windowing, Vulkan. Depends on qlike_core.
 add_library(qlike_engine STATIC
     src/engine/window.cpp
@@ -318,6 +369,7 @@ add_library(qlike_engine STATIC
     src/engine/vk_engine/flashlight.cpp
     src/engine/vk_engine/player_body.cpp
     src/engine/vk_engine/ragdoll.cpp
+    src/engine/vk_engine/body_rt.cpp
     src/engine/net/net.cpp
     src/engine/cluster_lod.cpp
     src/engine/vk_engine/cluster_draw.cpp
@@ -370,7 +422,6 @@ add_library(qlike_engine STATIC
     src/engine/aa_vehicle.cpp
     src/engine/rocket_sim.cpp
     src/engine/globe.cpp
-    src/engine/motion_match.cpp
 )
 target_include_directories(qlike_engine PUBLIC src)
 target_include_directories(qlike_engine PRIVATE
@@ -380,6 +431,7 @@ target_include_directories(qlike_engine PRIVATE
     ${fastnoiselite_SOURCE_DIR}/Cpp)
 target_link_libraries(qlike_engine PUBLIC
     qlike_core
+    qlike_anim
     Vulkan::Vulkan
     glfw
     vk-bootstrap::vk-bootstrap

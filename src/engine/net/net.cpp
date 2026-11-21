@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 
@@ -22,33 +23,24 @@ namespace {
 
 #pragma pack(push, 1)
 struct Beacon     { char magic[4]; uint8_t ver; uint8_t role; uint8_t nplayers; uint16_t port; uint32_t id; };
-struct MsgState   { uint8_t type; uint32_t id; uint32_t t; PlayerState s; };
+struct MsgState   { uint8_t type; uint32_t id; uint32_t t; PackedState s; };
 struct MsgSnapHdr { uint8_t type; uint32_t server_t; uint8_t n; };
-struct SnapEntry  { uint32_t id; uint32_t t; PlayerState s; };
+struct SnapEntry  { uint32_t id; uint32_t t; PackedState s; };
 struct MsgEvent   { uint8_t type; Event e; };
 struct MsgHello   { uint8_t type; uint32_t id; char name[16]; };
 struct MsgWorld   { uint8_t type; WorldState w; };
 #pragma pack(pop)
 
 enum : uint8_t { kMsgState = 1, kMsgSnap = 2, kMsgEvent = 3, kMsgHello = 4, kMsgWorld = 5 };
-constexpr uint8_t kVersion = 1;
+constexpr uint8_t kVersion = kProtocolVersion;
 
-float lerp_angle(float a, float b, float t) {
-    float d = std::fmod(b - a, 6.2831853f);
-    if (d > 3.14159265f) d -= 6.2831853f;
-    if (d < -3.14159265f) d += 6.2831853f;
-    return a + d * t;
+// QLIKE_NET_PORT=<n>: another discovery port (game ports follow it), so test instances on a
+// machine or a network do not meet games that are being played.
+uint16_t discovery_port() {
+    static const uint16_t p = [] { const char* e = std::getenv("QLIKE_NET_PORT"); const int v = e ? std::atoi(e) : 0; return uint16_t(v > 1024 && v < 65000 ? v : kDiscoveryPort); }();
+    return p;
 }
-
-PlayerState mix_state(const PlayerState& a, const PlayerState& b, float t) {
-    PlayerState o = t < 0.5f ? a : b;          // flags / health: nearest
-    o.px = a.px + (b.px - a.px) * t; o.py = a.py + (b.py - a.py) * t; o.pz = a.pz + (b.pz - a.pz) * t;
-    o.vx = a.vx + (b.vx - a.vx) * t; o.vy = a.vy + (b.vy - a.vy) * t; o.vz = a.vz + (b.vz - a.vz) * t;
-    o.yaw = lerp_angle(a.yaw, b.yaw, t);
-    o.pitch = a.pitch + (b.pitch - a.pitch) * t;
-    o.crouch = a.crouch + (b.crouch - a.crouch) * t;
-    return o;
-}
+uint16_t game_port() { return uint16_t(discovery_port() == kDiscoveryPort ? kGamePort : discovery_port() + 1); }
 
 }  // namespace
 
@@ -69,11 +61,14 @@ struct Session::Impl {
     struct PeerInfo { ENetPeer* peer; uint32_t id; char name[16]; };
     std::vector<PeerInfo> peers;           // host: the connected clients
     PlayerState local{};
+    double    server_now_ms = 0.0;
+    Session::Stats* stats = nullptr;
 
     void send(ENetPeer* p, const void* data, size_t len, bool reliable) {
         if (!p) return;
         ENetPacket* pk = enet_packet_create(data, len, reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
-        if (pk && enet_peer_send(p, reliable ? 1 : 0, pk) < 0) enet_packet_destroy(pk);
+        if (pk && enet_peer_send(p, reliable ? 1 : 0, pk) < 0) { enet_packet_destroy(pk); return; }
+        if (pk && stats) { stats->tx_bytes += len; ++stats->tx_packets; }
     }
     void send_all(const void* data, size_t len, bool reliable, ENetPeer* except = nullptr) {
         for (auto& pi : peers) if (pi.peer != except) send(pi.peer, data, len, reliable);
@@ -105,7 +100,7 @@ struct Session::Impl {
     }
 };
 
-Session::Session() : d_(new Impl) {}
+Session::Session() : d_(new Impl) { d_->stats = &stats_; }
 Session::~Session() { stop(); delete d_; }
 
 const char* Session::role_name() const {
@@ -137,7 +132,7 @@ bool Session::start(const std::string& player_name) {
     do { id_ = (uint32_t(rd()) << 1) ^ uint32_t(rd()) ^ uint32_t(GetTickCount64()); } while (id_ == 0);
 
     for (uint16_t k = 0; k < 8 && !d_->host; ++k) {
-        ENetAddress a; a.host = ENET_HOST_ANY; a.port = uint16_t(kGamePort + k);
+        ENetAddress a; a.host = ENET_HOST_ANY; a.port = uint16_t(game_port() + k);
         d_->host = enet_host_create(&a, kMaxPlayers, 2, 0, 0);
         if (d_->host) d_->port = a.port;
     }
@@ -148,7 +143,7 @@ bool Session::start(const std::string& player_name) {
         BOOL yes = TRUE;
         setsockopt(d_->disc, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes), sizeof(yes));
         setsockopt(d_->disc, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&yes), sizeof(yes));
-        sockaddr_in sa{}; sa.sin_family = AF_INET; sa.sin_addr.s_addr = INADDR_ANY; sa.sin_port = htons(kDiscoveryPort);
+        sockaddr_in sa{}; sa.sin_family = AF_INET; sa.sin_addr.s_addr = INADDR_ANY; sa.sin_port = htons(discovery_port());
         if (bind(d_->disc, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) != 0) {
             log::warnf("[net] discovery bind failed (%d)", WSAGetLastError());
             closesocket(d_->disc); d_->disc = INVALID_SOCKET;
@@ -174,7 +169,7 @@ void Session::stop() {
     if (d_->disc != INVALID_SOCKET) { closesocket(d_->disc); d_->disc = INVALID_SOCKET; }
     if (d_->enet_ok) { enet_deinitialize(); d_->enet_ok = false; }
     d_->server = nullptr; d_->peers.clear(); d_->seen.clear();
-    players_.clear(); events_.clear();
+    players_.clear(); gate_.clear();
     role_ = Role::Off;
 }
 
@@ -194,39 +189,17 @@ void Session::add_snap(uint32_t id, uint32_t t, const PlayerState& s, double now
     if (id == 0 || id == id_) return;
     RemotePlayer& p = player(id);
     p.last_rx = now;
-    if (!p.snaps.empty()) {
-        const uint32_t last = p.snaps.back().t;
-        if (t <= last) {
-            if (last - t < 5000u) return;       // duplicate or out of order
-            p.snaps.clear();                    // the clock restarted (new host)
-        }
-    }
-    p.snaps.push_back({ t, s });
-    while (p.snaps.size() > 64) p.snaps.pop_front();
+    if (!p.buf.add(t, s, uint32_t(std::max(0.0, d_->server_now_ms)))) ++stats_.dropped_states;
 }
 
-void Session::interpolate(uint32_t rt, double now) {
+void Session::interpolate(uint32_t session_now, double now) {
     for (auto& p : players_) {
-        p.fresh = !p.snaps.empty() && (now - p.last_rx) < 2.0;
-        if (p.snaps.empty()) continue;
-        const auto& q = p.snaps;
-        if (rt <= q.front().t) { p.state = q.front().s; continue; }
-        if (rt >= q.back().t) {
-            // Nothing newer yet: carry on along the last velocity for a
-            // quarter of a second at most, then stand still.
-            const float dt = std::min(float(rt - q.back().t) * 0.001f, 0.25f);
-            p.state = q.back().s;
-            p.state.px += p.state.vx * dt; p.state.py += p.state.vy * dt; p.state.pz += p.state.vz * dt;
-            continue;
-        }
-        for (size_t i = q.size() - 1; i > 0; --i) {
-            if (q[i - 1].t > rt) continue;
-            const auto& a = q[i - 1]; const auto& b = q[i];
-            const float dx = b.s.px - a.s.px, dy = b.s.py - a.s.py, dz = b.s.pz - a.s.pz;
-            if (dx * dx + dy * dy + dz * dz > 36.0f) { p.state = b.s; break; }      // teleport / respawn: no slide
-            p.state = mix_state(a.s, b.s, float(rt - a.t) / float(std::max<uint32_t>(b.t - a.t, 1u)));
-            break;
-        }
+        p.fresh = !p.buf.snaps.empty() && (now - p.last_rx) < 2.0;
+        const uint32_t delay = p.buf.delay_ms();
+        const SnapBuffer::Sample s = p.buf.sample(session_now > delay ? session_now - delay : 0u);
+        if (!s.valid) continue;
+        p.state = s.s;
+        p.teleported = s.teleported;
     }
 }
 
@@ -235,11 +208,14 @@ void Session::to_solo(const char* why) {
     d_->server = nullptr;
     d_->have_offset = false;
     players_.clear();
+    gate_.clear();
     role_ = Role::Solo;
 }
 
-void Session::send_event(const Event& e) {
+void Session::send_event(Event e) {
     if (!d_->host) return;
+    e.t = uint32_t(std::max(0.0, d_->server_now_ms));
+    e.seq = ++event_seq_;
     MsgEvent m{ kMsgEvent, e };
     if (role_ == Role::Host) d_->send_all(&m, sizeof(m), true);
     else if (role_ == Role::Client) d_->send(d_->server, &m, sizeof(m), true);
@@ -261,7 +237,12 @@ bool Session::take_world(WorldState& out) {
 
 std::vector<Event> Session::take_events() {
     std::vector<Event> out;
-    out.swap(events_);
+    const uint32_t now_ms = uint32_t(std::max(0.0, d_->server_now_ms));
+    gate_.release([&](uint32_t from) {
+        uint32_t delay = kInterpDelayMs;
+        for (const auto& p : players_) if (p.id == from) delay = p.buf.delay_ms();
+        return now_ms > delay ? now_ms - delay : 0u;
+    }, out);
     return out;
 }
 
@@ -270,6 +251,7 @@ void Session::update(double now, const PlayerState& local) {
     if (d_->t0 < 0.0) d_->t0 = now;
     d_->local = local;
     const double local_ms = (now - d_->t0) * 1000.0;
+    d_->server_now_ms = role_ == Role::Client ? local_ms + d_->offset_ms : local_ms;
 
     // ---- transport ----
     ENetEvent ev;
@@ -307,9 +289,10 @@ void Session::update(double now, const PlayerState& local) {
             const uint8_t* data = ev.packet->data;
             const size_t len = ev.packet->dataLength;
             const uint8_t type = len ? data[0] : 0;
+            stats_.rx_bytes += len; ++stats_.rx_packets;
             if (type == kMsgState && len == sizeof(MsgState) && role_ == Role::Host) {
                 MsgState m; std::memcpy(&m, data, sizeof(m));
-                for (auto& pi : d_->peers) if (pi.peer == ev.peer && pi.id == m.id) add_snap(m.id, m.t, m.s, now);
+                for (auto& pi : d_->peers) if (pi.peer == ev.peer && pi.id == m.id) add_snap(m.id, m.t, unpack_state(m.s), now);
             } else if (type == kMsgSnap && len >= sizeof(MsgSnapHdr) && ev.peer == d_->server) {
                 MsgSnapHdr h; std::memcpy(&h, data, sizeof(h));
                 if (len == sizeof(h) + size_t(h.n) * sizeof(SnapEntry)) {
@@ -319,14 +302,15 @@ void Session::update(double now, const PlayerState& local) {
                     d_->have_offset = true;
                     for (uint8_t i = 0; i < h.n; ++i) {
                         SnapEntry e; std::memcpy(&e, data + sizeof(h) + size_t(i) * sizeof(e), sizeof(e));
-                        add_snap(e.id, e.t, e.s, now);
+                        add_snap(e.id, e.t, unpack_state(e.s), now);
                     }
                 }
             } else if (type == kMsgEvent && len == sizeof(MsgEvent)) {
                 MsgEvent m; std::memcpy(&m, data, sizeof(m));
-                if (m.e.kind == Event::Leave) remove_player(m.e.from);
-                events_.push_back(m.e);
-                if (role_ == Role::Host) d_->send_all(&m, sizeof(m), true, ev.peer);
+                if (m.e.kind == Event::Leave) { remove_player(m.e.from); gate_.forget(m.e.from); }
+                // (a duplicate or a stale repeat is neither played nor passed on)
+                if (gate_.push(m.e)) { if (role_ == Role::Host) d_->send_all(&m, sizeof(m), true, ev.peer); }
+                else ++stats_.duplicate_events;
             } else if (type == kMsgWorld && len == sizeof(MsgWorld)) {
                 MsgWorld m; std::memcpy(&m, data, sizeof(m));
                 // host: only requests from clients; client: only from the host
@@ -359,7 +343,8 @@ void Session::update(double now, const PlayerState& local) {
                         MsgEvent m{ kMsgEvent, {} };
                         m.e.kind = Event::Leave; m.e.from = pid;
                         d_->send_all(&m, sizeof(m), true);
-                        events_.push_back(m.e);
+                        gate_.push(m.e);
+                        gate_.forget(pid);
                         remove_player(pid);
                     }
                     break;
@@ -394,7 +379,7 @@ void Session::update(double now, const PlayerState& local) {
                       uint8_t(role_ == Role::Solo ? 0 : (role_ == Role::Host ? 1 : 2)),
                       uint8_t(players_.size() + 1), d_->port, id_ };
             for (uint32_t addr : d_->bcast) {
-                sockaddr_in to{}; to.sin_family = AF_INET; to.sin_addr.s_addr = addr; to.sin_port = htons(kDiscoveryPort);
+                sockaddr_in to{}; to.sin_family = AF_INET; to.sin_addr.s_addr = addr; to.sin_port = htons(discovery_port());
                 sendto(d_->disc, reinterpret_cast<const char*>(&b), sizeof(b), 0, reinterpret_cast<sockaddr*>(&to), sizeof(to));
             }
         }
@@ -426,7 +411,7 @@ void Session::update(double now, const PlayerState& local) {
     // ---- send ----
     if (role_ == Role::Client && d_->have_offset && now >= d_->next_send) {
         d_->next_send = std::max(d_->next_send + kSendInterval, now - kSendInterval);
-        MsgState m{ kMsgState, id_, uint32_t(std::max(0.0, local_ms + d_->offset_ms)), local };
+        MsgState m{ kMsgState, id_, uint32_t(std::max(0.0, local_ms + d_->offset_ms)), pack_state(local) };
         d_->send(d_->server, &m, sizeof(m), false);
     }
     if (role_ == Role::Host && now >= d_->next_snap) {
@@ -436,11 +421,11 @@ void Session::update(double now, const PlayerState& local) {
         size_t off = sizeof(h);
         auto put = [&](uint32_t pid, uint32_t t, const PlayerState& s) {
             if (h.n > kMaxPlayers) return;
-            SnapEntry e{ pid, t, s };
+            SnapEntry e{ pid, t, pack_state(s) };
             std::memcpy(buf + off, &e, sizeof(e)); off += sizeof(e); ++h.n;
         };
         put(id_, uint32_t(local_ms), local);
-        for (const auto& p : players_) if (!p.snaps.empty()) put(p.id, p.snaps.back().t, p.snaps.back().s);
+        for (const auto& p : players_) if (!p.buf.snaps.empty()) put(p.id, p.buf.snaps.back().t, p.buf.snaps.back().s);
         std::memcpy(buf, &h, sizeof(h));
         d_->send_all(buf, off, false);
     }
@@ -450,8 +435,10 @@ void Session::update(double now, const PlayerState& local) {
     players_.erase(std::remove_if(players_.begin(), players_.end(),
                                   [&](const RemotePlayer& p) { return p.last_rx > 0.0 && now - p.last_rx > 6.0; }),
                    players_.end());
-    const double server_now = role_ == Role::Host ? local_ms : local_ms + d_->offset_ms;
-    interpolate(uint32_t(std::max(0.0, server_now - double(kInterpDelayMs))), now);
+    const double server_now = role_ == Role::Client ? local_ms + d_->offset_ms : local_ms;
+    d_->server_now_ms = server_now;
+    render_t_ = uint32_t(std::max(0.0, server_now - double(kInterpDelayMs)));
+    interpolate(uint32_t(std::max(0.0, server_now)), now);
 }
 
 }  // namespace qlike::net

@@ -1,12 +1,12 @@
-// The player's own body in first person: a skinned soldier (built with
-// MakeHuman / MPFB in Blender, tools/character/) whose legs walk, whose
-// knees bend when crouching and whose hands hold what the player carries.
+// The soldier's body: the local player's own (seen from the eyes) and, through the same code,
+// every other player's. A skinned mesh (built with MakeHuman / MPFB in Blender, tools/character/)
+// posed by the animation library (src/anim, see docs/animation/architecture.md):
 //
-// The pose is made here, not played back from animation files: legs and
-// arms are solved with two-bone IK toward foot / hand targets, so the hands
-// are always exactly on the weapon and the feet follow the real movement.
-// The mesh is skinned on the CPU (about 12k vertices) into a per-frame
-// vertex buffer and drawn with the ordinary mesh shader.
+//   controller state  ->  anim::CharacterAnimator  ->  joint matrices  ->  bone palette  ->  GPU skinning (cube_skin.vert)
+//
+// This file only gathers what the animator is told (where the character is, how it moves, where
+// it aims, what it holds), skins the result (about 43k vertices) into a per-frame vertex buffer
+// and draws it with the ordinary mesh shader. The animator never touches the controller.
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
@@ -14,10 +14,12 @@
 #include "engine/log.h"
 
 #include <GLFW/glfw3.h>
+#include <imgui.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -27,37 +29,16 @@ namespace qlike {
 
 namespace {
 
-// Shortest rotation taking unit vector a to unit vector b.
-glm::mat3 rot_from_to(glm::vec3 a, glm::vec3 b) {
-    const float d = glm::dot(a, b);
-    if (d > 0.99999f) return glm::mat3(1.0f);
-    glm::vec3 axis;
-    if (d < -0.99999f) {
-        axis = glm::cross(a, std::abs(a.x) < 0.8f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0));
-    } else {
-        axis = glm::cross(a, b);
-    }
-    axis = glm::normalize(axis);
-    return glm::mat3(glm::rotate(glm::mat4(1.0f), std::acos(glm::clamp(d, -1.0f, 1.0f)), axis));
-}
-
-glm::mat3 rot_axis(glm::vec3 axis, float angle) {
-    return glm::mat3(glm::rotate(glm::mat4(1.0f), angle, glm::normalize(axis)));
-}
-
-// "x,y,z" from an environment variable (pose tuning without a rebuild).
-glm::vec3 env_vec3(const char* name, glm::vec3 def) {
-    const char* s = std::getenv(name);
-    if (!s) return def;
-    glm::vec3 v = def;
-    if (std::sscanf(s, "%f,%f,%f", &v.x, &v.y, &v.z) != 3) return def;
-    return v;
-}
-
 float env_float(const char* name, float def) {
     const char* s = std::getenv(name);
     return s ? float(std::atof(s)) : def;
 }
+
+double now_ms() {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+struct GroundProbe { const VulkanEngine* engine; float feet_y; };
 
 }  // namespace
 
@@ -67,16 +48,15 @@ int VulkanEngine::body_bone(const char* name) const {
     return -1;
 }
 
-void VulkanEngine::init_player_body() {
+// Reads one .qchar. with_bones: this is the file the skeleton is taken from (and the scale that
+// puts the model's eyes at the player's eye height); every other file must be on that skeleton.
+bool VulkanEngine::load_skin_mesh(const char* file, SkinMesh& out, bool with_bones, bool rt_part) {
     std::string path;
-    for (const char* p : { "assets/character/soldier_fp.qchar", "../assets/character/soldier_fp.qchar" }) {
-        std::ifstream t(p, std::ios::binary);
-        if (t.good()) { path = p; break; }
+    for (const char* dir : { "assets/character/", "../assets/character/" }) {
+        std::ifstream t(std::string(dir) + file, std::ios::binary);
+        if (t.good()) { path = std::string(dir) + file; break; }
     }
-    if (path.empty()) {
-        log::info("[body] no assets/character/soldier_fp.qchar - no visible player body");
-        return;
-    }
+    if (path.empty()) return false;
     std::ifstream f(path, std::ios::binary);
     char magic[4]{};
     uint32_t nb = 0, nv = 0, ni = 0;
@@ -85,11 +65,11 @@ void VulkanEngine::init_player_body() {
     f.read(reinterpret_cast<char*>(&nv), 4);
     f.read(reinterpret_cast<char*>(&ni), 4);
     if (std::memcmp(magic, "QCH1", 4) != 0 || nb == 0 || nb > 255 || nv == 0 || nv > 2000000 || ni > 12000000) {
-        log::warn("[body] bad character file");
-        return;
+        log::warnf("[body] %s: bad character file", file);
+        return false;
     }
-    body_bones_.resize(nb);
-    for (BodyBone& b : body_bones_) {
+    std::vector<BodyBone> bones(nb);
+    for (BodyBone& b : bones) {
         char name[32]{};
         int32_t parent = -1;
         f.read(name, 32);
@@ -108,653 +88,497 @@ void VulkanEngine::init_player_body() {
     std::vector<uint32_t> idx(ni);
     f.read(reinterpret_cast<char*>(idx.data()), std::streamsize(ni) * 4);
     if (!f.good()) {
-        log::warn("[body] character file truncated");
+        log::warnf("[body] %s: truncated", file);
+        return false;
+    }
+    if (with_bones) {
+        body_bones_ = std::move(bones);
+        // Scale so the model's eyes are at the player's standing eye height.
+        float top = 0.0f;
+        for (const FileVert& v : fv) top = std::max(top, v.p[1]);
+        const int head = body_bone("Head");
+        // (the head is not in this mesh: its height is the neck joint plus a head)
+        const float model_eye = head >= 0 ? body_bones_[head].head.y + 0.035f : top + 0.13f;
+        const float stand_eye = game::Player::kHalfExtents.y + game::Player::kEyeOffsetStand;
+        body_scale_ = stand_eye / std::max(model_eye, 0.5f);
+        for (BodyBone& b : body_bones_) { b.head *= body_scale_; b.tail *= body_scale_; }
+        log::infof("[body] soldier: %u bones, scale %.3f (model eye %.3f m)", nb, body_scale_, model_eye);
+    } else {
+        bool same = bones.size() == body_bones_.size();
+        for (size_t i = 0; same && i < bones.size(); ++i) same = bones[i].name == body_bones_[i].name && bones[i].parent == body_bones_[i].parent;
+        if (!same) {
+            log::warnf("[body] %s is on another skeleton than the body: not used (export the character again)", file);
+            return false;
+        }
+    }
+    // Two static vertex streams: the rest pose, and each vertex's bones and weights. The GPU
+    // skins (cube_skin.vert) with the bone palette of the character being drawn.
+    std::vector<Vertex> stream(nv);
+    for (uint32_t i = 0; i < nv; ++i)
+        stream[i] = { glm::vec3(fv[i].p[0], fv[i].p[1], fv[i].p[2]) * body_scale_, glm::vec3(fv[i].n[0], fv[i].n[1], fv[i].n[2]), glm::vec2(fv[i].uv[0], fv[i].uv[1]) };
+    out.rest = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_, stream.data(), nv, idx.data(), ni);
+    const uint32_t rt_base = uint32_t(body_rt_rest_.size());
+    if (rt_part) {                      // part of the mesh the ray tracer gets (body_rt.cpp)
+        body_rt_rest_.insert(body_rt_rest_.end(), stream.begin(), stream.end());
+        for (uint32_t i : idx) body_rt_idx_.push_back(rt_base + i);
+    }
+    for (uint32_t i = 0; i < nv; ++i) {
+        float b[4], w[4];
+        for (int k = 0; k < 4; ++k) { b[k] = float(std::min<uint8_t>(fv[i].b[k], uint8_t(nb - 1))); w[k] = fv[i].w[k] / 255.0f; }
+        stream[i] = { glm::vec3(b[0], b[1], b[2]), glm::vec3(b[3], w[0], w[1]), glm::vec2(w[2], w[3]) };
+    }
+    out.skin = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_, stream.data(), nv, idx.data(), 3);
+    if (rt_part) body_rt_skin_.insert(body_rt_skin_.end(), stream.begin(), stream.end());
+    out.index_count = ni;
+    out.vertex_count = nv;
+    return true;
+}
+
+void VulkanEngine::init_player_body() {
+    if (!load_skin_mesh("soldier_fp.qchar", body_lod_[0], true)) {
+        log::info("[body] no assets/character/soldier_fp.qchar - no visible player body");
         body_bones_.clear();
         return;
     }
-
-    // Scale so the model's eyes are at the player's standing eye height.
-    float top = 0.0f;
-    for (const FileVert& v : fv) top = std::max(top, v.p[1]);
-    const int head = body_bone("Head");
-    // (the head is not in the mesh: its height is the neck joint plus a head)
-    const float model_eye = head >= 0 ? body_bones_[head].head.y + 0.035f : top + 0.13f;
-    const float stand_eye = game::Player::kHalfExtents.y + game::Player::kEyeOffsetStand;
-    body_scale_ = stand_eye / std::max(model_eye, 0.5f);
-    for (BodyBone& b : body_bones_) { b.head *= body_scale_; b.tail *= body_scale_; }
-    body_verts_.resize(nv);
-    for (uint32_t i = 0; i < nv; ++i) {
-        BodyVert& o = body_verts_[i];
-        o.pos = glm::vec3(fv[i].p[0], fv[i].p[1], fv[i].p[2]) * body_scale_;
-        o.nrm = glm::vec3(fv[i].n[0], fv[i].n[1], fv[i].n[2]);
-        o.uv = glm::vec2(fv[i].uv[0], fv[i].uv[1]);
-        for (int k = 0; k < 4; ++k) {
-            o.bone[k] = std::min<uint8_t>(fv[i].b[k], uint8_t(nb - 1));
-            o.weight[k] = fv[i].w[k] / 255.0f;
-        }
-    }
-    body_index_count_ = ni;
-    body_dbg_idx_ = idx;
-
-    // Index buffer (static) through the ordinary mesh upload; its vertex
-    // buffer holds the rest pose and is not drawn.
-    {
-        std::vector<Vertex> rest(nv);
-        for (uint32_t i = 0; i < nv; ++i) rest[i] = { body_verts_[i].pos, body_verts_[i].nrm, body_verts_[i].uv };
-        body_mesh_ = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_,
-                                           rest.data(), nv, idx.data(), ni);
-    }
-    for (uint32_t i = 0; i < kFrameOverlap; ++i) {
-        VkBufferCreateInfo bci{};
-        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size = sizeof(Vertex) * nv;
-        bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        VmaAllocationInfo ai{};
-        vk_check(vmaCreateBuffer(allocator_, &bci, &aci, &body_vbuf_[i], &body_valloc_[i], &ai), "body vertex buffer");
-        body_vmapped_[i] = ai.pMappedData;
-    }
-    body_skinned_.resize(nv);
+    const uint32_t nb = uint32_t(body_bones_.size());
+    load_skin_mesh("soldier_fp_lod1.qchar", body_lod_[1], false);
+    body_rt_rest_.clear(); body_rt_skin_.clear(); body_rt_idx_.clear();
+    load_skin_mesh("soldier_fp_lod2.qchar", body_lod_[2], false, true);
+    load_skin_mesh("soldier_head.qchar", head_lod_[0], false);
+    load_skin_mesh("soldier_head_lod1.qchar", head_lod_[1], false);
+    load_skin_mesh("soldier_head_lod2.qchar", head_lod_[2], false, true);
+    init_body_rt();
+    log::infof("[body] triangles by level of detail: body %u / %u / %u, head %u / %u / %u (0 = file missing: the level before is drawn)",
+               body_lod_[0].index_count / 3, body_lod_[1].index_count / 3, body_lod_[2].index_count / 3,
+               head_lod_[0].index_count / 3, head_lod_[1].index_count / 3, head_lod_[2].index_count / 3);
+    if (nb > kSkinBones) log::warnf("[body] %u bones: more than the palette holds (%u)", nb, kSkinBones);
     body_R_.assign(nb, glm::mat3(1.0f));
     body_P_.assign(nb, glm::vec3(0.0f));
-    body_local_.assign(nb, glm::mat3(1.0f));
-    body_set_.assign(nb, 0);
-    log::infof("[body] soldier: %u bones, %u vertices, %u triangles, scale %.3f (model eye %.3f m)",
-               nb, nv, ni / 3, body_scale_, model_eye);
-    // Movement: the motion capture database (tools/anim/build_motion_db.py).
-    for (const char* p : { "assets/character/motion.qmm", "../assets/character/motion.qmm" })
-        if (body_motion_.load(p)) break;
-    body_motion_bone_.clear();
-    if (body_motion_.ok()) {
-        for (const std::string& n : body_motion_.bone_names) body_motion_bone_.push_back(body_bone(n.c_str()));
-        log::infof("[body] motion matching: %u frames (with mirrors), %u bones, %zu clips", body_motion_.frames,
-                   body_motion_.bones, body_motion_.ranges.size());
-    } else {
-        log::info("[body] no assets/character/motion.qmm - the body moves by the built-in walk cycle");
+
+    // Animation: the cooked asset (tools/anim/cook_main.cpp -> vibe_animcook). Its skeleton must
+    // be this mesh's, joint for joint, or the skin would follow the wrong bones.
+    body_animator_.reset();
+    std::string why;
+    bool loaded = false;
+    for (const char* p : { "assets/character/soldier.qanim", "../assets/character/soldier.qanim" }) {
+        std::ifstream t(p, std::ios::binary);
+        if (!t.good()) continue;
+        loaded = anim_set_.load(p, &why);
+        break;
+    }
+    if (loaded) {
+        const anim::SkeletonDef& s = anim_set_.runtime->skeleton();
+        bool same = size_t(s.size()) == body_bones_.size();
+        for (size_t i = 0; same && i < body_bones_.size(); ++i)
+            same = s.names[i] == body_bones_[i].name && s.parents[i] == body_bones_[i].parent &&
+                   glm::length(s.rest_pos[i] - body_bones_[i].head) < 2e-3f;
+        if (!same) { loaded = false; why = "its skeleton is not the character mesh's (cook the asset again)"; }
+    }
+    if (!loaded) {
+        log::warnf("[body] no animation: assets/character/soldier.qanim %s - the body is not drawn",
+                   why.empty() ? "is missing (run vibe_animcook)" : why.c_str());
+        anim_set_ = anim::AnimationSet{};
+        return;
+    }
+    body_animator_ = std::make_unique<anim::CharacterAnimator>(anim_set_);
+    apply_anim_tuning(body_animator_->tuning);
+    anim_debug_ = std::getenv("QLIKE_ANIM_DEBUG") != nullptr;
+    log::infof("[body] animation: %s, %d clips (%.1f MB compressed), motion database %u frames (%.1f MB), %zu jumps",
+               anim_set_.runtime->name(), anim_set_.runtime->num_clips(), double(anim_set_.runtime->clip_bytes()) / 1048576.0,
+               anim_set_.db.frames(), double(anim_set_.db.memory_bytes()) / 1048576.0, anim_set_.db.jumps().size());
+}
+
+// The animation's style, without a rebuild: QLIKE_ANIM_TUNE="name=value,name=value". Names:
+//   halflife (s, inertial blend)   run_speed (m/s the game's run is matched to in the capture)
+//   max_rate  max_stride  max_warp (rad)  lean (0 = none)  foot_ik  foot_lock  stride_warp  orient_warp
+//   hand_ik (0/1)   air (airborne pose strength)   air_sway   land_dip   reach_time (s)
+//   search (s between searches)   lock_speed (m/s above which feet are not held)
+void VulkanEngine::apply_anim_tuning(anim::AnimTuning& t) const {
+    const char* s = std::getenv("QLIKE_ANIM_TUNE");
+    if (!s) return;
+    std::string spec(s);
+    size_t at = 0;
+    while (at < spec.size()) {
+        const size_t end = std::min(spec.find(',', at), spec.size());
+        const std::string kv = spec.substr(at, end - at);
+        at = end + 1;
+        const size_t eq = kv.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string k = kv.substr(0, eq);
+        const float v = float(std::atof(kv.c_str() + eq + 1));
+        if (k == "halflife") t.inertial_halflife = v;
+        else if (k == "run_speed") t.matcher.run_speed = v;
+        else if (k == "max_rate") t.max_rate = v;
+        else if (k == "max_stride") t.max_stride = v;
+        else if (k == "max_warp") t.max_orient_warp = v;
+        else if (k == "lean") t.lean_strength = v;
+        else if (k == "foot_ik") t.foot_ik = v != 0.0f;
+        else if (k == "foot_lock") t.foot_lock = v != 0.0f;
+        else if (k == "stride_warp") t.stride_warp = v != 0.0f;
+        else if (k == "orient_warp") t.orient_warp = v != 0.0f;
+        else if (k == "hand_ik") t.hand_ik = v != 0.0f;
+        else if (k == "air") t.airborne_pose_strength = v;
+        else if (k == "air_sway") t.air_sway = v;
+        else if (k == "land_dip") t.land_dip = v;
+        else if (k == "reach_time") t.air.reach_time = v;
+        else if (k == "search") t.matcher.search_interval = v;
+        else if (k == "lock_speed") t.foot_lock_max_speed = v;
+        else log::warnf("[body] QLIKE_ANIM_TUNE: unknown name '%s'", k.c_str());
     }
 }
 
 void VulkanEngine::destroy_player_body() {
-    destroy_mesh(allocator_, body_mesh_);
-    for (uint32_t i = 0; i < kFrameOverlap; ++i) {
-        if (body_vbuf_[i]) vmaDestroyBuffer(allocator_, body_vbuf_[i], body_valloc_[i]);
-        body_vbuf_[i] = VK_NULL_HANDLE;
-        body_valloc_[i] = nullptr;
-        body_vmapped_[i] = nullptr;
-    }
-    body_bones_.clear();
-    body_verts_.clear();
-}
-
-// Forward kinematics: every joint follows its parent (times its local
-// rotation) unless its orientation was set explicitly.
-void VulkanEngine::body_fk() {
-    for (size_t i = 0; i < body_bones_.size(); ++i) {
-        const BodyBone& b = body_bones_[i];
-        if (b.parent < 0) {
-            body_P_[i] = b.head + body_root_off_;
-            if (!body_set_[i]) body_R_[i] = body_local_[i];
-        } else {
-            const BodyBone& p = body_bones_[b.parent];
-            body_P_[i] = body_P_[b.parent] + body_R_[b.parent] * (b.head - p.head);
-            if (!body_set_[i]) body_R_[i] = body_R_[b.parent] * body_local_[i];
+    destroy_body_rt();
+    for (SkinMesh* set : { body_lod_, head_lod_ })
+        for (int i = 0; i < kBodyLods; ++i) {
+            destroy_mesh(allocator_, set[i].rest);
+            destroy_mesh(allocator_, set[i].skin);
+            set[i] = SkinMesh{};
         }
+    body_animator_.reset();
+    body_bones_.clear();
+}
+
+// What a foot at world (x, z) stands on, for a character whose feet are at feet_y: the terrain,
+// or the top of a level box (floor, stair, bridge) under that point that the character could be
+// standing on. Level boxes are known near the local player only (the collision broadphase).
+float VulkanEngine::anim_ground_height(float x, float z, float feet_y) const {
+    float g = sample_terrain_height(x, z);
+    for (const collision::AABB& a : near_static_) {
+        if (x < a.min.x || x > a.max.x || z < a.min.z || z > a.max.z) continue;
+        if (a.max.y > feet_y + 0.6f) continue;               // above the knees: a wall, not a floor
+        g = std::max(g, a.max.y);
+    }
+    return g;
+}
+
+// One character, one frame: the animator is told what the controller (or the network) says,
+// and its pose goes into the bone palette (`palette` gets its first row; nullptr: pose only).
+// Leaves the pose in body_R_ / body_P_ (model space) for whoever needs it next (a ragdoll
+// taking over).
+void VulkanEngine::pose_character(anim::CharacterAnimator& a, anim::CharacterAnimationInput& in, int* palette, std::vector<glm::vec4>* keep) {
+    static const auto ground_cb = [](void* user, float x, float z) -> float {
+        const GroundProbe* p = static_cast<const GroundProbe*>(user);
+        return p->engine->anim_ground_height(x, z, p->feet_y);
+    };
+    GroundProbe probe{ this, in.position.y };
+    // (level floors are known within the broadphase's reach of the local player; further out a
+    // character's feet stay level rather than follow terrain that may lie under a floor)
+    const glm::vec2 dc(in.position.x - near_static_center_.x, in.position.z - near_static_center_.y);
+    if (glm::dot(dc, dc) < 20.0f * 20.0f) { in.ground_height = ground_cb; in.ground_user = &probe; }
+    in.gravity = game_.gravity;
+    in.stand_eye_height = game::Player::kHalfExtents.y + game::Player::kEyeOffsetStand;
+    const double t0 = now_ms();
+    a.update(in);
+    const double t1 = now_ms();
+    anim_ms_ += float(t1 - t0);
+    ++anim_lod_count_[glm::clamp(in.lod, 0, 3)];
+    if (in.lod >= 3) return;
+    const std::span<const glm::mat4> m = a.model();
+    const size_t nb = std::min(body_bones_.size(), m.size());
+    for (size_t i = 0; i < nb; ++i) {
+        body_R_[i] = glm::mat3(m[i]);
+        body_P_[i] = glm::vec3(m[i][3]);
+    }
+    if (palette) {
+        *palette = body_push_pose(keep);
+        skin_ms_ += float(now_ms() - t1);
     }
 }
 
-// Two-bone IK: joints a -> b -> c; c goes to `target` (as far as the limb
-// reaches), the middle joint bends toward `pole`.
-void VulkanEngine::body_ik(int a, int b, int c, glm::vec3 target, glm::vec3 pole) {
-    if (a < 0 || b < 0 || c < 0) return;
-    const glm::vec3 ab0 = body_bones_[b].head - body_bones_[a].head;
-    const glm::vec3 bc0 = body_bones_[c].head - body_bones_[b].head;
-    const float l1 = glm::length(ab0), l2 = glm::length(bc0);
-    const glm::vec3 pa = body_P_[a];
-    glm::vec3 d = target - pa;
-    float dist = glm::length(d);
-    if (dist < 1e-4f) { d = glm::vec3(0, -1, 0); dist = 1e-4f; }
-    const glm::vec3 dir = d / dist;
-    dist = glm::clamp(dist, std::abs(l1 - l2) + 0.01f, (l1 + l2) * 0.995f);
-    const float ca = glm::clamp((l1 * l1 + dist * dist - l2 * l2) / (2.0f * l1 * dist), -1.0f, 1.0f);
-    glm::vec3 pp = pole - dir * glm::dot(pole, dir);
-    if (glm::dot(pp, pp) < 1e-8f) pp = glm::cross(dir, glm::vec3(1, 0, 0));
-    pp = glm::normalize(pp);
-    const glm::vec3 pb = pa + dir * (l1 * ca) + pp * (l1 * std::sqrt(std::max(0.0f, 1.0f - ca * ca)));
-    const glm::vec3 pc = pa + dir * dist;
-    const glm::mat3 parent = body_bones_[a].parent >= 0 ? body_R_[body_bones_[a].parent] : glm::mat3(1.0f);
-    body_R_[a] = rot_from_to(glm::normalize(parent * ab0), glm::normalize(pb - pa)) * parent;
-    body_R_[b] = rot_from_to(glm::normalize(body_R_[a] * bc0), glm::normalize(pc - pb)) * body_R_[a];
-    body_set_[a] = body_set_[b] = 1;
-    body_P_[b] = pb;
-    body_P_[c] = pc;
-}
-
-// A leg fitted to a new ankle position, keeping what the pose had: thigh and shin are turned
-// (the shortest way) from where they pointed to where the two-bone solution puts them, with
-// the knee bending the way it already did.
-void VulkanEngine::body_leg_fit(int up, int lo, int ft, glm::vec3 target) {
-    const float l1 = glm::length(body_bones_[lo].head - body_bones_[up].head);
-    const float l2 = glm::length(body_bones_[ft].head - body_bones_[lo].head);
-    const glm::vec3 pa = body_P_[up], kb = body_P_[lo], fc = body_P_[ft];
-    glm::vec3 d = target - pa;
-    float dist = glm::length(d);
-    if (dist < 1e-4f) return;
-    const glm::vec3 dir = d / dist;
-    dist = glm::clamp(dist, std::abs(l1 - l2) + 0.01f, (l1 + l2) * 0.998f);
-    const float ca = glm::clamp((l1 * l1 + dist * dist - l2 * l2) / (2.0f * l1 * dist), -1.0f, 1.0f);
-    glm::vec3 pole = (kb - pa) - dir * glm::dot(kb - pa, dir);
-    if (glm::dot(pole, pole) < 1e-6f) pole = glm::vec3(0.0f, 0.0f, -1.0f) - dir * glm::dot(glm::vec3(0.0f, 0.0f, -1.0f), dir);
-    pole = glm::normalize(pole);
-    const glm::vec3 pb = pa + dir * (l1 * ca) + pole * (l1 * std::sqrt(std::max(0.0f, 1.0f - ca * ca)));
-    const glm::vec3 pc = pa + dir * dist;
-    body_R_[up] = rot_from_to(glm::normalize(kb - pa), glm::normalize(pb - pa)) * body_R_[up];
-    body_R_[lo] = rot_from_to(glm::normalize(fc - kb), glm::normalize(pc - pb)) * body_R_[lo];
-    body_set_[up] = body_set_[lo] = 1;
-    body_P_[lo] = pb;
-    body_P_[ft] = pc;
-}
-
-// Poses and skins the body for this frame. Called once the frame's camera
-// is known (the body rides on the interpolated camera, like the flashlight).
+// The local player's body for this frame. Called once the frame's camera is known (the body
+// rides on the interpolated camera, like the flashlight).
 void VulkanEngine::update_player_body(float dt) {
     body_drawn_ = false;
-    if (body_bones_.empty() || (!game_.player_body && !mp_pose_dst_)) return;
+    anim_ms_ = skin_ms_ = 0.0f;
+    body_palette_used_ = 0;                // (first of the frame's three: this, mp_pose_avatars, corpses_update)
+    body_palette_ = -1;
+    for (int& c : anim_lod_count_) c = 0;
+    // The cosmetic reload runs out by itself; firing ends it at once (combat.cpp).
+    if (body_reload_left_ > 0.0f) body_reload_left_ = std::max(0.0f, body_reload_left_ - glm::clamp(dt, 0.0f, 0.1f));
+    if (weapon_ != 0 || flashlight_on_) body_reload_left_ = 0.0f;
+    if (body_bones_.empty() || !body_animator_ || !game_.player_body) return;
     CPU_SCOPE("player body");
     dt = glm::clamp(dt, 0.0f, 0.05f);
-    const float tnow = static_cast<float>(glfwGetTime());
 
     // ---- where the body stands ----
     const float yaw = player_.yaw, pitch = player_.pitch;
     const glm::vec3 fwd(std::sin(yaw), 0.0f, -std::cos(yaw)), right(std::cos(yaw), 0.0f, std::sin(yaw));
     const float eye_h = game::Player::kHalfExtents.y + player_.eye_offset_y();
-    const float stand_eye = game::Player::kHalfExtents.y + game::Player::kEyeOffsetStand;
     const float crouch = glm::clamp(player_.crouch_factor, 0.0f, 1.0f);
     const float look_down = glm::smoothstep(0.15f, 1.25f, -pitch);
-    // The eye sits in front of the neck; further when looking down, so the
-    // view is never inside the chest.
+    // The eye sits in front of the neck; further when looking down, so the view is never inside the chest.
     static const float kBack0 = env_float("QLIKE_BODY_BACK", 0.11f);
-    const float back = kBack0 + 0.17f * look_down + 0.25f * crouch;
+    // (looking down, the bottom of the view looks back past straight down: the body stays behind that)
+    static const float kBackDown = env_float("QLIKE_BODY_BACK_DOWN", 0.30f);
+    const float back = kBack0 + kBackDown * look_down + 0.25f * crouch;
     const glm::vec3 eye = current_frame_view_.eye_pos;
     const glm::vec3 feet = eye - glm::vec3(0.0f, eye_h, 0.0f) - fwd * back;
-    body_model_ = glm::mat4(glm::vec4(right, 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f), glm::vec4(-fwd, 0.0f),
-                            glm::vec4(feet, 1.0f));
     // Model space: +X right, +Y up, -Z forward; the eye is at (0, eye_h, -back).
-    const glm::vec3 eye_m(0.0f, eye_h, -back);
+    body_model_ = glm::mat4(glm::vec4(right, 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f), glm::vec4(-fwd, 0.0f), glm::vec4(feet, 1.0f));
     auto to_model = [&](glm::vec3 world) {
         const glm::vec3 d = world - feet;
         return glm::vec3(glm::dot(d, right), d.y, -glm::dot(d, fwd));
     };
-    // A point given in view space (x right, y up, z toward the viewer).
-    const glm::vec3 cam_f(0.0f, std::sin(pitch), -std::cos(pitch)), cam_u(0.0f, std::cos(pitch), std::sin(pitch));
-    auto view_pt = [&](glm::vec3 v) { return eye_m + glm::vec3(v.x, 0.0f, 0.0f) + cam_u * v.y - cam_f * v.z; };
-    auto view_dir = [&](glm::vec3 v) { return glm::vec3(v.x, 0.0f, 0.0f) + cam_u * v.y - cam_f * v.z; };
+    auto dir_to_model = [&](glm::vec3 d) { return glm::vec3(glm::dot(d, right), d.y, -glm::dot(d, fwd)); };
 
-    // ---- movement ----
-    // Test hook: QLIKE_BODY_WALK=<m/s> poses the body as if walking forward at that speed.
-    // (QLIKE_BODY_STRAFE=<m/s> adds a sideways speed, to the right.)
-    static const float kWalk = env_float("QLIKE_BODY_WALK", -1.0f), kStrafe = env_float("QLIKE_BODY_STRAFE", 0.0f);
-    // (QLIKE_BODY_AIR=<m/s> poses it in the air, rising at that speed.)
-    static const float kAir = env_float("QLIKE_BODY_AIR", 1e9f);
-    const glm::vec3 vel = (kWalk >= 0.0f ? fwd * kWalk + right * kStrafe : player_.velocity) + glm::vec3(0.0f, kAir < 1e8f ? kAir : 0.0f, 0.0f);
-    const glm::vec2 vm(glm::dot(vel, right), -glm::dot(vel, fwd));          // model x, z
-    const float speed = glm::length(vm);
-    const bool grounded = ((player_.on_ground && !player_swimming_) || kWalk >= 0.0f) && kAir > 1e8f;
-    const float ease = 1.0f - std::exp(-dt * 9.0f);
-    body_air_ += ((grounded ? 0.0f : 1.0f) - body_air_) * (1.0f - std::exp(-dt * 7.0f));
-    body_move_ += (glm::clamp(speed / 1.2f, 0.0f, 1.0f) - body_move_) * ease;
-    if (speed > 0.2f) body_dir_ = glm::normalize(glm::mix(body_dir_, vm / speed, ease));
-    if (glm::dot(body_dir_, body_dir_) < 0.25f) body_dir_ = glm::vec2(0.0f, -1.0f);
-    // Step length as people really walk and run: ~0.7 m at a stroll, ~1.25 m
-    // at a run (was 0.48 / 0.77 m: twice too many small, hurried steps).
-    const float stride = glm::clamp(0.44f + 0.185f * speed, 0.40f, 1.30f) * (1.0f - 0.45f * crouch);   // metres per step
-    if (grounded) body_phase_ += 3.14159265f * speed * dt / std::max(stride, 0.2f);
-    if (body_phase_ > 6.2831853f * 64.0f) body_phase_ -= 6.2831853f * 64.0f;
-
-    // ---- reset the pose ----
-    std::fill(body_set_.begin(), body_set_.end(), uint8_t(0));
-    std::fill(body_local_.begin(), body_local_.end(), glm::mat3(1.0f));
-
-    // ---- hips, spine and legs: from motion capture ----
-    // (QLIKE_BODY_PROCEDURAL=1: the built-in walk cycle instead.)
-    static const bool kNoMocap = std::getenv("QLIKE_BODY_PROCEDURAL") != nullptr;
-    const bool mocap = body_motion_.ok() && !kNoMocap;
-    if (mocap) {
-        BodyAnim& an = *body_anim_;
-        auto spring0 = [](glm::vec3& x, glm::vec3& v, float halflife, float h) {       // critically damped, toward 0
-            const float y = 4.0f * 0.69314718f / halflife * 0.5f;
-            const glm::vec3 j1 = v + x * y;
-            const float e = std::exp(-y * h);
-            x = e * (x + j1 * h);
-            v = e * (v - j1 * y * h);
-        };
-        // How fast the body turns.
-        float turn = 0.0f;
-        if (an.has_yaw && dt > 1e-4f) {
-            float d = yaw - an.prev_yaw;
-            d -= 6.2831853f * std::round(d / 6.2831853f);
-            turn = d / dt;
-        }
-        an.prev_yaw = yaw;
-        an.has_yaw = true;
-        an.turn += (glm::clamp(turn, -6.0f, 6.0f) - an.turn) * (1.0f - std::exp(-dt * 8.0f));
-        // The game runs much faster than a person in a capture studio (8 m/s against 2): the
-        // search is asked for the capture's equivalent, and the clip it finds is then played
-        // faster and with longer strides until its feet cover the real ground speed.
-        const float qs = speed <= 1.0f ? speed : 1.0f + 1.1f * (1.0f - std::exp(-(speed - 1.0f) / 2.5f));
-        MotionQuery mq;
-        mq.vel = speed > 0.05f ? vm / speed * qs : glm::vec2(0.0f);
-        mq.turn_rate = an.turn;
-        mq.tag = 0;
-        if (crouch > 0.5f)
-            for (const MotionDB::Range& rg : body_motion_.ranges) if (rg.tag == 1) { mq.tag = 1; break; }
-        mq.rate = an.rate;
-        // Jumps: captured ones. In the air the frame follows the flight - push-off while rising
-        // fast, the top of the jump as the rise dies, reaching for the ground while falling -
-        // because the game's jump lasts far longer than a person's. On touching down the
-        // capture's landing plays out, then matching takes over again.
-        const bool airborne = !grounded && !player_swimming_;
-        if (!body_motion_.jumps.empty()) {
-            if (airborne) {
-                an.air_t += dt;
-                if (an.jstate != 1 && an.air_t > 0.05f) {
-                    an.jump = motion_find_jump(body_motion_, mq);
-                    an.jstate = an.jump >= 0 ? 1 : 0;
-                    if (an.jstate == 1) motion_goto(body_motion_, an.ms, int(body_motion_.jumps[an.jump].takeoff), 1.0f);
-                }
-            } else {
-                if (an.jstate == 1) {
-                    an.jstate = an.air_t > 0.20f ? 2 : 0;
-                    an.land_t = 0.0f;
-                    if (an.jstate == 2 && std::abs(an.ms.frame - int(body_motion_.jumps[an.jump].land)) > 2)
-                        motion_goto(body_motion_, an.ms, int(body_motion_.jumps[an.jump].land), 1.0f);
-                }
-                an.air_t = 0.0f;
-            }
-        }
-        if (an.jstate == 1) {
-            const MotionDB::Jump& jp = body_motion_.jumps[an.jump];
-            const float u = glm::clamp(0.5f - 0.5f * vel.y / 8.5f, 0.0f, 1.0f);
-            const float fpos = float(jp.takeoff) + u * float(jp.land - jp.takeoff - 1);
-            const float cur = float(an.ms.frame) + an.ms.frac;
-            // (no faster than three times the capture's own pace, so nothing snaps)
-            const float nf = cur + glm::clamp(fpos - cur, -dt * 90.0f, dt * 90.0f);
-            an.ms.frame = int(std::floor(nf));
-            an.ms.frac = nf - std::floor(nf);
-            motion_pose(body_motion_, an.ms, dt, body_pose_);
-        } else if (an.jstate == 2) {
-            an.land_t += dt;
-            an.ms.frac += dt * body_motion_.fps;
-            while (an.ms.frac >= 1.0f) { an.ms.frac -= 1.0f; ++an.ms.frame; }
-            motion_pose(body_motion_, an.ms, dt, body_pose_);
-            if (an.land_t > 0.28f) { an.jstate = 0; an.ms.since_search = 1e9f; }
-        } else {
-            motion_update(body_motion_, an.ms, mq, dt, body_pose_);
-        }
-        const bool jumping = an.jstate != 0;
-        const float as = glm::length(body_pose_.root_vel);
-        float rate_t = 1.0f, stride_t = 1.0f, warp_t = 0.0f;
-        if (speed > 0.3f && as > 0.3f && !jumping) {
-            rate_t = glm::clamp(speed / as, 0.75f, 1.6f);
-            stride_t = glm::clamp(speed / (as * rate_t), 0.7f, 2.4f);
-            // Orientation warping: the legs turn to the way we really go (a diagonal, say, on a
-            // forward or a sideways clip) while the chest keeps facing where we look.
-            float a = std::atan2(vm.x, vm.y) - std::atan2(body_pose_.root_vel.x, body_pose_.root_vel.y);
-            a -= 6.2831853f * std::round(a / 6.2831853f);
-            warp_t = glm::clamp(a, -1.0f, 1.0f);
-        }
-        const float e2 = 1.0f - std::exp(-dt * 10.0f);
-        an.rate += (rate_t - an.rate) * e2;
-        an.stride += (stride_t - an.stride) * e2;
-        an.warp += (warp_t - an.warp) * e2;
-
-        const int hips_i = body_bone("Hips");
-        const float hip_drop = (stand_eye - eye_h) * (mq.tag == 1 ? 0.50f : 0.62f);
-        // A share of the look pitch goes into the spine (the arms follow the view); folded when crouched.
-        const float bend = 0.10f * glm::clamp(pitch, -1.2f, 1.2f) - (mq.tag == 1 ? 0.25f : 0.55f) * crouch;
-        const glm::mat3 W = rot_axis(glm::vec3(0, 1, 0), an.warp);
-        for (size_t k = 0; k < body_motion_bone_.size(); ++k) {
-            const int bi = body_motion_bone_[k];
-            if (bi < 0) continue;
-            const std::string& nm = body_bones_[bi].name;
-            float up_frac = 1.0f;                                      // 0 = lower body, 1 = chest and above
-            if (nm == "Hips" || nm.find("Leg") != std::string::npos || nm.find("Foot") != std::string::npos || nm.find("Toe") != std::string::npos) up_frac = 0.0f;
-            else if (nm == "Spine") up_frac = 1.0f / 3.0f;
-            else if (nm == "Spine1") up_frac = 2.0f / 3.0f;
-            glm::mat3 R = glm::mat3_cast(body_pose_.rot[k]);
-            if (up_frac < 1.0f) R = rot_axis(glm::vec3(0, 1, 0), an.warp * (1.0f - up_frac)) * R;
-            if (up_frac > 0.0f) R = rot_axis(glm::vec3(1, 0, 0), bend * up_frac) * R;
-            body_R_[bi] = R;
-            body_set_[bi] = 1;
-        }
-        if (hips_i >= 0) {
-            const glm::vec3 H = body_bones_[hips_i].head;
-            const glm::vec3 hp = W * glm::vec3(body_pose_.hip.x, 0.0f, body_pose_.hip.z) * body_scale_;
-            body_root_off_ = glm::vec3(hp.x, body_pose_.hip.y * body_scale_ - H.y - hip_drop, hp.z + 0.10f * crouch);
-        }
-        body_fk();
-        const glm::vec3 hipP = hips_i >= 0 ? body_P_[hips_i] : glm::vec3(0.0f);
-        const glm::vec2 mdir = speed > 0.3f ? vm / speed : glm::vec2(0.0f, -1.0f);
-        for (int side = 0; side < 2; ++side) {
-            const char* L = side == 0 ? "Left" : "Right";
-            const int up = body_bone((std::string(L) + "UpLeg").c_str());
-            const int lo = body_bone((std::string(L) + "Leg").c_str());
-            const int ft = body_bone((std::string(L) + "Foot").c_str());
-            if (up < 0 || lo < 0 || ft < 0) continue;
-            glm::vec3 target = body_P_[ft];
-            // Stride warping: the feet reach further along the way we go.
-            glm::vec2 rel(target.x - hipP.x, target.z - hipP.z);
-            rel += mdir * (glm::dot(rel, mdir) * (an.stride - 1.0f));
-            target.x = hipP.x + rel.x;
-            target.z = hipP.z + rel.y;
-            // Foot locking: a foot the capture has on the ground stays where it stands in the
-            // world; let go, what is left of the difference eases away.
-            BodyAnim::Lock& lk = an.lock[side];
-            const bool want = body_pose_.contact[side] > 0.5f && grounded && speed < 4.0f;
-            const glm::vec3 tw = feet + right * target.x + glm::vec3(0.0f, target.y, 0.0f) - fwd * target.z;
-            if (!want) lk.broken = false;
-            if (want && !lk.on && !lk.broken) { lk.on = true; lk.world = tw + lk.off; lk.off_v = glm::vec3(0.0f); }
-            if (lk.on) {
-                lk.off = lk.world - tw;
-                lk.off.y = 0.0f;
-                if (!want || glm::length(lk.off) > 0.22f) { lk.on = false; lk.broken = want; }
-            }
-            if (!lk.on) spring0(lk.off, lk.off_v, 0.09f, dt);
-            target += to_model(feet + lk.off);            // (the offset, turned into the body's frame)
-            // In the air: legs hang, knees a little bent, one ahead of the other.
-            const glm::vec3 air = body_bones_[ft].head + glm::vec3(0.0f, 0.16f, side == 0 ? -0.14f : 0.06f);
-            // (only without captured jumps: with them the capture has the legs)
-            const float air_k = body_motion_.jumps.empty() ? body_air_ : 0.0f;
-            target = glm::mix(target, air, air_k);
-            body_leg_fit(up, lo, ft, target);
-            if (air_k > 0.01f) body_R_[ft] = rot_axis(glm::vec3(1, 0, 0), -0.35f * air_k) * body_R_[ft];
-        }
-        body_fk();
-    } else {
-    const int hips = body_bone("Hips");
-    const int spine[3] = { body_bone("Spine"), body_bone("Spine1"), body_bone("Spine2") };
-    // Hips: lower when crouching, a small bounce per step, a breath of sway.
-    // The body is lowest when both feet are down and rides up over the
-    // standing leg; more at a run.
-    const float bounce = -(0.022f + 0.010f * glm::clamp(speed, 0.0f, 6.0f)) * (0.5f + 0.5f * std::cos(2.0f * body_phase_)) *
-                         body_move_ * (1.0f - body_air_);
-    const float hip_drop = (stand_eye - eye_h) * 0.62f;
-    body_root_off_ = glm::vec3(0.012f * std::sin(body_phase_) * body_move_, -hip_drop + bounce, 0.10f * crouch);
-    // Torso: leans into the run and folds forward when crouched; a little of
-    // the look pitch goes into the spine so the arms follow the view.
-    const float lean = -(0.035f * glm::clamp(speed, 0.0f, 7.0f) * (1.0f - body_air_) * (vm.y < 0.0f ? 1.0f : -0.4f) * 0.25f) -
-                       0.55f * crouch + 0.10f * glm::clamp(pitch, -1.2f, 1.2f);
-    const float breath = 0.006f * std::sin(tnow * 1.5f);
-    for (int s : spine)
-        if (s >= 0) body_local_[s] = rot_axis(glm::vec3(1, 0, 0), (lean + breath) / 3.0f);
-    // Pelvis: turns with the stride and drops a little on the swinging side.
-    if (hips >= 0) body_local_[hips] = rot_axis(glm::vec3(0, 1, 0), 0.09f * std::cos(body_phase_) * body_move_) *
-                                       rot_axis(glm::vec3(0, 0, 1), 0.035f * std::sin(body_phase_) * body_move_);
-    body_fk();
-
-    // ---- legs ----
-    const glm::vec3 dir3(body_dir_.x, 0.0f, body_dir_.y);
-    for (int side = 0; side < 2; ++side) {
-        const char* L = side == 0 ? "Left" : "Right";
-        const int up = body_bone((std::string(L) + "UpLeg").c_str());
-        const int lo = body_bone((std::string(L) + "Leg").c_str());
-        const int ft = body_bone((std::string(L) + "Foot").c_str());
-        if (up < 0 || lo < 0 || ft < 0) continue;
-        const float ph = body_phase_ + (side == 0 ? 0.0f : 3.14159265f);
-        // One cycle: the first half the foot stands (it moves back under the
-        // body at exactly walking speed - no sliding), the second half it
-        // swings forward, lifting early and reaching out before it lands.
-        const float cyc = ph / 6.2831853f - std::floor(ph / 6.2831853f);
-        const bool  stance = cyc < 0.5f;
-        const float u = stance ? cyc / 0.5f : (cyc - 0.5f) / 0.5f;          // 0..1 within the half
-        const float along = stance ? (0.5f - u) : (-0.5f + u * u * (3.0f - 2.0f * u));
-        const float run = glm::clamp((speed - 2.0f) / 3.5f, 0.0f, 1.0f);
-        // Lift: quick off the ground, peak before the middle, down to land.
-        const float swing = stance ? 0.0f : std::sin(3.14159265f * std::pow(u, 0.75f));
-        glm::vec3 target = body_bones_[ft].head;
-        target += dir3 * (stride * along * body_move_);
-        target.y += (0.055f + 0.16f * run) * swing * body_move_;
-        // A runner's trailing foot kicks up behind.
-        if (!stance) target.y += 0.10f * run * std::sin(3.14159265f * glm::clamp(u * 2.0f, 0.0f, 1.0f)) * body_move_;
-        // Crouched: feet a little apart and forward.
-        target += glm::vec3((side == 0 ? -1.0f : 1.0f) * 0.05f * crouch, 0.0f, -0.10f * crouch);
-        // In the air: legs hang, knees a little bent, one ahead of the other.
-        const glm::vec3 air = body_bones_[ft].head + glm::vec3(0.0f, 0.16f, side == 0 ? -0.14f : 0.06f);
-        target = glm::mix(target, air, body_air_);
-        const glm::vec3 pole(side == 0 ? -0.18f : 0.18f, 0.0f, -1.0f);
-        body_ik(up, lo, ft, target, pole);
-        // Foot: flat on the ground, toes down while it swings.
-        // Foot roll: heel strikes first (toes up), flat through the stance,
-        // heel lifts before push-off, toes hang down through the swing.
-        float roll = 0.0f;
-        if (stance) roll = 0.30f * (1.0f - glm::smoothstep(0.0f, 0.18f, u)) - 0.55f * glm::smoothstep(0.70f, 1.0f, u);
-        else        roll = -0.55f * (1.0f - glm::smoothstep(0.0f, 0.55f, u)) + 0.30f * glm::smoothstep(0.65f, 1.0f, u);
-        const float toe = roll * body_move_ * (1.0f - body_air_) - 0.35f * body_air_;
-        body_R_[ft] = rot_axis(glm::vec3(1, 0, 0), toe);
-        body_set_[ft] = 1;
-    }
-    body_fk();
-    }
-
-    // ---- arms ----
-    // What the hands hold decides where they go (view space, metres).
-    static const glm::vec3 kGunR = env_vec3("QLIKE_BODY_RH", glm::vec3(0.165f, -0.300f, -0.120f));
-    static const glm::vec3 kGunL = env_vec3("QLIKE_BODY_LH", glm::vec3(0.178f, -0.243f, -0.430f));
-    const float bob_x = 0.006f * std::sin(body_phase_) * body_move_;
-    const float bob_y = -0.005f * (0.5f - 0.5f * std::cos(2.0f * body_phase_)) * body_move_;
-    for (int side = 0; side < 2; ++side) {
-        const char* L = side == 0 ? "Left" : "Right";
-        const std::string S(L);
-        const int ua = body_bone((S + "Arm").c_str()), fa = body_bone((S + "ForeArm").c_str()), hd = body_bone((S + "Hand").c_str());
-        const int i1 = body_bone((S + "HandIndex1").c_str()), m1 = body_bone((S + "HandMiddle1").c_str()),
-                  p1 = body_bone((S + "HandPinky1").c_str());
-        if (ua < 0 || fa < 0 || hd < 0 || i1 < 0 || m1 < 0 || p1 < 0) continue;
-        const float sx = side == 0 ? -1.0f : 1.0f;
-        // The hand's own frame at rest: a = wrist to knuckles, n = out of the
-        // palm, b = a x n.
-        const glm::vec3 a0 = glm::normalize(body_bones_[m1].head - body_bones_[hd].head);
-        glm::vec3 n0 = glm::normalize(glm::cross(a0, body_bones_[i1].head - body_bones_[p1].head));
-        if (n0.y > 0.0f) n0 = -n0;                                   // palms face down in the rest pose
-        const glm::vec3 b0 = glm::cross(a0, n0);
-        const glm::mat3 F0(a0, n0, b0);
-
-        glm::vec3 grip, a1, n1;          // palm centre, finger direction, palm normal (model space)
-        glm::vec3 pole(sx * 0.9f, -1.0f, 0.5f);
-        float curl[3] = { 0.9f, 1.15f, 0.8f };                       // finger joints (rad)
-        float index_curl = 1.0f;
-        bool  free_arm = false;
-        bool  grip_thumb = false;        // thumb closes round the grip instead of sticking out
-        if (flashlight_on_ && side == 1) {
-            // Fist round the torch body, thumb forward along it.
-            const glm::vec3 f = glm::normalize(glm::vec3(glm::dot(flash_fwd_, right), flash_fwd_.y, -glm::dot(flash_fwd_, fwd)));
-            const glm::vec3 r = glm::normalize(glm::vec3(glm::dot(flash_right_, right), flash_right_.y, -glm::dot(flash_right_, fwd)));
-            const glm::vec3 u = glm::cross(r, f);
-            grip = to_model(flash_pos_) - f * 0.030f + r * 0.012f;
-            pole = glm::vec3(0.30f, -1.0f, 0.85f);                    // elbow down and back, by the ribs
-            a1 = glm::normalize(f * 0.80f - u * 0.60f);
-            n1 = -r;
-            curl[0] = 1.15f; curl[1] = 1.35f; curl[2] = 0.9f;
-        } else if (!flashlight_on_ && weapon_ == 0 && side == 1) {
-            // Right hand on the pistol grip, index finger on the trigger.
-            grip = view_pt(kGunR + glm::vec3(bob_x, bob_y, body_recoil_));
-            a1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_RA", glm::vec3(-0.10f, 0.25f, -1.0f))));
-            n1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_RN", glm::vec3(-1.0f, 0.0f, 0.10f))));
-            index_curl = 0.45f;
-        } else if (!flashlight_on_ && weapon_ == 0 && side == 0) {
-            // Left hand under the fore-end.
-            grip = view_pt(kGunL + glm::vec3(bob_x, bob_y, body_recoil_));
-            a1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LA", glm::vec3(0.95f, 0.20f, -0.35f))));
-            n1 = glm::normalize(view_dir(env_vec3("QLIKE_BODY_LN", glm::vec3(0.05f, 1.0f, 0.15f))));
-            // Palm up under the fore-end, fingers wrapped up its far side, thumb up the near side.
-            curl[0] = 1.05f; curl[1] = 1.30f; curl[2] = 0.85f;
-            grip_thumb = true;
-        } else if (!flashlight_on_ && weapon_ == 1 && side == 1) {
-            // The tablet lies on the right hand.
-            grip = view_pt(glm::vec3(0.170f, -0.200f + bob_y, -0.375f));
-            a1 = glm::normalize(view_dir(glm::vec3(-0.35f, 0.55f, -0.75f)));
-            n1 = glm::normalize(view_dir(glm::vec3(-0.25f, 0.70f, 0.65f)));
-            curl[0] = 0.25f; curl[1] = 0.3f; curl[2] = 0.2f;
-        } else {
-            // Free arm: hangs at the side and swings against the legs.
-            free_arm = true;
-            const int sh = body_bone((S + "Shoulder").c_str());
-            const glm::vec3 base = body_P_[sh >= 0 ? sh : ua];
-            const float sw = std::sin(body_phase_ + (side == 0 ? 3.14159265f : 0.0f)) * body_move_;
-            grip = base + glm::vec3(sx * 0.19f, -0.56f + 0.03f * std::abs(sw), -0.07f - 0.20f * sw - 0.10f * crouch);
-            a1 = glm::normalize(glm::vec3(0.0f, -1.0f, -0.25f - 0.3f * sw));
-            n1 = glm::vec3(-sx, 0.0f, 0.0f);
-            pole = glm::vec3(sx * 0.4f, -0.3f, 1.0f);
-            curl[0] = 0.35f; curl[1] = 0.45f; curl[2] = 0.3f;
-        }
-        n1 = glm::normalize(n1 - a1 * glm::dot(n1, a1));
-        // The right-handed frame mirrors for the left hand.
-        const glm::mat3 F1(a1, n1, glm::cross(a1, n1));
-        const glm::mat3 G = F1 * glm::transpose(F0);
-        // Wrist from the palm centre.
-        const float palm = glm::length(body_bones_[m1].head - body_bones_[hd].head);
-        const glm::vec3 wrist = grip - a1 * (palm * (free_arm ? 0.0f : 0.80f)) - n1 * (free_arm ? 0.0f : 0.028f);
-        if (!(free_arm && mocap)) {                // (a free arm swings as the capture has it)
-            body_ik(ua, fa, hd, wrist, pole);
-            body_R_[hd] = G;
-            body_set_[hd] = 1;
-        }
-        // Fingers close round the grip (rotation taking a toward n).
-        for (const char* fn : { "Index", "Middle", "Ring", "Pinky" }) {
-            const float k = (fn[0] == 'I') ? index_curl : 1.0f;
-            for (int j = 0; j < 3; ++j) {
-                const int fb = body_bone((S + "Hand" + fn + char('1' + j)).c_str());
-                if (fb >= 0) body_local_[fb] = rot_axis(b0, curl[j] * k);
-            }
-        }
-        // Thumb: swings in over the fingers.
-        for (int j = 0; j < 3; ++j) {
-            const int tb = body_bone((S + "HandThumb" + char('1' + j)).c_str());
-            if (tb >= 0) body_local_[tb] = grip_thumb
-                ? rot_axis(a0, -sx * (j == 0 ? 0.85f : 0.0f)) * rot_axis(b0, j == 0 ? 0.35f : 0.55f)
-                : rot_axis(a0, -sx * (j == 0 ? 0.35f : 0.0f)) * rot_axis(n0, sx * (j == 0 ? 0.10f : 0.30f) * (free_arm ? 0.3f : 1.0f));
+    // ---- what the controller says ----
+    // Test hooks: QLIKE_BODY_WALK=<m/s> moves the body as if walking forward at that speed,
+    // QLIKE_BODY_STRAFE=<m/s> adds a sideways speed (to the right), QLIKE_BODY_AIR=<m/s> holds it
+    // in the air rising at that speed, QLIKE_BODY_FIRE=<shots/s> fires, QLIKE_BODY_RELOAD=1 reloads
+    // in a loop.
+    // (QLIKE_BODY_WALKBACK=<m/s>: backward at that speed)
+    static const float kWalkBack = env_float("QLIKE_BODY_WALKBACK", 0.0f);
+    static const float kWalk = kWalkBack > 0.0f ? 0.0f : env_float("QLIKE_BODY_WALK", -1.0f), kStrafe = env_float("QLIKE_BODY_STRAFE", 0.0f);
+    static const float kAir = env_float("QLIKE_BODY_AIR", 1e9f), kFire = env_float("QLIKE_BODY_FIRE", 0.0f);
+    static const bool kReload = std::getenv("QLIKE_BODY_RELOAD") != nullptr;
+    const bool hooked = kWalk >= 0.0f || kAir < 1e8f;
+    anim::CharacterAnimationInput in;
+    in.dt = dt;
+    in.position = feet;
+    in.velocity = player_.velocity;
+    in.facing_yaw = yaw;
+    in.aim_pitch = pitch;
+    in.grounded = player_.on_ground && !player_swimming_;
+    in.swimming = player_swimming_;
+    in.wants_jump = last_pin_.jump;
+    in.crouch = crouch;
+    in.eye_local = glm::vec3(0.0f, eye_h, -back);
+    in.first_person = true;
+    {
+        glm::vec3 wish(0.0f);
+        if (last_pin_.fwd) wish += fwd;
+        if (last_pin_.back) wish -= fwd;
+        if (last_pin_.right) wish += right;
+        if (last_pin_.left) wish -= right;
+        if (glm::dot(wish, wish) > 1e-6f && state_ == State::Playing && !fly_mode_) {
+            const float mult = (last_pin_.sprint ? 1.5f : last_pin_.crawl ? 0.4f : 1.0f) * (1.0f - 0.55f * glm::clamp(last_pin_.wade, 0.0f, 1.0f));
+            in.desired_velocity = glm::normalize(wish) * game::kPlayerMove.max_walk_speed * mult;
         }
     }
-    body_fk();
+    if (hooked) {
+        in.velocity = (kWalk >= 0.0f ? fwd * (kWalk - kWalkBack) + right * kStrafe : glm::vec3(0.0f)) + glm::vec3(0.0f, kAir < 1e8f ? kAir : 0.0f, 0.0f);
+        in.desired_velocity = glm::vec3(in.velocity.x, 0.0f, in.velocity.z);
+        in.grounded = kAir > 1e8f;
+        in.swimming = false;
+    }
+    if (kFire > 0.0f) body_shot_seq_ = uint32_t(glfwGetTime() * double(kFire));
+    if (kReload && body_reload_left_ <= 0.0f && std::fmod(glfwGetTime(), 3.0) < 0.1) { ++body_reload_seq_; body_reload_left_ = body_animator_->weapon.reload_time; }
+    in.held = flashlight_on_ ? anim::HeldItem::Torch : (weapon_ == 1 ? anim::HeldItem::Tablet : anim::HeldItem::Rifle);
+    if (flashlight_on_) {
+        in.torch_pos = to_model(flash_pos_);
+        in.torch_fwd = dir_to_model(flash_fwd_);
+        in.torch_right = dir_to_model(flash_right_);
+    }
+    in.shot_seq = body_shot_seq_;
+    in.reload_seq = body_reload_seq_;
+    in.aiming = body_aim_;
+    in.hit_seq = body_hit_seq_;
+    in.hit_dir = dir_to_model(body_hit_dir_);
+    in.reloading = body_reload_left_ > 0.0f;
+    // A respawn or a jump to another place: nothing remembered in world space survives it.
+    static glm::vec3 last_feet(1e9f);
+    in.teleported = glm::length(feet - last_feet) > 6.0f + 2.0f * glm::length(player_.velocity) * dt;
+    last_feet = feet;
 
-    // Test hooks: QLIKE_BODY_FRONT=<m> stands the body that far in front of
-    // the camera (turned by QLIKE_BODY_TURN degrees) to look at the pose from
-    // outside; QLIKE_BODY_REST=1 shows the rest pose.
+    // (QLIKE_ADS="x,y,z": where the aimed weapon goes in the player's own view, metres from its usual place)
+    if (static const char* e = std::getenv("QLIKE_ADS"); e) {
+        glm::vec3 v = body_animator_->weapon.ads_shift_fp;
+        if (std::sscanf(e, "%f,%f,%f", &v.x, &v.y, &v.z) == 3) body_animator_->weapon.ads_shift_fp = v;
+    }
+    pose_character(*body_animator_, in, &body_palette_);
+    body_weapon_offset_ = body_animator_->weapon_offset();
+    body_fire_offset_ = body_animator_->weapon_fire_offset();
+
+    // Test hooks: QLIKE_BODY_FRONT=<m> stands the body that far in front of the camera (turned
+    // by QLIKE_BODY_TURN degrees) to look at the pose from outside; QLIKE_BODY_REST=1 shows the
+    // rest pose; QLIKE_BODY_DEBUG=1 logs what the animator is doing once a second.
     static const float kFront = env_float("QLIKE_BODY_FRONT", 0.0f), kTurn = glm::radians(env_float("QLIKE_BODY_TURN", 180.0f));
-    static const bool kRest = std::getenv("QLIKE_BODY_REST") != nullptr;
+    static const bool kRest = std::getenv("QLIKE_BODY_REST") != nullptr, kDebug = std::getenv("QLIKE_BODY_DEBUG") != nullptr;
+    body_front_ = kFront > 0.0f;
     if (kFront > 0.0f) {
         const glm::mat4 T = glm::translate(glm::mat4(1.0f), glm::vec3(eye.x, eye.y - eye_h, eye.z) + fwd * kFront);
         body_model_ = T * glm::rotate(glm::mat4(1.0f), kTurn - yaw, glm::vec3(0, 1, 0));
     }
     if (kRest) {
-        std::fill(body_set_.begin(), body_set_.end(), uint8_t(0));
-        std::fill(body_local_.begin(), body_local_.end(), glm::mat3(1.0f));
-        body_root_off_ = glm::vec3(0.0f);
-        body_fk();
+        for (size_t i = 0; i < body_bones_.size(); ++i) { body_R_[i] = glm::mat3(1.0f); body_P_[i] = body_bones_[i].head; }
+        body_palette_ = body_push_pose();
     }
-
-    // ---- skin ----
-    const size_t nb = body_bones_.size();
-    body_skin_R_.resize(nb);
-    body_skin_T_.resize(nb);
-    for (size_t i = 0; i < nb; ++i) {
-        body_skin_R_[i] = body_R_[i];
-        body_skin_T_[i] = body_P_[i] - body_R_[i] * body_bones_[i].head;
+    if (kDebug && frame_number_ % 60 == 0) {
+        const anim::AnimDebug& d = body_animator_->debug();
+        log::infof("[body] %s clip %s t %.2f%s  speed %.2f (anim %.2f) rate %.2f stride %.2f warp %.2f  air %s ttc %.2f  contact %d%d lock %d%d  "
+                   "cost %.2f (cur %.2f)%s  searches %u switches %u  invalid %u  %.3f ms (search %.3f)",
+                   d.mode, d.clip >= 0 ? anim_set_.runtime->clip(d.clip).name.c_str() : "-", d.clip_time, d.mirrored ? " mirrored" : "",
+                   d.speed, d.anim_speed, d.rate, d.stride, d.warp, anim::air_phase_name(d.air_phase), std::min(d.time_to_contact, 99.0f),
+                   int(d.contact[0]), int(d.contact[1]), int(d.locked[0]), int(d.locked[1]), d.match.cost, d.current_cost,
+                   d.fallback ? " fallback" : "", d.searches, d.switches, d.invalid_poses, d.update_ms, d.search_ms);
     }
-    const size_t nv = body_verts_.size();
-    for (size_t i = 0; i < nv; ++i) {
-        const BodyVert& v = body_verts_[i];
-        glm::vec3 p(0.0f), n(0.0f);
-        for (int k = 0; k < 4; ++k) {
-            const float w = v.weight[k];
-            if (w <= 0.0f) continue;
-            const glm::mat3& R = body_skin_R_[v.bone[k]];
-            p += (R * v.pos + body_skin_T_[v.bone[k]]) * w;
-            n += (R * v.nrm) * w;
-        }
-        body_skinned_[i] = { p, glm::normalize(n), v.uv };
-    }
-    static const bool kDebug = std::getenv("QLIKE_BODY_DEBUG") != nullptr;
-    if (kDebug && frame_number_ == 100) {
-        std::vector<float> worst(nb, 0.0f);
-        for (size_t i = 0; i < nv; ++i) {
-            const BodyVert& v = body_verts_[i];
-            const float d0 = glm::length(v.pos - body_bones_[v.bone[0]].head);
-            const float d1 = glm::length(body_skinned_[i].position - body_P_[v.bone[0]]);
-            worst[v.bone[0]] = std::max(worst[v.bone[0]], d1 - d0);
-        }
-        for (size_t t = 0, shown = 0; t + 2 < body_dbg_idx_.size() && shown < 25; t += 3) {
-            for (int e = 0; e < 3; ++e) {
-                const uint32_t i0 = body_dbg_idx_[t + e], i1 = body_dbg_idx_[t + (e + 1) % 3];
-                const float r = glm::length(body_verts_[i0].pos - body_verts_[i1].pos);
-                const float p = glm::length(body_skinned_[i0].position - body_skinned_[i1].position);
-                if (p > r + 0.08f) {
-                    const BodyVert& a = body_verts_[i0]; const BodyVert& b = body_verts_[i1];
-                    log::infof("[body] edge %.3f -> %.3f  v%u %s %.2f/%s %.2f  v%u %s %.2f/%s %.2f", r, p,
-                               i0, body_bones_[a.bone[0]].name.c_str(), a.weight[0], body_bones_[a.bone[1]].name.c_str(), a.weight[1],
-                               i1, body_bones_[b.bone[0]].name.c_str(), b.weight[0], body_bones_[b.bone[1]].name.c_str(), b.weight[1]);
-                    ++shown;
-                    break;
-                }
-            }
-        }
-        for (size_t i = 0; i < nb; ++i) {
-            const glm::mat3& R = body_R_[i];
-            log::infof("[body] %-18s stretch %.3f  det %.3f  P %.2f %.2f %.2f", body_bones_[i].name.c_str(), worst[i],
-                       glm::determinant(R), body_P_[i].x, body_P_[i].y, body_P_[i].z);
-        }
+    {
+        static uint32_t reported = 0;
+        const uint32_t bad = body_animator_->debug().invalid_poses;
+        if (bad != reported) { log::warnf("[body] the animator produced %u pose(s) that were not finite; the last good pose was shown", bad); reported = bad; }
     }
     // Test hook: QLIKE_TEST_RAGDOLL=<frame>: at that frame the body as posed here is shot (from
     // the camera, at chest height unless QLIKE_TEST_RAGDOLL_Y=<m above the feet>) and falls.
     {
         static const int kRag = int(env_float("QLIKE_TEST_RAGDOLL", -1.0f));
-        if (kRag >= 0 && !mp_pose_dst_ && int(frame_number_) == kRag) {
+        if (kRag >= 0 && int(frame_number_) == kRag) {
             glm::mat4 bm = body_model_;
             bm[3].y = sample_terrain_height(bm[3].x, bm[3].z);          // (standing on the ground there)
             const glm::vec3 base = glm::vec3(bm[3]);
             const glm::vec3 hp = base + glm::vec3(0.0f, env_float("QLIKE_TEST_RAGDOLL_Y", 1.25f), 0.0f);
             const glm::mat4 vi = bm * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, eye_h, -back));
-            corpse_spawn(bm, vi, vel, hp, glm::normalize(hp - eye), env_float("QLIKE_TEST_RAGDOLL_POWER", 1.0f));
+            corpse_spawn(bm, vi, in.velocity, hp, glm::normalize(hp - eye), env_float("QLIKE_TEST_RAGDOLL_POWER", 1.0f));
         }
     }
-    const uint32_t slot = frame_number_ % kFrameOverlap;
-    void* dst = mp_pose_dst_ ? static_cast<void*>(mp_pose_dst_) : body_vmapped_[slot];     // a remote player's buffer (multiplayer.cpp)
-    if (dst) {
-        std::memcpy(dst, body_skinned_.data(), nv * sizeof(Vertex));
-        body_drawn_ = true;
+    body_drawn_ = body_palette_ >= 0;
+}
+
+// What the animation is doing, drawn over the game: the chosen clip and frame, the match's cost
+// by feature group, the predicted path, foot contacts and locks, IK targets, phases and timings
+// for the local player; levels of detail and cost for everybody. (QLIKE_ANIM_DEBUG=1, or the menu.)
+void VulkanEngine::anim_debug_overlay() {
+    if (!anim_debug_ || !body_animator_) return;
+    const anim::AnimDebug& d = body_animator_->debug();
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 disp = ImGui::GetIO().DisplaySize;
+    char line[256];
+    float y = disp.y * 0.30f;
+    auto text = [&](ImU32 col) {
+        dl->AddText(ImVec2(19.0f, y + 1.0f), IM_COL32(0, 0, 0, 220), line);
+        dl->AddText(ImVec2(18.0f, y), col, line);
+        y += ImGui::GetTextLineHeight() + 2.0f;
+    };
+    const ImU32 white = IM_COL32(235, 235, 235, 255), dim = IM_COL32(170, 200, 255, 255), warn = IM_COL32(255, 170, 90, 255);
+    std::snprintf(line, sizeof(line), "ANIM  %s  |  %s  t %.2f s%s", d.mode, d.clip >= 0 ? anim_set_.runtime->clip(d.clip).name.c_str() : "-",
+                  d.clip_time, d.mirrored ? "  (mirrored)" : "");
+    text(white);
+    std::snprintf(line, sizeof(line), "speed %.2f m/s  root velocity of the clip %.2f  ->  rate x%.2f  stride x%.2f  leg turn %.0f deg  lean %.1f / %.1f deg",
+                  d.speed, d.anim_speed, d.rate, d.stride, glm::degrees(d.warp), glm::degrees(d.lean_roll), glm::degrees(d.lean_pitch));
+    text(dim);
+    std::snprintf(line, sizeof(line), "match cost %.2f (staying: %.2f)%s   feet %.2f  foot vel %.2f  hips %.2f  path %.2f  facing %.2f",
+                  d.match.cost, d.current_cost, d.fallback ? "  FALLBACK: path only" : "", d.match.group_cost[0], d.match.group_cost[1],
+                  d.match.group_cost[2], d.match.group_cost[3], d.match.group_cost[4]);
+    text(d.fallback ? warn : dim);
+    std::snprintf(line, sizeof(line), "searches %u  switches %u  inertial offset %.2f   air: %s  contact in %.2f s  impact %.1f m/s  flights %u",
+                  d.searches, d.switches, d.inertial_energy, anim::air_phase_name(d.air_phase), std::min(d.time_to_contact, 99.0f), d.impact, d.flights);
+    text(dim);
+    std::snprintf(line, sizeof(line), "feet: contact L%d R%d  locked L%d R%d  pelvis %.3f m   weapon: recoil %.2f  reload %.2f  equip %.2f",
+                  int(d.contact[0]), int(d.contact[1]), int(d.locked[0]), int(d.locked[1]), d.pelvis_offset, d.recoil, d.reload, d.equip);
+    text(dim);
+    std::snprintf(line, sizeof(line), "this frame: animation %.3f ms (local %.3f, search %.3f)  skinning %.3f ms   characters by level 0/1/2/3: %d / %d / %d / %d",
+                  anim_ms_, d.update_ms, d.search_ms, skin_ms_, anim_lod_count_[0], anim_lod_count_[1], anim_lod_count_[2], anim_lod_count_[3]);
+    text(white);
+    if (d.invalid_poses) { std::snprintf(line, sizeof(line), "INVALID POSES: %u", d.invalid_poses); text(warn); }
+    if (net_) {
+        const net::Session::Stats& ns = net_->stats();
+        std::snprintf(line, sizeof(line), "net: sent %.1f kB  received %.1f kB  duplicate events dropped %u  states dropped %u",
+                      double(ns.tx_bytes) / 1024.0, double(ns.rx_bytes) / 1024.0, ns.duplicate_events, ns.dropped_states);
+        text(dim);
+    }
+
+    // In the world: the predicted path, foot targets (green = planted and held), hand targets, the muzzle line.
+    const glm::mat4 vp = current_frame_view_.vp;
+    auto project = [&](glm::vec3 w, ImVec2& out) {
+        const glm::vec4 c = vp * glm::vec4(w, 1.0f);
+        if (c.w < 0.05f) return false;
+        out = ImVec2((c.x / c.w * 0.5f + 0.5f) * disp.x, (c.y / c.w * 0.5f + 0.5f) * disp.y);
+        return true;
+    };
+    auto model_pt = [&](glm::vec3 m) { return glm::vec3(body_model_ * glm::vec4(m, 1.0f)); };
+    ImVec2 a, b;
+    glm::vec3 prev(0.0f, 0.02f, 0.0f);
+    for (int h = 0; h < anim::MotionSchema::kHorizons; ++h) {
+        const glm::vec3 p(d.traj.pos[h].x, 0.02f, d.traj.pos[h].y);
+        if (project(model_pt(prev), a) && project(model_pt(p), b)) {
+            dl->AddLine(a, b, IM_COL32(90, 200, 255, 255), 2.0f);
+            dl->AddCircleFilled(b, 4.0f, IM_COL32(90, 200, 255, 255));
+            ImVec2 e;
+            if (project(model_pt(p + glm::vec3(d.traj.dir[h].x, 0.0f, d.traj.dir[h].y) * 0.25f), e)) dl->AddLine(b, e, IM_COL32(255, 230, 90, 255), 1.5f);
+        }
+        prev = p;
+    }
+    for (int s = 0; s < 2; ++s) {
+        if (project(model_pt(d.foot_target[s]), a))
+            dl->AddCircle(a, 7.0f, d.locked[s] ? IM_COL32(80, 255, 120, 255) : (d.contact[s] ? IM_COL32(255, 220, 80, 255) : IM_COL32(255, 90, 90, 255)), 12, 2.0f);
+        if (project(model_pt(d.hand_target[s]), a)) dl->AddRect(ImVec2(a.x - 4.0f, a.y - 4.0f), ImVec2(a.x + 4.0f, a.y + 4.0f), IM_COL32(255, 140, 255, 255));
+    }
+    const glm::vec3 mz = body_animator_->muzzle_position();
+    if (project(model_pt(mz), a) && project(model_pt(mz + body_animator_->muzzle_direction() * 1.5f), b)) dl->AddLine(a, b, IM_COL32(255, 80, 60, 200), 1.5f);
+    // Other players: their level of detail and clip over their heads.
+    for (const auto& av : mp_avatars_) {
+        if (!av.id || !av.animator || !av.drawn) continue;
+        const anim::AnimDebug& ad = av.animator->debug();
+        if (!project(av.eye + glm::vec3(0.0f, 0.55f, 0.0f), a)) continue;
+        std::snprintf(line, sizeof(line), "L%d %s %s %.2f ms", av.lod, ad.mode, ad.clip >= 0 ? anim_set_.runtime->clip(ad.clip).name.c_str() : "-", ad.update_ms);
+        dl->AddText(ImVec2(a.x - ImGui::CalcTextSize(line).x * 0.5f, a.y), IM_COL32(170, 255, 200, 255), line);
     }
 }
 
-// Skins the pose in body_R_ / body_P_ into a vertex buffer.
-void VulkanEngine::body_skin_to(Vertex* dst) {
-    const size_t nb = body_bones_.size();
-    body_skin_R_.resize(nb);
-    body_skin_T_.resize(nb);
+// The pose in body_R_ / body_P_ as this frame's next palette entry: per bone the 3x4 matrix that
+// takes a rest-pose vertex to its posed place (model space). Returns its first row for
+// pc.grass_params.y, or -1 when the palette is full (the character is then not drawn).
+int VulkanEngine::body_push_pose(std::vector<glm::vec4>* keep) {
+    const size_t nb = std::min<size_t>(body_bones_.size(), kSkinBones);
+    body_rows_.resize(nb * 3);
     for (size_t i = 0; i < nb; ++i) {
-        body_skin_R_[i] = body_R_[i];
-        body_skin_T_[i] = body_P_[i] - body_R_[i] * body_bones_[i].head;
+        const glm::mat3& R = body_R_[i];
+        const glm::vec3 T = body_P_[i] - R * body_bones_[i].head;
+        body_rows_[i * 3 + 0] = glm::vec4(R[0][0], R[1][0], R[2][0], T.x);
+        body_rows_[i * 3 + 1] = glm::vec4(R[0][1], R[1][1], R[2][1], T.y);
+        body_rows_[i * 3 + 2] = glm::vec4(R[0][2], R[1][2], R[2][2], T.z);
     }
-    const size_t nv = body_verts_.size();
-    for (size_t i = 0; i < nv; ++i) {
-        const BodyVert& v = body_verts_[i];
-        glm::vec3 p(0.0f), n(0.0f);
-        for (int k = 0; k < 4; ++k) {
-            const float w = v.weight[k];
-            if (w <= 0.0f) continue;
-            const glm::mat3& R = body_skin_R_[v.bone[k]];
-            p += (R * v.pos + body_skin_T_[v.bone[k]]) * w;
-            n += (R * v.nrm) * w;
-        }
-        dst[i] = { p, glm::normalize(n), v.uv };
-    }
+    if (keep) *keep = body_rows_;
+    return body_push_rows(body_rows_);
 }
 
-void VulkanEngine::draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
-    if (!mp_draw_ && !body_drawn_) return;
+int VulkanEngine::body_push_rows(const std::vector<glm::vec4>& rows) {
+    if (!body_palette_map_ || rows.empty() || body_palette_used_ >= kSkinCharacters) return -1;
     const uint32_t slot = frame_number_ % kFrameOverlap;
-    VkDeviceSize off = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, mp_draw_ ? &mp_draw_->vbuf[slot] : &body_vbuf_[slot], &off);
-    vkCmdBindIndexBuffer(cmd, body_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+    const uint32_t first = (slot * kSkinCharacters + body_palette_used_++) * kSkinBones * 3;
+    std::memcpy(body_palette_map_ + first, rows.data(), std::min<size_t>(rows.size(), kSkinBones * 3) * sizeof(glm::vec4));
+    return int(first);
+}
+
+// Which of the soldier's meshes a character at `pos` (its eye) is drawn with: by its height on
+// screen, with a margin against flipping back and forth at a boundary.
+int VulkanEngine::body_mesh_lod(glm::vec3 pos, int previous) const {
+    const float tan_half = current_frame_view_.proj[1][1] != 0.0f ? 1.0f / std::abs(current_frame_view_.proj[1][1]) : 0.7f;
+    const float dist = std::max(glm::length(pos - current_frame_view_.eye_pos), 0.1f);
+    const float px = 1.8f / (dist * tan_half) * 0.5f * float(swapchain_extent_.height);
+    // full above 300 px, the middle one above 100
+    const float up = 1.12f, down = 0.89f;
+    int lod = px > 300.0f ? 0 : px > 100.0f ? 1 : 2;
+    if (lod < previous && px < (previous == 1 ? 300.0f : 100.0f) * up) lod = previous;       // not yet clearly bigger
+    if (lod > previous && px > (previous == 0 ? 300.0f : 100.0f) * down) lod = previous;     // not yet clearly smaller
+    return lod;
+}
+
+void VulkanEngine::draw_player_body(
+VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
+    if (!mp_draw_ && !body_drawn_) return;
+    const int palette = mp_draw_ ? mp_draw_->palette : body_palette_;
+    if (palette < 0 || !skin_pipeline()) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skin_pipeline());
+    // Which mesh: the player's own body is always the full one; others by their size on screen.
+    static const int kForceMesh = std::getenv("QLIKE_MESH_LOD") ? std::atoi(std::getenv("QLIKE_MESH_LOD")) : -1;
+    int lod = kForceMesh >= 0 ? kForceMesh : (mp_draw_ ? mp_draw_->mesh_lod : 0);
+    lod = glm::clamp(lod, 0, kBodyLods - 1);
+    auto level = [&](const SkinMesh* set) -> const SkinMesh* {
+        for (int i = lod; i >= 0; --i) if (set[i].index_count) return &set[i];
+        return nullptr;
+    };
+    const SkinMesh* body = level(body_lod_);
+    // The head: on everybody but the player himself (who looks out of it).
+    const SkinMesh* head = (mp_draw_ || body_front_) ? level(head_lod_) : nullptr;
+    if (!body) return;
+    auto draw_mesh = [&](const SkinMesh& m) {
+        const VkBuffer streams[2] = { m.rest.vertex_buffer, m.skin.vertex_buffer };
+        const VkDeviceSize offs[2] = { 0, 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 2, streams, offs);
+        vkCmdBindIndexBuffer(cmd, m.rest.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, m.index_count, 1, 0, 0, 0);
+    };
     PushConstants pc{};
     const glm::mat4 bm = mp_draw_ ? mp_draw_->model : body_model_;
     // `vp` is relative to `cam` (draw_viewmodel): so is the matrix it multiplies; the lighting keeps the world one.
@@ -777,8 +601,29 @@ void VulkanEngine::draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, co
     pc.emissive = glm::vec4(0.0f);
     // albedo = the soldier atlas, sampled with the mesh UVs (marker -8, cube.frag)
     pc.tex_params = glm::vec4(float(kTexSoldier), -8.0f, 1.0f, 0.0f);
+    pc.grass_params = glm::vec4(0.0f, float(palette), 0.0f, 0.0f);          // .y: first palette row (cube_skin.vert)
     vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
-    vkCmdDrawIndexed(cmd, body_index_count_, 1, 0, 0, 0);
+    draw_mesh(*body);
+    if (head) draw_mesh(*head);
+    // Test hook: QLIKE_BODY_CROWD=<n> draws the local body n more times in a block ahead
+    // (the same pose): what n skinned characters cost the GPU (gpu-passes: w_viewmodel).
+    static const int kCrowd = std::getenv("QLIKE_BODY_CROWD") ? std::atoi(std::getenv("QLIKE_BODY_CROWD")) : 0;
+    if (kCrowd > 0 && !mp_draw_) {
+        const int side = int(std::ceil(std::sqrt(float(kCrowd))));
+        for (int i = 0; i < kCrowd; ++i) {
+            const glm::vec3 off = glm::vec3(bm * glm::vec4(float(i % side - side / 2) * 1.2f, 0.0f, -2.0f - float(i / side) * 1.2f, 0.0f));
+            glm::mat4 m = bm, mr = bm_rel;
+            m[3] += glm::vec4(off, 0.0f);
+            mr[3] += glm::vec4(off, 0.0f);
+            pc.mvp = vp * mr;
+            pc.prev_mvp = pc.mvp;
+            pc.model = m;
+            vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
+            draw_mesh(*body);
+            if (head) draw_mesh(*head);
+        }
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());      // (the caller goes on with rigid parts)
 }
 
 }  // namespace qlike

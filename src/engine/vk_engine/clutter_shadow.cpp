@@ -110,6 +110,21 @@ void VulkanEngine::init_clutter_shadow() {
     VkVertexInputAttributeDescription a4{ 4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 };
     cfg.vattrs = { a0, a2, a3, a4 };
     clutter_shadow_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    // Skinned characters: two vertex streams (rest pose; bones and weights), the scene set for
+    // the bone palette.
+    skin_shadow_vert_ = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/skin_shadow.vert.spv");
+    if (skin_shadow_vert_ && pipeline_layout_) {
+        vkpipe::GraphicsPipelineConfig sc = cfg;
+        sc.vert = skin_shadow_vert_;
+        sc.layout = pipeline_layout_;
+        VkVertexInputBindingDescription s1{ 1, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX };
+        sc.vbindings = { b0, s1 };
+        VkVertexInputAttributeDescription k3{ 3, 1, VK_FORMAT_R32G32B32_SFLOAT, uint32_t(offsetof(Vertex, position)) };
+        VkVertexInputAttributeDescription k4{ 4, 1, VK_FORMAT_R32G32B32_SFLOAT, uint32_t(offsetof(Vertex, normal)) };
+        VkVertexInputAttributeDescription k5{ 5, 1, VK_FORMAT_R32G32_SFLOAT, uint32_t(offsetof(Vertex, uv)) };
+        sc.vattrs = { a0, k3, k4, k5 };
+        skin_shadow_pipeline_ = vkpipe::build_graphics_pipeline(device_, sc);
+    }
     {
         VkDescriptorImageInfo ii{ clutter_shadow_sampler_, clutter_shadow_array_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkWriteDescriptorSet w{};
@@ -124,6 +139,10 @@ void VulkanEngine::init_clutter_shadow() {
 }
 
 void VulkanEngine::destroy_clutter_shadow() {
+    if (skin_shadow_pipeline_) vkDestroyPipeline(device_, skin_shadow_pipeline_, nullptr);
+    if (skin_shadow_vert_) vkDestroyShaderModule(device_, skin_shadow_vert_, nullptr);
+    skin_shadow_pipeline_ = VK_NULL_HANDLE;
+    skin_shadow_vert_ = VK_NULL_HANDLE;
     deferred_desc_sig_ = 0;   // handles may be recreated (even at the same address)
     if (clutter_shadow_pipeline_) vkDestroyPipeline(device_, clutter_shadow_pipeline_, nullptr);
     if (clutter_shadow_layout_) vkDestroyPipelineLayout(device_, clutter_shadow_layout_, nullptr);
@@ -268,10 +287,52 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
                 }
             }
         }
+        // The soldiers: in the sun's two maps, and in the flashlight's (not the one holding it).
+        if (layer <= 2) draw_skinned_shadows(cmd, cvp, layer != 2);
         vkCmdEndRendering(cmd);
     }
     vkinit::transition_image_aspect(cmd, clutter_shadow_image_, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
+// Every soldier with a pose this frame, depth only, into the shadow map being rendered: the
+// player's own body (with the head it is otherwise drawn without: a shadow has one), the other
+// players and the fallen. One level of detail below what is drawn; a shadow does not show it.
+void VulkanEngine::draw_skinned_shadows(VkCommandBuffer cmd, const glm::mat4& light_vp, bool with_local) {
+    static const bool kOff = std::getenv("QLIKE_NO_BODY_SHADOW") != nullptr;
+    if (kOff || !skin_shadow_pipeline_ || !body_lod_[0].index_count || !body_palette_map_) return;
+    bool bound = false;
+    auto draw = [&](const glm::mat4& model, int palette, int lod) {
+        if (palette < 0) return;
+        if (!bound) {
+            bound = true;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skin_shadow_pipeline_);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &scene_desc_set_, 0, nullptr);
+        }
+        PushConstants pc{};
+        pc.mvp = light_vp * model;
+        pc.model = model;
+        pc.grass_params = glm::vec4(0.0f, float(palette), 0.0f, 0.0f);
+        vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
+        lod = glm::clamp(lod + 1, 1, kBodyLods - 1);
+        for (const SkinMesh* set : { body_lod_, head_lod_ }) {
+            const SkinMesh* m = nullptr;
+            for (int i = lod; i >= 0 && !m; --i) if (set[i].index_count) m = &set[i];
+            if (!m) continue;
+            const VkBuffer streams[2] = { m->rest.vertex_buffer, m->skin.vertex_buffer };
+            const VkDeviceSize offs[2] = { 0, 0 };
+            vkCmdBindVertexBuffers(cmd, 0, 2, streams, offs);
+            vkCmdBindIndexBuffer(cmd, m->rest.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, m->index_count, 1, 0, 0, 0);
+        }
+    };
+    if (with_local && body_drawn_) draw(body_model_, body_palette_, 0);
+    if (net_)
+        for (const MpAvatar& a : mp_avatars_)
+            if (a.id && a.drawn) draw(a.model, a.palette, a.mesh_lod);
+    for (const Corpse& c : corpses_)
+        if (c.rag && c.av.drawn) draw(c.av.model, c.av.palette, c.av.mesh_lod);
+}
+
 } // namespace qlike
+

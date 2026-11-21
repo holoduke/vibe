@@ -68,20 +68,7 @@ void VulkanEngine::corpse_spawn(const glm::mat4& model, const glm::mat4& view_in
         physics_->remove_ragdoll(c->rag);
         c->rag = 0;
     }
-    const size_t nb = body_bones_.size(), nv = body_verts_.size();
-    for (uint32_t i = 0; i < kFrameOverlap; ++i) {
-        if (c->av.vbuf[i]) continue;
-        VkBufferCreateInfo bci{};
-        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size = sizeof(Vertex) * nv;
-        bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        VmaAllocationCreateInfo aci{};
-        aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        VmaAllocationInfo ai{};
-        if (vmaCreateBuffer(allocator_, &bci, &aci, &c->av.vbuf[i], &c->av.valloc[i], &ai) != VK_SUCCESS) { c->av.vbuf[i] = VK_NULL_HANDLE; return; }
-        c->av.mapped[i] = ai.pMappedData;
-    }
+    const size_t nb = body_bones_.size();
     // The pose, in the world (positions relative to the feet: small numbers).
     const glm::mat3 Mr(model);
     c->origin = glm::vec3(model[3]);
@@ -162,13 +149,12 @@ void VulkanEngine::corpse_spawn(const glm::mat4& model, const glm::mat4& view_in
     c->av.view_inv = view_inv;
     c->av.muzzle_t = 0.0f;
     c->av.recoil_t = 0.0f;
-    c->av.phase = 0.0f;         // (used here as: frames skinned since the physics went to sleep)
+    c->av.settle = 0.0f;        // frames skinned since the physics went to sleep
 }
 
 void VulkanEngine::corpses_update(float dt) {
     if (!physics_) return;
     static const float kLife = 25.0f;
-    const uint32_t slot = frame_number_ % kFrameOverlap;
     const size_t nb = body_bones_.size();
     for (Corpse& c : corpses_) {
         if (!c.rag) continue;
@@ -179,9 +165,12 @@ void VulkanEngine::corpses_update(float dt) {
             c.av.drawn = false;
             continue;
         }
-        // Lying still: both frames' buffers hold the final pose, nothing more to do.
-        if (!physics_->ragdoll_active(c.rag)) { if (c.av.phase >= float(kFrameOverlap)) continue; c.av.phase += 1.0f; }
-        else c.av.phase = 0.0f;
+        // Lying still: the final pose is sent again, nothing more to do.
+        if (!physics_->ragdoll_active(c.rag)) {
+            if (c.av.settle >= 2.0f && !c.av.pose_rows.empty()) { c.av.palette = body_push_rows(c.av.pose_rows); continue; }
+            c.av.settle += 1.0f;
+        }
+        else c.av.settle = 0.0f;
         CPU_SCOPE("ragdoll");
         if (std::getenv("QLIKE_RAGDOLL_DEBUG") && (frame_number_ % 20) == 0) {
             glm::vec3 p; glm::quat q; physics_->ragdoll_part(c.rag, 0, p, q);
@@ -220,18 +209,19 @@ void VulkanEngine::corpses_update(float dt) {
                 body_P_[i] = c.P0[i];
             }
         }
-        if (c.av.mapped[slot]) body_skin_to(static_cast<Vertex*>(c.av.mapped[slot]));
+        c.av.palette = body_push_pose(&c.av.pose_rows);
         // the head (drawn as a part of its own, like the other players')
         const glm::mat3 Dh = glm::mat3_cast(dq[2]);
         glm::mat4 e(Dh * glm::mat3(c.eye0));
         e[3] = glm::vec4(pp[2] + Dh * (glm::vec3(c.eye0[3]) - (c.p0[2] - c.origin)), 1.0f);
         c.av.view_inv = e;
         c.av.eye = glm::vec3(e[3]);
+        c.av.mesh_lod = body_mesh_lod(c.av.eye, c.av.mesh_lod);
     }
 }
 
 void VulkanEngine::draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp) {
-    const float sv_recoil = recoil_timer_, sv_muzzle = muzzle_flash_timer_, sv_body_recoil = body_recoil_;
+    const float sv_recoil = recoil_timer_, sv_muzzle = muzzle_flash_timer_;
     const int sv_weapon = weapon_;
     const bool sv_flash = flashlight_on_;
     for (Corpse& c : corpses_) {
@@ -242,18 +232,12 @@ void VulkanEngine::draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp) {
         mp_draw_ = nullptr;
     }
     recoil_timer_ = sv_recoil; muzzle_flash_timer_ = sv_muzzle; weapon_ = sv_weapon; flashlight_on_ = sv_flash;
-    body_recoil_ = sv_body_recoil;
 }
 
 void VulkanEngine::corpses_destroy() {
     for (Corpse& c : corpses_) {
         if (c.rag && physics_) physics_->remove_ragdoll(c.rag);
         c.rag = 0;
-        for (uint32_t i = 0; i < kFrameOverlap; ++i) {
-            if (c.av.vbuf[i]) vmaDestroyBuffer(allocator_, c.av.vbuf[i], c.av.valloc[i]);
-            c.av.vbuf[i] = VK_NULL_HANDLE;
-            c.av.mapped[i] = nullptr;
-        }
     }
 }
 

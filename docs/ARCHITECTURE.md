@@ -13,6 +13,7 @@ src/game/                    gameplay that knows nothing about Vulkan
   level.cpp                    the castle: walls, towers, keep, stairs, colliders
   player.cpp/.h                movement, crouch, eye position
   collision.cpp, physics.cpp   AABB collision for the player
+src/anim/                    character animation library (no Vulkan): see docs/animation/guide.md
 src/engine/                  engine modules that are NOT the VulkanEngine class
   terrain.cpp, terrain_clod.cpp  height map, CPU twins of the terrain shader
   world_props.cpp              tree / bush / rock archetypes + where they stand
@@ -54,8 +55,8 @@ Everything is in `namespace qlike`. Runtime files live in the project root:
 | Launch site, rocket, its flight (orbit and back), launch button | `rocket.cpp`, `engine/rocket_sim.cpp` (the flight, no engine dependencies), models: `tools/rocket/make_rocket.py` |
 | Combat: gun, projectiles, airstrike, jets, AA | `combat.cpp`, `aa.cpp`, `fx.cpp` |
 | Player body (soldier, hands on the gun) | `player_body.cpp`, `flashlight.cpp` |
-| Character movement: motion matching on motion capture (search, inertialisation) | `engine/motion_match.cpp`; database built by `tools/anim/build_motion_db.py` into `assets/character/motion.qmm` |
-| LAN multiplayer: discovery, host election, snapshots, interpolation | `src/engine/net/net.h`, `net.cpp` (ENet; no engine types) |
+| Character animation: skeleton + clips (ozz), motion matching, jumps, inertialisation, warps, foot / hand IK, weapon layers, levels of detail | `src/anim/` (library, tested by `tests/anim/`); asset `assets/character/soldier.qanim` cooked by `vibe_animcook` (`tools/anim/cook_main.cpp`); docs in `docs/animation/` |
+| LAN multiplayer: discovery, host election, snapshots, interpolation | `src/engine/net/net.h`, `net.cpp` (ENet; no engine types); what is replicated, its wire form, buffering, events: `net_state.h`; state -> a remote player's animator input: `net_anim.h` |
 | Multiplayer game side: other players (avatars), their shots, hits, health, HUD | `multiplayer.cpp` |
 | A killed player falls as a physics ragdoll | `ragdoll.cpp`, `physics_world.cpp` (`add_ragdoll`) |
 | In-game HUD (health, weapon, slots, frame rate); fonts are loaded in `ui_setup.cpp` | `ui_gamehud.cpp` |
@@ -101,8 +102,14 @@ its local variables and are not self-contained.
 | A HUD element | `ui_hud.cpp` |
 | Editor items | `veg_zones.cpp` (`kItems`) |
 | Gun, bullets, fire rate | `combat.cpp`; bolt glow: `fx.cpp` |
-| Hands, arms; how the captured movement is fitted (speed, stride, direction, planted feet) | `player_body.cpp` |
-| Which captured frame is played next | `engine/motion_match.cpp` |
+| The soldier's meshes: body without head, head with helmet, three levels of detail each | built by `tools/character/make_soldier.py`, exported by `tools/character/export_fp.py` into `assets/character/soldier_fp*.qchar`, `soldier_head*.qchar`, `soldier_atlas.jpg`; loaded and chosen in `player_body.cpp` (`load_skin_mesh`, `body_mesh_lod`) |
+| The soldiers' shadows | Ray traced for the nearest six: `vk_engine/body_rt.cpp` (`record_body_rt`, called from `rebuild_tlas`), `shaders/skin_rt.comp`. On the ground for all: `clutter_shadow.cpp` (`draw_skinned_shadows`), `shaders/skin_shadow.vert` |
+| Order of a frame's first steps (camera, poses, TLAS) | `frame.cpp`: `pose_characters_for_frame` runs before `submit_tlas_build` because the TLAS build skins the soldiers' ray-tracing copies |
+| What the animator is told about the local player; the bone palette; the animation debug overlay | `player_body.cpp`; the skinning itself: `shaders/cube_skin.vert` (pipelines in `pipelines_setup.cpp`, palette buffer = scene set binding 33 in `descriptors.cpp`) |
+| How a pose is made (order of layers, warps, feet, arms, recoil, reload) | `src/anim/character_animator.cpp`; tuning: `AnimTuning` in its header |
+| Which captured frame is played next | `src/anim/motion_matcher.cpp` (ground), `src/anim/airborne.cpp` (jumps, falls, landings) |
+| Where the hands hold the weapon, recoil and reload timing | `WeaponDef` in `src/anim/character_animator.h` |
+| What is replicated about a player | `src/engine/net/net_state.h` (bump `kProtocolVersion`) |
 | Player speed, jump, crouch | `src/game/player.cpp` |
 | Anti-aircraft vehicles | `aa.cpp` |
 | Loading screen | `loader_screen.cpp`, art in `assets/loader/loading_bg.jpg` |
@@ -146,10 +153,13 @@ a second; the host relays snapshots at 60 Hz; other players are drawn 100 ms in 
 interpolated. Shots / hits / deaths are reliable events; a hit is decided on the shooter's machine
 against the avatar as drawn there (`mp_bolt_hits`).
 
-Other players reuse the local soldier pose solver: `mp_pose_avatars` swaps their state into
-`player_` / the body animation members, runs `update_player_body` into their own vertex buffer
-(`mp_pose_dst_`), and restores. `draw_remote_players` draws body + gun through `draw_viewmodel`
-with their camera matrix (`mp_draw_`).
+Other players each have an animator of their own (`MpAvatar::animator`): `mp_pose_avatars` turns
+their interpolated state into its input (`net::remote_animation_input`), picks a level of detail
+by their size on screen, and writes their bone palette (the GPU skins). No pose data is sent: position,
+velocity, view, movement keys, stance, weapon and a shot counter are (35 bytes, 30 times a second).
+Shots are stamped events, de-duplicated and played when the delayed picture reaches their moment.
+`draw_remote_players` draws body + what they carry through `draw_viewmodel` with their camera
+matrix (`mp_draw_`). Whether a player can be hit never depends on whether or how they are drawn.
 
 Off for automated runs (`--frames`, `--screenshot`) unless `QLIKE_NET=1`; `QLIKE_NO_NET=1` turns it
 off entirely. Two instances on one PC work (the second takes the next game port).
@@ -224,26 +234,29 @@ What is still missing (in the order to build):
 3. **Depth range**: the projection is 0.05 .. 1500 m (also in `fsr3.cpp`, `dlss.cpp`, several shaders). Move to reversed-Z with the far plane at infinity before anything real is drawn far away.
 4. Other planets / a moon as bodies, and gravity that points at the planet's centre.
 
-## Character movement (motion matching)
+## Character animation (`src/anim`, `docs/animation/`)
 
-The soldier's hips, spine and legs are not animated by clips in a state machine: `engine/motion_match.cpp`
-searches a database of motion capture several times a second for the frame that best continues the
-current pose and the path of the next second, and hides the jump by inertialisation.
+A library of its own (`qlike_anim`: glm + ozz-animation, no Vulkan), one `CharacterAnimator` per
+character. It is told what the controller says (position, velocity, wish direction, view, ground
+contact, stance, what is held, shot and reload counters) and returns joint matrices; it never
+writes to the controller. `docs/animation/guide.md` is the working manual (API, cooking, tuning,
+hooks, tests, known gaps), `architecture.md` the design and status, `performance.md` the numbers.
 
-- **Data**: `assets/character/motion.qmm`, built by `tools/anim/build_motion_db.py` from the 100STYLE
-  set (CC BY 4.0; the raw BVH files are not in the repo - download from the dataset's page). Styles are
-  tags: 0 = Neutral, 1 = Crouched. To add one (Zombie, Old, Drunk...), pass it to the tool and pick the
-  tag in `update_player_body`. Mirrored copies are made at load.
-- **Fitting to the game** (`player_body.cpp`): the game moves at 8 m/s, the capture at 2. The query asks
-  for the capture's equivalent speed; playback rate (to 1.6x) and stride length (to 2.4x) then make the
-  feet cover the real speed. Orientation warping turns the legs to the real direction of travel while
-  the chest faces the view. Feet in contact are locked in the world below 4 m/s.
-- **Jumps**: tag 2 = the "TwoFootJump" style. Its flights are found at load (`MotionDB::jumps`); in the air the
-  frame follows the vertical speed (push-off, top, reaching down), on touch-down the captured landing plays.
-  `QLIKE_BODY_AIR=<m/s>` poses the body in the air.
-- **Still by hand**: the arms (IK to the weapon), crouch depth.
-- `QLIKE_BODY_FRONT=<m>` + `QLIKE_BODY_TURN=<deg>` show the body from outside; `QLIKE_BODY_WALK` /
-  `QLIKE_BODY_STRAFE` drive it; `QLIKE_BODY_PROCEDURAL=1` gives the old walk cycle.
+- **Ground**: motion matching on 100STYLE capture (`motion_matcher.cpp`), the path predicted with
+  the controller's own movement model (`trajectory.cpp`).
+- **Air**: captured two-foot jumps scrubbed by vertical speed and predicted time to contact
+  (`airborne.cpp`): no clip can run out, a landing never holds the player.
+- **Every change of source** is hidden by inertialisation (`inertializer.cpp`).
+- **Fitting to the game**: game speed mapped onto the pace the capture sustains in that direction,
+  playback rate, stride (a foot beyond the leg's reach leaves the ground), legs turned to the
+  travel direction (diagonals included), lean; feet locked in the world below 4 m/s and following
+  the ground. `vibe_animbench <asset> slide` measures what is left of foot slide.
+- **Weapon**: the weapon frame comes from the view; both arms are fitted to its grips last;
+  recoil, reload and equip move the frame (`weapon_offset`, which `draw_viewmodel` uses too).
+- **Data**: `assets/character/soldier.qanim`, cooked by `build/vibe_animcook.exe <100STYLE dir>
+  assets/character/soldier_fp.qchar assets/character/soldier.qanim` (raw BVH not in the repo).
+- Hooks: `QLIKE_ANIM_DEBUG=1` (overlay), `QLIKE_BODY_FRONT` / `_TURN` / `_WALK` / `_STRAFE` / `_AIR` /
+  `_FIRE` / `_RELOAD`, `QLIKE_ANIM_TUNE="name=value,..."`. R reloads (cosmetic; firing ends it).
 
 ## Ragdolls (`vk_engine/ragdoll.cpp`, `PhysicsWorld::add_ragdoll`)
 

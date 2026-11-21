@@ -589,6 +589,18 @@ void VulkanEngine::run(const RunOptions& opts) {
                 in.fire = true;
                 in.fire_held = true;
             }
+            // QLIKE_TEST_MOVE=1: real movement keys on a 9 s loop (forward with a jump, sprint,
+            // strafe, back, a turning arc) - an unattended player for watching animation and
+            // netcode from a second instance.
+            static const bool test_move = std::getenv("QLIKE_TEST_MOVE") != nullptr;
+            if (test_move) {
+                static const auto move_t0 = std::chrono::steady_clock::now();
+                const float t = std::fmod(std::chrono::duration<float>(std::chrono::steady_clock::now() - move_t0).count(), 9.0f);
+                if (t < 3.0f) { in.fwd = true; in.jump = t > 1.2f && t < 1.3f; in.sprint = t > 2.0f; }
+                else if (t < 4.5f) in.right = true;
+                else if (t < 6.0f) in.back = true;
+                else if (t < 8.5f) { in.fwd = true; in.left = t > 7.2f; in.mouse_dx = 6.0; in.jump = t > 7.9f && t < 8.0f; }
+            }
             // QLIKE_TEST_HOLD=1: pin the camera at the restored settings
             // pose (no gravity) for aerial / overview captures.
             static const bool test_hold = std::getenv("QLIKE_TEST_HOLD") != nullptr;
@@ -700,6 +712,17 @@ void VulkanEngine::run(const RunOptions& opts) {
             if (in.weapon2 && !prev_weapon_key_[1]) { weapon_ = 1; flashlight_on_ = false; }
         }
         prev_weapon_key_[0] = in.weapon1; prev_weapon_key_[1] = in.weapon2;
+        // R: reload. Cosmetic (the laser has no magazine): it is shown and replicated, and firing ends it.
+        if (state_ == State::Playing && !terrain_edit_mode_ && in.brush_mode_next && !prev_reload_key_ && weapon_ == 0 && !flashlight_on_ &&
+            body_reload_left_ <= 0.0f && body_animator_) {
+            ++body_reload_seq_;
+            body_reload_left_ = body_animator_->weapon.reload_time;
+        }
+        prev_reload_key_ = in.brush_mode_next;
+        // Right mouse: aim. (Test hook: QLIKE_TEST_AIM=1 holds it.)
+        static const bool kTestAim = std::getenv("QLIKE_TEST_AIM") != nullptr;
+        body_aim_ = state_ == State::Playing && !terrain_edit_mode_ && weapon_ == 0 && !flashlight_on_ && (in.alt_fire_held || kTestAim);
+        if (state_ != State::Playing) last_pin_ = game::PlayerInput{};
         if (in.fly_key && !prev_fly_key_ && state_ == State::Playing) {
             fly_mode_ = !fly_mode_;
             player_.velocity = glm::vec3(0.0f);
@@ -929,6 +952,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                 pin.sprint = in.sprint;
                 pin.crawl = in.crawl;
                 pin.gravity = game_.gravity;
+                last_pin_ = pin;                 // (what the player wants: the animation's prediction reads it)
                 // Water: how much of the 1.8 m body is under the surface.
                 // Swimming starts once the water reaches the chest (the
                 // feet no longer carry the body) and ends when it drops
@@ -1393,6 +1417,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             ImGui::NewFrame();
             build_hud_ui();
             mp_hud();
+            anim_debug_overlay();
             if (terrain_shaders_compiling()) {
                 // First start: say why the ground looks plain for a minute.
                 ImDrawList* dl = ImGui::GetForegroundDrawList();

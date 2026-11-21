@@ -24,6 +24,8 @@
 // game side.
 #pragma once
 
+#include "engine/net/net_state.h"
+
 #include <glm/vec3.hpp>
 
 #include <cstdint>
@@ -37,26 +39,8 @@ constexpr uint16_t kDiscoveryPort = 47777;
 constexpr uint16_t kGamePort      = 47778;   // first choice; the next free one of 8 is taken
 constexpr int      kMaxPlayers    = 8;
 constexpr double   kSendInterval  = 1.0 / 30.0;
-constexpr uint32_t kInterpDelayMs = 100;     // remote players are shown this far in the past
 
 #pragma pack(push, 1)
-struct PlayerState {
-    float px, py, pz;          // AABB centre (Player::position)
-    float vx, vy, vz;
-    float yaw, pitch;
-    float crouch;              // 0 standing .. 1 crawling
-    uint8_t flags;             // bit 0 on ground, bit 1 swimming, bit 2 flashlight
-    uint8_t health;            // 0..100
-};
-struct Event {
-    enum Kind : uint8_t { Fire = 1, Hit = 2, Death = 3, Leave = 4, Airstrike = 5 };   // Airstrike: a = target, b = run direction
-    uint8_t  kind;
-    uint32_t from;             // Fire: shooter. Hit: shooter. Death: the one who died. Leave: who left
-    uint32_t to;               // Hit: victim. Death: killer
-    float    a[3];             // Fire: origin. Hit: hit position
-    float    b[3];             // Fire: direction
-    float    v;                // Hit: damage
-};
 // Shared world state: weather + clock. A client that changes it sends a
 // request to the host; the host applies it and sends it to everybody (and
 // again once a second, so a late joiner and any drift are brought in line).
@@ -77,9 +61,9 @@ struct RemotePlayer {
     std::string name;
     PlayerState state{};       // interpolated to the render time (see Session::update)
     bool        fresh = false; // has at least one state and is not stale
+    bool        teleported = false; // this frame's state is a jump from the last (respawn): no blending across it
     // internal
-    struct Snap { uint32_t t; PlayerState s; };
-    std::deque<Snap> snaps;
+    SnapBuffer  buf;
     double last_rx = 0.0;
 };
 
@@ -100,8 +84,12 @@ public:
     // every remote player to the current render time.
     void update(double now, const PlayerState& local);
 
-    void send_event(const Event& e);          // reliable, to everybody else
-    std::vector<Event> take_events();         // events received since the last call
+    void send_event(Event e);                 // reliable, to everybody else; stamped with the session clock and a sequence number
+    std::vector<Event> take_events();         // events whose moment the (delayed) picture has reached
+    // Traffic since start(): payload bytes and packets, for bandwidth figures.
+    struct Stats { uint64_t tx_bytes = 0, rx_bytes = 0, tx_packets = 0, rx_packets = 0; uint32_t duplicate_events = 0, dropped_states = 0; };
+    const Stats& stats() const { return stats_; }
+    uint32_t render_time_ms() const { return render_t_; }   // the session time remote players are shown at
     void send_world(const WorldState& w);     // host: to all clients; client: request to the host
     bool take_world(WorldState& out);         // the newest world state received since the last call
 
@@ -119,14 +107,17 @@ private:
     Role role_ = Role::Off;
     std::string name_;
     std::vector<RemotePlayer> players_;
-    std::vector<Event> events_;
+    EventGate gate_;
+    Stats stats_{};
+    uint32_t render_t_ = 0;
+    uint16_t event_seq_ = 0;
     WorldState world_{};
     bool world_new_ = false;
 
     RemotePlayer& player(uint32_t id);
     void remove_player(uint32_t id);
     void add_snap(uint32_t id, uint32_t t, const PlayerState& s, double now);
-    void interpolate(uint32_t render_t, double now);
+    void interpolate(uint32_t session_now, double now);
     void to_solo(const char* why);
 };
 

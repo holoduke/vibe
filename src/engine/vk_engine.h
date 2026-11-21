@@ -32,7 +32,7 @@
 #include "engine/aa_vehicle.h"
 #include "engine/rocket_sim.h"
 #include "engine/globe.h"
-#include "engine/motion_match.h"
+#include "anim/character_animator.h"
 #include "engine/texture.h"   // for BackgroundDecodeHandle
 #include "engine/vk_engine/settings_types.h"  // RtSettings / GameSettings
 #include "game/level.h"
@@ -563,6 +563,22 @@ private:
     // raymarch scales the >=0.9999 sky-discard then either eats valid
     // terrain (gaps) or writes fake mid-depth halos.
     VkSampler       tr_lr_depth_sampler_ = VK_NULL_HANDLE;
+
+    // The terrain's low-resolution march ("march pre-pass", rt_.terrain_rm_prepass): one
+    // distance per block of pixels (R32F, render_extent_ / tr_march_div_) - how far a ray
+    // can go before the ground comes near. Drawn before the world pass by a cut-down build
+    // of the terrain shader (terrain_march_lo.frag.spv); the full-resolution terrain pass
+    // reads it (binding 34) and starts its march there. Made and resized with the tr_lr_*
+    // targets above.
+    VkImage         tr_march_image_ = VK_NULL_HANDLE;
+    VmaAllocation   tr_march_alloc_ = nullptr;
+    VkImageView     tr_march_view_  = VK_NULL_HANDLE;
+    VkExtent2D      tr_march_extent_{};
+    int             tr_march_div_   = 2;
+    VkShaderModule  tr_march_module_   = VK_NULL_HANDLE;
+    VkPipeline      tr_march_pipeline_ = VK_NULL_HANDLE;
+    bool tr_march_prepass_on() const;
+    void render_terrain_march_prepass(VkCommandBuffer cmd);
 
     // --- Attachment-based Variable Rate Shading (VK_KHR_fragment_shading_rate) ---
     // Small R8_UINT image sized at (render_extent + tile - 1) / tile. Each
@@ -1189,56 +1205,109 @@ private:
     // ---- The player's own body (player_body.cpp): a skinned soldier,
     // posed with IK every frame and skinned on the CPU. ----
     struct BodyBone { std::string name; int parent = -1; glm::vec3 head{0.0f}, tail{0.0f}; };
-    struct BodyVert { glm::vec3 pos, nrm; glm::vec2 uv; uint8_t bone[4]; float weight[4]; };
-    // Movement from motion capture (motion matching, engine/motion_match.h): the state of one
-    // character - where it is in the database, how the clip is fitted to the real speed and
-    // direction, and the feet it has planted.
-    struct BodyAnim {
-        MotionState ms;
-        float rate = 1.0f, stride = 1.0f, warp = 0.0f, turn = 0.0f, prev_yaw = 0.0f;
-        bool  has_yaw = false;
-        int   jump = -1, jstate = 0;          // captured jump in use; 0 on the ground, 1 in the air, 2 landing
-        float air_t = 0.0f, land_t = 0.0f;
-        struct Lock { bool on = false, broken = false; glm::vec3 world{0.0f}, off{0.0f}, off_v{0.0f}; } lock[2];
-    };
-    MotionDB         body_motion_;
-    std::vector<int> body_motion_bone_;                // database bone -> soldier bone
-    MotionPose       body_pose_;
-    BodyAnim         body_anim_local_;
-    BodyAnim*        body_anim_ = &body_anim_local_;   // whose movement update_player_body is working on
-    void body_leg_fit(int up, int lo, int ft, glm::vec3 target);
+    // Animation (src/anim): one shared set (skeleton, clips, motion database) and one animator per
+    // character. The animator turns controller state - or, for another player, the interpolated
+    // network state - into joint matrices; pose_character sends them to the GPU, which skins (cube_skin.vert). See docs/animation.
+    anim::AnimationSet anim_set_;
+    std::unique_ptr<anim::CharacterAnimator> body_animator_;      // the local player's
+    void pose_character(anim::CharacterAnimator& a, anim::CharacterAnimationInput& in, int* palette, std::vector<glm::vec4>* keep = nullptr);
+    float anim_ground_height(float x, float z, float feet_y) const;   // what a foot at (x, z) stands on
+    void apply_anim_tuning(anim::AnimTuning& t) const; // QLIKE_ANIM_TUNE
+    void anim_debug_overlay();                         // QLIKE_ANIM_DEBUG=1 / the menu: chosen clip, costs, contacts, IK targets
+    bool anim_debug_ = false;
+    game::PlayerInput last_pin_{};                     // the movement keys of the last tick (what the player wants)
+    uint32_t  body_hit_seq_ = 0;                       // hits the local player took (his own body flinches)
+    glm::vec3 body_hit_dir_{0.0f, 0.0f, 1.0f};         //   world: the way the last one travelled
+    uint32_t  body_shot_seq_ = 0, body_reload_seq_ = 0;    // count the local player's shots / reloads
+    float     body_reload_left_ = 0.0f;                // seconds of reload left (cosmetic: firing ends it)
+    bool      prev_reload_key_ = false;
+    glm::mat4 body_fire_offset_{1.0f};                 // the weapon the moment a shot leaves it (level, no recoil): view * this
+    const glm::mat4* shot_weapon_offset_ = nullptr;    // set while somebody else's shot is replayed: their weapon then
+    bool      body_aim_ = false;                       // right mouse held: aiming (rifle in the shoulder); else at the ready
+    glm::mat4 body_weapon_offset_{1.0f};               // recoil, reload, equip: what is carried is drawn at view * this
+    float     anim_ms_ = 0.0f, skin_ms_ = 0.0f;        // this frame, all characters
+    int       anim_lod_count_[4]{};
     std::vector<BodyBone> body_bones_;
-    std::vector<BodyVert> body_verts_;
-    std::vector<Vertex>   body_skinned_;
-    std::vector<glm::mat3> body_R_, body_local_, body_skin_R_;
-    std::vector<glm::vec3> body_P_, body_skin_T_;
-    std::vector<uint8_t>   body_set_;
-    Mesh          body_mesh_{};                       // index buffer (+ rest pose)
-    VkBuffer      body_vbuf_[kFrameOverlap]{};
-    VmaAllocation body_valloc_[kFrameOverlap]{};
-    void*         body_vmapped_[kFrameOverlap]{};
-    uint32_t      body_index_count_ = 0;
-    std::vector<uint32_t> body_dbg_idx_;
+    std::vector<glm::mat3> body_R_;
+    std::vector<glm::vec3> body_P_;
+    // A skinned mesh: two static vertex streams (the rest pose; bone indices and weights packed
+    // as floats in a Vertex) and its indices. The soldier's body has no head (the player looks
+    // out of it); the head, with helmet and eyes, is a mesh of its own, drawn on other players
+    // and the fallen. Both at three levels of detail (tools/character/export_fp.py); a level
+    // whose file is missing is the level before it.
+    struct SkinMesh { Mesh rest{}, skin{}; uint32_t index_count = 0, vertex_count = 0; };
+    static constexpr int kBodyLods = 3;
+    SkinMesh      body_lod_[kBodyLods], head_lod_[kBodyLods];
+    bool load_skin_mesh(const char* file, SkinMesh& out, bool with_bones, bool rt_part = false);
+    // The soldiers in the ray-traced scene (vk_engine/body_rt.cpp): the nearest few get a copy,
+    // skinned by a compute pass and rebuilt into a BLAS every frame, one set per frame in flight.
+    static constexpr uint32_t kRtBodies = 6;
+    struct RtBody { VkAccelerationStructureKHR as = VK_NULL_HANDLE; VkBuffer buf = VK_NULL_HANDLE, scratch = VK_NULL_HANDLE;
+                    VmaAllocation alloc = nullptr, scratch_alloc = nullptr; VkDeviceAddress addr = 0, scratch_addr = 0; };
+    struct RtBodyInstance { glm::mat4 model, prev_model; VkDeviceAddress blas; };
+    std::vector<Vertex>   body_rt_rest_, body_rt_skin_;      // the level 2 body + head, merged (CPU copy for the upload)
+    std::vector<uint32_t> body_rt_idx_;
+    uint32_t      body_rt_verts_ = 0, body_rt_tris_ = 0;
+    VkBuffer      body_rt_rest_buf_ = VK_NULL_HANDLE, body_rt_skin_buf_ = VK_NULL_HANDLE, body_rt_index_buf_ = VK_NULL_HANDLE;
+    VmaAllocation body_rt_rest_alloc_ = nullptr, body_rt_skin_alloc_ = nullptr, body_rt_index_alloc_ = nullptr;
+    VkDeviceAddress body_rt_index_addr_ = 0;
+    VkBuffer      body_rt_out_buf_[kFrameOverlap]{};         // skinned positions, kRtBodies x vertices
+    VmaAllocation body_rt_out_alloc_[kFrameOverlap]{};
+    VkDeviceAddress body_rt_out_addr_[kFrameOverlap]{};
+    RtBody        body_rt_[kFrameOverlap][kRtBodies]{};
+    VkDescriptorSetLayout body_rt_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool body_rt_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet  body_rt_set_[kFrameOverlap]{};
+    VkPipelineLayout body_rt_layout_ = VK_NULL_HANDLE;
+    VkPipeline       body_rt_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule   body_rt_module_ = VK_NULL_HANDLE;
+    std::vector<RtBodyInstance> body_rt_list_;               // this frame's, for rebuild_tlas
+    void init_body_rt();
+    void destroy_body_rt();
+    void record_body_rt(VkCommandBuffer cmd);
+    void pose_characters_for_frame();                        // camera of the frame + every soldier's pose (before the TLAS build)
+    int  body_mesh_lod(glm::vec3 pos, int previous) const;    // by height on screen
+    bool          body_front_ = false;                // QLIKE_BODY_FRONT: the local body is looked at from outside (head drawn)
+    // The bone palette: three rows (a 3x4 matrix, rest -> posed, model space) per bone, for every
+    // character drawn this frame, one region per frame in flight. Binding 33 of the scene set.
+    static constexpr uint32_t kSkinBones = 64, kSkinCharacters = 48;
+    VkBuffer      body_palette_buf_ = VK_NULL_HANDLE;
+    VmaAllocation body_palette_alloc_ = nullptr;
+    glm::vec4*    body_palette_map_ = nullptr;
+    uint32_t      body_palette_used_ = 0;             // characters pushed this frame
+    int           body_palette_ = -1;                 // the local body: its first row this frame
+    std::vector<glm::vec4> body_rows_;
+    int  body_push_pose(std::vector<glm::vec4>* keep = nullptr);     // body_R_ / body_P_ -> palette; first row, or -1 when full
+    int  body_push_rows(const std::vector<glm::vec4>& rows);
+    VkPipeline pipeline_skin_ = VK_NULL_HANDLE, pipeline_skin_gbuf_ = VK_NULL_HANDLE;
+    VkShaderModule skin_vert_module_ = VK_NULL_HANDLE;
+    VkPipeline skin_pipeline() const { return (pipeline_skin_gbuf_ && deferred_owns_lighting()) ? pipeline_skin_gbuf_ : pipeline_skin_; }
     float         body_scale_ = 1.0f;
     glm::mat4     body_model_{1.0f};
-    glm::vec3     body_root_off_{0.0f};
-    float         body_phase_ = 0.0f, body_move_ = 0.0f, body_air_ = 0.0f, body_recoil_ = 0.0f;
-    glm::vec2     body_dir_{0.0f, -1.0f};
     bool          body_drawn_ = false;
 
     // ---- LAN multiplayer (vk_engine/multiplayer.cpp, engine/net) ----
     struct MpAvatar {                                  // another player, as drawn here
         uint32_t      id = 0;                          // 0 = free slot
-        VkBuffer      vbuf[kFrameOverlap]{};           // their skinned soldier
-        VmaAllocation valloc[kFrameOverlap]{};
-        void*         mapped[kFrameOverlap]{};
+        int           palette = -1;                    // this frame's first row in the bone palette; -1 = not drawn
+        std::vector<glm::vec4> pose_rows;              // the last pose (re-sent on a frame that is not posed)
         glm::mat4     model{1.0f}, prev_model{1.0f}, view_inv{1.0f};
-        glm::vec3     eye{0.0f}, root{0.0f};
-        glm::vec2     dir{0.0f, -1.0f};
-        float         phase = 0.0f, move = 0.0f, air = 0.0f, recoil_t = 0.0f, muzzle_t = 0.0f;
+        glm::vec3     eye{0.0f};
+        glm::mat4     weapon_offset{1.0f};             // from their animator (recoil, reload, equip)
+        glm::mat4     fire_offset{1.0f};               // ... and where a shot of theirs leaves from
+        float         settle = 0.0f, recoil_t = 0.0f, muzzle_t = 0.0f;
+        std::unique_ptr<anim::CharacterAnimator> animator;
+        int           lod = 0, skipped = 0;            // animation level of detail; frames since the last pose
+        int           mesh_lod = 0;                    // which mesh is drawn (by size on screen)
+        uint32_t      reload_seq = 0;
+        uint32_t      hit_seq = 0;                     // counts the hits seen on them (their body flinches)
+        bool          was_reloading = false;
+        float         combat_t = 1e9f;                 // seconds since they shot or were shot at by us
+        float         skip_dt = 0.0f;                  // time not yet given to the animator (a skipped frame)
+        bool          teleported = false;              // their state jumped (respawn): told to the animator once
         bool          drawn = false, fresh_pose = true;
+        bool          present = false;                 // has a current state: can be hit, whether drawn or not
         glm::vec3     foot_last{1e9f};                 // footprints in the snow
-        BodyAnim      anim;                            // their movement (motion matching state)
         bool          corpse = false;                  // drawn as a body on the ground: head, no weapon
         bool          die = false;                     // killed: the next pose becomes a ragdoll (ragdoll.cpp)
         glm::vec3     hit_pos{0.0f}, hit_dir{0.0f};    // the last shot that hit them
@@ -1251,17 +1320,16 @@ private:
     std::array<MpAvatar, net::kMaxPlayers> mp_avatars_{};
     std::vector<MpFeed> mp_feed_;
     const MpAvatar* mp_draw_ = nullptr;                // set while a remote player's body + gun are drawn
-    Vertex*   mp_pose_dst_ = nullptr;                  // set while a remote player's body is posed
     bool      mp_remote_shot_ = false;                 // fire_projectile is replaying someone else's shot
-    glm::vec3 mp_spawn_{0.0f};
-    float     mp_health_ = 100.0f, mp_hurt_ = 0.0f, mp_hitmark_ = 0.0f;
+    glm::vec3 mp_spawn_{0.0f}, mp_last_sent_pos_{0.0f};
+    float     mp_health_ = 100.0f, mp_hurt_ = 0.0f, mp_hitmark_ = 0.0f, mp_teleport_hold_ = 0.0f;
     int       mp_kills_ = 0;
     // ---- Ragdolls (ragdoll.cpp): a killed player's body, handed to the physics. ----
     static constexpr int kCorpseParts = 11;
     struct Corpse {
         uint32_t  rag = 0;                             // physics ragdoll; 0 = free slot
         float     age = 0.0f;
-        MpAvatar  av;                                  // vertex buffers + matrices, drawn like a player
+        MpAvatar  av;                                  // palette + matrices, drawn like a player
         glm::vec3 origin{0.0f};
         std::vector<glm::mat3> R0;                     // per bone at the moment of death (world)
         std::vector<glm::vec3> P0;                     //   (relative to origin)
@@ -1275,7 +1343,6 @@ private:
     void corpses_update(float dt);
     void corpses_destroy();
     void draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp);
-    void body_skin_to(Vertex* dst);
     void mp_init();
     void mp_shutdown();
     void mp_update(float dt);                          // network + events (main loop)
@@ -1304,8 +1371,6 @@ private:
     void init_player_body();
     void destroy_player_body();
     int  body_bone(const char* name) const;
-    void body_fk();
-    void body_ik(int a, int b, int c, glm::vec3 target, glm::vec3 pole);
     void update_player_body(float dt);
     void draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam);
 
@@ -2085,6 +2150,11 @@ private:
     VkPipelineLayout clutter_shadow_layout_ = VK_NULL_HANDLE;
     VkPipeline     clutter_shadow_pipeline_ = VK_NULL_HANDLE;
     VkShaderModule clutter_shadow_vert_ = VK_NULL_HANDLE;
+    // The soldiers (the player's own body, other players, the fallen) into the same maps:
+    // skin_shadow.vert on the world pipeline layout (it reads the bone palette).
+    VkPipeline     skin_shadow_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule skin_shadow_vert_ = VK_NULL_HANDLE;
+    void draw_skinned_shadows(VkCommandBuffer cmd, const glm::mat4& light_vp, bool with_local);
     glm::mat4      clutter_shadow_vp_{0.0f};
     void init_clutter_shadow();
     void destroy_clutter_shadow();

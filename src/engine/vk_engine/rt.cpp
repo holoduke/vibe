@@ -875,6 +875,8 @@ void VulkanEngine::bake_static_brushes() {
 
 void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     if (!rt_initialized_) return;
+    // The soldiers near the camera: skinned and rebuilt every frame (body_rt.cpp).
+    record_body_rt(cmd);
 
     // Skip the entire build when nothing in the dynamic set moved since
     // last frame. Static brushes are baked + memcpyed once per change;
@@ -892,6 +894,8 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     };
     uint64_t sig = 0xcbf29ce484222325ULL;
     sig = mix64(sig, dyn_props_.size());
+    sig = mix64(sig, body_rt_list_.size());
+    if (!body_rt_list_.empty()) sig = mix64(sig, frame_number_);      // a pose is new every frame
     sig = mix64(sig, projectiles_.size());
     sig = mix64(sig, static_brush_dirty_ ? 1u : 0u);
     sig = mix64(sig, rt_.textures_enabled ? 1u : 0u);
@@ -1295,6 +1299,10 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
                        /*full_emissive=*/true, cylinder_blas_device_address_,
                        kNoTex, 0x78);
     }
+
+    // The soldiers (their BLAS is in model space).
+    for (const RtBodyInstance& b : body_rt_list_)
+        write_instance(b.model, b.prev_model, glm::vec4(0.23f, 0.26f, 0.17f, 1.0f), glm::vec3(0.0f), false, b.blas, kNoTex, 0x7F);
 
     VkAccelerationStructureGeometryInstancesDataKHR inst_data{};
     inst_data.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
