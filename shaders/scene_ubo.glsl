@@ -99,6 +99,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   globe_info;       // x: 1 = a far chart (not home's), y: the chart origin's local x (m), z: 1 = the near-field ground bake is valid, w: profiling mask (QLIKE_RM_SKIP: terrain shader sections left out)
     ivec4  globe_cell[12];   // the landscape FBM's lattice at the chart's origin, per octave: cell ...
     vec4   globe_frac[12];   // ... and position in it (world_map.glsl wm_shape3)
+    vec4   rm_perf;          // raymarched terrain, speed: x = bits (1: low-resolution march first, 2: simpler relief under grass), y = that march's pixel size (full-res pixels), z = fast final approach 0..1, w = normal: drop detail finer than this many pixels (0 = keep all)
 } scene;
 
 // Leaves through the year. `h`: a number 0..1 of the tree (each tree turns

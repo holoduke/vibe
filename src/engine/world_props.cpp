@@ -14,7 +14,9 @@
 #include <array>
 #include <cstring>
 #include <fstream>
+#include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <cmath>
 #include <map>
 #include <random>
@@ -137,6 +139,15 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
         for (int l = 0; l < kVegLods; ++l) build_bush(a.lods[l], p, l, lo, tiny, hi);
         finish(a); out.push_back(std::move(a));
     }
+    // River-bank scrub: 6 variants - bush willows low and tall, and two young alders.
+    for (int v = 0; v < 6; ++v) {
+        VegArchetype a; a.species = 2; a.riverside = true;
+        const float seed = U(rng) * 6.28f;
+        const bool alder = v >= 4;
+        const float H = alder ? 4.2f + 1.4f * U(rng) : (v % 2 == 0 ? 2.1f + 0.7f * U(rng) : 3.2f + 1.1f * U(rng));
+        for (int l = 0; l < kVegLods; ++l) build_river_shrub(a.lods[l], seed, alder, H, l);
+        finish(a); out.push_back(std::move(a));
+    }
     // Rock LOD meshes: the surface of rock_sdf.glsl's shape function without
     // its finest detail (cracks / grain are added per pixel in cube.frag by
     // evaluating the same function at the mesh surface). Real geometry: the
@@ -230,6 +241,34 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
     return out;
 }
 
+float river_shrub_density(float x, float z, float h, float ny, float wl) {
+    const float e = world_river_distance(x, z);
+    if (e > 30.0f) return 0.0f;
+    const float up = h - wl;
+    if (up < 0.10f || up > 3.2f || ny < 0.60f) return 0.0f;
+    // On the bank: from the water's edge (about 5 m outside the channel) back to where the
+    // ground has risen a couple of metres; thickest just above the water.
+    float d = (1.0f - glm::smoothstep(14.0f, 30.0f, e)) * glm::smoothstep(0.10f, 0.45f, up) * (1.0f - glm::smoothstep(1.6f, 3.2f, up));
+    // Thickets with gaps between them, a few bushes wide.
+    auto hn = [](float px, float pz) {
+        auto hv = [](int ix, int iz) {
+            uint32_t n = uint32_t(ix) * 374761393u + uint32_t(iz) * 668265263u; n = (n ^ (n >> 13)) * 1274126177u;
+            return float((n ^ (n >> 16)) & 0xFFFFu) / 65535.0f;
+        };
+        const float fx = std::floor(px), fz = std::floor(pz);
+        float tx = px - fx, tz = pz - fz; tx = tx * tx * (3.0f - 2.0f * tx); tz = tz * tz * (3.0f - 2.0f * tz);
+        const int ix = int(fx), iz = int(fz);
+        return glm::mix(glm::mix(hv(ix, iz), hv(ix + 1, iz), tx), glm::mix(hv(ix, iz + 1), hv(ix + 1, iz + 1), tx), tz);
+    };
+    const float thick = hn(x / 17.0f, z / 17.0f) * 0.65f + hn(x / 6.0f + 9.0f, z / 6.0f) * 0.35f;
+    d *= glm::smoothstep(0.34f, 0.62f, thick);
+    // Down the river: the reeds have the banks by the castle's lake; the scrub takes over
+    // toward the sea (the river runs away from the castle, so distance from it is how far
+    // downstream this is).
+    const float down = glm::smoothstep(150.0f, 620.0f, std::sqrt(x * x + z * z));
+    return d * glm::mix(0.10f, 1.0f, down);
+}
+
 std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
                                           const WorldPropParams& P,
                                           const std::vector<VegArchetype>& arch,
@@ -238,8 +277,10 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
     std::vector<VegInstance> out;
     if (hm.heights.empty() || arch.empty()) return out;
     std::vector<int> by_species[4];
+    std::vector<int> river_pool;                       // river-bank scrub: its own rule below
     std::vector<int> old_trees[2];                     // old-growth pines / broadleaf
     for (size_t i = 0; i < arch.size(); ++i) {
+        if (arch[i].riverside) { river_pool.push_back(int(i)); continue; }
         if (arch[i].old && arch[i].species < 2) old_trees[arch[i].species].push_back(int(i));
         else by_species[arch[i].species].push_back(int(i));
     }
@@ -537,6 +578,43 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         vi.rot_arch_phase = glm::vec4(u() * 6.2831853f, float(ai), u() * 6.2831853f, 0.0f);
         out.push_back(vi);
         ++bushes;
+    }
+    // Riverside: scrub on the banks of the river (river_shrub_density). The banks are a
+    // narrow strip, so the tries are thrown at the river's own box, and - unlike everything
+    // above - right down to the water's edge.
+    if (!river_pool.empty()) {
+        int placed = 0;
+        const float bx0 = std::max(-85.0f, -ext), bx1 = std::min(2095.0f, ext), bz0 = std::max(-110.0f, -ext), bz1 = std::min(780.0f, ext);
+        for (int a = 0; a < P.river_attempts && placed < P.max_river_shrubs && bx1 > bx0 && bz1 > bz0; ++a) {
+            uint32_t rs = ((uint32_t(a) + 1u) * 2654435761u) ^ (uint32_t(P.seed) * 40503u) ^ 0x51F15EEDu;
+            rs ^= rs >> 15; rs *= 0x2C1B3C6Du; rs ^= rs >> 12; rs |= 1u;
+            auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
+            const float x = bx0 + u() * (bx1 - bx0), z = bz0 + u() * (bz1 - bz0);
+            const float pick = u(), size = u(), rot = u(), phase = u(), which = u();
+            if (world_river_distance(x, z) > 40.0f) continue;                 // (cheap; most tries end here)
+            if (std::sqrt(x * x + z * z) < P.castle_clear) continue;
+            if (excluded(x, z) || road_d(x, z) < road_clear + 2.0f) continue;
+            const float h = h_at(x, z);
+            const float dens = river_shrub_density(x, z, h, ny_at(x, z), P.water_level);
+            if (pick > dens * P.bush_density) continue;
+            const int ai = river_pool[size_t(which * float(river_pool.size())) % river_pool.size()];
+            VegInstance vi{};
+            vi.pos_scale = glm::vec4(x, h - 0.06f, z, 0.75f + 0.55f * size);
+            vi.rot_arch_phase = glm::vec4(rot * 6.2831853f, float(ai), phase * 6.2831853f, 0.0f);
+            out.push_back(vi);
+            ++placed;
+        }
+        st.river_shrubs = placed;
+        if (std::getenv("QLIKE_LOG_VEG")) {            // where to look: a few shrubs and trees for test captures
+            int rn = 0, tn = 0, on = 0;
+            for (const auto& v : out) {
+                const auto& A = arch[size_t(v.rot_arch_phase.y + 0.5f)];
+                if (A.riverside && v.pos_scale.x > 300.0f && rn < 4 && ++rn) std::puts(("[vegpos] river " + std::to_string(v.pos_scale.x) + " " + std::to_string(v.pos_scale.y) + " " + std::to_string(v.pos_scale.z)).c_str());
+                else if (A.species <= 1 && A.old && on < 4 && ++on) std::puts(("[vegpos] old" + std::to_string(A.species) + " " + std::to_string(v.pos_scale.x) + " " + std::to_string(v.pos_scale.y) + " " + std::to_string(v.pos_scale.z)).c_str());
+                else if (A.species <= 1 && !A.old && std::abs(v.pos_scale.x) < 300.0f && tn < 6 && ++tn) std::puts(("[vegpos] tree" + std::to_string(A.species) + " " + std::to_string(v.pos_scale.x) + " " + std::to_string(v.pos_scale.y) + " " + std::to_string(v.pos_scale.z)).c_str());
+            }
+            std::fflush(stdout);
+        }
     }
     // Painted areas are filled deliberately as well: the random attempts
     // above cover the whole map, so a small painted patch caught few or

@@ -2943,6 +2943,7 @@ private:
     VkPipeline             clouds_over_pipeline_ = VK_NULL_HANDLE;
     bool                   sun_shafts_prepass_ran_ = false;           // this frame: compose skips its own shafts
     bool                   atmo_dispatched_this_frame_ = false;
+    bool                   sky_filled_this_frame_ = false;   // the sky-fill pass ran: the scene colour holds the real sky
 
     // --- Bloom mip chain (Karis-style downsample + tent upsample) ---
     static constexpr int kBloomMips = 5;

@@ -2,7 +2,7 @@
 // that needs blade shadows (the raymarched terrain, the lawn itself and the
 // deferred pass for objects standing in the grass). It is the same field
 // grass_raymarch.frag draws: one blade per 17 cm cell, hashed position,
-// rotation, height and wind phase.
+// rotation, height and wind phase, in patches of different grass types.
 //
 // Requires: scene_ubo.glsl, and a sampler2D `u_grass_mask` (the grass
 // eligibility mask over the 2048 m map) declared before this include.
@@ -24,8 +24,36 @@ float gs_blade(vec3 p, float th) {
     float d2 = max(0.0, gs_blade2d(p.xy));
     return sqrt(d2 * d2 + p.z * p.z) - th;
 }
-// Distance to the nearest blade; `gy` = ground height (blade roots).
-float gs_map(vec3 p, float gy) {
+// ---- Grass types ----
+// The meadow is not one grass: a smooth field over the map picks the type
+// of each patch (a few metres across) - short fine lawn, ordinary meadow
+// grass, tall coarse grass, and dry stalks that carry seed heads. The types
+// are the same blade with another height, width and lean (and colour, in
+// the shaders that draw it), so they cost nothing in the march.
+const float kGsMaxH = 1.2;            // tallest type, x the height setting
+float gs_type_noise(vec2 w) {
+    vec2 a = w * 0.11, b = w * 0.37;
+    float n = sin(a.x + 1.7 * sin(a.y * 0.83 + 0.6)) * sin(a.y * 1.13 + 1.3 * sin(a.x * 0.71 + 2.1));
+    n += 0.35 * sin(b.x + sin(b.y * 1.3)) * sin(b.y + sin(b.x * 0.9 + 1.0));
+    return clamp(0.5 + 0.42 * n, 0.0, 1.0);
+}
+// x: height, y: width, z: lean (all x the plain blade), w: dry stalks 0..1.
+vec4 gs_type(float tn) {
+    float meadow = smoothstep(0.40, 0.47, tn);     // below: fine lawn
+    float coarse = smoothstep(0.53, 0.60, tn);
+    float stalk  = smoothstep(0.66, 0.71, tn);
+    return vec4(mix(0.62, 0.85, meadow) + 0.35 * coarse,
+                mix(0.75, 1.00, meadow) + 0.50 * coarse - 0.90 * stalk,
+                mix(0.60, 1.00, meadow) + 0.60 * coarse - 1.10 * stalk,
+                stalk);
+}
+// A blade's own height, 0.3 .. 1 of its type's: the short ones fill the
+// base of the lawn, the long ones stand out of it.
+float gs_blade_s(float rw) { return 0.3 + 0.7 * rw * (1.4 - 0.4 * rw); }
+
+// Distance to the nearest blade; `gy` = ground height (blade roots),
+// `tp` = gs_type() of the patch.
+float gs_map(vec3 p, float gy, vec4 tp) {
     const float kPeriod = 0.17;
     const float kPi2 = 6.28318530718;
     vec3 lp = p; lp.y -= gy;
@@ -61,8 +89,11 @@ float gs_map(vec3 p, float gy) {
             float wind_t = scene.grass_rm_params.z + r.w * kPi2;
             np.x += sin(wind_t * 1.4) * scene.grass_rm_params.y * 0.025 *
                     smoothstep(0.0, 1.7 * bh, np.y);
-            float sc = max(0.65, sqrt(r.w)) * bh;
-            d = min(d, gs_blade(np / sc, 0.002 / sc) * sc);
+            float bs = gs_blade_s(r.w);
+            float hs = bh * tp.x * bs;
+            float ws = bh * tp.y * (0.45 + 0.55 * bs);
+            float m  = min(hs, ws);
+            d = min(d, gs_blade(np / vec3(ws, hs, ws), 0.002 / m) * m);
         }
     }
     return d;
@@ -73,8 +104,9 @@ float gs_map(vec3 p, float gy) {
 // shadow itself). Sphere-traced with a wide penumbra: hair-thin shadows
 // would otherwise alias away.
 float grass_blade_vis(vec3 p, float gy, vec3 L, float t0) {
+    vec4  tp = gs_type(gs_type_noise(p.xz));
     float bh = clamp(scene.grass_rm_params.x, 0.05, 3.0) * 0.36;
-    float top = gy + bh * 1.05;
+    float top = gy + bh * 1.12 * tp.x;
     if (p.y >= top && L.y >= 0.0) return 1.0;            // above the blades, light from above
     // Until the ray leaves the blade layer (or 2 m: a light low in the grass).
     float t_max = L.y > 0.02 ? min((top - p.y) / L.y, 2.0) : 1.5;
@@ -84,7 +116,7 @@ float grass_blade_vis(vec3 p, float gy, vec3 L, float t0) {
     for (int i = 0; i < 12; ++i) {
         if (t > t_max) break;
         vec3 q = p + L * t;
-        float d = gs_map(q, gy);
+        float d = gs_map(q, gy, tp);
         res = min(res, 7.0 * max(d, 0.0) / t);
         if (res < 0.02) break;
         t += clamp(d, 0.015, 0.14);

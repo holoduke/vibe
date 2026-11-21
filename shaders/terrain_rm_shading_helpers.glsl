@@ -76,18 +76,26 @@ vec3 calcNormal(vec3 pos, float t) {
     float tpl = plateauWeight(pos.xz);
     // (The stones are left out of these three full-terrain taps and added
     // below from three cheap stone-only taps at about one pixel's width.)
+    // Under a dense lawn (settings: simpler relief under grass) the three taps read the
+    // relief's main rills only: the blades hide the rest.
+    float lawn = -1.0;
+    if ((int(scene.rm_perf.x) & 2) != 0 && t < 26.0) {
+        lawn = grassEligibility(pos.xz, pos.y);
+        g_rm_relief_lite = lawn > 0.80;
+    }
     g_pebN_h = -1.0; g_pebN_k = 0.0;   // -1: no stones looked up for this pixel
     g_peb_mode = -1;
     float hC = terrainH_lod_pw(pos.xz, t, tpl);
     float hR = terrainH_lod_pw(pos.xz + vec2(eps, 0.0), t, tpl);
     float hU = terrainH_lod_pw(pos.xz + vec2(0.0, eps), t, tpl);
     g_peb_mode = 0;
+    g_rm_relief_lite = false;
     vec3 gN = vec3(hC - hR, eps, hC - hU) / eps;
     if (t < 26.0 && tpl < 0.99 && !RMDBG(2)) {
         float pw = (1.0 - smoothstep(10.0, 26.0, t)) * (1.0 - tpl) * g_rm_detail_mul;
         // Under a dense lawn the stones cannot be seen: skip all their work
         // there (most of the terrain).
-        if (pw > 0.01) pw *= 1.0 - smoothstep(0.55, 0.80, grassEligibility(pos.xz, pos.y));
+        if (pw > 0.01) pw *= 1.0 - smoothstep(0.55, 0.80, lawn >= 0.0 ? lawn : grassEligibility(pos.xz, pos.y));
         if (pw > 0.01) {
             float pe = max(0.0015, 1.5 * t * 2.0 * scene.viewport.w);
             float pR = rm_pebbles(pos.xz + vec2(pe, 0.0), t);
@@ -441,6 +449,27 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
     vec3 grass_top  = mix(ground_base, ground_base * 0.7, nz);
     float tint_str  = clamp(scene.grass_color_ground.w, 0.0, 1.0);
     col = mix(col, grass_top, grass_amt * tint_str);
+#ifndef QLIKE_WATER
+    // Grass floor: close up, what shows between the blades is the matted
+    // base of the lawn - old flattened leaves in the blades' own shadow -
+    // not soil in the meadow's (much lighter) far colour. Gaps between the
+    // blades then read as more grass. Fades out with distance, where the
+    // tint above stands in for the whole lawn. Shading only (not the march).
+    if (grass_amt > 0.2 && cam_d < 45.0) {
+        float fw = smoothstep(0.2, 0.65, grass_amt) * (1.0 - smoothstep(14.0, 45.0, cam_d)) * 0.85;
+        // Two sets of fine streaks: leaves lying this way and that.
+        float s1 = noise2(vec2(dot(pos.xz, vec2( 0.80, 0.60)) * 70.0, dot(pos.xz, vec2(-0.60, 0.80)) * 7.0));
+        float s2 = noise2(vec2(dot(pos.xz, vec2(-0.45, 0.89)) * 70.0, dot(pos.xz, vec2( 0.89, 0.45)) * 7.0) + 31.0);
+        float th = mix(0.5, max(s1, s2), 1.0 - smoothstep(6.0, 20.0, cam_d));   // (finer than a pixel further out)
+        vec3 lo = scene.grass_color_bottom.rgb * 0.55;
+        vec3 hi = mix(scene.grass_color_bottom.rgb, scene.grass_color_top.rgb, 0.6);
+        vec3 fl = mix(lo, hi, smoothstep(0.45, 0.95, th));
+        // Dry litter: under the dry-stalk patches (grass_blades.glsl), and a little everywhere.
+        vec3 straw = dot(scene.grass_color_top.rgb, vec3(0.3333)) * vec3(1.90, 1.55, 0.75);
+        fl = mix(fl, straw * 0.6, smoothstep(0.66, 0.71, gs_type_noise(pos.xz)) * 0.5 + 0.12 * smoothstep(0.7, 0.95, s1));
+        col = mix(col, fl, fw);
+    }
+#endif
 
     // Two-region shore tint — grass-area gets one colour, bare-
     // terrain gets another. Both fade smoothly with height above the

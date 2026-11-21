@@ -21,7 +21,7 @@ layout(std430, set = 0, binding = 4) readonly buffer Exposure {
     vec4 hl0;            // the landscape's height layers (m): sand->grass start, end, grass->dirt start, end
     vec4 hl1;            // dirt->rock start, end, rock->snow start, end
     vec4 misc;           // x: top of the local cloud layer (m), y: cloud coverage, z: cloud size, w: metres the wind has carried the clouds
-    vec4 misc2;          // x: base of the local cloud layer (m)
+    vec4 misc2;          // x: base of the local cloud layer (m), y: the hour angle (radians, 0 at noon): how far the sky has turned (stars)
     vec4 sun_land;       // rgb: the sunlight on the landscape (scene.sun_color.rgb x intensity)
     // The globe (engine/globe.h): the frame at the camera's ground point - the planet-frame
     // directions of the view's east (x), up (y) and south (z) - and the landscape FBM's lattice
@@ -424,9 +424,24 @@ vec3 st_hash3(vec2 p) {
 }
 vec3 st_oct_dir(vec2 e) { return normalize(vec3(e.x, 1.0 - abs(e.x) - abs(e.y), e.y)); }
 // px = angular size of a pixel (rad), t = clock (s), cover = cloud cover 0..1.
-vec3 star_field(vec3 dir, float px, float t, float cover) {
+// `ldir`: the view direction here (for the horizon and the air's dimming); `dir`: the same
+// direction in the sky's own frame (star_sky_dir) - where on the star map it points.
+// The stars are fixed to the sky, not to the place the camera stands. A view direction is
+// first carried into the planet's frame (the globe frame at the camera: travelling round the
+// planet turns the sky overhead, and on the far side other stars are up), then turned back
+// about the celestial pole by the hour angle - the sky wheels through the night with the
+// clock, at the rate the sun and the moon cross it (environment.cpp).
+vec3 star_sky_dir(vec3 ldir) {
+    mat3 gF = mat3(u_exposure.gf0.xyz, u_exposure.gf1.xyz, u_exposure.gf2.xyz);
+    vec3 pd = gF * ldir;
+    const vec3 P = vec3(0.0, 0.731354, -0.681998);       // the pole: 47 deg north at home (x east, y up, z south)
+    float H = u_exposure.misc2.y;
+    float c = cos(H), s = sin(H);
+    return normalize(pd * c + cross(P, pd) * s + P * (dot(P, pd) * (1.0 - c)));
+}
+vec3 star_field(vec3 ldir, vec3 dir, float px, float t, float cover) {
     // (below the REAL horizon only - see the end of this function)
-    if (dir.y < -0.01 - sqrt(max(1.0 - (6360.0 * 6360.0) / (pc.atmo.z * pc.atmo.z), 0.0))) return vec3(0.0);
+    if (ldir.y < -0.01 - sqrt(max(1.0 - (6360.0 * 6360.0) / (pc.atmo.z * pc.atmo.z), 0.0))) return vec3(0.0);
     // The star map covers the upper half of the sky. Below the horizontal (seen from high up: the
     // space between it and the planet's rim) the lower half gets its own stars from the same map,
     // mirrored and re-seeded - there was a ring without stars around the planet.
@@ -455,7 +470,7 @@ vec3 star_field(vec3 dir, float px, float t, float cover) {
         float r = px * ((L == 0) ? 0.95 : 0.78);
         float core = exp(-d * d / (r * r));
         float glow = (L == 0) ? 0.06 * m * exp(-d / (px * 3.0)) : 0.0;
-        float low = 1.0 - clamp(dir.y * 2.5, 0.0, 1.0);
+        float low = 1.0 - clamp(ldir.y * 2.5, 0.0, 1.0);
         float tw = 1.0 + (0.10 + 0.45 * low) * sin(t * (4.0 + 9.0 * h2.y) + h2.z * 40.0);
         vec3 tint = mix(vec3(1.0, 0.76, 0.58), vec3(0.68, 0.81, 1.0), h2.y);
         sum += mix(vec3(1.0), tint, 0.7) * (flux * tw * (core + glow));
@@ -466,7 +481,7 @@ vec3 star_field(vec3 dir, float px, float t, float cover) {
     // (measured from the real horizon: from high up it lies well below the horizontal, and with a
     // fixed cut at the horizontal there was a ring without stars around the planet)
     float y_hor = -sqrt(max(1.0 - (6360.0 * 6360.0) / (pc.atmo.z * pc.atmo.z), 0.0));
-    float y_rel = dir.y - y_hor;
+    float y_rel = ldir.y - y_hor;
     return sum * mix(0.40, 1.0, smoothstep(0.0, 0.35, y_rel)) * smoothstep(-0.01, 0.015, y_rel);
 }
 // Aerial perspective at world distance d_km: rgb in-scatter (unit sun),
@@ -1184,7 +1199,19 @@ void main() {
         vec4 bw  = vec4((1.0 - f.x) * f.y, f.x * f.y, f.x * (1.0 - f.y), (1.0 - f.x) * (1.0 - f.y));
         vec4 sky_m = vec4(greaterThanEqual(dg, vec4(0.99999)));
         float sky_w = dot(bw, sky_m);
-        if (pc.tone.x > 7.5) {
+        if (pc.tone.x > 15.5) {
+            // FSR 3 output with the sky already in it (sky-fill pass before the upscaler).
+            // FSR carries no coverage in alpha, and the depth taps are the jittered low-
+            // resolution ones - so nothing is rebuilt or split here: the colour stands as
+            // it is. A pixel is sky only where all four taps are; any other is treated as
+            // the object in it (haze and fog at that object's depth).
+            hdr = texture(history_color, sample_uv).rgb;
+            edge_w = (sky_w >= 0.999) ? 1.0 : 0.0;
+            if (edge_w < 1.0) {
+                float ow = dot(bw, 1.0 - sky_m);
+                obj_depth = (ow > 1e-4) ? dot(bw * (1.0 - sky_m), dg) / ow : 0.9999;
+            }
+        } else if (pc.tone.x > 7.5) {
             // DLSS output: alpha is the upscaled sky COVERAGE x FX
             // transmittance (deferred writes geometry alpha 0), aligned
             // with the colour by construction. The depth taps come from
@@ -1333,7 +1360,11 @@ void main() {
                     // in: the rest of that is the sky model's below-horizon value, a bright white - the
                     // distance washed out to a white band between 100 and 300 m.
                     vec4 plc = planet_surface(pdir, normalize(pc.sun_dir.xyz));
-                    vec3 tgt = (plc.a >= 0.999) ? atmo_sky(pdir) : plc.rgb;
+                    // (blended in over the next few hundred metres of climb. This was a switch the
+                    // moment the far field had fully come in, at ~220 m: the far distance changed
+                    // colour from one frame to the next - a sudden blue haze on the way up.)
+                    vec3 tgt = plc.rgb;
+                    if (plc.a >= 0.999) tgt = mix(plc.rgb, atmo_sky(pdir), smoothstep(220.0, 700.0, alt_m));
                     hdr_obj = mix(hdr_obj, tgt * obj_w, wf * plc.a);
                 }
             }
@@ -1356,7 +1387,7 @@ void main() {
                 float px = length(view_ray(uvp + vec2(pc.viewport.z, 0.0)) - sdir);
                 float cover = clamp((pc.atmo.x - 1.0) / 0.4, 0.0, 1.0);
                 float tclock = fract(pc.sky_color.w) / 0.49 * 64.0;
-                vec3 st = star_field(sdir, px, tclock, cover);
+                vec3 st = star_field(sdir, star_sky_dir(sdir), px, tclock, cover);
                 hdr_sky += st * (0.11 * star_k * night_k * edge_w * (1.0 - cla) * (1.0 - cla));
             }
         }

@@ -568,6 +568,8 @@ void VulkanEngine::build_menu_ui() {
             static const char* kVendor[] = { "unknown", "NVIDIA", "AMD", "Intel", "other" };
             ImGui::Text("GPU: %s (%s)", gpu_name_.c_str(), kVendor[int(gpu_vendor_)]);
             ImGui::Checkbox("Auto-pick upscaler for this GPU (at start-up)", &rt_.upscaler_auto);
+            if (ImGui::SliderFloat("FSR: least render scale", &rt_.fsr_min_render_scale, 0.5f, 1.0f, "%.2f") && rt_.fsr_backend == 1)
+                apply_render_scale();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("NVIDIA: DLSS + Ray Reconstruction + DLSS Frame Generation + Reflex.\nAMD / Intel: FSR 3.1 + FSR Frame Generation (+ AMD Anti-Lag 2).");
             if (anti_lag_supported_) ImGui::Checkbox("AMD Anti-Lag 2", &rt_.anti_lag);
         }
@@ -769,6 +771,24 @@ void VulkanEngine::build_menu_ui() {
                            0.0f, 1.0f, "%.2f");
         ImGui::Checkbox("Relaxation cone-stepping (Phase 6)",
                          &rt_.terrain_raymarch_relaxation);
+        ImGui::SeparatorText("Speed (same picture, less work)");
+        ImGui::Checkbox("Low-resolution march first", &rt_.terrain_rm_prepass);
+        {
+            const char* div_labels[] = { "2 x 2 pixels", "3 x 3 pixels", "4 x 4 pixels" };
+            int div_idx = std::clamp(rt_.terrain_rm_prepass_div, 2, 4) - 2;
+            if (ImGui::Combo("Block size of that march", &div_idx, div_labels, 3)) {
+                rt_.terrain_rm_prepass_div = div_idx + 2;
+                recreate_terrain_raymarch_lowres();
+            }
+        }
+        ImGui::SliderFloat("Fast final approach", &rt_.terrain_rm_converge, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Normal detail limit (pixels)", &rt_.terrain_rm_normal_px, 0.0f, 4.0f, "%.1f");
+        ImGui::Checkbox("Simpler relief under dense grass", &rt_.terrain_rm_relief_lite);
+        ImGui::TextDisabled("%s",
+            "March first: one ray per block of pixels walks to the ground,\n"
+            "every pixel then starts its own march there.\n"
+            "Fast approach: 0 = the old small steps close over the ground.\n"
+            "Normal limit: 0 = keep detail finer than a pixel in the lighting.");
         // TextDisabled is printf-style; passing "%s" + a string is the
         // safe way to display literal `%` characters (e.g. "50%").
         ImGui::TextDisabled("%s",

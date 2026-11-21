@@ -456,7 +456,7 @@ void VulkanEngine::tick_rocket(float dt) {
         R.trail.push_back({ glm::vec3(ex), now, R.alt, glm::vec3(-R.axis) * (30.0f * glm::clamp(float(S.throttle) * 1.6f, 0.12f, 1.0f)) });
         if (R.trail.size() > 700) R.trail.erase(R.trail.begin(), R.trail.begin() + 100);
     }
-    while (!R.trail.empty() && now - R.trail.front().t > 170.0f) R.trail.erase(R.trail.begin());
+    while (!R.trail.empty() && now - R.trail.front().t > 82.0f) R.trail.erase(R.trail.begin());
 
     // Clouds round the pad: while the engines burn close to the ground.
     const float near_ground = glm::clamp(1.0f - (float(R.pos.y) - (launch_pad_.y + kMountTop)) / 500.0f, 0.0f, 1.0f);
@@ -665,8 +665,11 @@ void VulkanEngine::rocket_build_fx(glm::vec3 eye, float px_ang, std::vector<Rock
             float s;
             const glm::vec3 p = see(glm::dvec3(wp), s);
             st.p.push_back(p);
-            st.w.push_back(min_w(p, (7.0f + 14.0f * std::sqrt(age) + 0.9f * age) * (0.35f + 0.65f * amt) * s, 1.0f));
-            const float life = glm::clamp(1.0f - age / 170.0f, 0.0f, 1.0f);
+            // (about half as wide as it was: at a minute old the trail was 400 m across. And it has
+            // thinned to nothing by the time its oldest samples are dropped - the tail used to be
+            // cut off, still a fifth opaque, twelve seconds of trail at a time.)
+            st.w.push_back(min_w(p, (6.0f + 9.0f * std::sqrt(age) + 0.25f * age) * (0.35f + 0.65f * amt) * s, 1.0f));
+            const float life = glm::clamp(1.0f - age / 80.0f, 0.0f, 1.0f);
             st.a.push_back(life * life * std::min(1.0f, age * 1.5f) * (0.25f + 0.75f * thin) * (0.3f + 0.7f * amt) * 0.95f);
         }
         strips.push_back(std::move(st));
@@ -692,7 +695,7 @@ void VulkanEngine::rocket_build_fx(glm::vec3 eye, float px_ang, std::vector<Rock
                 const glm::vec3 p = see(glm::dvec3(c + dir * r + glm::vec3(0.0f, up, 0.0f) + wind_vel_ * (0.15f * age * f)), s);
                 st.p.push_back(p);
                 st.w.push_back((7.0f + 24.0f * f + 1.5f * billow) * s * (0.6f + 0.4f * std::min(1.0f, age * 0.3f)));
-                st.a.push_back(fade * (i == 0 ? 0.0f : 1.0f) * (1.0f - 0.75f * f * f) * 0.95f);
+                st.a.push_back(fade * (i == 0 ? 0.0f : 1.0f) * (1.0f - f * f) * 0.95f);       // (thins to nothing at the tip)
             }
             strips.push_back(std::move(st));
         }

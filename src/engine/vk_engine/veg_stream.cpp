@@ -110,6 +110,7 @@ struct VulkanEngine::WvState {
     bool           nf_upload_pending = false;
     // Read-only for the workers.
     std::vector<int> pines, broads, old_pines, old_broads, bushes;
+    std::vector<int> river_shrubs;                 // river-bank scrub (world_props.h river_shrub_density)
     std::vector<float> arch_h;
     float water_level = 20.9f;
     int   octaves = 10;
@@ -276,6 +277,28 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
                 out->items.push_back(vi);
             }
     }
+    // River-bank scrub, where the river crosses this cell (the same rule as on the home tile).
+    if (!S.river_shrubs.empty() && x0 + kCell > -85.0f && x0 < 2095.0f && z0 + kCell > -110.0f && z0 < 780.0f) {
+        constexpr int kRiverGrid = 40;                              // 3.2 m cells: one try each
+        const float rs_cell = kCell / float(kRiverGrid);
+        for (int j = 0; j < kRiverGrid; ++j)
+            for (int i = 0; i < kRiverGrid; ++i) {
+                uint32_t rs = hash3(uint32_t(key.x) + 0xB1FEu, uint32_t(key.z), uint32_t(j * kRiverGrid + i));
+                auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
+                const float lx = (float(i) + u()) * rs_cell, lz = (float(j) + u()) * rs_cell;
+                const float x = x0 + lx, z = z0 + lz;
+                const float pick = u(), size = u(), rot = u(), phase = u(), which = u();
+                if (in_home(x, z)) continue;
+                if (world_river_distance(x, z) > 40.0f) continue;
+                const float h = world_ground_height(x, z, wl, S.octaves);
+                if (pick > river_shrub_density(x, z, h, ny_at(lx, lz), wl) * S.bush_density * 0.55f) continue;
+                const int ai = S.river_shrubs[size_t(which * float(S.river_shrubs.size())) % S.river_shrubs.size()];
+                VegInstance vi{};
+                vi.pos_scale = glm::vec4(x, h - 0.06f, z, 0.75f + 0.55f * size);
+                vi.rot_arch_phase = glm::vec4(rot * 6.2831853f, float(ai), phase * 6.2831853f, 0.0f);
+                out->items.push_back(vi);
+            }
+    }
     return out;
 }
 
@@ -404,7 +427,7 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
             S.arch_h.push_back(A.height);
             if (A.species == 0) (A.old ? S.old_pines : S.pines).push_back(int(a));
             else if (A.species == 1) (A.old ? S.old_broads : S.broads).push_back(int(a));
-            else if (A.species == 2) S.bushes.push_back(int(a));
+            else if (A.species == 2) (A.riverside ? S.river_shrubs : S.bushes).push_back(int(a));
         }
         S.water_level  = rt_.water_level;
         S.octaves      = std::clamp(rt_.terrain_raymarch_octaves, 4, 24);
@@ -530,7 +553,12 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
     const int rc = int(std::ceil(far_m / kCell)) + 1;
     std::vector<std::pair<float, CellKey>> want_jobs;
     bool cols_changed = false, any_change = false;
-    // Camera height: from the air the near rings are measured in 3D (no bushes under an aeroplane).
+    // Camera height: from the air the forest thins out as a whole (no bushes under an aeroplane).
+    // Not by the 3D distance to each cell, as it was: that kept the full forest in a disc under
+    // the camera whose radius shrank while climbing - seen from above, a dark circle on the
+    // ground that closed in on the spot below. Now a cell's level is the coarser of what its
+    // distance along the ground and what the camera's height call for: the thinning by
+    // height applies to everything in view at once.
     const float eye_h = std::max(eye.y - rt_.water_level - 60.0f, 0.0f);
     for (int dz = -rc; dz <= rc; ++dz)
         for (int dx = -rc; dx <= rc; ++dx) {
@@ -544,13 +572,18 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
                 if (x0 >= -kHomeHalf && x0 + kCell <= kHomeHalf && z0 >= -kHomeHalf && z0 + kCell <= kHomeHalf) continue;
             }
             WvState::Cell& c = S.cells[k];
-            const float d = std::sqrt(d_h * d_h + eye_h * eye_h);
-            int lvl = kLevels - 1;
+            const float d = std::sqrt(d_h * d_h + eye_h * eye_h);        // (the order cells are generated in)
+            int lvl = kLevels - 1, lvl_a = kLevels - 1;
             for (int l = 0; l < kLevels; ++l) {
                 // (a cell keeps its level until 8 % past the border: no flicker on a boundary)
                 const float reach = kReach[l] * ((c.level <= l) ? 1.08f : 1.0f);
-                if (d < reach) { lvl = l; break; }
+                if (d_h < reach) { lvl = l; break; }
             }
+            for (int l = 0; l < kLevels; ++l) {
+                const float reach = kReach[l] * ((c.level <= l) ? 1.08f : 1.0f);
+                if (eye_h < reach) { lvl_a = l; break; }
+            }
+            lvl = std::max(lvl, lvl_a);
             if (!c.data) {
                 c.requested = true;
                 want_jobs.push_back({ d, k });

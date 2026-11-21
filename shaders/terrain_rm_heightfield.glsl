@@ -28,6 +28,9 @@ float rm_snow_on(float d, vec2 wp, float h, float road_keep) {
     return sh;
 }
 
+// Set by calcNormal under a dense lawn (settings: simpler relief under grass): the main rills
+// only, as while marching - the side cracks and the soil texture's grain are hidden by the blades.
+bool g_rm_relief_lite = false;
 float rm_ground_detail(vec2 wp, float t, float h) {
     float w = 1.0 - smoothstep(10.0, 26.0, t);
     if (w <= 0.0 || RMDBG(1024)) return 0.0;
@@ -54,8 +57,12 @@ float rm_ground_detail(vec2 wp, float t, float h) {
     // instead of three plus a texture fetch on every near-ground step. The
     // hit point lands within ~5 cm of the full surface; the normal and the
     // shading (called without the flag) still use the full relief.
+#ifndef QLIKE_LITE
+    if (g_rm_ray_y > -1e8 && RMDBG(128)) return 0.0;       // profiling: the march without the relief
+#endif
     if (g_rm_ray_y > -1e8) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
                                               (RMDBG(32768) ? 0.0 : rm_pebbles_march(wp, t))) * road_keep + rsand, wp, h, road_keep) * w;
+    if (g_rm_relief_lite) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045) * road_keep + rsand, wp, h, road_keep) * w;
     float lod = log2(max(t * 2.0 * scene.viewport.w * 0.45 * 2048.0, 1.0));
     float disp = textureLod(u_normal[9], wp * 0.45, lod).a;
     float g2 = 1.0 - smoothstep(0.0, 0.25, abs(noise2(q * 2.7 + 3.1) * 2.0 - 1.0));  // side cracks
@@ -231,6 +238,12 @@ float terrainH_lod_pw(vec2 p, float ray_t, float tpl) {
     int oct_min  = max(2, min(oct_full, int(pc.emissive.w)));
     float lod_f  = smoothstep(pc.emissive.y, pc.emissive.z, ray_t);
     float oct_f  = float(oct_full) - lod_f * float(oct_full - oct_min);
+    // Detail finer than the pixel (settings: 'normal detail limit'): those octaves only add
+    // noise to the lighting at a distance. Same rule as the march above.
+    if (scene.rm_perf.w > 0.0) {
+        float fp = max(ray_t, 1.0) * 1.68 * scene.viewport.w;
+        oct_f = min(oct_f, max(log2(333.333 / (scene.rm_perf.w * fp)) + 1.0, float(oct_min)));
+    }
     int   oct    = int(ceil(oct_f));
     float frac   = 1.0 - (float(oct) - oct_f);
     float a = 0.0, b = 1.0;
@@ -335,7 +348,12 @@ float terrainM_shadow(vec2 p, float ray_t) {
 // unbounded (default 1500 m). Caller can pass a tighter bound — e.g.
 // the water-plane intersection distance — so the loop bails as soon
 // as any terrain hit past the bound is irrelevant.
-float raymarch(vec3 ro, vec3 rd, float t_max) {
+// Steps the last raymarch() took (profiling view, QLIKE_RM_SKIP bit 64).
+int g_rm_steps = 0;
+// `t_start`: a distance known to be clear of the ground (from the low-resolution march,
+// terrain_raymarch.frag main), 0 = none.
+float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
+    g_rm_steps = 0;
     float maxH = terrainMaxHeight();
     float t = 0.0;
     if (ro.y > maxH && rd.y >= 0.0) return -1.0;
@@ -382,9 +400,19 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
     }
 #endif
     float t_prev = t;
+    // Start where the low-resolution march got to (a little before it, by this pixel's own
+    // jitter, so the pixels of one of its texels do not share an error pattern).
+    float t_first = t;
+    if (t_start > 0.0) t = max(t, t_start - jitter * 0.5);
+    t_prev = t;
+    // Fast final approach (settings): see the step below.
+    float conv = scene.rm_perf.z;
+    float h_last = 0.0;
+    bool  real_last = false;
     for (int i = 0; i < kSteps; i++) {
 
         vec3 pos = ro + t * rd;
+        g_rm_steps = i + 1;
         // Sky escape: any ray rising above the FBM ceiling with a
         // positive y-component cannot ever hit terrain — bail early
         // instead of walking the budget out to t=1500. Saves the worst-
@@ -443,6 +471,12 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
             if (!coarse) g_rm_ray_y = pos.y;
             h = coarse ? hm : pos.y - terrainM_lod(pos.xz, t);
             g_rm_ray_y = -1e9;
+            // The low-resolution march is a bound, not a promise: should this pixel's ray
+            // already be in the ground at its start, march it from the beginning.
+            if (i == 0 && t_start > 0.0 && !coarse && h < 0.0) {
+                t = t_first; t_prev = t; t_start = 0.0;
+                continue;
+            }
             // On the road the marched surface IS the baked (levelled) one.
             // The FBM's extra octaves stand up to ~0.5 m proud of it; seen
             // from a low eye along the road they formed a lumpy, spiky
@@ -489,6 +523,23 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
         } else {
             advance = kStep_eff * h;
         }
+#ifndef QLIKE_WATER
+        // Fast final approach. Close over the ground a step of `kStep * h` shrinks with the
+        // clearance: a ray skimming the ground took dozens of ever smaller steps - most of
+        // this pass. Two steps on the real surface tell how fast the clearance is being lost;
+        // aim (a fraction `conv` of the way) at where it runs out. Limits: never more than a
+        // dozen clearances (the ground is not a plane), a few clearances only down among the
+        // stones, and an absolute cap that grows with distance. Overshooting into the ground
+        // is caught by the bisection below.
+        if (conv > 0.0 && !coarse && real_last && h > 0.0) {
+            float s = (h_last - h) / max(t - t_prev, 1e-4);
+            if (s > 1e-3) {
+                float k_rel = (t < 26.0) ? mix(3.0, 12.0, smoothstep(0.04, 0.30, h)) : 12.0;
+                advance = max(advance, min(min(conv * h / s, k_rel * h), 0.35 + 0.03 * t));
+            }
+        }
+        real_last = !coarse; h_last = h;
+#endif
         // Once h goes negative we've crossed the surface — the next step
         // would walk us back, and with rl > 1 the back-step grows enough to
         // ping-pong indefinitely until kSteps caps. Break out instead so
@@ -500,6 +551,26 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
             // ray started underground (black speckle). Bisect back to the
             // surface between the last point above it and this one.
             float ta = t_prev, tb = t;
+#ifndef QLIKE_WATER
+            if (conv > 0.0 && real_last && h_last > 0.0) {
+                // With the fast approach nearly every ray ends here, so the search has to
+                // be cheap: the clearance is known at both ends (above at ta, below at tb)
+                // and is close to a straight line between them - three steps of "where does
+                // that line cross zero" land within millimetres (seven halvings did the
+                // same). Read as the march reads it (the marching relief), so the hit lies
+                // on the surface the march was walking over.
+                float ha = h_last, hb = h;
+                for (int k = 0; k < 3; ++k) {
+                    float tm = ta + (tb - ta) * clamp(ha / (ha - hb), 0.05, 0.95);
+                    vec3  pm = ro + tm * rd;
+                    g_rm_ray_y = pm.y;
+                    float hm2 = pm.y - terrainM_lod(pm.xz, tm);
+                    g_rm_ray_y = -1e9;
+                    if (hm2 > 0.0) { ta = tm; ha = hm2; } else { tb = tm; hb = hm2; }
+                }
+                return ta + (tb - ta) * clamp(ha / (ha - hb), 0.0, 1.0) * 0.98;      // (just short of the crossing: never inside the ground)
+            }
+#endif
             for (int k = 0; k < 5; ++k) {
                 float tm = 0.5 * (ta + tb);
                 vec3  pm = ro + tm * rd;
@@ -539,6 +610,51 @@ float raymarch(vec3 ro, vec3 rd, float t_max) {
     if (final_h > 5.0 && rd.y > 0.0) return -1.0;
     return t;
 }
+
+#ifdef QLIKE_MARCH_ONLY
+// The low-resolution march (terrain_march_lo.frag.spv; frame.cpp "march pre-pass"). One ray
+// for a block of pixels: it walks until the ground comes within the width of that block
+// (`cone` = its radius per metre of distance), over an upper bound of the surface (no close
+// relief to work out), and returns the last point that was still clear by that margin. The
+// full-resolution pass starts its own march there - the walk through the open air and down
+// to the ground is done once for the block instead of once for every pixel.
+// Returns 0 = nothing known (march from the eye), 1e9 = no ground within the march's range.
+float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone) {
+    float maxH = terrainMaxHeight();
+    float t = 0.0;
+    if (ro.y > maxH && rd.y >= 0.0) return 1e9;
+    if (ro.y > maxH) t = (ro.y - maxH) / (-rd.y);
+    float t_limit = (t_max > 0.0) ? min(t_max, 1500.0) : 1500.0;
+    if (t > t_limit) return 1e9;
+    // (the eye in the ground: the full pass has its own march for that)
+    if (all(lessThan(abs(ro.xz), vec2(kHeightmapSide * 0.5 - 2.0))) && ro.y - terrainM_lod(ro.xz, 0.0) < 0.12) return 0.0;
+    int   kSteps = int(pc.tex_params.x);
+    float kStep  = abs(pc.emissive.x);
+    float t_safe = t;
+    for (int i = 0; i < kSteps; i++) {
+        vec3 pos = ro + t * rd;
+        if (rd.y > 0.0 && pos.y > maxH) return 1e9;
+        float hm = -1.0;
+        if (all(lessThan(abs(pos.xz), vec2(kHeightmapSide * 0.5 - 2.0))))
+            hm = pos.y - meshHeight(pos.xz) - 2.0;
+        else {
+            float nh = nf_height(pos.xz);
+            if (nh > -1e8) hm = pos.y - nh - 2.0;
+        }
+        float h = hm;
+        if (hm <= 0.75) {
+            g_rm_ray_y = 1e8;                         // far above: the relief's upper bound, not the relief
+            h = pos.y - terrainM_lod(pos.xz, t);
+            g_rm_ray_y = -1e9;
+        }
+        if (h < 3.0 * cone * t + 0.06) return t_safe;
+        if (t > t_limit) return 1e9;
+        t_safe = t;
+        t += kStep * mix(1.0, 2.5, smoothstep(200.0, 600.0, t)) * h;
+    }
+    return t_safe;
+}
+#endif
 
 #ifndef QLIKE_WATER
 // How far the landscape is marched. 1500 m on the ground and up to 1 km

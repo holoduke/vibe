@@ -435,6 +435,11 @@ void VulkanEngine::init_swapchain() {
     // and would crash the image-create call). Round to nearest int.
     {
         float sc = std::max(0.1f, rt_.render_scale);
+        // (FSR: never below its own floor - see fsr_min_render_scale)
+        if (rt_.fsr2_enabled && rt_.fsr_backend == 1 && sc < rt_.fsr_min_render_scale) {
+            sc = rt_.fsr_min_render_scale;
+            log::infof("[upscaler] FSR: rendering at %.0f %% of the output size (render_scale %.2f is below the FSR floor)", sc * 100.0f, rt_.render_scale);
+        }
         uint32_t rw = std::max<uint32_t>(1,
             static_cast<uint32_t>(static_cast<float>(swapchain_extent_.width)  * sc + 0.5f));
         uint32_t rh = std::max<uint32_t>(1,

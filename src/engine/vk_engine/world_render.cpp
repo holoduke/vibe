@@ -181,6 +181,49 @@ void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
+// The terrain's low-resolution march (frame.cpp "march pre-pass"): the cut-down terrain shader
+// over a target 1/tr_march_div_ the size. The push constants are those of the full-resolution
+// terrain pass in render_world() - the two must cast the same rays over the same ground.
+void VulkanEngine::render_terrain_march_prepass(VkCommandBuffer cmd) {
+    const FrameView& fv = current_frame_view_;
+    VkViewport vps{};
+    vps.width  = static_cast<float>(tr_march_extent_.width);
+    vps.height = static_cast<float>(tr_march_extent_.height);
+    vps.minDepth = 0.0f; vps.maxDepth = 1.0f;
+    // (the target rounds up to whole texels: the view covers render_extent_ exactly, so a
+    // texel is tr_march_div_ full pixels everywhere)
+    vps.width  = static_cast<float>(render_extent_.width)  / static_cast<float>(tr_march_div_);
+    vps.height = static_cast<float>(render_extent_.height) / static_cast<float>(tr_march_div_);
+    vkCmdSetViewport(cmd, 0, 1, &vps);
+    VkRect2D scissor{ {0, 0}, tr_march_extent_ };
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr_march_pipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &scene_desc_set_, 0, nullptr);
+    PushConstants pc{};
+    pc.mvp      = fv.vp;
+    pc.model    = glm::mat4(glm::inverse(glm::dmat4(fv.proj) * glm::dmat4(glm::dmat3(fv.view))));
+    pc.prev_mvp = prev_view_proj_valid_ ? prev_view_proj_ : fv.vp;
+    pc.color    = glm::vec4(0.0f, 0.0f, 11.5f, 22.0f);
+    pc.emissive = glm::vec4(
+        -std::clamp(rt_.terrain_raymarch_step_factor, 0.15f, 0.8f),
+        std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
+        std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
+                 (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
+        static_cast<float>(std::clamp(rt_.terrain_raymarch_lod_min_octaves, 2, 8)));
+    pc.tex_params = glm::vec4(
+        static_cast<float>(std::clamp(rt_.terrain_raymarch_max_steps, 60, 300)),
+        static_cast<float>(std::clamp(rt_.terrain_raymarch_shadow_steps, 16, 96)),
+        static_cast<float>(std::clamp(rt_.terrain_raymarch_octaves, 4, 24)),
+        static_cast<float>(std::clamp(rt_.terrain_raymarch_normal_octaves, 4, 32)));
+    pc.grass_params = glm::vec4(
+        std::max(0.0f, rt_.terrain_raymarch_fog_strength),
+        rt_.terrain_raymarch_relaxation ? 1.0f : 0.0f,
+        rt_.terrain_raymarch_fog_godrays ? 1.0f : 0.0f,
+        rt_.water_rt_reflections ? 1.0f : 0.0f);
+    vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+}
+
 void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd) {
     // Fullscreen-tri compose pass — sits at the START of the main
     // world color pass. Samples LR raymarch outputs and writes

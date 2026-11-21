@@ -92,6 +92,10 @@ constexpr float kLaunchSiteX = 1600.0f, kLaunchSiteZ = 830.0f, kLaunchSiteH = 36
 // The river's cut applied to a ground height h at (x, z) (shaders/world_map.glsl wm_river):
 // h itself away from the river. For heights that did not come from the formula (a saved sculpt).
 float world_river_cut(float h, float x, float z, float water_level);
+// Distance (m) from the edge of the river's channel at (x, z): negative in the channel, the
+// waterline lies about 5 m outside it. 1e9 away from the river (more than 120 m) and on any
+// other part of the planet. For what grows on the banks (world_props.cpp, veg_stream.cpp).
+float world_river_distance(float x, float z);
 
 // Builds a single triangulated terrain mesh covering the whole heightmap.
 // Used by the merged BLAS for ray traversal — RT shadows / GI / AO see

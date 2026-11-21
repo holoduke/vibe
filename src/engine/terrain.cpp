@@ -165,6 +165,28 @@ inline float river(float h, glm::vec2 wp, float wl) {
     const float t = std::clamp(0.5f + 0.125f * (cap - h), 0.0f, 1.0f);
     return glm::mix(cap, h, t) - 4.0f * t * (1.0f - t);
 }
+// Distance (m) from the edge of the river's channel at wp (negative inside it), as river()
+// above measures it - the same wandering course, the same widening toward the sea. 1e9 when
+// the river is more than 120 m away.
+inline float river_edge(glm::vec2 wp) {
+    if (wp.x < -85.0f || wp.x > 2095.0f || wp.y < -110.0f || wp.y > 780.0f) return 1e9f;
+    glm::vec2 q = wp + 12.0f * glm::vec2(std::sin(wp.y * 0.043f + 1.3f), std::sin(wp.x * 0.037f + 0.4f)) +
+                       5.0f * glm::vec2(std::sin(wp.y * 0.113f), std::sin(wp.x * 0.097f + 2.0f));
+    const float pool = 1.0f - sstep(22.0f, 55.0f, glm::distance(wp, glm::vec2(43.4f, 297.4f)));
+    q -= pool * 6.0f * glm::vec2(0.719f, 0.695f);
+    float d2 = 1e12f;
+    for (int c = 0; c < 5; ++c) {
+        const float* b = kRivBox[c];
+        if (q.x < b[0] || q.y < b[1] || q.x > b[2] || q.y > b[3]) continue;
+        for (int i = c * 5; i < c * 5 + 5; ++i) {
+            glm::vec2 a = kRiv[i], ab = kRiv[i + 1] - a;
+            glm::vec2 dv = q - (a + ab * std::clamp(glm::dot(q - a, ab) / glm::dot(ab, ab), 0.0f, 1.0f));
+            d2 = std::min(d2, glm::dot(dv, dv));
+        }
+    }
+    if (d2 > 120.0f * 120.0f) return 1e9f;
+    return std::sqrt(d2) - (7.0f + 9.0f * sstep(1450.0f, 1900.0f, wp.x) + 4.0f * pool);
+}
 inline float height_core(float h, float a, float w, float rng, float v, float wl) {
     float hl = 30.0f + (h - 30.0f) * glm::mix(0.42f, 1.12f, rng);
     hl = glm::mix(wl + 0.7f + std::max(hl - 24.0f, 0.0f) * 0.5f, hl, sstep(0.0f, 0.03f, v));
@@ -298,6 +320,10 @@ float world_forest(float x, float z, float h, float ny, float water_level) {
 
 float world_river_cut(float h, float x, float z, float water_level) {
     return globe::current().home ? wm::river(h, glm::vec2(x, z), water_level) : h;
+}
+
+float world_river_distance(float x, float z) {
+    return globe::current().home ? wm::river_edge(glm::vec2(x, z)) : 1e9f;
 }
 
 float world_ground_height(float x, float z, float water_level, int octaves) {

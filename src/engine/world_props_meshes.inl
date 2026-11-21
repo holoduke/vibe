@@ -746,6 +746,8 @@ void build_pine(LevelMesh& m, const PineParams& p, int lod, const Ico& lo, const
             o.leaf_size = 2.7f;
             o.gnarliness[0] = 0.09f;
         }
+        // Roots: pines hold theirs mostly under the needle litter; the old ones show more.
+        o.roots = (p.H > 18.0f) ? 0.80f + 0.35f * v1 : 0.30f + 0.40f * v2;
         build_ez_tree(m, o, kVegDetail[lod], p.H);
         return;
     }
@@ -815,6 +817,8 @@ void build_oak(LevelMesh& m, const OakParams& p, int lod, const Ico& lo, const I
             o.leaf_size *= 1.12f;
             o.start[1] = 0.36f;
         }
+        // Roots: a birch stands on a modest foot, an oak on a spreading one, an old oak on buttresses.
+        o.roots = (p.H > 10.5f) ? 1.10f + 0.40f * v1 : (birch ? 0.35f + 0.35f * v1 : 0.65f + 0.45f * v2);
         build_ez_tree(m, o, kVegDetail[lod], p.H * 1.2f);
         return;
     }
@@ -947,6 +951,31 @@ void build_shrub(LevelMesh& m, const BushParams& p, int lod, const Ico& lo) {
                  u3 * 6.28f, p.seed * 5.0f + float(ci) * 1.7f, 0.32f, 2.8f, 0.0f, -0.05f,
                  glm::vec2(sway(c), 3.0f), glm::min(0.45f, sway(c) + 0.08f));
     }
+}
+
+// The scrub of the river banks (world_props.cpp place_vegetation "Riverside"): a bush willow,
+// or - `alder` - a young alder: fewer, stouter, more upright stems and broad leaves.
+// `H` = height in metres at scale 1.
+void build_river_shrub(LevelMesh& m, float seed, bool alder, float H, int lod) {
+    EzTreeOptions o = ez_preset_river_shrub();
+    o.seed = uint32_t(seed * 8713.0f) + 29u;
+    const float v1 = glm::fract(seed * 5.3f), v2 = glm::fract(seed * 9.1f);
+    o.children[0] = 9 + int(v1 * 5.0f);
+    o.angle[1] = 28.0f + 16.0f * v2;                      // some stand, some sprawl
+    o.force_strength = 0.003f + 0.004f * v1;
+    o.length[1] = 15.0f * (0.85f + 0.4f * v2);
+    if (alder) {
+        o.children[0] = 5 + int(v1 * 3.0f);
+        o.children[1] = 4;
+        o.angle[1] = 20.0f + 10.0f * v2;
+        o.radius[1] = 0.55f;
+        o.force_strength = 0.001f;
+        o.leaf_kind = 0.0f;
+        o.leaf_size = 3.4f;
+        o.leaf_count = 7;
+        o.roots = 0.45f;                                  // an alder holds the bank with its roots
+    }
+    build_ez_tree(m, o, kVegDetail[lod], H);
 }
 
 void build_bush(LevelMesh& m, const BushParams& p, int lod, const Ico& lo, const Ico& tiny,

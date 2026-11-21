@@ -324,6 +324,8 @@ struct MapCtx {
 // Rotation of the blade that won the last map() call (= the hit blade
 // after the march): gives the blade face normal for lighting.
 float g_blade_rot = 0.0;
+vec3  g_blade_r   = vec3(0.5);   // that blade's hashes (colour variation)
+int   g_blade_kind = 0;          // 0 blade, 1 seed head, 2 flower
 float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     out_blade_hit = false;
     // Open air (raymarched terrain): one fetch of the baked heightmap
@@ -363,8 +365,11 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     // actual blade height (1.75 x the scaled base height covers every
     // blade); it used to be a fixed 2 m, sized for the slider's maximum -
     // an eye at 1.7 m was inside it for its whole ray.
+    // (1.12 x the scaled height is the tip of the tallest blade of the
+    // tallest grass type; + its seed head.)
+    const float bh0 = clamp(pc.grass_params.w, 0.05, 3.0) * 0.36;
     {
-        float blade_top = 1.75 * clamp(pc.grass_params.w, 0.05, 3.0) * 0.36;
+        float blade_top = 1.2 * bh0 * kGsMaxH + 0.10;
         float above = p.y - terrainY;
         if (above > blade_top + 0.3) return 0.5 * (above - blade_top);
     }
@@ -464,6 +469,17 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     float edge_soft = scene.grass_side_lit_params.w;
     float elig_gate = smoothstep(0.04, 0.30, elig);     // no noise on cleared ground (road, rock)
     if (elig + 0.175 * edge_soft * elig_gate < kEligThresh) return distToTerrain;
+    // The grass type of this patch (grass_blades.glsl): height, width, lean,
+    // dry stalks. Once per call - it changes over metres, the cell block is
+    // half a metre. Above this patch's own blades: no cell work either.
+    const float type_n = gs_type_noise(cellId * kPeriod);
+    const vec4  tp     = gs_type(type_n);
+    {
+        float top = 1.2 * bh0 * tp.x + 0.10;
+        if (lp.y > top + 0.3) return min(distToTerrain, 0.5 * (lp.y - top));
+    }
+    // Small flowers stand in drifts that follow the type field.
+    const bool flower_drift = fract(type_n * 9.0) < 0.35;
     // Drop the 8 neighbour cells past ~35 % of kMaxDist — at that
     // distance blades are sub-pixel and the neighbour offsets
     // contribute < 1 pixel of silhouette difference. Keeps centre
@@ -520,24 +536,56 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
             // Per-blade rotation + sub-cell xy offset.
             np.xz = rotate2d(r.z * kPi2) * np.xz;
             np.xz += (r.xy - 0.5) * kPeriod;
-            float bh = clamp(pc.grass_params.w, 0.05, 3.0) * 0.36 * mix(0.45, 1.0, edge_k);
+            float bh = bh0 * mix(0.45, 1.0, edge_k);
+            // The blade's own size: 0.3 .. 1 of its type's height (the short
+            // ones fill the base of the lawn), narrower when shorter but not
+            // in proportion, so a short blade is still a leaf and not a hair.
+            float s  = gs_blade_s(r.w);
+            float hs = bh * tp.x * s;
+            float ws = bh * tp.y * (0.45 + 0.55 * s);
+            // What stands on the tip: a seed head on the taller dry stalks, a
+            // small flower here and there in the green grass. Close range only
+            // (they shrink away with distance instead of sparkling).
+            int kind = 0;
+            if (ray_t < 28.0 && s > 0.55) {
+                if (tp.w > 0.5) { if (fract(r.z * 17.3) < 0.55) kind = 1; }
+                else if (flower_drift && fract(r.y * 23.7) < 0.022) kind = 2;
+            }
             // Cheap reject before the wind / silhouette maths: a blade is a
             // thin slab in its local z (distance >= |z| - thickness) and has a
-            // top (1.75 x its scale). Further than the best so far: skip.
-            if (abs(np.z) - 0.004 >= d || np.y - 1.75 * bh >= d) continue;
+            // top (1.12 x its height, + the head). Further than the best so far: skip.
+            if (abs(np.z) - (kind != 0 ? 0.022 : 0.008) >= d || np.y - (1.15 * hs + 0.08) >= d) continue;
             // Wind sway + a per-blade static lean (some blades stand, some
             // splay out), bending with height.
             float wind_t = pc.color.z + r.w * kPi2;
-            float bend   = sin(wind_t * 1.4) * pc.color.y * 0.025;
-            float lean   = (fract(r.w * 13.7 + r.z * 5.3) - 0.5) * 0.30;
-            np.x += (bend + lean * bh) * smoothstep(0.0, 1.7 * bh, np.y);
-            float scale = max(0.65, sqrt(r.w)) * bh;
+            float bend   = sin(wind_t * 1.4) * pc.color.y * 0.025 * (0.4 + 0.6 * s);
+            float lean   = (fract(r.w * 13.7 + r.z * 5.3) - 0.5) * 0.30 * tp.z * s;
+            np.x += (bend + lean * bh) * smoothstep(0.0, 1.5 * hs, np.y);
+            // Height and width scale separately: the distance is then a lower
+            // bound (x the smaller of the two), which is what the march needs.
+            float m     = min(hs, ws);
             float thick = 0.002 * (0.7 + 0.8 * fract(r.z * 7.1));
-            float bladeDist = sdGrassBlade(np / scale, thick / scale) * scale;
+            float bladeDist = sdGrassBlade(np / vec3(ws, hs, ws), thick / m) * m;
+            int   hit_kind  = 0;
+            if (kind != 0) {
+                float hf = 1.0 - smoothstep(16.0, 28.0, ray_t);
+                vec3  q  = np - vec3(0.289 * ws, 1.117 * hs, 0.0);      // the blade's tip
+                float hd;
+                if (kind == 1) {            // seed head: a slim spike
+                    q.y -= clamp(q.y, -0.012, 0.055 * hf);
+                    hd = length(q) - 0.0065 * hf;
+                } else {                    // flower: a small flattened ball
+                    q.y *= 1.8;
+                    hd = (length(q) - 0.017 * hf) / 1.8;
+                }
+                if (hd < bladeDist) { bladeDist = hd; hit_kind = kind; }
+            }
             if (bladeDist < d) {
                 d = bladeDist;
                 out_blade_hit = true;
                 g_blade_rot = r.z * kPi2;
+                g_blade_r = r.yzw;
+                g_blade_kind = hit_kind;
             }
             }
         }
@@ -751,12 +799,40 @@ void main() {
     // factor) so the base→tip gradient spans the whole blade. The old
     // /1.2 assumed the unscaled 1.2+ m blades — with lawn-scale blades
     // it left every pixel at the dark base colour.
-    float bh_max  = 1.7 * clamp(pc.grass_params.w, 0.05, 3.0) * 0.36;
+    // (x the height of this patch's grass type, so short lawn and tall grass
+    // both run the whole gradient.)
+    float type_n  = gs_type_noise(p.xz);
+    vec4  type_p  = gs_type(type_n);
+    float bh_max  = 1.7 * clamp(pc.grass_params.w, 0.05, 3.0) * 0.36 * type_p.x;
     float h_t     = min(h_above / bh_max, 1.0);
     float clump   = hash12(floor(p.xz * 0.5)) * 0.15;   // ±15% per-clump tint shift
     vec3 grassCol = mix(scene.grass_color_bottom.rgb,
                         scene.grass_color_top.rgb, h_t);
     grassCol *= 1.0 - clump;
+    // Colour by grass type and by blade. All of it is relative to the two
+    // colours of the settings, so those still set the look of the meadow.
+    vec3 straw = dot(scene.grass_color_top.rgb, vec3(0.3333)) * vec3(1.90, 1.55, 0.75);
+    {
+        float lawn_w   = 1.0 - smoothstep(0.40, 0.47, type_n);
+        float coarse_w = smoothstep(0.53, 0.60, type_n);
+        grassCol *= mix(vec3(1.0), vec3(0.95, 1.10, 0.86), lawn_w);        // fine lawn: fresh
+        grassCol *= mix(vec3(1.0), vec3(0.74, 0.86, 0.72), coarse_w);      // coarse grass: deep, dull
+        grassCol  = mix(grassCol, straw, type_p.w * mix(0.25, 0.80, h_t)); // dry stalks: straw toward the tip
+        // Each blade its own shade: yellower .. bluer, darker .. lighter, and
+        // one in fifteen has dried out.
+        vec3 br = g_blade_r;
+        grassCol *= mix(vec3(1.13, 1.02, 0.80), vec3(0.89, 1.00, 1.12), fract(br.x * 19.3)) *
+                    mix(0.82, 1.18, fract(br.y * 31.7));
+        if (fract(br.z * 41.3) < 0.066) grassCol = mix(grassCol, straw, 0.25 + 0.5 * h_t);
+    }
+    // What stands on the tip of the blade.
+    bool head = g_blade_kind != 0;
+    if (g_blade_kind == 1) {
+        grassCol = straw * mix(0.95, 1.30, fract(g_blade_r.x * 7.7));
+    } else if (g_blade_kind == 2) {
+        float fk = fract(g_blade_r.y * 57.1);
+        grassCol = fk < 0.45 ? vec3(0.60, 0.60, 0.56) : (fk < 0.80 ? vec3(0.70, 0.52, 0.06) : vec3(0.36, 0.22, 0.55));
+    }
     // Winter: snow lies on the grass, thickest on the tips.
     grassCol = mix(grassCol, vec3(0.86, 0.89, 0.93), scene_snow() * mix(0.45, 0.92, h_t));
 
@@ -780,6 +856,7 @@ void main() {
     // height, so the AO term mostly adds extinction at the very base.
     float ao_floor = clamp(scene.grass_color_bottom.w, 0.0, 1.0);
     float ao = ao_floor + (1.0 - ao_floor) * pow(h_t, 0.6);
+    if (head) ao = 1.0;      // on top of the grass: open to the sky
 
     // Per-blade "lean" variation — hash the cell ID and tilt the
     // effective n_dot_l so adjacent blades on the same flat ground

@@ -702,6 +702,19 @@ add_custom_command(
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${TR_LITE_SPV})
 
+# The low-resolution march of the terrain (QLIKE_MARCH_ONLY in the shader): the same source,
+# cut down to "how far can a ray go before the ground comes near" - one value per block of pixels.
+set(TR_MARCH_SPV "${SHADER_OUTPUT_DIR}/terrain_march_lo.frag.spv")
+add_custom_command(
+    OUTPUT ${TR_MARCH_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DQLIKE_MARCH_ONLY=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_MARCH_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader terrain_march_lo.frag (low-resolution march variant)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${TR_MARCH_SPV})
+
 set(WATER_SPV "${SHADER_OUTPUT_DIR}/water.frag.spv")
 add_custom_command(
     OUTPUT ${WATER_SPV}

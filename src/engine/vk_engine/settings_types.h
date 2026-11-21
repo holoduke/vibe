@@ -649,6 +649,12 @@ struct RtSettings {
         int   terrain_gi_bounces_cap     = 1;     // max GI bounces per ray
         float terrain_ao_final_strength  = 0.45f; // 0=no final-colour AO, 1=full
         float terrain_rm_contrast        = 1.25f; // raymarched terrain: 1 = neutral
+        // Raymarched terrain, speed (Graphics > terrain; shaders: scene.rm_perf).
+        bool  terrain_rm_prepass         = true;  // march at low resolution first; the full pass starts from it
+        int   terrain_rm_prepass_div     = 2;     // that march's pixel: 2, 3 or 4 full pixels wide
+        float terrain_rm_converge        = 0.8f;  // fast final approach to the ground (0 = off, the old small steps)
+        float terrain_rm_normal_px       = 1.5f;  // normal: drop detail finer than this many pixels (0 = keep all)
+        bool  terrain_rm_relief_lite     = true;  // under dense grass the normal reads the main rills only
         // Specular reflection on flagged surfaces (the pedestal).
         bool  reflections_enabled = true;
         float reflection_strength = 0.5f;
@@ -750,6 +756,10 @@ struct RtSettings {
         // a reasonable default that recovers most lost detail without
         // ringing on edges. >1 looks deliberately punchy / over-sharpened.
         float compose_sharpen_strength = 0.55f;
+        // FSR path only (AMD / no DLSS): the least the scene is rendered at, as a share of the
+        // output size, whatever 'render_scale' says. FSR needs more pixels than DLSS to give a
+        // sharp picture: at half size it is soft and blocky, most of all in grass and leaves.
+        float fsr_min_render_scale = 0.77f;
         // Screen-space sun shafts (crepuscular rays) in compose.frag.
         // Radial accumulation from each pixel toward the sun's screen
         // position, depth-gated to only contribute from sky pixels —

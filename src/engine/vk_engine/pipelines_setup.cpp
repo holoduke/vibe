@@ -305,6 +305,19 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
             terrain_raymarch_lite_lr_pipeline_ = vkpipe::build_graphics_pipeline(device_, li);
         }
     }
+    // The low-resolution march (frame.cpp "march pre-pass"): a cut-down build of the same
+    // shader, one R32F output, no depth. Small: the driver compiles it at once.
+    tr_march_module_ = vkpipe::load_shader_module(device_, sd + "/terrain_march_lo.frag.spv");
+    if (tr_march_module_) {
+        vkpipe::GraphicsPipelineConfig mo = cfg;
+        mo.frag = tr_march_module_;
+        mo.color_formats = { VK_FORMAT_R32_SFLOAT };
+        mo.depth_format = VK_FORMAT_UNDEFINED;
+        mo.depth_test = false;
+        mo.depth_write = false;
+        mo.enable_vrs = false;
+        tr_march_pipeline_ = vkpipe::build_graphics_pipeline(device_, mo);
+    }
     // Three builds, each on a thread of its own (see the header): collected by
     // finish_terrain_raymarch_pipeline().
     const VkDevice dev = device_;
@@ -366,6 +379,10 @@ void VulkanEngine::destroy_terrain_raymarch_pipeline() {
     if (terrain_raymarch_lite_pipeline_)    vkDestroyPipeline(device_, terrain_raymarch_lite_pipeline_, nullptr);
     if (terrain_raymarch_lite_lr_pipeline_) vkDestroyPipeline(device_, terrain_raymarch_lite_lr_pipeline_, nullptr);
     if (terrain_raymarch_lite_module_)      vkDestroyShaderModule(device_, terrain_raymarch_lite_module_, nullptr);
+    if (tr_march_pipeline_) vkDestroyPipeline(device_, tr_march_pipeline_, nullptr);
+    if (tr_march_module_)   vkDestroyShaderModule(device_, tr_march_module_, nullptr);
+    tr_march_pipeline_ = VK_NULL_HANDLE;
+    tr_march_module_ = VK_NULL_HANDLE;
     terrain_raymarch_lite_pipeline_ = terrain_raymarch_lite_lr_pipeline_ = VK_NULL_HANDLE;
     terrain_raymarch_lite_module_ = VK_NULL_HANDLE;
     if (terrain_raymarch_lr_pipeline_) {
@@ -533,6 +550,13 @@ bool VulkanEngine::tr_use_lowres() const {
            rt_.terrain_raymarch_scale < 0.999f;
 }
 
+// The low-resolution march runs ahead of the full-resolution terrain pass (not with the
+// low-resolution terrain: that pass is cheap already and has no depth copy to line up with).
+bool VulkanEngine::tr_march_prepass_on() const {
+    return rt_.terrain_rm_prepass && rt_.terrain_raymarch_enabled && !tr_use_lowres() &&
+           tr_march_pipeline_ != VK_NULL_HANDLE && tr_march_view_ != VK_NULL_HANDLE;
+}
+
 void VulkanEngine::init_terrain_raymarch_lowres() {
     // Compute the scaled extent. Floor to int, min 1.
     float s = std::clamp(rt_.terrain_raymarch_scale, 0.25f, 1.0f);
@@ -656,6 +680,60 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         vk_check(vkCreateSampler(device_, &si, nullptr, &tr_lr_depth_sampler_),
                  "tr_lr_depth_sampler");
+    }
+
+    // The low-resolution march's target: R32F, a whole number of full pixels per texel.
+    {
+        tr_march_div_ = std::clamp(rt_.terrain_rm_prepass_div, 2, 4);
+        tr_march_extent_ = { (render_extent_.width  + uint32_t(tr_march_div_) - 1) / uint32_t(tr_march_div_),
+                             (render_extent_.height + uint32_t(tr_march_div_) - 1) / uint32_t(tr_march_div_) };
+        VkImageCreateInfo ici{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = nullptr, .flags = 0,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = VK_FORMAT_R32_SFLOAT,
+            .extent = { tr_march_extent_.width, tr_march_extent_.height, 1 },
+            .mipLevels = 1, .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0, .pQueueFamilyIndices = nullptr,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        vk_check(vmaCreateImage(allocator_, &ici, &aci, &tr_march_image_, &tr_march_alloc_, nullptr), "tr_march image");
+        VkImageViewCreateInfo vci{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = nullptr, .flags = 0, .image = tr_march_image_,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R32_SFLOAT,
+            .components = {},
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0, .levelCount = 1,
+                .baseArrayLayer = 0, .layerCount = 1,
+            },
+        };
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_march_view_), "tr_march view");
+        // In SHADER_READ_ONLY from the start: the terrain shader's binding must be valid
+        // on frames the march is switched off (it is not read then).
+        vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
+            vkinit::transition_image(cb, tr_march_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        });
+        VkDescriptorImageInfo mi{};
+        mi.sampler     = tr_lr_depth_sampler_;      // NEAREST, clamped (the shader gathers texels)
+        mi.imageView   = tr_march_view_;
+        mi.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet mw{};
+        mw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        mw.dstSet = scene_desc_set_;
+        mw.dstBinding = 34;
+        mw.descriptorCount = 1;
+        mw.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        mw.pImageInfo = &mi;
+        vkUpdateDescriptorSets(device_, 1, &mw, 0, nullptr);
     }
 
     // Write descriptor bindings 9, 10, 11. These are stable across
@@ -830,6 +908,15 @@ void VulkanEngine::recreate_vrs_attachment() {
 }
 
 void VulkanEngine::destroy_terrain_raymarch_lowres() {
+    if (tr_march_view_) {
+        vkDestroyImageView(device_, tr_march_view_, nullptr);
+        tr_march_view_ = VK_NULL_HANDLE;
+    }
+    if (tr_march_image_) {
+        vmaDestroyImage(allocator_, tr_march_image_, tr_march_alloc_);
+        tr_march_image_ = VK_NULL_HANDLE;
+        tr_march_alloc_ = nullptr;
+    }
     if (tr_lr_color_view_) {
         vkDestroyImageView(device_, tr_lr_color_view_, nullptr);
         tr_lr_color_view_ = VK_NULL_HANDLE;

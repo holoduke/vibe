@@ -45,9 +45,11 @@ struct WorldPropParams {
     int   bush_attempts   = 500000;
     float tree_density    = 1.0f;   // multiplies the forest density field
     float bush_density    = 1.0f;
+    int   river_attempts  = 220000; // tries at the river-bank scrub (a narrow strip: most miss)
+    int   max_river_shrubs = 6000;
 };
 
-struct WorldPropStats { int formations = 0, boulders = 0, pines = 0, broadleaf = 0, bushes = 0, old = 0; };
+struct WorldPropStats { int formations = 0, boulders = 0, pines = 0, broadleaf = 0, bushes = 0, old = 0, river_shrubs = 0; };
 
 // Vegetation archetype: one species variant with a 4-level LOD chain in
 // local space (base at origin, y up). Vertex uv = (wind weight, material:
@@ -57,11 +59,19 @@ constexpr int kVegRtLevels = 4;   // BLAS detail levels for ray tracing (one per
 struct VegArchetype {
     int species = 0;                 // 0 pine, 1 broadleaf, 2 bush, 3 rock
     bool old = false;                // old-growth tree (placed in old-growth stands only)
+    bool riverside = false;          // river-bank scrub: planted along the river only (species 2)
     int  baked = -1;                 // rock sculpted + baked in Blender (tools/rocks): its number, else -1
     game::LevelMesh lods[kVegLods];
     float radius = 1.0f;             // bounding-sphere radius (scale 1)
     float height = 1.0f;
 };
+// River-bank scrub: how much of it grows at (x, z), 0..1 - the rule shared by the home
+// tile's planting (world_props.cpp) and the streamed world beyond it (veg_stream.cpp).
+// `h` ground height, `ny` the ground normal's y, `wl` the water level. The river leaves the
+// lake by the castle among reeds and runs to the sea: scrub is sparse near the castle and
+// takes the banks over downstream.
+float river_shrub_density(float x, float z, float h, float ny, float wl);
+
 // GPU instance (std430, 32 B): .xyz pos, .w scale | .x rotY, .y archetype,
 // .z wind phase, .w vertical scale (0 = 1).
 struct VegInstance {

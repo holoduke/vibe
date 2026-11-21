@@ -94,6 +94,9 @@ layout(set = 0, binding = 13) uniform sampler2D u_grass_mask;
 // Depth pre-pass copy (objects, vegetation, rocks, castle): pixels they
 // cover never need the terrain marched behind them.
 layout(set = 0, binding = 27) uniform sampler2D u_prepass_depth;
+// The low-resolution march (binding 34, R32F): for each block of pixels, how far a ray can
+// go before the ground comes near (terrain_rm_heightfield.glsl raymarch_lo).
+layout(set = 0, binding = 34) uniform sampler2D u_march_lo;
 // Fog wisp pattern (R8 256², REPEAT). One textureLod() replaces the
 // 3-octave noise2() weighted sum the fog density + godray probe
 // loops used to compute per-tap. UV maps q→texture as `q / 16.0` so
@@ -678,7 +681,10 @@ void main() {
     // the horizon - beyond the landscape the planet itself is drawn (compose.frag).
     // (No further than the terrain march reaches: past that there is no shore to bound it,
     // and from above 1.5 km it was a pale disc of "sea" under the camera.)
-    if (ro.y > 220.0 && t_water_plane > rm_far_limit(ro.y)) t_water_plane = -1.0;
+    // (The cut comes in from the horizon: at 220 m it lies beyond it and closes in to the march's
+    // range by 1200 m. It used to drop to that range the moment the camera passed 220 m - all
+    // the sea between 23 km and the horizon turned into the far field's colour in one frame.)
+    if (ro.y > 220.0 && t_water_plane > rm_far_limit(ro.y) * mix(3.0, 1.0, smoothstep(220.0, 1200.0, ro.y))) t_water_plane = -1.0;
 #else /* QLIKE_WATER */
     // Distance to the water plane is just |vWPos - camera|. Replaces the
     // analytic ray-vs-plane intersection (which was algebraically equal
@@ -706,6 +712,16 @@ void main() {
     // already owns the ground this frame; we just shade water.
     bool water_only = true;
 #endif /* QLIKE_WATER */
+#ifdef QLIKE_MARCH_ONLY
+    {
+        // This build IS the low-resolution march: one distance per block of pixels, nothing else.
+        bool  air_lo = ro.y > terrainMaxHeight() + 60.0;
+        float r = (water_only || air_lo) ? 0.0
+                : raymarch_lo(ro, rd, t_water_plane, 1.68 * scene.viewport.w * scene.rm_perf.y * 0.75);
+        outColor = vec4(r, 0.0, 0.0, 0.0);
+        return;
+    }
+#endif
     // The FBM heightfield IS the mesh terrain (the CDLOD mesh is baked
     // from this exact noise), so the water's FBM-driven shore depth,
     // showthrough and reflection all agree with the rasterised ground.
@@ -756,8 +772,15 @@ void main() {
     // only through the empty-space bug fixed in terrain_rm_heightfield.glsl, and the far march for
     // every pixel cost five times as much.)
     bool air = !water_only && ro.y > terrainMaxHeight() + 60.0;
+    // Where the low-resolution march got to: the nearest of the four blocks round this
+    // pixel (each is clear to there by more than its own width). 1e9: no ground in range.
+    float t_start = 0.0;
+    if ((int(scene.rm_perf.x) & 1) != 0 && pc.emissive.x < 0.0 && !water_only && !air) {
+        vec4 g4 = textureGather(u_march_lo, gl_FragCoord.xy / (scene.rm_perf.y * vec2(textureSize(u_march_lo, 0))), 0);
+        t_start = min(min(g4.x, g4.y), min(g4.z, g4.w));
+    }
     float t = water_only ? raymarchMesh(ro, rd, t_water_plane)
-                         : (air ? -1.0 : raymarch(ro, rd, t_stop));
+                         : ((air || t_start > 1e8) ? -1.0 : raymarch(ro, rd, t_stop, t_start));
     if (!air && obj_stop && t < 0.0) discard;      // an object owns this pixel
     // From the air (above 1 km): the landscape beyond the normal march's reach.
     if (t < 0.0 && !water_only && (air || !obj_stop)) {
@@ -766,6 +789,21 @@ void main() {
         if (obj_stop && t < 0.0) discard;
     }
 
+#if !defined(QLIKE_WATER) && !defined(QLIKE_LITE)
+    if (RMDBG(64)) {
+        // Profiling (QLIKE_RM_SKIP bit 64): the march alone. Nothing is shaded; the picture
+        // shows how many steps each pixel's march took (black 0 .. white 64, red beyond).
+        if (t < 0.0) discard;
+        vec4 cd = pc.mvp * vec4(ro + rd * t, 1.0);
+        gl_FragDepth = min(cd.z / max(cd.w, 1e-4), 0.999989);
+        float sc = float(g_rm_steps) / 64.0;
+        outColor = vec4(sc > 1.0 ? vec3(1.0, 0.0, 0.0) * min(sc - 1.0, 1.0) + vec3(0.0, 0.0, 0.2) : vec3(sc), 1.0);
+        outMotion = vec2(0.0);
+        outGBuffer0 = vec4(clamp(outColor.rgb, vec3(0.0), vec3(1.0)), 8.0 / 255.0);
+        outGBuffer1 = vec4(0.5, 0.5, 0.7, 0.0);
+        return;
+    }
+#endif
     // Resolve water vs terrain ordering for the rest of the shader.
     float t_water = -1.0;
     if (t_water_plane > 0.0 && (t < 0.0 || t_water_plane < t)) {

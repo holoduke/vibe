@@ -67,7 +67,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 18 + kSpomMaterialCount },
+            kTextureCount * 2 + 19 + kSpomMaterialCount },      // + the terrain's low-resolution march (34)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -87,7 +87,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[34]{};
+    VkDescriptorSetLayoutBinding bindings[35]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -334,11 +334,15 @@ void VulkanEngine::init_descriptors() {
     bindings[33].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[33].descriptorCount = 1;
     bindings[33].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    // Binding 34: the terrain's low-resolution march (R32F; pipelines_setup.cpp
+    // init_terrain_raymarch_lowres) - the full-resolution terrain pass starts from it.
+    bindings[34] = bindings[31];
+    bindings[34].binding = 34;
 
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 34, .pBindings = bindings,
+        .bindingCount = 35, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -902,6 +906,11 @@ void VulkanEngine::update_scene_ubo() {
             data.globe_frac[i] = glm::vec4(fracs[i][0], fracs[i][1], fracs[i][2], 0.0f);
         }
     }
+    // Raymarched terrain, speed settings (terrain_raymarch.frag; scene_ubo.glsl rm_perf).
+    data.rm_perf = glm::vec4((tr_march_prepass_on() ? 1.0f : 0.0f) + (rt_.terrain_rm_relief_lite ? 2.0f : 0.0f),
+                             float(tr_march_div_),
+                             rt_.terrain_rm_converge,
+                             rt_.terrain_rm_normal_px);
     data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_rain_,
                                    std::min(env_wet_, 0.99f) + std::floor(glm::clamp(env_snow_, 0.0f, 1.0f) * 255.0f),   // fract = wet, whole = snow (scene_ubo.glsl)
                                    0.0f);

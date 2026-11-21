@@ -228,6 +228,30 @@ EzTreeOptions ez_preset_bush() {
     return o;
 }
 
+EzTreeOptions ez_preset_river_shrub() {
+    // The scrub of a river bank: a sallow (bush willow). Many long, whippy stems from one
+    // stool, rising steeply and then arching outward under their own weight, forking once or
+    // twice, with small narrow leaves all along the outer two thirds - an open, airy dome
+    // taller than a man, quite unlike the dense round bushes of the forest edge.
+    EzTreeOptions o;
+    o.seed = 7717; o.evergreen = false; o.levels = 2;
+    const float angle[4] = { 0, 34, 40, 40 };           const int children[4] = { 11, 3, 0, 0 };
+    const float gn[4] = { 0.06f, 0.10f, 0.16f, 0.0f };   const float len[4] = { 2.2f, 15.0f, 8.0f, 1.0f };
+    const float rad[4] = { 0.50f, 0.42f, 0.55f, 0.6f };  const int sec[4] = { 2, 7, 4, 1 };
+    const int seg[4] = { 5, 4, 3, 3 };                   const float st[4] = { 0, 0.0f, 0.30f, 0.3f };
+    const float tp[4] = { 0.4f, 0.72f, 0.8f, 0.7f };
+    for (int i = 0; i < 4; ++i) {
+        o.angle[i] = angle[i]; o.children[i] = children[i]; o.gnarliness[i] = gn[i]; o.length[i] = len[i];
+        o.radius[i] = rad[i]; o.sections[i] = sec[i]; o.segments[i] = seg[i]; o.start[i] = st[i];
+        o.taper[i] = tp[i]; o.twist[i] = 0.0f;
+    }
+    o.force_dir = glm::vec3(0.0f, -1.0f, 0.0f);          // the stems bow over
+    o.force_strength = 0.0045f;
+    o.leaf_angle = 58; o.leaf_count = 9; o.leaf_start = 0.22f; o.leaf_size = 3.0f; o.leaf_size_variance = 0.45f;
+    o.leaf_double = true; o.leaf_kind = 2.0f;            // the small-leaf cell
+    return o;
+}
+
 void build_ez_tree(
 game::LevelMesh& m, const EzTreeOptions& o, float max_detail, float target_height) {
     Gen g{ o, Rng{ o.seed * 2654435761u + 977u }, {}, {}, {} };
@@ -275,6 +299,120 @@ game::LevelMesh& m, const EzTreeOptions& o, float max_detail, float target_heigh
                 const uint32_t v3 = v1 + uint32_t(segs), v4 = v2 + uint32_t(segs);
                 m.idx.insert(m.idx.end(), { v1, v3, v2, v2, v3, v4 });
             }
+    }
+
+    // ---- Roots: a flared foot round the trunk and roots running out of it into the ground ----
+    // (this engine's own, not part of EZ-Tree.) The trunk used to end as a plain cylinder
+    // stuck in the soil. Now its lowest part widens into buttresses, and from each buttress a
+    // root arches out and dives into the ground, some of them forking. How many, how long and
+    // how heavy follows `o.roots` and the tree's own random numbers (a separate stream: the
+    // crown stays that of the seed). They rise well clear of the ground near the trunk (the
+    // drawn ground can stand up to ~0.25 m above the tree's base close to the camera) and end
+    // deep enough to stay buried on a slope. All of it is ordinary bark tube (priority near
+    // 0), so it is lit, shadowed and ray traced with the trunk.
+    if (o.roots > 0.01f && !g.branches.empty() && !g.branches[0].sections.empty()) {
+        Rng rr{ o.seed * 747796405u + 2891336453u };
+        const float R  = glm::clamp(g.branches[0].sections[0].radius * sc, 0.02f, 0.60f);     // trunk radius at the ground (m)
+        const float k  = glm::clamp(o.roots, 0.0f, 1.5f);
+        const int   n  = std::clamp(3 + int(k * 3.0f + rr.u() * 2.0f), 3, 8);
+        struct Root { float ang, len, r0, hs; };
+        std::vector<Root> roots;
+        const float a0 = rr.u() * 2.0f * kPi;
+        for (int j = 0; j < n; ++j) {
+            Root r;
+            r.ang = a0 + 2.0f * kPi * (float(j) + rr.random(0.32f, -0.32f)) / float(n);
+            const float big = rr.u();                                        // some roots are much heavier than others
+            r.len = R * (2.2f + 3.6f * big) * (0.55f + 0.55f * k) + 0.25f;
+            r.r0  = R * (0.24f + 0.26f * big) * (0.70f + 0.30f * std::min(k, 1.0f));
+            r.hs  = std::max(0.30f, R * (0.55f + 0.75f * big) * (0.6f + 0.5f * k));
+            roots.push_back(r);
+        }
+        const bool fine = max_detail > 0.3f;
+
+        // The flared foot: a sleeve round the trunk's first stretch, bulging toward each root.
+        {
+            const float sec_len = (g.branches[0].sections.size() > 1)
+                ? glm::length(g.branches[0].sections[1].origin - g.branches[0].sections[0].origin) * sc : 3.0f * R;
+            const float Hf = std::min(R * (2.2f + 1.2f * k), sec_len * 0.95f);
+            const int segs = fine ? 16 : 8;
+            const float ys[6] = { -0.55f, 0.0f, 0.14f, 0.34f, 0.64f, 1.0f };       // x Hf (the first: buried, in metres)
+            // (the top ring lies just INSIDE the trunk: the sleeve then leaves the bark along a slanting
+            // line where it has almost no flare left, and no ledge shows where it ends)
+            const uint32_t base = uint32_t(m.verts.size());
+            for (int i = 0; i < 6; ++i) {
+                const float y = ys[i] < 0.0f ? ys[i] : ys[i] * Hf;
+                const float f = ys[i] <= 0.0f ? 1.0f : std::exp(-y / (0.9f * R + 0.25f * Hf)) * (1.0f - ys[i]);
+                for (int j = 0; j < segs; ++j) {
+                    const float a = 2.0f * kPi * float(j) / float(segs);
+                    float lobe = 0.0f;
+                    for (const Root& r : roots) {
+                        const float c = std::max(std::cos(a - r.ang), 0.0f);
+                        lobe = std::max(lobe, std::pow(c, 5.0f) * (r.r0 / (0.5f * R)));
+                    }
+                    const float rad = std::min(R * (0.985f + f * (0.19f + 0.62f * lobe) * (0.55f + 0.45f * k)), 0.97f);
+                    const glm::vec3 nrm(std::cos(a), 0.0f, std::sin(a));
+                    push(m, glm::vec3(0.0f, y, 0.0f) + nrm * rad, nrm, 0.0f + rad, 8.0f);
+                }
+            }
+            for (int i = 0; i + 1 < 6; ++i)
+                for (int j = 0; j < segs; ++j) {
+                    const uint32_t v1 = base + uint32_t(i * segs + j), v2 = base + uint32_t(i * segs + (j + 1) % segs);
+                    const uint32_t v3 = v1 + uint32_t(segs), v4 = v2 + uint32_t(segs);
+                    m.idx.insert(m.idx.end(), { v1, v3, v2, v2, v3, v4 });
+                }
+        }
+
+        // One root: a tube from (d0, y0) at angle `ang`, `len` long, arching down into the ground.
+        auto emit_root = [&](float ang, float d0, float y0, float len, float r0, float prio, float bend) {
+            // (the random numbers are drawn whether or not this detail level keeps the root:
+            // every level of one tree must grow the same roots)
+            const float ph = rr.u() * 6.28f, wig = rr.random(0.30f, 0.10f);
+            if (sp(prio) > max_detail) return;
+            const int N = fine ? 7 : 4, segs = fine ? 6 : 4;
+            const float sink = 0.40f + 0.22f * len;                               // how deep the tip ends
+            std::vector<glm::vec3> c(static_cast<size_t>(N + 1));
+            for (int i = 0; i <= N; ++i) {
+                const float t = float(i) / float(N);
+                const float a = ang + bend * t + wig * std::sin(t * 4.1f + ph) * t;
+                const float d = d0 + len * t;
+                const float y = y0 * (1.0f - t) * (1.0f - t) - sink * t * t + 0.05f * R * std::sin(t * 9.0f + ph) * (1.0f - t);
+                c[size_t(i)] = glm::vec3(std::cos(a) * d, y, std::sin(a) * d);
+            }
+            const uint32_t base = uint32_t(m.verts.size());
+            const float qp = qprio(sp(prio));
+            for (int i = 0; i <= N; ++i) {
+                const float t = float(i) / float(N);
+                const glm::vec3 tan = glm::normalize(c[size_t(std::min(i + 1, N))] - c[size_t(std::max(i - 1, 0))]);
+                const glm::vec3 side = glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), tan));
+                const glm::vec3 upv = glm::cross(tan, side);
+                const float rad = glm::clamp(r0 * (1.0f - 0.80f * t), 0.006f, 0.97f);
+                for (int j = 0; j < segs; ++j) {
+                    const float a = 2.0f * kPi * float(j) / float(segs);
+                    const glm::vec3 nrm = glm::normalize(side * std::cos(a) + upv * std::sin(a));
+                    push(m, c[size_t(i)] + nrm * rad, nrm, qp + rad, 8.0f);
+                }
+            }
+            for (int i = 0; i < N; ++i)
+                for (int j = 0; j < segs; ++j) {
+                    const uint32_t v1 = base + uint32_t(i * segs + j), v2 = base + uint32_t(i * segs + (j + 1) % segs);
+                    const uint32_t v3 = v1 + uint32_t(segs), v4 = v2 + uint32_t(segs);
+                    m.idx.insert(m.idx.end(), { v1, v3, v2, v2, v3, v4 });
+                }
+        };
+        for (const Root& r : roots) {
+            const float bend = rr.random(0.45f, -0.45f);
+            const float prio = 0.02f + 0.10f * rr.u();
+            emit_root(r.ang, 0.45f * R, r.hs, r.len, r.r0, prio, bend);
+            // A side root forking off the heavier ones.
+            const float fk = rr.u(), fs = rr.u(), fl = rr.u();
+            const float t = 0.30f + 0.25f * fs;
+            const float d = 0.45f * R + r.len * t;
+            const float y = r.hs * (1.0f - t) * (1.0f - t) - (0.40f + 0.22f * r.len) * t * t;
+            if (k > 0.5f && fk < 0.30f + 0.25f * k)
+                emit_root(r.ang + bend * t, d, y, r.len * (0.35f + 0.35f * fl), r.r0 * (1.0f - 0.80f * t) * 0.85f,
+                          0.10f + 0.12f * fl, (fs < 0.5f ? 1.0f : -1.0f) * (0.7f + 0.5f * fl));
+            else { rr.u(); rr.u(); }        // (keeps the stream in step with the branch taken above)
+        }
     }
 
     // ---- Leaves: cards. A second, crossed card per leaf joins in at the

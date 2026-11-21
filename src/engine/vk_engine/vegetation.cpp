@@ -248,6 +248,7 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
     write_veg_hiz_binding();
 
     log::infof("[veg] %d old-growth trees", st.old);
+    log::infof("[veg] %d river-bank shrubs", st.river_shrubs);
     log::infof("[veg] %u instances (%d pines, %d broadleaf, %d bushes, %d rock formations, "
                "%d boulders), %zu archetypes; LOD tris per archetype avg %zu/%zu/%zu/%zu",
                veg_count_, st.pines, st.broadleaf, st.bushes, st.formations, st.boulders,

@@ -370,7 +370,9 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
                                // ... and the weather field of clouds.comp (coverage, cloud size, metres the wind has carried it)
                                glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), glm::clamp(rt_.cloud_scale, 0.3f, 4.0f), float(cloud_travel_),
                                // the layer's base (m): from above it the clouds are in front of the land
-                               (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f) : 1.0e9f, 0.0f, 0.0f, 0.0f,
+                               (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f) : 1.0e9f, 
+                               // the hour angle: how far the sky has turned (the stars, compose.frag star_sky_dir)
+                               rt_.day_night_enabled ? (rt_.time_of_day - 12.0f) / 24.0f * 6.2831853f : 0.0f, 0.0f, 0.0f,
                                // the sunlight as the landscape gets it (scene.sun_color: golden-hour colour x intensity)
                                last_sun_rgb_.x * rt_.sun_intensity, last_sun_rgb_.y * rt_.sun_intensity, last_sun_rgb_.z * rt_.sun_intensity, 0.0f };
         vkCmdUpdateBuffer(frame.command_buffer, exposure_buf_, 16, sizeof(pl), pl);
@@ -650,6 +652,33 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     }
     prof_mark(frame.command_buffer, "terrain_raymarch_lr");
 
+    // ---------- Pass 0.6: the terrain's low-resolution march ("march pre-pass") ----------
+    // One ray per block of pixels finds how far it can go before the ground comes near;
+    // the full-resolution terrain pass (in the world pass below) starts its march there.
+    if (tr_march_prepass_on()) {
+        VkCommandBuffer c = frame.command_buffer;
+        vkinit::transition_image(c, tr_march_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkClearValue mc{};
+        mc.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };          // 0 = nothing known: march from the eye
+        VkRenderingAttachmentInfo m_att =
+            vkinit::color_attachment_info(tr_march_view_, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingInfo m_ri{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr, .flags = 0,
+            .renderArea = { {0, 0}, tr_march_extent_ },
+            .layerCount = 1, .viewMask = 0,
+            .colorAttachmentCount = 1, .pColorAttachments = &m_att,
+            .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
+        };
+        vkCmdBeginRendering(c, &m_ri);
+        render_terrain_march_prepass(c);
+        vkCmdEndRendering(c);
+        vkinit::transition_image(c, tr_march_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        prof_mark(c, "terrain_march_lo");
+    }
+
     auto color_att = vkinit::color_attachment_info(scene_color_view_,
                                                    &clear_color,
                                                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -899,16 +928,21 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
 
     prof_mark(frame.command_buffer, "taa");
 
-    // ---------- Pass 2.15: sky fill (DLSS path) ----------
+    // ---------- Pass 2.15: sky fill (DLSS and FSR 3 paths) ----------
     // Put the real sky (atmosphere + clouds) into the render-res scene
     // colour BEFORE DLSS. Sky coverage lives in the colour's alpha, written
     // at the same jittered positions as the colour, so the blend
     // (colour += (sky - placeholder) * dst.alpha) is exact per pixel. DLSS
     // then upscales a finished image; compose no longer rebuilds the sky
     // at silhouettes from a mismatched depth / upscaled alpha (dark rims).
+    // (FSR 3 too. Without it the sky was rebuilt after the upscaler from the jittered low-
+    // resolution depth, which does not line up with FSR's anti-aliased edges: every object
+    // against the sky kept a rim of the placeholder colour - bright bleeding, worst at night.)
     atmo_dispatched_this_frame_ = false;
-    if (rt_.fsr2_enabled && rt_.fsr_backend == 2 && dlss_active() &&
+    sky_filled_this_frame_ = false;
+    if (rt_.fsr2_enabled && ((rt_.fsr_backend == 2 && dlss_active()) || (rt_.fsr_backend == 1 && fsr3_context_valid_)) &&
         deferred_lighting_active_ && sky_fill_pipeline_ != VK_NULL_HANDLE) {
+        sky_filled_this_frame_ = true;
         VkCommandBuffer cmd = frame.command_buffer;
         if (rt_.sky_mode == 1) {
             dispatch_atmosphere(cmd);
@@ -1355,7 +1389,9 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         // tone.x: tonemap mode, +8 = colour is DLSS output whose alpha
         // carries exact sky coverage (deferred writes geometry alpha 0).
         pc_data.tone = glm::vec4(float(rt_.tonemap_mode) +
-                                     ((compose_uses_dlss_ && deferred_lighting_active_) ? 8.0f : 0.0f),
+                                     ((compose_uses_dlss_ && deferred_lighting_active_) ? 8.0f : 0.0f) +
+                                     // +16 = FSR 3 output with the sky already in it (no coverage in its alpha)
+                                     ((compose_uses_fsr3_ && sky_filled_this_frame_ && !compose_uses_dlss_) ? 16.0f : 0.0f),
                                  (rt_.fog_volumetric && fog_pipeline_) ? std::max(20.0f, rt_.fog_max_dist) : 0.0f,
                                  hdr_active_ ? std::max(80.0f, rt_.hdr_paper_nits) : 0.0f,
                                  std::max(rt_.hdr_peak_nits, rt_.hdr_paper_nits));

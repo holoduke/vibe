@@ -44,11 +44,15 @@ struct EzTreeOptions {
     float leaf_size_variance = 0.7f;
     bool  leaf_double = true;        // two crossed cards per leaf
     float leaf_kind = 0.0f;          // atlas cell: 0 oak, 1 spruce, 2 birch, 3 pine (odd = conifer)
+    // Roots at the foot of the trunk (eztree.cpp, Roots): 0 = none, 1 = a well rooted tree,
+    // more for old giants. The flared foot and the roots that run out of it.
+    float roots = 0.0f;
 };
 
 EzTreeOptions ez_preset_oak();
 EzTreeOptions ez_preset_pine();
 EzTreeOptions ez_preset_bush();
+EzTreeOptions ez_preset_river_shrub();   // willow / alder scrub of the river banks
 
 // Continuous level of detail. Every element of a tree (a branch, a leaf
 // card) has a PRIORITY in 0..1: the trunk 0, limbs low, twigs high, leaves

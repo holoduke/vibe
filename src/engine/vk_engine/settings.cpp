@@ -514,7 +514,13 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_gi_bounces_cap", s.rt_.terrain_gi_bounces_cap);
     f("terrain_ao_final_strength", s.rt_.terrain_ao_final_strength);
     f("terrain_rm_contrast", s.rt_.terrain_rm_contrast);
+    f("terrain_rm_prepass", s.rt_.terrain_rm_prepass);
+    f("terrain_rm_prepass_div", s.rt_.terrain_rm_prepass_div);
+    f("terrain_rm_converge", s.rt_.terrain_rm_converge);
+    f("terrain_rm_normal_px", s.rt_.terrain_rm_normal_px);
+    f("terrain_rm_relief_lite", s.rt_.terrain_rm_relief_lite);
     f("render_scale", s.rt_.render_scale);
+    f("fsr_min_render_scale", s.rt_.fsr_min_render_scale);
     f("quality_preset", s.rt_.quality_preset);
     f("ao_mode", s.rt_.ao_mode);
     f("gravity", s.game_.gravity);
@@ -709,7 +715,11 @@ void VulkanEngine::load_settings() {
     clampi(rt_.terrain_gi_bounces_cap,   1,     4);
     clampf(rt_.terrain_ao_final_strength,0.0f, 1.0f);
     clampf(rt_.terrain_rm_contrast, 0.5f, 2.5f);
+    clampi(rt_.terrain_rm_prepass_div, 2, 4);
+    clampf(rt_.terrain_rm_converge, 0.0f, 1.0f);
+    clampf(rt_.terrain_rm_normal_px, 0.0f, 4.0f);
     clampf(rt_.render_scale,     0.4f,    2.5f);
+    clampf(rt_.fsr_min_render_scale, 0.5f, 1.0f);
     clampi(rt_.quality_preset,  -1,         3);  // -1 = custom
     clampi(rt_.ao_mode,          0,         3);  // 0=off,1=fast,2=RTAO,3=HBAO
     clampi(rt_.spom_mode,        0,         3);  // 0 flat, 1 SPOM, 2 SSDM, 3 POM

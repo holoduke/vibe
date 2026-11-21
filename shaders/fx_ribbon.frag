@@ -59,10 +59,22 @@ void main() {
     if (kind == 0) {
         // Smoke / vapour trail: soft gaussian cross-section, broken up by
         // drifting noise so it reads as billowing vapour, lit by sun + sky.
-        float a = vUv.x * exp(-vUv.y * vUv.y * 2.2);
+        // The cross-section falls to nothing at the strip's border (it used to end there at a
+        // tenth of its strength: on a trail hundreds of metres wide that drew an outline
+        // against the sky). The border itself is eaten away by the noise - large billows,
+        // smaller ones on them - so the edge of the smoke is a ragged cloud, not a line.
+        float y2   = vUv.y * vUv.y;
+        float prof = (1.0 - y2) * (1.0 - y2) * exp(-y2 * 1.1);
         vec3  q = vWorld * 0.22 + vec3(0.0, time * 0.25, time * 0.1);
-        float n = vnoise(q) * 0.65 + vnoise(q * 2.7) * 0.35;
-        a *= smoothstep(0.18, 0.75, n + 0.25 * (1.0 - abs(vUv.y)));
+        float n = vnoise(q * 0.21) * 0.45 + vnoise(q) * 0.36 + vnoise(q * 2.7) * 0.19;
+        float a = vUv.x * prof * smoothstep(0.10, 0.85, n * 0.9 + 0.75 * prof);
+        // Soft where it meets the ground or anything else: fades out over the last metres
+        // in front of the surface behind it (a flat strip cut the terrain along a hard line).
+        {
+            float zs = texelFetch(u_scene_depth, ivec2(gl_FragCoord.xy), 0).r;
+            float d_scene = 0.05 / max(1.0 - zs, 1e-7), d_here = 0.05 / max(1.0 - gl_FragCoord.z, 1e-7);
+            a *= smoothstep(0.0, 3.0 + 0.03 * d_here, d_scene - d_here);
+        }
         vec3 sun = scene.sun_color.rgb * scene.sun_color.a;
         vec3 lit = vTint * (sun * 0.75 + scene.sky_color.rgb * 0.55 + 0.05);
         a = clamp(a * inten, 0.0, 1.0);

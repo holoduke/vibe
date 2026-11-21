@@ -395,6 +395,7 @@ struct SceneUBO {
     glm::vec4  globe_info;
     glm::ivec4 globe_cell[12];
     glm::vec4  globe_frac[12];
+    glm::vec4  rm_perf;          // raymarched terrain, speed settings (scene_ubo.glsl)
 };
 
 // ---- KHR ray tracing entry points ----
