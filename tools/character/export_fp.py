@@ -55,6 +55,12 @@ bone_index = {b.name: i for i, b in enumerate(bones)}
 
 def game_name(n):
     """Rig bone name -> the name the game looks for (Hips, LeftArm, RightHandIndex1 ...)."""
+    # (the face, borrowed from MakeHuman's default rig: names end in .L / .R)
+    face = {"jaw": "Jaw", "eye": "Eye", "orbicularis03": "UpperLid", "orbicularis04": "LowerLid", "oculi01": "Brow"}
+    fside = "Left" if n.endswith(".L") else "Right" if n.endswith(".R") else ""
+    fcore = n[:-2] if fside else n
+    if fcore in face:
+        return fside + face[fcore]
     side = "Left" if n.endswith("_l") else "Right" if n.endswith("_r") else ""
     core = n[:-2] if side else n
     fixed = {"Root": "Root", "pelvis": "Hips", "spine_01": "Spine", "spine_02": "Spine1", "spine_03": "Spine2",
@@ -77,7 +83,7 @@ for b, n in zip(bones, out_name):
 SKIP = ("teeth", "tongue", "hair", "brow", "lash")
 # Only on the head: eyes ("low-poly" is the eye mesh) and the helmet.
 HEAD_ONLY = ("low-poly", "helmet")
-HEAD_BONES = {i for i, n in enumerate(out_name) if n == "Head"}
+HEAD_BONES = {i for i, n in enumerate(out_name) if n == "Head" or n == "Jaw" or n.endswith(("Eye", "Lid", "Brow"))}
 NECK_BONES = {i for i, n in enumerate(out_name) if n == "Neck"}
 HAND_BONES = {i for i, n in enumerate(out_name) if "Hand" in n}          # hand + all finger bones
 

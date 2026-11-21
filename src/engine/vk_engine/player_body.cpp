@@ -222,6 +222,11 @@ void VulkanEngine::apply_anim_tuning(anim::AnimTuning& t) const {
         else if (k == "land_dip") t.land_dip = v;
         else if (k == "reach_time") t.air.reach_time = v;
         else if (k == "search") t.matcher.search_interval = v;
+        else if (k == "face") t.face = v;
+        else if (k == "blink") t.blink_hold = v;
+        else if (k == "jaw") t.jaw_hold = v;
+        else if (k == "eyes") t.eyes_hold = v;
+        else if (k == "idle_look") t.idle_look = v;
         else if (k == "lock_speed") t.foot_lock_max_speed = v;
         else log::warnf("[body] QLIKE_ANIM_TUNE: unknown name '%s'", k.c_str());
     }
@@ -367,7 +372,7 @@ void VulkanEngine::update_player_body(float dt) {
     in.wants_jump = last_pin_.jump;
     in.crouch = crouch;
     in.eye_local = glm::vec3(0.0f, eye_h, -back);
-    in.first_person = true;
+    in.first_person = std::getenv("QLIKE_BODY_FRONT") == nullptr;      // (looked at from outside by the test hook: as others see it)
     {
         glm::vec3 wish(0.0f);
         if (last_pin_.fwd) wish += fwd;

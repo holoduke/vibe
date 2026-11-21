@@ -64,6 +64,16 @@ bool AnimationSet::init(const AnimAsset& asset, std::string* why) {
         if (r.clip < 0 || r.clip >= rt->num_clips()) { if (why) *why = "motion database names a clip the asset does not have"; db = MotionDatabase{}; return false; }
     if (!rt->rig().complete()) { if (why) *why = "the skeleton lacks a joint the animation needs"; db = MotionDatabase{}; return false; }
     const SkeletonDef& s = rt->skeleton();
+    face = Face{};
+    face.jaw = s.find("Jaw");
+    for (int side = 0; side < 2; ++side) {
+        const std::string S = side == 0 ? "Left" : "Right";
+        face.eye[side] = s.find(S + "Eye");
+        face.lid_up[side] = s.find(S + "UpperLid");
+        face.lid_lo[side] = s.find(S + "LowerLid");
+        face.brow[side] = s.find(S + "Brow");
+    }
+    face.ok = face.eye[0] >= 0 && face.eye[1] >= 0 && face.lid_up[0] >= 0 && face.lid_up[1] >= 0;
     static const char* const kFingers[4] = { "Index", "Middle", "Ring", "Pinky" };
     for (int side = 0; side < 2; ++side) {
         const std::string S = side == 0 ? "LeftHand" : "RightHand";
@@ -132,6 +142,9 @@ void CharacterAnimator::reset() {
     gaze_half_ = 0.45f; gaze_sweep_ = gaze_sweep_to_ = 0.0f;
     gaze_yaw_ = gaze_yaw_v_ = gaze_pitch_ = gaze_pitch_v_ = gaze_w_ = 0.0f;
     shift_left_ = 3.0f; shift_t_ = shift_ = shift_v_ = 0.0f;
+    blink_left_ = 2.0f; blink_t_ = -1.0f; lid_ = 0.0f; blinks_ = 0;
+    eye_yaw_ = eye_pitch_ = dart_yaw_ = dart_pitch_ = 0.0f; dart_left_ = 1.0f;
+    jaw_ = jaw_v_ = brow_ = brow_v_ = 0.0f; gaze_want_yaw_ = gaze_want_pitch_ = 0.0f;
     weapon_fire_offset_ = glm::mat4(1.0f);
     stand_hips_ = set_.stand_hips;
     weapon_offset_ = glm::mat4(1.0f);
@@ -647,6 +660,8 @@ void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
         tp = std::clamp(tp, -0.45f, 0.45f) * gaze_w_ * tuning.idle_look;
         // (the aim, a shot: the head is back on it at once, whatever its pace was)
         const float half = busy ? 0.09f : gaze_half_;
+        gaze_want_yaw_ = ty;
+        gaze_want_pitch_ = tp;
         spring_to(gaze_yaw_, gaze_yaw_v_, ty, half, dt);
         spring_to(gaze_pitch_, gaze_pitch_v_, tp, half * 1.15f, dt);
         if (std::abs(gaze_yaw_) + std::abs(gaze_pitch_) > 1e-4f) {
@@ -709,6 +724,68 @@ void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
             if (!in.first_person) rotate_in_model(rig[Role::Head], glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), q, 0.6f));
         }
     }
+    face_layer(in);
+}
+
+// The face: blinks, eyes that get where the head is going before it does and dart about a little
+// in between, a jaw that drops when hit or out of breath, brows that go up with a hit. Seen from
+// outside at full detail only; the joints are optional (AnimationSet::face).
+void CharacterAnimator::face_layer(const CharacterAnimationInput& in) {
+    const AnimationSet::Face& F = set_.face;
+    if (!F.ok || in.first_person || in.lod > 0 || tuning.face <= 0.0f) return;
+    if (!rng_seeded_) return;                                   // (the idle layer seeds the sequence)
+    const float dt = std::clamp(in.dt, 0.0f, 0.1f);
+    const float dying = std::clamp(in.dying, 0.0f, 1.0f);
+    // ---- blinking: every few seconds, a tenth of a second; sometimes twice; with a turn of the eyes ----
+    blink_left_ -= dt;
+    if (blink_left_ <= 0.0f && blink_t_ < 0.0f) {
+        blink_t_ = 0.0f;
+        ++blinks_;
+        blink_left_ = rnd() < 0.15f ? 0.30f + 0.15f * rnd() : 2.0f + 4.5f * rnd();
+    }
+    float shut = 0.0f;
+    if (blink_t_ >= 0.0f) {
+        blink_t_ += dt;
+        const float kDown = 0.055f, kUp = 0.11f;                 // (down faster than up)
+        shut = blink_t_ < kDown ? blink_t_ / kDown : 1.0f - (blink_t_ - kDown) / kUp;
+        if (blink_t_ >= kDown + kUp) { blink_t_ = -1.0f; shut = 0.0f; }
+        shut = smooth01(std::clamp(shut, 0.0f, 1.0f));
+    }
+    shut = std::max({ shut, smooth01(dying) * 0.85f, std::clamp(tuning.blink_hold, 0.0f, 1.0f) });
+    lid_ = shut;
+    // ---- eyes: at the target at once (the head follows), and small darts while nothing is looked at ----
+    dart_left_ -= dt;
+    if (dart_left_ <= 0.0f) {
+        dart_left_ = 0.5f + 2.2f * rnd();
+        dart_yaw_ = (rnd() - 0.5f) * 0.16f;
+        dart_pitch_ = (rnd() - 0.5f) * 0.07f;
+    }
+    float ey = (gaze_want_yaw_ - gaze_yaw_) + dart_yaw_ * gaze_w_;
+    float ep = (gaze_want_pitch_ - gaze_pitch_) + dart_pitch_ * gaze_w_;
+    ey = std::clamp(ey + tuning.eyes_hold, -0.55f, 0.55f);
+    ep = std::clamp(ep, -0.35f, 0.30f);
+    // (an eye moves in a few hundredths of a second: no easing to speak of)
+    const float ke = 1.0f - std::exp(-dt / 0.025f);
+    eye_yaw_ += (ey - eye_yaw_) * ke;
+    eye_pitch_ += (ep - eye_pitch_) * ke;
+    // ---- jaw and brows: a hit, dying, out of breath ----
+    const float hurt = std::clamp((std::abs(flinch_pitch_) + std::abs(flinch_roll_)) / std::max(tuning.flinch, 1e-3f), 0.0f, 1.0f);
+    const float speed = glm::length(glm::vec2(in.velocity.x, in.velocity.z));
+    const float breath = speed > 9.5f ? 0.035f + 0.02f * std::sin(time_ * 6.0f) : 0.0f;
+    spring_to(jaw_, jaw_v_, std::max({ 0.16f * hurt, 0.22f * smooth01(dying), breath, tuning.jaw_hold }), 0.06f, dt);
+    spring_to(brow_, brow_v_, std::max(hurt, 0.6f * smooth01(dying)), 0.06f, dt);
+
+    const float k = std::clamp(tuning.face, 0.0f, 1.0f);
+    const glm::vec3 kY(0.0f, 1.0f, 0.0f);
+    for (int side = 0; side < 2; ++side) {
+        // (+yaw looks right: about -Y; +pitch looks up: about +X; a lid comes down about -X)
+        rotate_in_model(F.eye[side], glm::angleAxis(-eye_yaw_ * k, kY) * rot_x(eye_pitch_ * k));
+        // the lids go with the eye's height, and shut
+        rotate_in_model(F.lid_up[side], rot_x((0.6f * eye_pitch_ - 0.50f * lid_) * k));
+        if (F.lid_lo[side] >= 0) rotate_in_model(F.lid_lo[side], rot_x((0.3f * eye_pitch_ + 0.10f * lid_) * k));
+        if (F.brow[side] >= 0) pose_[size_t(F.brow[side])].t.y += 0.0045f * brow_ * k;
+    }
+    if (F.jaw >= 0) rotate_in_model(F.jaw, rot_x(-jaw_ * k));
 }
 
 

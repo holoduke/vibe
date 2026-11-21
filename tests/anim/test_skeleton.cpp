@@ -18,7 +18,7 @@ TEST_CASE("anim: the soldier's skeleton loads and is a valid rig", "[anim][skele
     std::string why;
     REQUIRE(load_qchar_skeleton(kSoldier, s, &why));
     REQUIRE(s.validate(&why));
-    CHECK(s.size() == 53);
+    CHECK(s.size() == 62);            // 53 of the body, 9 of the face
     CHECK(s.parents[0] == -1);
     for (int i = 1; i < s.size(); ++i) {
         INFO(s.names[size_t(i)]);

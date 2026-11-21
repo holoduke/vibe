@@ -18,6 +18,10 @@ ASSETS = os.path.abspath(argv[0])
 OUT = os.path.abspath(argv[1])
 os.makedirs(OUT, exist_ok=True)
 
+# (MPFB has to be an enabled add-on before its modules can be imported; not saved to the preferences)
+if "bl_ext.blender_org.mpfb" not in bpy.context.preferences.addons:
+    bpy.ops.preferences.addon_enable(module="bl_ext.blender_org.mpfb")
+
 from bl_ext.blender_org.mpfb.services.humanservice import HumanService
 from bl_ext.blender_org.mpfb.services.targetservice import TargetService
 from bl_ext.blender_org.mpfb.services.objectservice import ObjectService
@@ -45,13 +49,91 @@ basemesh = HumanService.create_human(mask_helpers=True, detailed_helpers=True, e
                                      feet_on_ground=True, scale=0.1, macro_detail_dict=macro)
 log("basemesh", basemesh.name, "verts", len(basemesh.data.vertices))
 
-# ---- skeleton: the game-engine rig (53 bones, full fingers). It is fitted to
+# ---- skeleton: the game-engine rig (53 bones, full fingers; 9 face bones are added to it above). It is fitted to
 # the body; MPFB's "mixamo" rig comes in a T-pose that does not line up with
 # the arms of the base mesh. ----
 # The body shape lives in shape keys; bake it into the mesh first, or the
 # rig is fitted to the default body (wrong joint positions, not on the ground).
 TargetService.bake_targets(basemesh)
+# ---- a face. The game-engine rig has none (the head is one bone); MakeHuman's default rig has a
+# full one, with weights for this very mesh. Nine of its bones are borrowed: the jaw, the eyes,
+# the upper and lower lids and the brows. (With the body's 53 that is 62: the engine's bone
+# palette holds 64 a character.) The default rig is put on for a moment, read, and taken off. ----
+FACE_KEEP = ["jaw", "eye.L", "eye.R", "orbicularis03.L", "orbicularis03.R", "orbicularis04.L", "orbicularis04.R",
+             "oculi01.L", "oculi01.R"]
+FACE_PREFIX = ("jaw", "eye.", "orbicularis", "oculi", "oris", "levator", "risorius", "special", "tongue", "temporalis")
+face = {n: {"w": {}} for n in FACE_KEEP}
+_tmp = HumanService.add_builtin_rig(basemesh, "default", import_weights=True)
+_parent = {b.name: (b.parent.name if b.parent else None) for b in _tmp.data.bones}
+
+
+def _keeper(n):
+    """The borrowed bone a face bone's weight goes to: itself, or the nearest one above it
+    (the lower lip's bones hang on the jaw); None = it stays with the head."""
+    while n is not None:
+        if n in face:
+            return n
+        if n == "head":
+            return None
+        n = _parent.get(n)
+    return None
+
+
+_gname = {g.index: g.name for g in basemesh.vertex_groups}
+for v in basemesh.data.vertices:
+    for g in v.groups:
+        n = _gname[g.group]
+        if n.startswith(FACE_PREFIX) and g.weight > 1e-4:
+            k = _keeper(n)
+            if k:
+                face[k]["w"][v.index] = face[k]["w"].get(v.index, 0.0) + g.weight
+for n in FACE_KEEP:
+    b = _tmp.data.bones[n]
+    face[n]["head"] = _tmp.matrix_world @ b.head_local
+    face[n]["tail"] = _tmp.matrix_world @ b.tail_local
+    log("face bone", n, tuple(round(c, 3) for c in face[n]["head"]), "->", tuple(round(c, 3) for c in face[n]["tail"]),
+        "vertices", len(face[n]["w"]))
+for m in list(basemesh.modifiers):
+    if m.type == "ARMATURE" and m.object == _tmp:
+        basemesh.modifiers.remove(m)
+for g in list(basemesh.vertex_groups):
+    if g.name in _parent:
+        basemesh.vertex_groups.remove(g)
+if basemesh.parent == _tmp:
+    _mw = basemesh.matrix_world.copy()
+    basemesh.parent = None
+    basemesh.matrix_world = _mw
+bpy.data.objects.remove(_tmp, do_unlink=True)
+
 rig = HumanService.add_builtin_rig(basemesh, "game_engine", import_weights=True)
+
+# The borrowed bones, on the head; their weights taken out of what the vertices had.
+bpy.context.view_layer.objects.active = rig
+bpy.ops.object.mode_set(mode="EDIT")
+_inv = rig.matrix_world.inverted()
+for n in FACE_KEEP:
+    eb = rig.data.edit_bones.new(n)
+    eb.head = _inv @ face[n]["head"]
+    eb.tail = _inv @ face[n]["tail"]
+    eb.parent = rig.data.edit_bones["head"]
+    eb.use_connect = False
+bpy.ops.object.mode_set(mode="OBJECT")
+_total = {}
+for n in FACE_KEEP:
+    for vi, w in face[n]["w"].items():
+        _total[vi] = _total.get(vi, 0.0) + w
+_rigbones = {b.name for b in rig.data.bones}
+_gname = {g.index: g.name for g in basemesh.vertex_groups}
+for vi, t in _total.items():
+    k = max(0.0, 1.0 - min(t, 1.0))
+    for g in basemesh.data.vertices[vi].groups:
+        if _gname[g.group] in _rigbones:
+            g.weight *= k
+for n in FACE_KEEP:
+    vg = basemesh.vertex_groups.new(name=n)
+    for vi, w in face[n]["w"].items():
+        vg.add([vi], min(w, 1.0), "REPLACE")
+log("face", len(FACE_KEEP), "bones,", len(_total), "vertices carry them")
 for _n in ("pelvis", "foot_l", "hand_l", "head"):
     log("joint", _n, tuple(round(c, 3) for c in rig.data.bones[_n].head_local))
 log("rig", rig.name if rig else None, "bones", len(rig.data.bones) if rig else 0)

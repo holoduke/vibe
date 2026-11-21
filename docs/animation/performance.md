@@ -69,7 +69,7 @@ In the game the other players' animators are updated together on the job threads
 | Pose search | 0.20 - 0.45 ms over 86,135 frames, both mirror halves; 0.005 ms while idle |
 
 **Skinning is on the GPU** (`shaders/cube_skin.vert`): the rest-pose mesh and each vertex's bones
-and weights are static buffers, a character costs the CPU one 53-bone palette (7.6 kB) a frame.
+and weights are static buffers, a character costs the CPU one 62-bone palette (8.9 kB) a frame.
 On the CPU it was ~0.6 ms a body, which put the wall at 20 - 30 drawn players; now about 0.01 ms
 of GPU time a body (43k vertices each: the crowd numbers above are vertex work, the block of
 copies is mostly off screen, so shading is not in them). The mesh has no levels of detail: at
@@ -126,7 +126,7 @@ build. Nothing to optimise there at six.
 | | |
 |---|---|
 | Asset on disk | 24.2 MB |
-| Clips in memory (ozz, compressed) | 15.0 MB for 89,508 frames x 53 joints: 175 bytes per frame (raw: 1,484) |
+| Clips in memory (ozz, compressed) | 15.3 MB for 89,508 frames x 62 joints: 179 bytes per frame (raw: 1,736) |
 | Motion database | 12.7 MB (32 floats per frame, padded for AVX; the mirrored half is not stored) |
 | Per character | ~16 kB of pose buffers plus two sampling caches |
 | Before this work | ~46 MB (every frame stored twice) |

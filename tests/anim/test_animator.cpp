@@ -1124,3 +1124,64 @@ TEST_CASE("animator: dying, the body buckles the way the shot went, without a ju
         CHECK(a.muzzle_position().y < 1.25f);                   // the weapon is out of the aim
     }
 }
+
+TEST_CASE("real asset: the face blinks, looks and lets go", "[anim][animator][asset]") {
+    AnimationSet set;
+    std::string why;
+    if (!set.load((std::string(QLIKE_SOURCE_DIR) + "/assets/character/soldier.qanim").c_str(), &why)) {
+        WARN("assets/character/soldier.qanim not loaded (" << why << "): skipped");
+        return;
+    }
+    REQUIRE(set.face.ok);
+    REQUIRE(set.face.jaw >= 0);
+    const Rig& rig = set.runtime->rig();
+    CharacterAnimator a(set);
+    CharacterAnimationInput in;
+    in.dt = 1.0f / 60.0f;
+    in.ground_height = flat_ground;
+    in.eye_local = glm::vec3(0.0f, 1.6f, -0.11f);
+    in.aiming = false;
+    in.variation = 7;
+    // how far a face joint is turned against the head it sits on
+    auto turned = [&](int joint) {
+        const glm::quat h = glm::quat_cast(glm::mat3(a.model()[size_t(rig[Role::Head])]));
+        const glm::quat j = glm::quat_cast(glm::mat3(a.model()[size_t(joint)]));
+        const glm::quat d = glm::inverse(h) * j;
+        return 2.0f * std::acos(std::clamp(std::abs(d.w), 0.0f, 1.0f));
+    };
+    for (int i = 0; i < 30; ++i) a.update(in);
+    const float lid_open = turned(set.face.lid_up[0]), jaw_shut = turned(set.face.jaw);
+    int open_frames = 0, frames = 20 * 60;
+    float lid_most = 0.0f, lid_turn_most = 0.0f, eye_most = 0.0f;
+    for (int i = 0; i < frames; ++i) {
+        a.update(in);
+        REQUIRE(pose_is_valid(a.model()));
+        if (a.lids() < 0.05f) ++open_frames;
+        lid_most = std::max(lid_most, a.lids());
+        lid_turn_most = std::max(lid_turn_most, std::abs(turned(set.face.lid_up[0]) - lid_open));
+        eye_most = std::max(eye_most, glm::length(a.eyes()));
+        CHECK(std::abs(a.eyes().x) <= 0.551f);
+        CHECK(a.eyes().y <= 0.301f);
+        CHECK(a.eyes().y >= -0.351f);
+    }
+    INFO("blinks " << a.blinks() << " in 20 s, eyes open " << 100.0f * float(open_frames) / float(frames) << " % of the time, lid turned "
+         << lid_turn_most << " rad at most, eyes off centre " << eye_most << " rad at most");
+    CHECK(a.blinks() >= 3);                                 // (people: 10 - 20 a minute)
+    CHECK(a.blinks() <= 12);
+    CHECK(float(open_frames) > 0.90f * float(frames));
+    CHECK(lid_most > 0.9f);
+    CHECK(lid_turn_most > 0.3f);                            // the joint itself moved, not only the number
+    CHECK(eye_most > 0.02f);                                // the eyes are not painted on
+    // killed: the eyes close and the jaw hangs
+    for (int i = 1; i <= 23; ++i) { in.dying = float(i) / 23.0f; a.update(in); }
+    for (int i = 0; i < 10; ++i) a.update(in);
+    CHECK(a.lids() > 0.8f);
+    CHECK(a.jaw() > 0.15f);
+    CHECK(turned(set.face.jaw) > jaw_shut + 0.12f);
+    // seen from inside there is no face to move
+    CharacterAnimator b(set);
+    in.dying = 0.0f;
+    in.first_person = true;
+    for (int i = 0; i < 600; ++i) b.update(in);
+    CHECK(b.blinks() == 0);
+}

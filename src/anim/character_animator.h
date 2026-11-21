@@ -37,6 +37,13 @@ struct AnimationSet {
         bool      ok = false;
     };
     Hand   hand[2]{};                    // left, right
+    // The face, if the skeleton has one (Jaw, Left/RightEye, ...UpperLid, ...LowerLid, ...Brow, all
+    // on the head; the lids turn about the eye's centre). -1 = absent; `ok` = eyes and upper lids.
+    struct Face {
+        int  jaw = -1, eye[2] = { -1, -1 }, lid_up[2] = { -1, -1 }, lid_lo[2] = { -1, -1 }, brow[2] = { -1, -1 };
+        bool ok = false;
+    };
+    Face   face{};
     float  stand_hips = 1.0f;            // hips height of the standing idle, metres
     size_t asset_bytes = 0;
 
@@ -95,6 +102,10 @@ struct AnimTuning {
     float speed_lean = 0.010f;           // radians per m/s, into the direction of travel
     float max_lean = 0.22f;
     float flinch = 0.22f;                // radians the torso gives under an ordinary hit (0 = none)
+    // The face (seen from outside, full detail only). The three *_hold values are for looking at
+    // it: they force the lids shut / the jaw open / the eyes to a side, whatever else is going on.
+    float face = 1.0f;                   // 0 = a still face
+    float blink_hold = 0.0f, jaw_hold = 0.0f, eyes_hold = 0.0f;
     float idle_look = 1.0f;              // not aiming: the head looks about, at others, or nowhere for a while (0 = never)
     float idle_sway = 1.0f;              // standing, not aiming: breathing and a shift of weight now and then (0 = none)
     float head_to_sights = 1.0f;         // seen from outside: the head leans to the stock (0 = stays upright)
@@ -195,6 +206,11 @@ public:
     int   gaze_mode() const { return gaze_mode_; }
     float gaze_yaw() const { return gaze_yaw_; }       // radians, + right
     float gaze_pitch() const { return gaze_pitch_; }   // radians, + up
+    // The face: how far the lids are shut (0 open, 1 shut), the eyes off straight ahead, the jaw open.
+    float lids() const { return lid_; }
+    glm::vec2 eyes() const { return glm::vec2(eye_yaw_, eye_pitch_); }      // radians: + right, + up
+    float jaw() const { return jaw_; }                                      // radians
+    int   blinks() const { return blinks_; }
     // Model-space muzzle position and direction (effects; never hit registration).
     glm::vec3 muzzle_position() const { return muzzle_pos_; }
     // The magazine in the support hand through the middle of a reload: its place in the weapon
@@ -255,6 +271,13 @@ private:
     float     gaze_yaw_ = 0.0f, gaze_yaw_v_ = 0.0f, gaze_pitch_ = 0.0f, gaze_pitch_v_ = 0.0f, gaze_w_ = 0.0f;
     float     shift_left_ = 3.0f, shift_t_ = 0.0f, shift_ = 0.0f, shift_v_ = 0.0f;
     float     rnd();                                   // 0 .. 1, this animator's own sequence
+    // the face
+    float     blink_left_ = 2.0f, blink_t_ = -1.0f, lid_ = 0.0f;
+    int       blinks_ = 0;
+    float     eye_yaw_ = 0.0f, eye_pitch_ = 0.0f, dart_yaw_ = 0.0f, dart_pitch_ = 0.0f, dart_left_ = 1.0f;
+    float     jaw_ = 0.0f, jaw_v_ = 0.0f, brow_ = 0.0f, brow_v_ = 0.0f;
+    float     gaze_want_yaw_ = 0.0f, gaze_want_pitch_ = 0.0f;     // where the head is being turned to (the eyes are there first)
+    void      face_layer(const CharacterAnimationInput& in);
     bool      mag_visible_ = false;
     uint32_t  hit_seq_ = 0;
     float     flinch_pitch_ = 0.0f, flinch_pitch_v_ = 0.0f, flinch_roll_ = 0.0f, flinch_roll_v_ = 0.0f;

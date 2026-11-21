@@ -209,6 +209,17 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   held for seconds, small far more often than large; a quick one is the exception. Standing it
   breathes and shifts its weight (`idle_sway`). Each character has its own sequence
   (`variation`), the same every run. All of it stops at once for the aim, a shot or a reload.
+- **The face.** The skeleton has nine face joints on the head (`Jaw`, `Left/RightEye`,
+  `...UpperLid`, `...LowerLid`, `...Brow`), borrowed with their weights from MakeHuman's default
+  rig by `tools/character/make_soldier.py` (the game-engine rig has none). `face_layer` drives
+  them for characters seen from outside at full detail: a blink every 2 - 6.5 s (0.055 s down,
+  0.11 s up, now and then twice), eyes that are on the idle look's target before the head gets
+  there and dart a little in between, lids that follow the eyes up and down, a jaw that drops
+  and brows that lift with a hit, a jaw that hangs and eyes that close when killed, a slightly
+  open mouth at a sprint. `QLIKE_ANIM_TUNE="blink=1"`, `jaw=0.3`, `eyes=0.5` hold one of them to
+  look at it; `face=0` switches the layer off. No lips, cheeks or speech: the mouth corners and
+  the tongue stay with the head or the jaw. Capture: `captures/face_rig.png` (open, shut, jaw,
+  eyes right, eyes left).
 - **Looking down at oneself.** The body has no head and its clothes are open at the collar: the
   export closes it with the base of the neck, and the body stands further behind the eye the
   further down the view goes (`QLIKE_BODY_BACK`, `QLIKE_BODY_BACK_DOWN`), so straight down shows
