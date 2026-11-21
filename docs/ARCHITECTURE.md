@@ -244,8 +244,10 @@ hooks, tests, known gaps), `architecture.md` the design and status, `performance
 - **Air**: captured two-foot jumps scrubbed by vertical speed and predicted time to contact
   (`airborne.cpp`): no clip can run out, a landing never holds the player.
 - **Every change of source** is hidden by inertialisation (`inertializer.cpp`).
-- **Fitting to the game**: playback rate, stride (as far as a leg reaches), legs turned to the
-  travel direction, lean; feet locked in the world below 4 m/s and following the ground.
+- **Fitting to the game**: game speed mapped onto the pace the capture sustains in that direction,
+  playback rate, stride (a foot beyond the leg's reach leaves the ground), legs turned to the
+  travel direction (diagonals included), lean; feet locked in the world below 4 m/s and following
+  the ground. `vibe_animbench <asset> slide` measures what is left of foot slide.
 - **Weapon**: the weapon frame comes from the view; both arms are fitted to its grips last;
   recoil, reload and equip move the frame (`weapon_offset`, which `draw_viewmodel` uses too).
 - **Data**: `assets/character/soldier.qanim`, cooked by `build/vibe_animcook.exe <100STYLE dir>

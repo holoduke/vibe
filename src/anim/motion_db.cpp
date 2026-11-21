@@ -101,6 +101,9 @@ std::vector<uint8_t> MotionDatabaseBuilder::serialize() const {
     return std::move(w.bytes);
 }
 
+// (of the frames going one way, the share that is slower than the "cruise" pace)
+static const double kCruisePercentile = 0.95;
+
 bool MotionDatabase::load(const uint8_t* data, size_t size, uint64_t rig_id, std::string* why) {
     *this = MotionDatabase{};
     auto fail = [&](const char* s) { if (why) *why = s; *this = MotionDatabase{}; return false; };
@@ -149,6 +152,26 @@ bool MotionDatabase::load(const uint8_t* data, size_t size, uint64_t rig_id, std
     for (const MotionJump& j : jumps_)
         if (!(j.takeoff < j.land && j.land < frames_ && j.apex >= j.takeoff && j.apex <= j.land && range_of_[j.takeoff] == range_of_[j.land]))
             return fail("motion database: bad jump entry");
+    // What pace each direction of the capture sustains (see cruise_speed).
+    for (int stance = 0; stance < 2; ++stance) {
+        std::vector<float> sp[3];
+        for (const MotionRange& rg : ranges_) {
+            if (rg.tags & kTagJump) continue;
+            if (stance == 0 ? !(rg.tags & kTagLocomotion) : !(rg.tags & kTagCrouch)) continue;
+            for (uint32_t f = rg.first; f < rg.first + rg.count; ++f) {
+                const float x = std::abs(info_[f].root_vel_x), z = info_[f].root_vel_z, v = std::sqrt(x * x + z * z);
+                if (v < 0.4f) continue;
+                const int axis = -z > 0.82f * v ? 0 : z > 0.82f * v ? 2 : x > 0.82f * v ? 1 : -1;      // within 35 degrees
+                if (axis >= 0) sp[axis].push_back(v);
+            }
+        }
+        for (int a = 0; a < 3; ++a) {
+            if (sp[a].size() < 30) continue;
+            const size_t nth = size_t(double(sp[a].size() - 1) * kCruisePercentile);
+            std::nth_element(sp[a].begin(), sp[a].begin() + std::ptrdiff_t(nth), sp[a].end());
+            cruise_[stance][a] = sp[a][nth];
+        }
+    }
     return true;
 }
 

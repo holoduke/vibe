@@ -124,6 +124,7 @@ std::vector<Style100Source> default_style100_sources() {
     return {
         { "Neutral",     "FW,FR,BW,BR,SW,SR,ID,TR1,TR2,TR3", kTagLocomotion },
         { "StartStop",   "FW,FR,BW,BR,SW,SR",                kTagLocomotion },
+        { "Rushed",      "FW,FR,BW,BR,SW,SR",                kTagLocomotion },      // the fastest takes of the set (to 2.6 m/s)
         { "Crouched",    "FW,FR,BW,BR,SW,SR,ID,TR1,TR2,TR3", kTagCrouch },
         { "TwoFootJump", "FW,FR,BW,SW,ID",                   kTagJump },
     };

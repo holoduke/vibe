@@ -119,6 +119,8 @@ void CharacterAnimator::reset() {
     accel_ = glm::vec3(0.0f);
     rate_ = stride_ = 1.0f;
     warp_ = lean_roll_ = lean_roll_v_ = lean_pitch_ = lean_pitch_v_ = 0.0f;
+    snap_axis_ = 0.0f;
+    snap_on_ = false;
     dip_ = dip_v_ = pelvis_ik_ = pelvis_ik_v_ = 0.0f;
     for (Lock& l : lock_) l = Lock{};
     recoil_t_ = 0.0f; reload_t_ = -1.0f; reload_w_ = 0.0f; equip_t_ = 1.0f;
@@ -151,7 +153,7 @@ float CharacterAnimator::ground_at(const CharacterAnimationInput& in, glm::vec3 
 // shortest way from where it pointed to where the solution puts it, so the twist the pose had
 // along the bones is kept (no rolled thighs or forearms); c keeps its orientation. The middle
 // joint bends toward `pole` (model space), or the way it already bends if none is given.
-void CharacterAnimator::fit_limb(int a, int b, int c, glm::vec3 target, const glm::vec3* pole) {
+void CharacterAnimator::fit_limb(int a, int b, int c, glm::vec3 target, const glm::vec3* pole, bool from_rest) {
     const glm::vec3 pa(model_[size_t(a)][3]), pb0(model_[size_t(b)][3]), pc0(model_[size_t(c)][3]);
     const float l1 = glm::length(pb0 - pa), l2 = glm::length(pc0 - pb0);
     if (l1 < 1e-5f || l2 < 1e-5f) return;
@@ -172,10 +174,21 @@ void CharacterAnimator::fit_limb(int a, int b, int c, glm::vec3 target, const gl
     const glm::vec3 pc = pa + dir * dist;
     const glm::quat Ra = glm::quat_cast(glm::mat3(model_[size_t(a)])), Rb = glm::quat_cast(glm::mat3(model_[size_t(b)])),
                     Rc = glm::quat_cast(glm::mat3(model_[size_t(c)]));
-    const glm::quat Ra2 = quat_from_to(glm::normalize(pb0 - pa), glm::normalize(pb - pa)) * Ra;
-    const glm::quat Rb2 = quat_from_to(glm::normalize(pc0 - pb0), glm::normalize(pc - pb)) * Rb;
-    const int par = set_.runtime->skeleton().parents[size_t(a)];
+    const SkeletonDef& sk = set_.runtime->skeleton();
+    const int par = sk.parents[size_t(a)];
     const glm::quat P = par >= 0 ? glm::quat_cast(glm::mat3(model_[size_t(par)])) : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::quat Ra2, Rb2;
+    if (from_rest) {
+        // A limb placed from scratch (an arm on a weapon): turned from its rest pose on the body,
+        // not from where the capture has it. A running arm swings far behind the body, and the
+        // shortest turn from there to the weapon goes over the top one frame and under the next.
+        Ra2 = quat_from_to(P * glm::normalize(sk.rest_local(b)), glm::normalize(pb - pa)) * P;
+        Rb2 = quat_from_to(Ra2 * glm::normalize(sk.rest_local(c)), glm::normalize(pc - pb)) * Ra2;
+    } else {
+        // A limb adjusted (a foot moved a little): the capture's own pose, turned the least.
+        Ra2 = quat_from_to(glm::normalize(pb0 - pa), glm::normalize(pb - pa)) * Ra;
+        Rb2 = quat_from_to(glm::normalize(pc0 - pb0), glm::normalize(pc - pb)) * Rb;
+    }
     pose_[size_t(a)].r = glm::normalize(glm::inverse(P) * Ra2);
     pose_[size_t(b)].r = glm::normalize(glm::inverse(Ra2) * Rb2);
     pose_[size_t(c)].r = glm::normalize(glm::inverse(Rb2) * Rc);
@@ -276,8 +289,22 @@ void CharacterAnimator::lower_body(const CharacterAnimationInput& in, glm::vec2 
     const MotionDatabase& db = set_.db;
     const float dt = std::clamp(in.dt, 0.0f, 0.1f);
     const bool airborne = !in.grounded && !in.swimming;
-    const float k = speed > 1e-3f ? capture_speed(speed, tuning.matcher) / speed : 1.0f;
     const glm::vec2 wish(in.desired_velocity.x, in.desired_velocity.z);
+    // Game speeds are mapped onto what the capture sustains in the direction of travel (its
+    // back-pedal is slower than its run): asking for more finds single fast moments, never a
+    // whole step, and the search would jump back to that moment for ever.
+    MatcherParams mp = tuning.matcher;
+    {
+        const float ang = std::atan2(v_local.x, v_local.y);                    // 0 = backward, pi = forward
+        const float a = std::abs(snap_on_ ? snap_axis_ : ang);
+        const int axis = a > 2.36f ? 0 : a > 0.79f ? 1 : 2;
+        const float cruise = db.cruise_speed(in.crouch > 0.5f, axis);
+        if (cruise > 0.0f) {
+            mp.run_speed = cruise;
+            mp.walk_speed = std::min(mp.walk_speed, 0.6f * cruise);
+        }
+    }
+    const float k = speed > 1e-3f ? capture_speed(speed, mp) / speed : 1.0f;
 
     AirborneInput ai;
     ai.dt = dt;
@@ -319,12 +346,30 @@ void CharacterAnimator::lower_body(const CharacterAnimationInput& in, glm::vec2 
         MatcherInput mi;
         mi.traj = predict_trajectory(ti, tuning.move, hz);
         mi.velocity = v_local;
+        // Diagonals: the capture has forward, sideways and backward takes and nothing in between.
+        // A request in between is turned onto the nearest of those for the search; the orientation
+        // warp then turns the legs back to the way the character really goes. The direction in use
+        // is kept until the request is well past the middle (W+D is exactly the middle).
+        if (tuning.orient_warp && speed > 1.0f) {
+            const float kQuarter = 1.57079633f;
+            const float ang = std::atan2(v_local.x, v_local.y);
+            float axis = std::round(ang / kQuarter) * kQuarter;
+            if (snap_on_ && std::abs(wrap_angle(ang - snap_axis_)) < 0.96f) axis = snap_axis_;       // 55 degrees
+            snap_axis_ = axis;
+            snap_on_ = true;
+            const float w = wrap_angle(ang - axis), c = std::cos(-w), sn = std::sin(-w);
+            auto turn = [&](glm::vec2 v) { return glm::vec2(v.x * c + v.y * sn, -v.x * sn + v.y * c); };
+            mi.velocity = turn(mi.velocity);
+            mi.traj.vel_end = turn(mi.traj.vel_end);
+            for (int h = 0; h < MotionSchema::kHorizons; ++h) mi.traj.pos[h] = turn(mi.traj.pos[h]);
+        } else {
+            snap_on_ = false;
+        }
         mi.require_tags = in.crouch > 0.5f ? uint32_t(kTagCrouch) : uint32_t(kTagLocomotion);
         // Standing still with no input is the idle, nothing else: a walk frozen in mid-step is not standing.
         if (speed < 0.25f && glm::length(wish) < 0.1f && !in.swimming) mi.require_tags |= kTagIdle;
         mi.rate = rate_;
         mi.force_search = ao.finished;
-        MatcherParams mp = tuning.matcher;
         if (in.lod == 1) { mp.search_interval *= 3.0f; mp.change_interval *= 3.0f; }
         else if (in.lod >= 2) { mp.search_interval = 0.5f; mp.change_interval = 0.25f; }
         const double s0 = now_ms();
@@ -429,7 +474,24 @@ void CharacterAnimator::pelvis_and_warp(const CharacterAnimationInput& in, glm::
     spring_to(lean_pitch_, lean_pitch_v_, pitch_t, 0.12f, dt);
     if (std::abs(lean_roll_) + std::abs(lean_pitch_) > 1e-4f)
         rotate_in_model(rig[Role::Spine], glm::angleAxis(lean_roll_, glm::vec3(0.0f, 0.0f, 1.0f)) * rot_x(lean_pitch_));
+    // The chest stays near its place over the feet. What is carried hangs in the view, which
+    // does not lean: a captured run leans the torso far enough forward to put the shoulder on
+    // the weapon's grip, and an arm with no room folds to nothing and flips. Most of the lean
+    // is taken back out at the base of the spine (the hips and legs keep theirs).
+    if (tuning.chest_keep < 1.0f && !in.swimming) {
+        const IAnimationRuntime& rt = *set_.runtime;
+        rt.local_to_model(*ctx_, pose_, model_, hips);
+        const int base = rig[Role::Spine], neck = rig[Role::Neck];
+        const SkeletonDef& sk = rt.skeleton();
+        const glm::vec3 pn(model_[size_t(neck)][3]), pb(model_[size_t(base)][3]);
+        const float h = std::max(pn.y - pb.y, 0.15f);
+        const float ex = pn.x - sk.rest_pos[size_t(neck)].x;
+        const float ez = pn.z - (sk.rest_pos[size_t(neck)].z + 0.10f * std::clamp(in.crouch, 0.0f, 1.0f));
+        const float k = (1.0f - std::clamp(tuning.chest_keep, 0.0f, 1.0f)) / h;
+        rotate_in_model(base, glm::angleAxis(std::clamp(ex * k, -0.6f, 0.6f), glm::vec3(0.0f, 0.0f, 1.0f)) * rot_x(std::clamp(-ez * k, -0.6f, 0.6f)));
+    }
     dbg_.lean_roll = lean_roll_;
+
     dbg_.lean_pitch = lean_pitch_;
 
     // A long fall is not a still picture: the limbs keep working a little, more the longer it lasts.
@@ -480,27 +542,32 @@ void CharacterAnimator::feet(const CharacterAnimationInput& in, glm::vec2 v_loca
         const int ft = rig[side == 0 ? Role::LeftFoot : Role::RightFoot];
         const glm::vec3 base(model_[size_t(ft)][3]);
         glm::vec3 t = base;
-        // Stride warp: the feet reach further along the way the character goes.
+        // Stride warp: the feet reach further along the way the character goes, so a foot on the
+        // ground travels back under the body as fast as the ground does. A leg is only so long:
+        // where the stride asks for more, the foot leaves the ground (it rises on the circle the
+        // leg can reach) instead of being dragged over it. Contact gets shorter and the step gets a
+        // flight, which is what running faster is. The hips come down a little to lengthen it.
         glm::vec2 rel(t.x - hipP.x, t.z - hipP.z);
-        {
-            // ... as far as the leg is long: a stride the leg cannot make would lift the foot off the
-            // ground or lock the knee. Beyond that the feet slide; they do not stretch.
+        if (stride_ > 1.0f) {
             const int up = rig[side == 0 ? Role::LeftUpLeg : Role::RightUpLeg], lo = rig[side == 0 ? Role::LeftLeg : Role::RightLeg];
-            const glm::vec3 pu(model_[size_t(up)][3]);
-            const float reach = (glm::length(glm::vec3(model_[size_t(lo)][3]) - pu) + glm::length(base - glm::vec3(model_[size_t(lo)][3]))) * 0.985f;
-            const float along = glm::dot(rel, mdir);
-            float k = stride_ - 1.0f;
-            auto too_far = [&](float kk) {
-                const glm::vec2 r = rel + mdir * (along * kk);
-                const glm::vec3 p(hipP.x + r.x, t.y, hipP.z + r.y);
-                return glm::length(p - pu) > reach;
-            };
-            if (k > 0.0f && too_far(k)) {
-                float lo_k = 0.0f, hi_k = k;
-                for (int it = 0; it < 6; ++it) { const float mid = 0.5f * (lo_k + hi_k); (too_far(mid) ? hi_k : lo_k) = mid; }
-                k = lo_k;
+            const glm::vec3 pu = glm::vec3(model_[size_t(up)][3]) + glm::vec3(0.0f, pelvis_ik_, 0.0f);
+            const float reach = (glm::length(glm::vec3(model_[size_t(lo)][3]) - glm::vec3(model_[size_t(up)][3])) +
+                                 glm::length(base - glm::vec3(model_[size_t(lo)][3]))) * 0.985f;
+            // (measured from under the foot's own hip joint: the width of the stance is not stride)
+            rel += mdir * (glm::dot(glm::vec2(t.x - pu.x, t.z - pu.z), mdir) * (stride_ - 1.0f));
+            glm::vec2 d(hipP.x + rel.x - pu.x, hipP.z + rel.y - pu.z);
+            float dl = glm::length(d);
+            const float cap = tuning.stride_reach * reach;
+            if (dl > cap) {
+                d *= cap / dl;
+                rel = glm::vec2(pu.x + d.x - hipP.x, pu.z + d.y - hipP.z);
+                dl = cap;
             }
-            rel += mdir * (along * k);
+            // (the circle of a leg that keeps a bend in the knee - a leg driven to its full length
+            // snaps straight and back - or of the leg as long as the capture has it at this moment)
+            const float own = std::min(glm::length(base - glm::vec3(model_[size_t(up)][3])), reach);
+            const float allow = std::max(tuning.stride_leg * reach, own);
+            t.y = std::max(t.y, pu.y - std::sqrt(std::max(allow * allow - dl * dl, 0.0f)));
         }
         t.x = hipP.x + rel.x;
         t.z = hipP.z + rel.y;
@@ -542,7 +609,9 @@ void CharacterAnimator::feet(const CharacterAnimationInput& in, glm::vec2 v_loca
         dbg_.locked[side] = lk.on;
         dbg_.foot_target[side] = t;
     }
-    // Pelvis compensation: when a foot has to go down, the hips go with it so the other leg is not stretched.
+    // Pelvis compensation: when a foot has to go down, the hips go with it so the other leg is not
+    // stretched; and a long stride is taken lower.
+    if (on_ground) lowest -= std::clamp((stride_ - 1.0f) * tuning.stride_drop, 0.0f, tuning.max_stride_drop);
     spring_to(pelvis_ik_, pelvis_ik_v_, lowest, 0.08f, dt);
     if (std::abs(pelvis_ik_) > 1e-4f) {
         pose_[size_t(hips)].t.y += pelvis_ik_;
@@ -551,7 +620,19 @@ void CharacterAnimator::feet(const CharacterAnimationInput& in, glm::vec2 v_loca
     for (int side = 0; side < 2; ++side) {
         const int up = rig[side == 0 ? Role::LeftUpLeg : Role::RightUpLeg], lo = rig[side == 0 ? Role::LeftLeg : Role::RightLeg],
                   ft = rig[side == 0 ? Role::LeftFoot : Role::RightFoot];
-        fit_limb(up, lo, ft, target[side], nullptr);
+        // Which way the knee points: as the capture has it while its leg is bent; a leg the capture
+        // has (nearly) straight says nothing about that - its knee lies on the line from hip to
+        // foot, and whatever is left over swings round from frame to frame once the foot is moved.
+        // There the knee points where the hips face.
+        const glm::vec3 pa(model_[size_t(up)][3]), pk(model_[size_t(lo)][3]), pf(model_[size_t(ft)][3]);
+        const float leg = glm::length(pk - pa) + glm::length(pf - pk);
+        const float straight = smooth01((glm::length(pf - pa) / std::max(leg, 1e-4f) - 0.90f) / 0.07f);
+        const glm::vec3 fwd = glm::mat3(model_[size_t(hips)]) * glm::vec3(0.0f, 0.0f, -1.0f);
+        glm::vec3 own = pk - (pa + pf) * 0.5f;
+        const float own_len = glm::length(own);
+        own = own_len > 1e-4f ? own / own_len : fwd;
+        const glm::vec3 knee = glm::mix(own, fwd, straight);
+        fit_limb(up, lo, ft, target[side], &knee);
         if (std::abs(slope[side]) > 1e-3f) {                 // the sole follows the slope
             rotate_in_model(ft, rot_x(slope[side] * w));
             rt.local_to_model(*ctx_, pose_, model_, ft);
@@ -664,7 +745,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
                 rt.local_to_model(*ctx_, pose_, model_, sh);
                 if (deficit <= 0.0f) break;
             }
-            fit_limb(ua, fa, hd, wrist, &pole);
+            fit_limb(ua, fa, hd, wrist, &pole, true);
             // The hand's orientation: its rest frame (fingers, palm) onto the grip's.
             const glm::mat3 F0(H.a0, H.n0, H.b0), F1(a1, n1, glm::cross(a1, n1));
             const glm::quat G = glm::quat_cast(F1 * glm::transpose(F0));

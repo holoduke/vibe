@@ -140,10 +140,153 @@ int all3(int, int) { return 3; }
 // What one client has in a crowd: a few close, some at mid range, many small, the rest not in view.
 int mixed(int i, int) { return i < 8 ? 0 : i < 32 ? 1 : i < 96 ? 2 : 3; }
 
+// How far the feet slide. The real controller is held on one key combination over flat ground
+// until its speed is steady; then, whenever the capture has a foot on the ground (its contact
+// flag), that foot moving over the ground is slide (0 = planted), and a foot the animator has
+// lifted off the ground meanwhile is counted as not standing ("on the ground" < 100 %).
+void slide_table(const anim::AnimationSet& set) {
+    const anim::Rig& rig = set.runtime->rig();
+    const int foot[2] = { rig[anim::Role::LeftFoot], rig[anim::Role::RightFoot] };
+    struct Dir { const char* name; bool f, b, r; };
+    const Dir dirs[] = { { "forward", true, false, false }, { "diagonal", true, false, true }, { "sideways", false, false, true }, { "backward", false, true, false } };
+    struct Pace { const char* name; bool sprint, crawl; };
+    const Pace paces[] = { { "crawl key", false, true }, { "walk", false, false }, { "sprint", true, false } };
+    std::printf("pace the capture sustains (m/s), forward / sideways / backward: standing %.2f / %.2f / %.2f, crouched %.2f / %.2f / %.2f\n\n",
+                double(set.db.cruise_speed(false, 0)), double(set.db.cruise_speed(false, 1)), double(set.db.cruise_speed(false, 2)),
+                double(set.db.cruise_speed(true, 0)), double(set.db.cruise_speed(true, 1)), double(set.db.cruise_speed(true, 2)));
+    std::printf("| pace | direction | speed m/s | clip | clip speed | rate | stride | slide m/s while down | share of speed | foot on the ground while down | locked | fastest joint rad/s |\n");
+    std::printf("|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|\n");
+    const float dt = 1.0f / 60.0f;
+    std::vector<collision::AABB> world{ { glm::vec3(-1e5f, -1.0f, -1e5f), glm::vec3(1e5f, 0.0f, 1e5f) } };
+    static const char* kTraceEnv = std::getenv("SLIDE_TRACE");
+    static const float trace_from = std::getenv("SLIDE_TRACE_T") ? float(std::atof(std::getenv("SLIDE_TRACE_T"))) : 4.0f;
+    for (const Pace& pc : paces) {
+        for (const Dir& d : dirs) {
+            Actor a;
+            a.p.position = glm::vec3(0.0f, 0.9f, 0.0f);
+            a.p.on_ground = true;
+            a.anim = std::make_unique<anim::CharacterAnimator>(set);
+            if (const char* off = std::getenv("SLIDE_OFF")) {            // comparison: switch layers off
+                const std::string o(off);
+                if (o.find("stride") != std::string::npos) a.anim->tuning.stride_warp = false;
+                if (o.find("orient") != std::string::npos) a.anim->tuning.orient_warp = false;
+                if (o.find("lock") != std::string::npos) a.anim->tuning.foot_lock = false;
+                if (o.find("footik") != std::string::npos) a.anim->tuning.foot_ik = false;
+                if (o.find("hand") != std::string::npos) a.anim->tuning.hand_ik = false;
+                if (o.find("lean") != std::string::npos) a.anim->tuning.lean_strength = 0.0f;
+                if (o.find("rate") != std::string::npos) a.anim->tuning.max_rate = 1.0f;
+            }
+            if (const char* e = std::getenv("SLIDE_STRIDE")) a.anim->tuning.max_stride = float(std::atof(e));
+            if (const char* e = std::getenv("SLIDE_LEG")) a.anim->tuning.stride_leg = float(std::atof(e));
+            if (const char* e = std::getenv("SLIDE_REACH")) a.anim->tuning.stride_reach = float(std::atof(e));
+            if (const char* e = std::getenv("SLIDE_DROP")) a.anim->tuning.max_stride_drop = float(std::atof(e));
+            a.pin.fwd = d.f; a.pin.back = d.b; a.pin.right = d.r;
+            a.pin.sprint = pc.sprint; a.pin.crawl = pc.crawl;
+            std::vector<glm::vec3> track[2];
+            std::vector<char> on[2];
+            std::string clip;
+            double clip_speed = 0.0, rate = 0.0, stride = 0.0, locked = 0.0, speed = 0.0;
+            float rest_y[2] = { 1e9f, 1e9f };
+            std::vector<anim::Transform> prev;
+            float worst_rate = 0.0f, worst_t = 0.0f;
+            std::string worst_joint;
+            int n = 0;
+            for (float t = 0.0f; t < 9.0f; t += dt) {
+                game::update_player(a.p, a.pin, world, dt * 0.5f);
+                game::update_player(a.p, a.pin, world, dt * 0.5f);
+                animate(a, dt);
+                if (t < 2.0f) continue;
+                {
+                    const auto loc = a.anim->local();
+                    if (!prev.empty())
+                        for (size_t j = 1; j < loc.size(); ++j) {
+                            const glm::quat dq = glm::inverse(prev[j].r) * loc[j].r;
+                            const float ang = 2.0f * std::asin(std::min(glm::length(glm::vec3(dq.x, dq.y, dq.z)), 1.0f)) / dt;
+                            const std::string& jn = set.runtime->skeleton().names[j];
+                            if (jn == "LeftHand" || jn == "RightHand") continue;
+                            if (ang > worst_rate) { worst_rate = ang; worst_t = t; worst_joint = set.runtime->skeleton().names[j]; }
+                        }
+                    prev.assign(loc.begin(), loc.end());
+                }
+                const anim::AnimDebug& g = a.anim->debug();
+                clip_speed += g.anim_speed; rate += g.rate; stride += g.stride;
+                speed += glm::length(glm::vec2(a.p.velocity.x, a.p.velocity.z));
+                locked += 0.5 * (double(g.locked[0]) + double(g.locked[1]));
+                ++n;
+                for (int k = 0; k < 2; ++k) {
+                    const glm::vec3 w = a.p.position - glm::vec3(0.0f, 0.9f, 0.0f) + glm::vec3(a.anim->model()[size_t(foot[k])][3]);     // yaw 0: model = world axes
+                    track[k].push_back(w);
+                    on[k].push_back(g.contact[k] ? 1 : 0);
+                    rest_y[k] = std::min(rest_y[k], w.y);
+                }
+                if (g.clip >= 0) clip = set.runtime->clip(g.clip).name;
+                if (kTraceEnv && std::string(kTraceEnv) == std::string(pc.name) + "/" + d.name && t > trace_from && t < trace_from + 0.5f) {
+                    // per leg: how far the foot is from the hip joint as a share of the leg's length, its height, the knee's rate
+                    static std::vector<anim::Transform> tp;
+                    const auto loc = a.anim->local();
+                    const auto m = a.anim->model();
+                    std::printf("  t %.3f %s @ %.2f%s stride %.2f |", double(t), clip.c_str(), double(g.clip_time), g.mirrored ? " m" : "", double(g.stride));
+                    for (int k = 0; k < 2; ++k) {
+                        const int up = rig[k == 0 ? anim::Role::LeftUpLeg : anim::Role::RightUpLeg], lo = rig[k == 0 ? anim::Role::LeftLeg : anim::Role::RightLeg];
+                        const glm::vec3 pu(m[size_t(up)][3]), pl(m[size_t(lo)][3]), pf(m[size_t(foot[k])][3]);
+                        const float len = glm::length(pl - pu) + glm::length(pf - pl);
+                        float kr = 0.0f;
+                        if (!tp.empty()) {
+                            const glm::quat dq = glm::inverse(tp[size_t(lo)].r) * loc[size_t(lo)].r;
+                            kr = 2.0f * std::asin(std::min(glm::length(glm::vec3(dq.x, dq.y, dq.z)), 1.0f)) / dt;
+                        }
+                        std::printf(" %c c%d ext %.3f z %+.3f y %.3f knee %5.1f |", k == 0 ? 'L' : 'R', int(g.contact[k]), double(glm::length(pf - pu) / len),
+                                    double(pf.z - pu.z), double(pf.y), double(kr));
+                    }
+                    {
+                        // right arm: reach as a share of its length, rates of the shoulder, upper arm and forearm
+                        const int sh = rig[anim::Role::RightShoulder], ua = rig[anim::Role::RightArm], fa = rig[anim::Role::RightForeArm], hd = rig[anim::Role::RightHand];
+                        const glm::vec3 p0(m[size_t(ua)][3]), p1(m[size_t(fa)][3]), p2(m[size_t(hd)][3]);
+                        auto rate = [&](int j) {
+                            if (tp.empty()) return 0.0f;
+                            const glm::quat dq = glm::inverse(tp[size_t(j)].r) * loc[size_t(j)].r;
+                            return 2.0f * std::asin(std::min(glm::length(glm::vec3(dq.x, dq.y, dq.z)), 1.0f)) / dt;
+                        };
+                        std::printf(" arm ext %.3f sh %5.1f ua %5.1f fa %5.1f  warp %.2f", double(glm::length(p2 - p0) / (glm::length(p1 - p0) + glm::length(p2 - p1))),
+                                    double(rate(sh)), double(rate(ua)), double(rate(fa)), double(g.warp));
+                    }
+                    std::printf("\n");
+                    tp.assign(loc.begin(), loc.end());
+
+                }
+            }
+            double slid = 0.0;
+            int down = 0, standing = 0;
+            for (int k = 0; k < 2; ++k) {
+                for (size_t i = 1; i < track[k].size(); ++i) {
+                    if (!on[k][i] || !on[k][i - 1]) continue;
+                    ++down;
+                    if (track[k][i].y > rest_y[k] + 0.03f) continue;          // lifted: in the air, not sliding
+                    ++standing;
+                    const glm::vec3 dv = track[k][i] - track[k][i - 1];
+                    slid += double(std::sqrt(dv.x * dv.x + dv.z * dv.z)) / double(dt);
+                }
+            }
+            const double s = standing ? slid / standing : 0.0;
+            speed /= n;
+            std::printf("| %s | %s | %.1f | %s | %.2f | %.2f | %.2f | %.2f | %.0f %% | %.0f %% | %.0f %% | %.0f %s at %.2f s |\n", pc.name, d.name, speed, clip.c_str(), clip_speed / n, rate / n,
+                        stride / n, s, 100.0 * s / std::max(speed, 1e-3), down ? 100.0 * standing / down : 0.0, 100.0 * locked / n,
+                        double(worst_rate), worst_joint.c_str(), double(worst_t));
+        }
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2) { std::fprintf(stderr, "usage: vibe_animbench <soldier.qanim> [seconds per case]\n"); return 2; }
+    if (argc < 2) { std::fprintf(stderr, "usage: vibe_animbench <soldier.qanim> [seconds per case | slide]\n"); return 2; }
+    if (argc > 2 && std::string(argv[2]) == "slide") {
+        anim::AnimationSet sset;
+        std::string swhy;
+        if (!sset.load(argv[1], &swhy)) { std::fprintf(stderr, "%s: %s\n", argv[1], swhy.c_str()); return 1; }
+        slide_table(sset);
+        return 0;
+    }
     const float seconds = argc > 2 ? float(std::atof(argv[2])) : 4.0f;
     anim::AnimationSet set;
     std::string why;

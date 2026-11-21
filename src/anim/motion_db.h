@@ -94,6 +94,10 @@ public:
     void normalise(const float* raw, float* out) const;                 // out: kStride floats
     static void mirror_raw(const float* raw, float* out);               // left <-> right
     size_t memory_bytes() const;
+    // The pace the capture keeps up in a direction (0 forward, 1 sideways, 2 backward), standing
+    // or crouched: a high percentile of the root speed of the frames going that way. A request
+    // for more than this finds only single moments, not whole steps. 0 = nothing captured.
+    float cruise_speed(bool crouched, int axis) const { return cruise_[crouched ? 1 : 0][axis < 0 ? 0 : axis > 2 ? 2 : axis]; }
 
     // Exhaustive search over every frame a range allows, both as captured and mirrored.
     MotionMatch search(const MotionQuery& q) const;
@@ -113,6 +117,7 @@ private:
     std::vector<MotionRange>     ranges_;
     std::vector<uint32_t>        range_of_;
     std::vector<MotionJump>      jumps_;
+    float    cruise_[2][3] = {};
 };
 
 // What the offline build hands over; serialised into the asset's motion block.

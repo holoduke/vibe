@@ -109,6 +109,19 @@ QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=a.cfg QLIKE_TEST_MOVE=1 QLIKE_TEST_FI
 QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=b.cfg QLIKE_TEST_HOLD=1 QLIKE_ANIM_DEBUG=1 QLIKE_ANIM_LOG=1 ./build/vibe.exe --frames 1500 --screenshot obs.png --screenshot-after 130
 ```
 
+## Measuring the gait
+
+```powershell
+./build/vibe_animbench.exe assets/character/soldier.qanim slide
+```
+
+Holds the real controller on each key combination and prints, per pace and direction: the clip
+chosen, its speed, rate and stride, how fast a planted foot moves over the ground, how much of
+the capture's contact the foot really stands, and the fastest joint. `SLIDE_OFF=stride,orient,
+lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, `SLIDE_LEG`,
+`SLIDE_REACH`, `SLIDE_DROP` set the stride tuning; `SLIDE_TRACE="walk/forward"` (with
+`SLIDE_TRACE_T=<s>`) prints half a second of legs and right arm frame by frame.
+
 ## Tests
 
 `./build.ps1 -Config Release -Test`, or `build/tests/qlike_anim_tests.exe "[animator]"`.
@@ -119,6 +132,7 @@ QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=b.cfg QLIKE_TEST_HOLD=1 QLIKE_ANIM_DE
 | `[import]` | BVH parsing and FK, retargeting (axes, scale, bone lengths), contacts, validation |
 | `[runtime]` | Bind-pose parity, sampling at boundaries, looping, root motion, blending / masks / additive, IK, mirroring, skinning, threads |
 | `[motion]` `[trajectory]` `[matcher]` `[inertializer]` | Features, jump detection, serialization, fast search = reference search, query time, prediction = the controller's own integration, hysteresis, 5 - 10 Hz input, pose and rate continuity |
+| `[asset]` | The cooked asset at the controller's real paces (crawl, walk, sprint; forward, diagonal, sideways, backward): foot slide, joint rates, a whole gait, no path-only searching. Skipped when the asset is missing |
 | `[animator]` `[lod]` | Against the real controller: reversals, strafes, 1x - 3x airtime, long falls, bunny hops, double jump + 180 in the air, hands on the weapon, recoil / reload / interrupt / switch, foot locks, slopes, platforms, variable frame rates, **controller trajectory identical with and without animation**, determinism, levels of detail |
 | `[net]` | Wire form and aim precision, insane packets, interpolation / extrapolation / teleports, adaptive delay, event de-duplication and timing, an observer's reconstruction over a link with 0 - 200 ms latency and 0 - 10 % loss, a stall, respawn, late join |
 
@@ -128,15 +142,21 @@ QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=b.cfg QLIKE_TEST_HOLD=1 QLIKE_ANIM_DE
 |---|---|
 | No body; log says `no animation: ... soldier.qanim` | Asset missing, cooked for another ozz version, or its skeleton is not the mesh's: cook again |
 | Log: `the animator produced N pose(s) that were not finite` | A bug; the last good pose was shown. `QLIKE_BODY_DEBUG=1` shows the clip and mode at that time |
-| Overlay says `FALLBACK: path only` often | The request is outside what was captured (see gap G1): the clip is chosen by direction alone |
-| Feet slide when running | Expected above 4 m/s with this data (G1) |
+| Overlay says `FALLBACK: path only` often | The request is outside what was captured: the clip is chosen by direction alone. Should be rare since requests are mapped onto the pace each direction of the capture sustains |
+| Feet slide when running | Some is expected with this data, most of it sideways (G1); `vibe_animbench <asset> slide` gives the numbers |
+| An arm or a knee snaps over for a frame | Should not happen (the `[asset]` test bounds every joint's rate): run `vibe_animbench <asset> slide` and look at the last column |
 | Remote player's feet ignore a floor far from you | Level floors are probed only near the local player; further out feet stay level (G4) |
 
 ## Known gaps
 
-- **G1 — speed.** The capture's "run" averages 1.25 m/s (peak 1.9); the game runs at 8 and
-  sprints at 12. Playback rate (to 1.5x), stride (to what the leg can reach) and lean cover about
-  5 m/s; beyond that feet slide and are not locked. A sprint capture with clear rights is the fix.
+- **G1 - speed.** The fastest takes of the capture sustain about 2.0 m/s forward, 1.4 sideways and
+  1.5 backward (`MotionDatabase::cruise_speed`); the game walks at 8 and sprints at 12. Playback
+  rate (to 1.5x) and stride (to 4.5x) make up the difference: a foot on the ground travels back
+  as fast as the ground does for as long as the leg reaches, then leaves the ground. Measured
+  (`vibe_animbench <asset> slide`, table in `performance.md`): the planted foot slides 0 - 1 % of
+  the body's speed at the crawl pace, 9 % walking and 10 % sprinting forward or diagonally,
+  19 - 25 % backward, 25 - 43 % sideways. Sideways is the weak one: a sidestep cannot be lengthened
+  the way a forward step can. A sprint and a fast sidestep capture with clear rights would close it.
 - **G2 — no captured aiming, firing, reload, fall or hard landing.** These are procedural
   layers; the landing uses the two-foot-jump capture's own landing.
 - **G3 — stops.** No distance matching; a stop is found by the search (the StartStop takes help).

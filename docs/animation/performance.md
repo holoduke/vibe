@@ -59,7 +59,7 @@ Reading it:
 | GPU, body + weapon (`w_viewmodel` in `gpu-passes`, RTX 4080, 1440p internal) | 0.06 ms |
 | GPU, 33 skinned bodies (`QLIKE_BODY_CROWD=32`) | 0.31 - 0.37 ms |
 | GPU, 129 skinned bodies (`QLIKE_BODY_CROWD=128`) | 1.25 - 1.47 ms |
-| Pose search | 0.20 - 0.45 ms over 79,210 frames, both mirror halves; 0.005 ms while idle |
+| Pose search | 0.20 - 0.45 ms over 86,135 frames, both mirror halves; 0.005 ms while idle |
 
 **Skinning is on the GPU** (`shaders/cube_skin.vert`): the rest-pose mesh and each vertex's bones
 and weights are static buffers, a character costs the CPU one 53-bone palette (7.6 kB) a frame.
@@ -68,13 +68,50 @@ of GPU time a body (43k vertices each: the crowd numbers above are vertex work, 
 copies is mostly off screen, so shading is not in them). The mesh has no levels of detail: at
 hundreds in view its 79k triangles per body become the cost, not the skinning.
 
+## Foot slide and joint rates at the controller's paces
+
+`vibe_animbench assets/character/soldier.qanim slide`: the real controller held on one key
+combination over flat ground. "Slide" is the speed over the ground of a foot the capture has
+on the ground and the animator has not lifted; "on the ground" is the share of the capture's
+contact during which the foot really stands (the rest it has left the ground: the leg was not
+long enough for the stride).
+
+| pace | direction | speed m/s | clip | clip speed | rate | stride | slide m/s while down | share of speed | foot on the ground while down | locked | fastest joint rad/s |
+|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|
+| crawl key | forward | 3.2 | Crouched_TR1 | 1.36 | 1.50 | 1.57 | 0.00 | 0 % | 100 % | 24 % | 17 RightToeBase at 2.48 s |
+| crawl key | diagonal | 3.2 | Crouched_TR1 | 1.36 | 1.50 | 1.57 | 0.00 | 0 % | 100 % | 24 % | 17 LeftToeBase at 2.08 s |
+| crawl key | sideways | 3.2 | Crouched_TR1 | 1.37 | 1.50 | 1.56 | 0.00 | 0 % | 90 % | 20 % | 19 RightForeArm at 3.00 s |
+| crawl key | backward | 3.2 | Crouched_BR | 1.04 | 1.50 | 2.08 | 0.02 | 1 % | 82 % | 33 % | 28 RightLeg at 2.65 s |
+| walk | forward | 8.0 | Neutral_FR | 1.87 | 1.50 | 2.85 | 0.74 | 9 % | 100 % | 0 % | 26 LeftLeg at 2.88 s |
+| walk | diagonal | 8.0 | Neutral_FR | 1.87 | 1.50 | 2.85 | 0.74 | 9 % | 100 % | 0 % | 26 RightLeg at 5.13 s |
+| walk | sideways | 8.0 | Neutral_SR | 1.45 | 1.50 | 3.71 | 2.00 | 25 % | 56 % | 0 % | 21 LeftLeg at 3.27 s |
+| walk | backward | 8.0 | Rushed_BW | 1.42 | 1.50 | 3.76 | 2.00 | 25 % | 65 % | 0 % | 31 RightUpLeg at 2.78 s |
+| sprint | forward | 12.0 | Neutral_FR | 1.87 | 1.50 | 4.27 | 1.25 | 10 % | 88 % | 0 % | 35 RightLeg at 3.15 s |
+| sprint | diagonal | 12.0 | Neutral_FR | 1.87 | 1.50 | 4.27 | 1.25 | 10 % | 88 % | 0 % | 35 RightLeg at 4.20 s |
+| sprint | sideways | 12.0 | Neutral_SR | 1.44 | 1.50 | 4.50 | 5.13 | 43 % | 36 % | 0 % | 22 LeftLeg at 2.92 s |
+| sprint | backward | 12.0 | Rushed_BR | 1.63 | 1.50 | 4.50 | 2.23 | 19 % | 100 % | 0 % | 38 LeftUpLeg at 2.65 s |
+
+Before this pass (same tool, the asset without the Rushed takes, 2026-11-21): walk 32 % forward,
+98 % diagonal, 79 % sideways, 87 % backward; sprint 55 / 87 / 86 / 92 %; and at those paces an
+upper arm or a knee turning at 100 - 184 rad/s for a frame (a visible snap). What changed:
+
+- a diagonal request is turned onto the nearest captured direction for the search and the legs
+  are turned back by the orientation warp (the capture has no diagonal takes);
+- game speed is mapped onto the pace the capture sustains in that direction, not onto one number
+  (a request for more found one fast moment and replayed a quarter of a second of it for ever);
+- the Rushed takes of 100STYLE are in the asset (the fastest of the set);
+- stride to 4.5x; a foot that would go beyond the leg leaves the ground instead of being held
+  back, the hips come down up to 10 cm;
+- the knee points where the hips face while the capture has the leg straight; arms on a weapon
+  are solved from the rest pose, not from the captured arm swing; the chest keeps 35 % of its lean.
+
 ## Memory
 
 | | |
 |---|---|
 | Asset on disk | 24.2 MB |
-| Clips in memory (ozz, compressed) | 12.9 MB for 80,101 frames x 53 joints: 168 bytes per frame (raw: 1,484) |
-| Motion database | 11.6 MB (32 floats per frame, padded for AVX; the mirrored half is not stored) |
+| Clips in memory (ozz, compressed) | 14.4 MB for 87,224 frames x 53 joints: 173 bytes per frame (raw: 1,484) |
+| Motion database | 12.3 MB (32 floats per frame, padded for AVX; the mirrored half is not stored) |
 | Per character | ~16 kB of pose buffers plus two sampling caches |
 | Before this work | ~46 MB (every frame stored twice) |
 

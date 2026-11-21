@@ -151,9 +151,11 @@ TEST_CASE("animator: idle, run, stop, strafe pick the fitting captures", "[anim]
     CHECK(clip_name(f, a) == "idle");
     run(sim, a, w, 0.6f, [](float, game::PlayerInput& in, Sim&, CharacterAnimationInput&) { in.fwd = true; in.crawl = true; }, k60);
     CHECK(clip_name(f, a) == "crouch_f");
-    INFO("max joint rate " << w.max_ang_rate << " rad/s");
+    INFO("max joint rate " << w.max_ang_rate << " rad/s at " << w.worst_joint);
     CHECK(w.max_bone_err < 2e-3f);
-    CHECK(w.max_ang_rate < 40.0f);
+    // (a foot passing under the hips at 8 - 12 m/s turns knee and thigh at 30 - 45 rad/s by geometry
+    // alone; a pop is 100 and more)
+    CHECK(w.max_ang_rate < 50.0f);
 }
 
 TEST_CASE("animator: sprint, instant 180 degree reversal, sprint", "[anim][animator]") {
@@ -177,8 +179,8 @@ TEST_CASE("animator: sprint, instant 180 degree reversal, sprint", "[anim][anima
     CHECK(sim.p.velocity.z > 11.0f);                     // going the new way at sprint speed
     CHECK(clip_name(f, a) == "run_f");
     CHECK(t_new_dir > 0.0f);
-    INFO("max joint rate " << w.max_ang_rate << " rad/s");
-    CHECK(w.max_ang_rate < 40.0f);
+    INFO("max joint rate " << w.max_ang_rate << " rad/s at " << w.worst_joint);
+    CHECK(w.max_ang_rate < 50.0f);
     CHECK(a.debug().switches < 40);
 }
 
@@ -720,4 +722,77 @@ TEST_CASE("animator: teleport drops world-space memory; swimming and no ground c
     in.swimming = false; in.ground_height = nullptr; in.velocity = glm::vec3(0.0f, -5.0f, 0.0f);
     for (int i = 0; i < 60; ++i) { a.update(in); REQUIRE(pose_is_valid(a.model())); }
     CHECK(a.debug().air_phase == AirPhase::Fall);                // ground unknown: falls, never "reaches"
+}
+
+// The cooked asset itself, at the paces the controller really holds. The synthetic clips of the
+// other tests are too tame to show what real capture does at 8 - 12 m/s: a torso leaning onto
+// the weapon, legs captured straight, a request faster than anything recorded.
+TEST_CASE("real asset: steady crawl, walk and sprint in every direction", "[anim][animator][asset]") {
+    AnimationSet set;
+    std::string why;
+    if (!set.load((std::string(QLIKE_SOURCE_DIR) + "/assets/character/soldier.qanim").c_str(), &why)) {
+        WARN("assets/character/soldier.qanim not loaded (" << why << "): skipped");
+        return;
+    }
+    // (the capture's pace per direction is what the request is mapped onto)
+    CHECK(set.db.cruise_speed(false, 0) > 1.5f);
+    CHECK(set.db.cruise_speed(false, 0) < 3.3f);
+    CHECK(set.db.cruise_speed(false, 2) > 0.8f);
+    CHECK(set.db.cruise_speed(false, 2) < set.db.cruise_speed(false, 0));
+    const Rig& rig = set.runtime->rig();
+    const int foot[2] = { rig[Role::LeftFoot], rig[Role::RightFoot] };
+    struct Case { const char* name; bool fwd, back, right, sprint, crawl; float max_slide; };
+    const Case cases[] = {
+        { "crawl forward", true, false, false, false, true, 0.06f },   { "crawl diagonal", true, false, true, false, true, 0.06f },
+        { "crawl backward", false, true, false, false, true, 0.06f },  { "walk forward", true, false, false, false, false, 0.16f },
+        { "walk diagonal", true, false, true, false, false, 0.16f },   { "walk sideways", false, false, true, false, false, 0.35f },
+        { "walk backward", false, true, false, false, false, 0.35f },  { "sprint forward", true, false, false, true, false, 0.20f },
+        { "sprint diagonal", true, false, true, true, false, 0.20f },  { "sprint backward", false, true, false, true, false, 0.30f },
+    };
+    for (const Case& c : cases) {
+        Sim sim;
+        CharacterAnimator a(set);
+        Watch w(set);
+        std::vector<glm::vec3> track[2];
+        std::vector<char> on[2];
+        float low[2] = { 1e9f, 1e9f };
+        int fallback = 0, frames = 0;
+        std::vector<int> clips_seen;
+        float t_now = 0.0f;
+        run(sim, a, w, 7.0f, [&](float t, game::PlayerInput& in, Sim&, CharacterAnimationInput&) {
+            t_now = t;
+            in.fwd = c.fwd; in.back = c.back; in.right = c.right; in.sprint = c.sprint; in.crawl = c.crawl;
+        }, k60, [&](const CharacterAnimationInput& in) {
+            if (t_now < 2.0f) return;
+            ++frames;
+            fallback += a.debug().fallback ? 1 : 0;
+            for (int k = 0; k < 2; ++k) {
+                const glm::vec3 p = in.position + glm::vec3(a.model()[size_t(foot[k])][3]);      // yaw 0: model axes = world axes
+                track[k].push_back(p);
+                on[k].push_back(a.debug().contact[k] ? 1 : 0);
+                low[k] = std::min(low[k], p.y);
+            }
+        });
+        const float speed = glm::length(glm::vec2(sim.p.velocity.x, sim.p.velocity.z));
+        double slid = 0.0;
+        int standing = 0, contact_frames[2] = { 0, 0 };
+        for (int k = 0; k < 2; ++k)
+            for (size_t i = 1; i < track[k].size(); ++i) {
+                if (!on[k][i] || !on[k][i - 1]) continue;
+                ++contact_frames[k];
+                if (track[k][i].y > low[k] + 0.03f) continue;
+                ++standing;
+                const glm::vec3 d = track[k][i] - track[k][i - 1];
+                slid += double(std::sqrt(d.x * d.x + d.z * d.z)) * 60.0;
+            }
+        const double slide = standing ? slid / standing / double(speed) : 0.0;
+        INFO(c.name << ": " << speed << " m/s, slide " << slide * 100.0 << " % of it, fastest joint " << w.max_ang_rate << " rad/s at " << w.worst_joint
+                    << ", path-only searches " << fallback << " of " << frames << " frames");
+        CHECK(slide < double(c.max_slide));
+        CHECK(w.max_ang_rate < 45.0f);                       // no knee or elbow snapping over
+        CHECK(w.max_bone_err < 2e-3f);
+        CHECK(fallback * 10 < frames);                       // the request is one the capture can answer
+        CHECK(contact_frames[0] > 10);                       // both feet take steps: a gait, not one moment replayed
+        CHECK(contact_frames[1] > 10);
+    }
 }

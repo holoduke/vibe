@@ -134,10 +134,12 @@ Runtime order per character (fixed, documented because layers must not fight):
 3. Lower body: motion matching (ground), airborne phase model (air), directional blend fallback
    when the database does not cover the request.
 4. Clip sampling -> local pose. Inertialisation of the change.
-5. Orientation warp (legs to travel direction), lean, stride warp targets.
+5. Orientation warp (legs to travel direction; a diagonal request is searched as the nearest captured
+   direction), lean, the chest held near its place under the view, stride warp targets.
 6. Upper body: aim yaw / pitch spread over pelvis, spine, neck, head with limits.
 7. Local -> model.
-8. Feet: contact detection, world locks, ground probes, pelvis compensation, two-bone IK.
+8. Feet: stride (a foot beyond the leg's reach leaves the ground), world locks, ground probes, pelvis
+   compensation, two-bone IK with a knee direction that does not depend on a straight leg.
 9. Weapon: the weapon frame comes from gameplay aim; reload / equip layer moves the hands' targets;
    additive recoil; two-bone IK for both arms; finger poses. IK runs after every additive layer.
 10. Local -> model for the changed chains; skinning matrices.
@@ -207,15 +209,15 @@ The game runs on the new system; `engine/motion_match.*`, `tools/anim/build_moti
 | Engine | `vk_engine/player_body.cpp` (rewritten), `multiplayer.cpp`, `ragdoll.cpp`, `props.cpp`, `combat.cpp`, `vk_engine.cpp`, `vk_engine.h` |
 | Network | `engine/net/net_state.h` (new), `net_anim.h` (new), `net.h`, `net.cpp` |
 | Tests | `tests/anim/` (skeleton, runtime, import, motion, animator, net) |
-| Asset | `assets/character/soldier.qanim` (27 clips, 80,101 frames, 490 jumps; 24 MB) |
+| Asset | `assets/character/soldier.qanim` (33 clips, 87,224 frames, 490 jumps; 26.8 MB) |
 
 Measured against the baseline (same machine, body shown from outside, running):
 
 | | Before | After |
 |---|---|---|
 | `player body` per frame (animation + skinning) | 0.80 - 0.90 ms | 0.08 - 0.40 ms on the CPU (animation only); skinning on the GPU, ~0.01 ms a body |
-| Data in memory | ~46 MB (frames stored twice for the mirror) | 24.5 MB (12.9 MB clips + 11.6 MB database; mirror searched, not stored) |
-| Search | every 0.2 s, scalar | every 0.1 s, AVX2: 0.2 - 0.45 ms over 79,210 frames x 2 |
+| Data in memory | ~46 MB (frames stored twice for the mirror) | 26.7 MB (14.4 MB clips + 12.3 MB database; mirror searched, not stored) |
+| Search | every 0.2 s, scalar | every 0.1 s, AVX2: 0.2 - 0.45 ms over 86,135 frames x 2 |
 | Tests | none | 70 |
 
 ### Acceptance criteria
@@ -224,8 +226,8 @@ Measured against the baseline (same machine, body shown from outside, running):
 |---|---|---|
 | 1 | Builds cleanly, existing tests green | pass |
 | 2 | Demo map showcase | not built as a map; every listed movement runs in the scenario tests and can be shown with the `QLIKE_BODY_*` hooks |
-| 3 | No obvious foot sliding in planted phases | pass below 4 m/s (locks, < 1.5 cm in tests). **Fail above**: the capture tops out near 1.9 m/s, the game runs 8 - 12; feet slide at speed (gap G1) |
-| 4 | No pops, NaNs, oscillation | pass in tests (joint rates bounded, 0 invalid poses, switch rate bounded at 5 - 10 Hz input) |
+| 3 | No obvious foot sliding in planted phases | pass below 4 m/s (locks, < 1.5 cm in tests) and at the crawl pace (0 - 1 %). At walk and sprint: 9 - 10 % of the body's speed forward and diagonally, 19 - 25 % backward, **25 - 43 % sideways** (measured, `performance.md`; bounded by the `[asset]` test). Not zero: the capture tops out near 2 m/s (gap G1) |
+| 4 | No pops, NaNs, oscillation | pass in tests (joint rates bounded, 0 invalid poses, switch rate bounded at 5 - 10 Hz input), and on the real asset at walk and sprint in every direction (fastest joint 17 - 38 rad/s; it was 100 - 184 until the arm and knee solves were fixed) |
 | 5 | Input never delayed or altered | pass: controller trajectories bit-identical with and without animation |
 | 6 | Debug tools | pass (`QLIKE_ANIM_DEBUG=1`) |
 | 7 | Automated tests | pass |

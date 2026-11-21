@@ -68,12 +68,16 @@ struct AnimTuning {
     physics::MoveParams move;            // the controller's movement model (set from game::kPlayerMove)
     float inertial_halflife = 0.085f;    // seconds; shorter = snappier, more visible changes
     float min_rate = 0.75f, max_rate = 1.5f;           // playback rate fitted to the real speed
-    float min_stride = 0.7f, max_stride = 2.6f;        // then stride length
+    float min_stride = 0.7f, max_stride = 4.5f;        // then stride length
+    float stride_reach = 0.72f;                        // a striding foot goes this share of the leg's length from the hip at most
+    float stride_leg = 0.90f;                          // ... and is lifted off the ground where the leg would be longer than this share
+    float stride_drop = 0.04f, max_stride_drop = 0.10f;// metres the hips come down per unit of extra stride, and at most
     float max_orient_warp = 1.05f;       // radians the legs may turn away from the capture's travel direction
     float lean_strength = 1.0f;          // 0 = none
     float accel_lean = 0.012f;           // radians per m/s^2 (turning at speed is an acceleration too)
     float speed_lean = 0.010f;           // radians per m/s, into the direction of travel
     float max_lean = 0.22f;
+    float chest_keep = 0.35f;            // share of the torso's lean away from its rest place that is kept (1 = all of it)
     float spine_pitch_share = 0.30f;     // share of the aim pitch taken by the spine (third person)
     float spine_pitch_share_fp = 0.10f;  // ... when seen from the character's own eyes
     float foot_ik_weight = 1.0f;
@@ -160,7 +164,7 @@ private:
     void arms(const CharacterAnimationInput& in);
     void rotate_in_model(int joint, const glm::quat& q);              // turns a joint about model axes (local pose)
     glm::quat model_rotation(int joint) const;                        // from pose_, by walking the parents
-    void fit_limb(int a, int b, int c, glm::vec3 target, const glm::vec3* pole);
+    void fit_limb(int a, int b, int c, glm::vec3 target, const glm::vec3* pole, bool from_rest = false);
     float ground_at(const CharacterAnimationInput& in, glm::vec3 model_point) const;   // metres above the model's origin plane
 
     const AnimationSet& set_;
@@ -175,6 +179,8 @@ private:
     float  prev_yaw_ = 0.0f, yaw_rate_ = 0.0f;
     glm::vec3 prev_vel_{0.0f}, accel_{0.0f};
     float  rate_ = 1.0f, stride_ = 1.0f, warp_ = 0.0f;
+    float  snap_axis_ = 0.0f;            // the captured direction (a multiple of 90 degrees) a diagonal request is turned onto
+    bool   snap_on_ = false;
     float  lean_roll_ = 0.0f, lean_roll_v_ = 0.0f, lean_pitch_ = 0.0f, lean_pitch_v_ = 0.0f;
     float  dip_ = 0.0f, dip_v_ = 0.0f, pelvis_ik_ = 0.0f, pelvis_ik_v_ = 0.0f;
     float  air_blend_ = 0.0f, time_ = 0.0f, stand_hips_ = 0.0f;
