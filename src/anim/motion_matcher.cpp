@@ -107,7 +107,10 @@ MatcherOutput update_matcher(const MotionDatabase& db, MatcherState& st, const M
             const bool same_place = st.frame >= 0 && best.mirrored == st.mirrored &&
                                     &db.range_of(uint32_t(best.frame)) == &db.range_of(uint32_t(st.frame)) &&
                                     std::abs(best.frame - st.frame) < p.min_hop_frames;
-            const bool better = best.cost < cur_cost * p.keep_ratio - p.keep_margin;
+            // Standing still stays in the idle it is in: turning the view on the spot is not a reason to
+            // restart it somewhere else.
+            const bool idling = keepable && (in.require_tags & kTagIdle) && (db.range_of(uint32_t(st.frame)).tags & kTagIdle);
+            const bool better = !idling && best.cost < cur_cost * p.keep_ratio - p.keep_margin;
             const bool allowed = st.since_switch >= p.min_switch_interval;
             if (!keepable || (better && !same_place && allowed)) {
                 if (!(same_place && !keepable && best.frame == st.frame)) {

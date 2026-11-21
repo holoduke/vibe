@@ -417,7 +417,6 @@ add_library(qlike_engine STATIC
     src/engine/aa_vehicle.cpp
     src/engine/rocket_sim.cpp
     src/engine/globe.cpp
-    src/engine/motion_match.cpp
 )
 target_include_directories(qlike_engine PUBLIC src)
 target_include_directories(qlike_engine PRIVATE
@@ -427,6 +426,7 @@ target_include_directories(qlike_engine PRIVATE
     ${fastnoiselite_SOURCE_DIR}/Cpp)
 target_link_libraries(qlike_engine PUBLIC
     qlike_core
+    qlike_anim
     Vulkan::Vulkan
     glfw
     vk-bootstrap::vk-bootstrap

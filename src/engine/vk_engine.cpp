@@ -700,6 +700,14 @@ void VulkanEngine::run(const RunOptions& opts) {
             if (in.weapon2 && !prev_weapon_key_[1]) { weapon_ = 1; flashlight_on_ = false; }
         }
         prev_weapon_key_[0] = in.weapon1; prev_weapon_key_[1] = in.weapon2;
+        // R: reload. Cosmetic (the laser has no magazine): it is shown and replicated, and firing ends it.
+        if (state_ == State::Playing && !terrain_edit_mode_ && in.brush_mode_next && !prev_reload_key_ && weapon_ == 0 && !flashlight_on_ &&
+            body_reload_left_ <= 0.0f && body_animator_) {
+            ++body_reload_seq_;
+            body_reload_left_ = body_animator_->weapon.reload_time;
+        }
+        prev_reload_key_ = in.brush_mode_next;
+        if (state_ != State::Playing) last_pin_ = game::PlayerInput{};
         if (in.fly_key && !prev_fly_key_ && state_ == State::Playing) {
             fly_mode_ = !fly_mode_;
             player_.velocity = glm::vec3(0.0f);
@@ -929,6 +937,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                 pin.sprint = in.sprint;
                 pin.crawl = in.crawl;
                 pin.gravity = game_.gravity;
+                last_pin_ = pin;                 // (what the player wants: the animation's prediction reads it)
                 // Water: how much of the 1.8 m body is under the surface.
                 // Swimming starts once the water reaches the chest (the
                 // feet no longer carry the body) and ends when it drops
@@ -1393,6 +1402,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             ImGui::NewFrame();
             build_hud_ui();
             mp_hud();
+            anim_debug_overlay();
             if (terrain_shaders_compiling()) {
                 // First start: say why the ground looks plain for a minute.
                 ImDrawList* dl = ImGui::GetForegroundDrawList();

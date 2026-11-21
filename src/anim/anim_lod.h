@@ -13,8 +13,8 @@
 namespace qlike::anim {
 
 struct LodParams {
-    float full_px = 220.0f;      // at least this tall on screen: level 0
-    float mid_px = 70.0f;        // ... level 1
+    float full_px = 110.0f;      // at least this tall on screen: level 0
+    float mid_px = 45.0f;        // ... level 1
     float low_px = 14.0f;        // ... level 2; smaller is level 3
     float hysteresis = 0.15f;    // a level is left only when the size is this share past its boundary
 };

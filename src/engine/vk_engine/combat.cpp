@@ -115,6 +115,8 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
 
     mp_on_local_fire(origin, direction);   // multiplayer: tell the others (no-op for a replayed remote shot)
     if (!mp_remote_shot_) {                // (a remote shot: their avatar kicks, the sound comes from there)
+        ++body_shot_seq_;                  // the body's recoil; replicated, so others see it too
+        body_reload_left_ = 0.0f;          // firing ends a reload at once: it never holds a shot back
         muzzle_flash_timer_ = kMuzzleFlashDuration;
         recoil_timer_       = kRecoilDuration;
     }

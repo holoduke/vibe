@@ -664,7 +664,7 @@ TEST_CASE("animator: levels of detail", "[anim][lod]") {
     LodInput li;
     li.distance = 2.0f;
     CHECK(select_lod(li) == 0);
-    li.distance = 12.0f;
+    li.distance = 20.0f;
     CHECK(select_lod(li) == 1);
     li.distance = 60.0f;
     CHECK(select_lod(li) == 2);
@@ -678,7 +678,7 @@ TEST_CASE("animator: levels of detail", "[anim][lod]") {
     CHECK(select_lod(li) == 3);
     li.in_view = true;
     // no flicker at a boundary
-    li.distance = 1.8f / (0.7f * 220.0f) * 540.0f;                // exactly the level 0 / 1 boundary
+    li.distance = 1.8f / (0.7f * 110.0f) * 540.0f;                // exactly the level 0 / 1 boundary
     li.previous = 0; li.distance *= 1.05f;
     CHECK(select_lod(li) == 0);
     li.previous = 1;
@@ -689,7 +689,7 @@ TEST_CASE("animator: levels of detail", "[anim][lod]") {
     CHECK(select_lod(li) == 0);
     int prev = 0, changes = 0;
     for (int i = 0; i < 200; ++i) {                              // wobbling round a boundary
-        li.distance = 1.8f / (0.7f * 70.0f) * 540.0f * (1.0f + 0.05f * std::sin(float(i)));
+        li.distance = 1.8f / (0.7f * 45.0f) * 540.0f * (1.0f + 0.05f * std::sin(float(i)));
         li.previous = prev;
         const int l = select_lod(li);
         changes += l != prev;

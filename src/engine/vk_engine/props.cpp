@@ -1055,11 +1055,14 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
 
     // Recoil: shift the entire viewmodel back along camera +Z (toward the
     // camera) by the kick curve. Camera looks down -Z, so positive +Z = back.
+    // With a body, what is carried is placed by that character's animator (recoil, reload,
+    // equip) - the same offset its hands were fitted to. Without one: the plain recoil kick.
     float kick = recoil_kick(recoil_timer_, kRecoilDuration, kRecoilStroke);
     glm::mat4 recoil_offset = glm::translate(glm::mat4(1.0f),
                                              glm::vec3(0.0f, 0.0f, kick));
+    if (mp_draw_) { if (mp_draw_->animator) recoil_offset = mp_draw_->weapon_offset; }
+    else if (body_animator_ && game_.player_body) recoil_offset = body_weapon_offset_;
     glm::mat4 view_inv_recoil = view_inv * recoil_offset;
-    if (!mp_draw_) body_recoil_ = kick;
     draw_player_body(cmd, vp, cam);        // (vp is camera-relative here: the body's world matrix has to be too)
     if (mp_draw_) {
         // The soldier mesh has no head (first person): a simple head and helmet for the others.
@@ -1082,7 +1085,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
         // reticle on it and a stub antenna. Camera space: +X right, +Y up,
         // -Z forward; the cube mesh is a unit cube.
         const float now = static_cast<float>(glfwGetTime());
-        const glm::mat4 base = view_inv *
+        const glm::mat4 base = view_inv_recoil *
             glm::translate(glm::mat4(1.0f), glm::vec3(0.155f, -0.165f + 0.004f * std::sin(now * 1.3f), -0.40f)) *
             glm::rotate(glm::mat4(1.0f), glm::radians(-14.0f), glm::vec3(0.0f, 1.0f, 0.0f)) *
             glm::rotate(glm::mat4(1.0f), glm::radians(52.0f), glm::vec3(1.0f, 0.0f, 0.0f));

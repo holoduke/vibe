@@ -482,7 +482,26 @@ void CharacterAnimator::feet(const CharacterAnimationInput& in, glm::vec2 v_loca
         glm::vec3 t = base;
         // Stride warp: the feet reach further along the way the character goes.
         glm::vec2 rel(t.x - hipP.x, t.z - hipP.z);
-        rel += mdir * (glm::dot(rel, mdir) * (stride_ - 1.0f));
+        {
+            // ... as far as the leg is long: a stride the leg cannot make would lift the foot off the
+            // ground or lock the knee. Beyond that the feet slide; they do not stretch.
+            const int up = rig[side == 0 ? Role::LeftUpLeg : Role::RightUpLeg], lo = rig[side == 0 ? Role::LeftLeg : Role::RightLeg];
+            const glm::vec3 pu(model_[size_t(up)][3]);
+            const float reach = (glm::length(glm::vec3(model_[size_t(lo)][3]) - pu) + glm::length(base - glm::vec3(model_[size_t(lo)][3]))) * 0.985f;
+            const float along = glm::dot(rel, mdir);
+            float k = stride_ - 1.0f;
+            auto too_far = [&](float kk) {
+                const glm::vec2 r = rel + mdir * (along * kk);
+                const glm::vec3 p(hipP.x + r.x, t.y, hipP.z + r.y);
+                return glm::length(p - pu) > reach;
+            };
+            if (k > 0.0f && too_far(k)) {
+                float lo_k = 0.0f, hi_k = k;
+                for (int it = 0; it < 6; ++it) { const float mid = 0.5f * (lo_k + hi_k); (too_far(mid) ? hi_k : lo_k) = mid; }
+                k = lo_k;
+            }
+            rel += mdir * (along * k);
+        }
         t.x = hipP.x + rel.x;
         t.z = hipP.z + rel.y;
         // Foot lock: a foot the capture has on the ground stays where it stands in the world
@@ -492,7 +511,9 @@ void CharacterAnimator::feet(const CharacterAnimationInput& in, glm::vec2 v_loca
         const bool want = full && tuning.foot_lock && cur_.contact[side] && on_ground && air_.phase == AirPhase::Ground &&
                           speed < tuning.foot_lock_max_speed && accel < tuning.foot_lock_max_accel;
         const glm::vec3 tw = in.position + model_to_world_vec(t, in.facing_yaw);
-        if (!want) lk.broken = false;
+        // (a lock given up because the body turned or was pushed away is taken up again where the
+        // foot now stands, once the body is at rest)
+        if (!want || (speed < 0.2f && std::abs(yaw_rate_) < 0.3f && glm::length(lk.off) < 0.02f)) lk.broken = false;
         if (lk.on) lk.world += in.ground_velocity * dt;
         if (want && !lk.on && !lk.broken) { lk.on = true; lk.world = tw + lk.off; lk.off_v = glm::vec3(0.0f); }
         if (lk.on) {
@@ -505,9 +526,14 @@ void CharacterAnimator::feet(const CharacterAnimationInput& in, glm::vec2 v_loca
         // The ground under the foot: up a step or a slope, down into a dip, within reach.
         float g = 0.0f;
         if (full && on_ground && in.ground_height) {
-            g = std::clamp(ground_at(in, t), -tuning.foot_ground_range, tuning.foot_ground_range);
-            const float gt = std::clamp(ground_at(in, t + glm::vec3(0.0f, 0.0f, -0.16f)), -tuning.foot_ground_range, tuning.foot_ground_range);
-            if (cur_.contact[side]) slope[side] = std::clamp(std::atan2(gt - g, 0.16f), -0.5f, 0.5f);
+            // (ground further away than a leg can follow is a drop or a wall beside the foot, not
+            // something to stand on: the foot stays level with the body)
+            g = ground_at(in, t);
+            if (std::abs(g) > tuning.foot_ground_range) g = 0.0f;
+            else if (cur_.contact[side]) {
+                const float gt = ground_at(in, t + glm::vec3(0.0f, 0.0f, -0.16f));
+                if (std::abs(gt) <= tuning.foot_ground_range) slope[side] = std::clamp(std::atan2(gt - g, 0.16f), -0.5f, 0.5f);
+            }
         }
         spring_to(lk.ground, lk.ground_v, g, 0.05f, dt);
         t.y += lk.ground * w;

@@ -162,7 +162,7 @@ void VulkanEngine::corpse_spawn(const glm::mat4& model, const glm::mat4& view_in
     c->av.view_inv = view_inv;
     c->av.muzzle_t = 0.0f;
     c->av.recoil_t = 0.0f;
-    c->av.phase = 0.0f;         // (used here as: frames skinned since the physics went to sleep)
+    c->av.settle = 0.0f;        // frames skinned since the physics went to sleep
 }
 
 void VulkanEngine::corpses_update(float dt) {
@@ -180,8 +180,8 @@ void VulkanEngine::corpses_update(float dt) {
             continue;
         }
         // Lying still: both frames' buffers hold the final pose, nothing more to do.
-        if (!physics_->ragdoll_active(c.rag)) { if (c.av.phase >= float(kFrameOverlap)) continue; c.av.phase += 1.0f; }
-        else c.av.phase = 0.0f;
+        if (!physics_->ragdoll_active(c.rag)) { if (c.av.settle >= float(kFrameOverlap)) continue; c.av.settle += 1.0f; }
+        else c.av.settle = 0.0f;
         CPU_SCOPE("ragdoll");
         if (std::getenv("QLIKE_RAGDOLL_DEBUG") && (frame_number_ % 20) == 0) {
             glm::vec3 p; glm::quat q; physics_->ragdoll_part(c.rag, 0, p, q);
@@ -231,7 +231,7 @@ void VulkanEngine::corpses_update(float dt) {
 }
 
 void VulkanEngine::draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp) {
-    const float sv_recoil = recoil_timer_, sv_muzzle = muzzle_flash_timer_, sv_body_recoil = body_recoil_;
+    const float sv_recoil = recoil_timer_, sv_muzzle = muzzle_flash_timer_;
     const int sv_weapon = weapon_;
     const bool sv_flash = flashlight_on_;
     for (Corpse& c : corpses_) {
@@ -242,7 +242,6 @@ void VulkanEngine::draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp) {
         mp_draw_ = nullptr;
     }
     recoil_timer_ = sv_recoil; muzzle_flash_timer_ = sv_muzzle; weapon_ = sv_weapon; flashlight_on_ = sv_flash;
-    body_recoil_ = sv_body_recoil;
 }
 
 void VulkanEngine::corpses_destroy() {

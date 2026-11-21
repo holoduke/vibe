@@ -8,7 +8,9 @@
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
 #include "engine/net/net.h"
+#include "anim/anim_lod.h"
 #include "engine/audio.h"
+#include "engine/cpu_prof.h"
 #include "engine/log.h"
 
 #include <imgui.h>
@@ -55,6 +57,7 @@ void VulkanEngine::mp_shutdown() {
     for (auto& a : mp_avatars_) {
         for (uint32_t i = 0; i < kFrameOverlap; ++i)
             if (a.vbuf[i]) { vmaDestroyBuffer(allocator_, a.vbuf[i], a.valloc[i]); a.vbuf[i] = VK_NULL_HANDLE; a.mapped[i] = nullptr; }
+        a.animator.reset();
         a.id = 0;
     }
 }
@@ -73,8 +76,21 @@ void VulkanEngine::mp_update(float dt) {
     ls.px = player_.position.x; ls.py = player_.position.y; ls.pz = player_.position.z;
     ls.vx = player_.velocity.x; ls.vy = player_.velocity.y; ls.vz = player_.velocity.z;
     ls.yaw = player_.yaw; ls.pitch = player_.pitch; ls.crouch = player_.crouch_factor;
-    ls.flags = uint8_t((player_.on_ground ? 1 : 0) | (player_swimming_ ? 2 : 0) | (flashlight_on_ ? 4 : 0));
+    // A respawn is told as such (one state long), so nobody slides the body across the map.
+    // (held for a moment: states go out 30 times a second, this runs every frame)
+    if (glm::length(player_.position - mp_last_sent_pos_) > net::kTeleportDistance + 0.1f * glm::length(player_.velocity)) mp_teleport_hold_ = 0.12f;
+    mp_last_sent_pos_ = player_.position;
+    const bool jumped = mp_teleport_hold_ > 0.0f;
+    mp_teleport_hold_ = std::max(0.0f, mp_teleport_hold_ - dt);
+    ls.flags = uint8_t((player_.on_ground ? net::kFlagGround : 0) | (player_swimming_ ? net::kFlagSwim : 0) | (flashlight_on_ ? net::kFlagTorch : 0) |
+                       (body_reload_left_ > 0.0f ? net::kFlagReload : 0) | (jumped ? net::kFlagTeleport : 0));
     ls.health = uint8_t(glm::clamp(mp_health_, 0.0f, 100.0f));
+    ls.weapon = uint8_t(weapon_);
+    // The movement keys: what this player wants, so others can predict starts, stops and turns as the controller will make them.
+    ls.move = uint8_t((last_pin_.fwd ? net::kMoveFwd : 0) | (last_pin_.back ? net::kMoveBack : 0) | (last_pin_.left ? net::kMoveLeft : 0) |
+                      (last_pin_.right ? net::kMoveRight : 0) | (last_pin_.sprint ? net::kMoveSprint : 0) | (last_pin_.jump ? net::kMoveJump : 0) |
+                      (last_pin_.crawl ? net::kMoveCrawl : 0));
+    ls.shot_seq = uint16_t(body_shot_seq_);
     net_->update(glfwGetTime(), ls);
 
     for (auto& f : mp_feed_) f.ttl -= dt;
@@ -100,7 +116,7 @@ void VulkanEngine::mp_update(float dt) {
             fire_projectile(o, d);
             mp_remote_shot_ = false;
             if (audio_) audio_->play_at(ClipID::Laser, o, 0.8f);
-            for (auto& a : mp_avatars_) if (a.id == e.from) { a.recoil_t = kRecoilDuration; a.muzzle_t = kMuzzleFlashDuration; }
+            for (auto& a : mp_avatars_) if (a.id == e.from) { a.recoil_t = kRecoilDuration; a.muzzle_t = kMuzzleFlashDuration; a.combat_t = 0.0f; }
         } else if (e.kind == net::Event::Hit) {
             // (where and from where they were hit: the push their body gets if this kills them)
             for (auto& a : mp_avatars_)
@@ -150,33 +166,36 @@ void VulkanEngine::mp_update(float dt) {
             if (!av) continue;
             MpAvatar fresh{};
             for (uint32_t i = 0; i < kFrameOverlap; ++i) { fresh.vbuf[i] = av->vbuf[i]; fresh.valloc[i] = av->valloc[i]; fresh.mapped[i] = av->mapped[i]; }
-            *av = fresh;
+            *av = std::move(fresh);
             av->id = p.id;
             av->fresh_pose = true;
             mp_feed(net_->name_of(p.id) + " joined");
         }
         av->st = p.state;
+        av->teleported = av->teleported || p.teleported;
     }
 
 }
 
-// Pose the other players with the local solver (their state swapped in).
+// The other players: each has an animator of its own, told what the network says about them
+// (interpolated ~100 ms in the past). Their pose is reconstructed here from position, velocity,
+// view, movement keys, stance, what they hold and their shot counter - no pose data is received.
+// Nothing of the local player's state is involved.
 void VulkanEngine::mp_pose_avatars(float dt) {
-    if (!net_ || body_bones_.empty()) return;
+    if (!net_ || body_bones_.empty() || !anim_set_.ok()) return;
+    CPU_SCOPE("remote bodies");
     dt = glm::clamp(dt, 0.0f, 0.1f);
     const size_t nv = body_verts_.size();
-    struct Saved {
-        glm::vec3 pos, vel; float yaw, pitch, crouch; bool ground, swim, flash;
-        glm::vec3 eye; glm::mat4 model; glm::vec3 root; float phase, move, air, recoil; glm::vec2 dir; bool drawn;
-    } sv{ player_.position, player_.velocity, player_.yaw, player_.pitch, player_.crouch_factor, player_.on_ground,
-          player_swimming_, flashlight_on_, current_frame_view_.eye_pos, body_model_, body_root_off_, body_phase_,
-          body_move_, body_air_, body_recoil_, body_dir_, body_drawn_ };
-    const uint32_t slot = frame_number_ % kFrameOverlap;
+    const uint32_t slot = frame_number_ % kFrameOverlap, other = (frame_number_ + kFrameOverlap - 1) % kFrameOverlap;
+    const glm::vec3 cam = current_frame_view_.eye_pos;
+    const float tan_half = current_frame_view_.proj[1][1] != 0.0f ? 1.0f / std::abs(current_frame_view_.proj[1][1]) : 0.7f;
     for (auto& a : mp_avatars_) {
         a.drawn = false;
         if (!a.id) continue;
         a.recoil_t = std::max(0.0f, a.recoil_t - dt);
         a.muzzle_t = std::max(0.0f, a.muzzle_t - dt);
+        a.combat_t += dt;
+        a.hit_age += dt;
         for (uint32_t i = 0; i < kFrameOverlap; ++i) {
             if (a.vbuf[i]) continue;
             VkBufferCreateInfo bci{};
@@ -191,50 +210,121 @@ void VulkanEngine::mp_pose_avatars(float dt) {
             a.mapped[i] = ai.pMappedData;
         }
         if (!a.mapped[slot]) continue;
+        if (!a.animator) { a.animator = std::make_unique<anim::CharacterAnimator>(anim_set_); apply_anim_tuning(a.animator->tuning); a.fresh_pose = true; }
         const net::PlayerState& s = a.st;
-        player_.position = glm::vec3(s.px, s.py, s.pz);
-        player_.velocity = glm::vec3(s.vx, s.vy, s.vz);
-        player_.yaw = s.yaw; player_.pitch = s.pitch; player_.crouch_factor = s.crouch;
-        player_.on_ground = (s.flags & 1) != 0;
-        player_swimming_ = (s.flags & 2) != 0;
-        flashlight_on_ = false;
-        const glm::vec3 eye = player_.eye_position();
-        current_frame_view_.eye_pos = eye;
-        body_phase_ = a.phase; body_move_ = a.move; body_air_ = a.air; body_dir_ = a.dir; body_root_off_ = a.root;
-        body_recoil_ = recoil_kick(a.recoil_t, kRecoilDuration, kRecoilStroke);
-        mp_pose_dst_ = static_cast<Vertex*>(a.mapped[slot]);
-        body_anim_ = &a.anim;
-        update_player_body(dt);
-        body_anim_ = &body_anim_local_;
-        mp_pose_dst_ = nullptr;
-        a.prev_model = a.fresh_pose ? body_model_ : a.model;
+        const float yaw = s.yaw, pitch = s.pitch, crouch = glm::clamp(s.crouch, 0.0f, 1.0f);
+        const glm::vec3 fwd(std::sin(yaw), 0.0f, -std::cos(yaw)), right(std::cos(yaw), 0.0f, std::sin(yaw));
+        const float eye_off = game::Player::kEyeOffsetStand + (game::Player::kEyeOffsetCrawl - game::Player::kEyeOffsetStand) * crouch;
+        const float eye_h = game::Player::kHalfExtents.y + eye_off;
+        const glm::vec3 eye = glm::vec3(s.px, s.py, s.pz) + glm::vec3(0.0f, eye_off, 0.0f);
+        // (the same stance as the body they see themselves: the eye a little in front of the neck)
+        const float back = 0.11f + 0.17f * glm::smoothstep(0.15f, 1.25f, -pitch) + 0.25f * crouch;
+        const glm::vec3 feet = eye - glm::vec3(0.0f, eye_h, 0.0f) - fwd * back;
+        const glm::mat4 model(glm::vec4(right, 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f), glm::vec4(-fwd, 0.0f), glm::vec4(feet, 1.0f));
+
+        // Level of detail: by size on screen, whether in view, and whether we are fighting them.
+        anim::LodInput li;
+        li.distance = glm::length(eye - cam);
+        li.screen_height = float(swapchain_extent_.height);
+        li.tan_half_fov_y = tan_half;
+        {
+            const glm::vec4 c = current_frame_view_.vp * glm::vec4(eye - glm::vec3(0.0f, 0.7f, 0.0f), 1.0f);
+            const float m = 1.25f * c.w + 1.5f;                     // generous: limbs, and what turns into view next frame
+            li.in_view = c.w > -1.5f && std::abs(c.x) < m && std::abs(c.y) < m;
+        }
+        li.combat = a.combat_t < 4.0f;
+        li.previous = a.lod;
+        static const int kForceLod = std::getenv("QLIKE_ANIM_LOD") ? std::atoi(std::getenv("QLIKE_ANIM_LOD")) : -1;
+        a.lod = kForceLod >= 0 ? glm::clamp(kForceLod, 0, 3) : anim::select_lod(li);
+
+        anim::CharacterAnimationInput in;
+        in.dt = dt;
+        in.position = feet;
+        in.velocity = glm::vec3(s.vx, s.vy, s.vz);
+        in.facing_yaw = yaw;
+        in.aim_pitch = pitch;
+        in.grounded = (s.flags & net::kFlagGround) != 0 && !(s.flags & net::kFlagSwim);
+        in.swimming = (s.flags & net::kFlagSwim) != 0;
+        in.wants_jump = (s.move & net::kMoveJump) != 0;
+        in.crouch = crouch;
+        in.eye_local = glm::vec3(0.0f, eye_h, -back);
+        {
+            glm::vec3 wish(0.0f);
+            if (s.move & net::kMoveFwd) wish += fwd;
+            if (s.move & net::kMoveBack) wish -= fwd;
+            if (s.move & net::kMoveRight) wish += right;
+            if (s.move & net::kMoveLeft) wish -= right;
+            if (glm::dot(wish, wish) > 1e-6f)
+                in.desired_velocity = glm::normalize(wish) * game::kPlayerMove.max_walk_speed * ((s.move & net::kMoveSprint) ? 1.5f : (s.move & net::kMoveCrawl) ? 0.4f : 1.0f);
+        }
+        in.held = (s.flags & net::kFlagTorch) ? anim::HeldItem::None : (s.weapon == 1 ? anim::HeldItem::Tablet : anim::HeldItem::Rifle);
+        in.shot_seq = s.shot_seq;
+        const bool reloading = (s.flags & net::kFlagReload) != 0;
+        if (reloading && !a.was_reloading) ++a.reload_seq;          // a reload began (the flag is state: it survives lost packets)
+        a.was_reloading = reloading;
+        in.reload_seq = a.reload_seq;
+        in.reloading = reloading;
+        in.teleported = a.teleported || a.fresh_pose;
+        a.teleported = false;
+        in.lod = a.lod;
+
+        // Level 2 is posed every other frame; in between, the last pose is copied into this
+        // frame's buffer. (Level 3 is not posed at all; its animator only keeps time.)
+        const bool skip = a.lod == 2 && !a.fresh_pose && !a.die && a.skipped == 0 && (frame_number_ & 1u) && a.mapped[other];
+        Vertex* dst = static_cast<Vertex*>(a.mapped[slot]);
+        if (skip) {
+            a.skipped = 1;
+            a.skip_dt = dt;
+            std::memcpy(dst, a.mapped[other], nv * sizeof(Vertex));
+        } else {
+            in.dt = dt + a.skip_dt;
+            a.skipped = 0;
+            a.skip_dt = 0.0f;
+            pose_character(*a.animator, in, a.lod >= 3 ? nullptr : dst);
+            a.weapon_offset = a.animator->weapon_offset();
+        }
+        a.prev_model = a.fresh_pose ? model : a.model;
         a.fresh_pose = false;
-        a.model = body_model_;
-        a.hit_age += dt;
+        a.model = model;
         if (a.die) {
             // Killed: this pose, with the speed they had, goes to the physics; the push comes
             // from the shot that did it (if we saw it), at the part of the body it hit.
             a.die = false;
+            if (a.lod >= 3) { in.lod = 2; in.dt = 0.0f; pose_character(*a.animator, in, nullptr); }       // (unseen: a pose is needed now)
             const bool seen = a.hit_age < 1.0f && glm::dot(a.hit_dir, a.hit_dir) > 0.5f;
-            corpse_spawn(body_model_, glm::mat4(glm::vec4(std::cos(s.yaw), 0.0f, std::sin(s.yaw), 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
-                                                glm::vec4(-std::sin(s.yaw), 0.0f, std::cos(s.yaw), 0.0f), glm::vec4(eye, 1.0f)),
-                         player_.velocity, seen ? a.hit_pos : eye - glm::vec3(0.0f, 0.4f, 0.0f),
+            corpse_spawn(model, glm::mat4(glm::vec4(std::cos(s.yaw), 0.0f, std::sin(s.yaw), 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
+                                          glm::vec4(-std::sin(s.yaw), 0.0f, std::cos(s.yaw), 0.0f), glm::vec4(eye, 1.0f)),
+                         in.velocity, seen ? a.hit_pos : eye - glm::vec3(0.0f, 0.4f, 0.0f),
                          seen ? a.hit_dir : glm::vec3(0.0f), seen ? std::max(a.hit_power, 0.5f) : 0.0f);
         }
-        a.phase = body_phase_; a.move = body_move_; a.air = body_air_; a.dir = body_dir_; a.root = body_root_off_;
         // Their camera: where their gun and head are drawn from.
-        const float cy = std::cos(s.yaw), sy = std::sin(s.yaw), cp = std::cos(s.pitch), sp = std::sin(s.pitch);
-        const glm::vec3 f(sy * cp, sp, -cy * cp), r(cy, 0.0f, sy), u = glm::cross(r, f);
-        a.view_inv = glm::mat4(glm::vec4(r, 0.0f), glm::vec4(u, 0.0f), glm::vec4(-f, 0.0f), glm::vec4(eye, 1.0f));
+        const float cp = std::cos(pitch), sp = std::sin(pitch);
+        const glm::vec3 f(fwd.x * cp, sp, fwd.z * cp), u = glm::cross(right, f);
+        a.view_inv = glm::mat4(glm::vec4(right, 0.0f), glm::vec4(u, 0.0f), glm::vec4(-f, 0.0f), glm::vec4(eye, 1.0f));
         a.eye = eye;
-        a.drawn = body_drawn_;
+        a.drawn = a.lod < 3;
     }
-    player_.position = sv.pos; player_.velocity = sv.vel; player_.yaw = sv.yaw; player_.pitch = sv.pitch;
-    player_.crouch_factor = sv.crouch; player_.on_ground = sv.ground;
-    player_swimming_ = sv.swim; flashlight_on_ = sv.flash;
-    current_frame_view_.eye_pos = sv.eye;
-    body_model_ = sv.model; body_root_off_ = sv.root; body_phase_ = sv.phase; body_move_ = sv.move; body_air_ = sv.air;
-    body_recoil_ = sv.recoil; body_dir_ = sv.dir; body_drawn_ = sv.drawn;
+    if (std::getenv("QLIKE_ANIM_LOG") && frame_number_ % 120 == 0) {
+        const net::Session::Stats& ns = net_->stats();
+        log::infof("[anim] bodies: animation %.3f ms, skinning %.3f ms this frame; levels 0/1/2/3 = %d/%d/%d/%d; net tx %llu B rx %llu B, dup events %u",
+                   anim_ms_, skin_ms_, anim_lod_count_[0], anim_lod_count_[1], anim_lod_count_[2], anim_lod_count_[3],
+                   static_cast<unsigned long long>(ns.tx_bytes), static_cast<unsigned long long>(ns.rx_bytes), ns.duplicate_events);
+    }
+}
+
+void VulkanEngine::draw_remote_players(VkCommandBuffer cmd, const glm::mat4& vp) {
+    if (!net_) return;
+    const float sv_recoil = recoil_timer_, sv_muzzle = muzzle_flash_timer_;
+    const int sv_weapon = weapon_; const bool sv_flash = flashlight_on_;
+    for (auto& a : mp_avatars_) {
+        if (!a.id || !a.drawn) continue;
+        // What they hold, as replicated: the laser gun or the tablet (a torch is not drawn for others).
+        recoil_timer_ = a.recoil_t; muzzle_flash_timer_ = a.muzzle_t; weapon_ = a.st.weapon == 1 ? 1 : 0; flashlight_on_ = false;
+        mp_draw_ = &a;
+        draw_viewmodel(cmd, vp, a.view_inv);
+        mp_draw_ = nullptr;
+    }
+    recoil_timer_ = sv_recoil; muzzle_flash_timer_ = sv_muzzle; weapon_ = sv_weapon; flashlight_on_ = sv_flash;
 }
 
 // Weather + clock are one shared state. Whoever changes it (a weather
@@ -326,27 +416,12 @@ bool VulkanEngine::mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
         e.a[0] = hit.x; e.a[1] = hit.y; e.a[2] = hit.z;
         const glm::vec3 bd = glm::normalize(b - a + glm::vec3(1e-6f, 0.0f, 0.0f));
         e.b[0] = bd.x; e.b[1] = bd.y; e.b[2] = bd.z;
-        av.hit_pos = hit; av.hit_dir = bd; av.hit_power = 1.0f; av.hit_age = 0.0f;
+        av.hit_pos = hit; av.hit_dir = bd; av.hit_power = 1.0f; av.hit_age = 0.0f; av.combat_t = 0.0f;
         net_->send_event(e);
         mp_hitmark_ = 0.25f;
         return true;
     }
     return false;
-}
-
-void VulkanEngine::draw_remote_players(VkCommandBuffer cmd, const glm::mat4& vp) {
-    if (!net_) return;
-    const float sv_recoil = recoil_timer_, sv_muzzle = muzzle_flash_timer_, sv_body_recoil = body_recoil_;
-    const int sv_weapon = weapon_; const bool sv_flash = flashlight_on_;
-    for (auto& a : mp_avatars_) {
-        if (!a.id || !a.drawn) continue;
-        recoil_timer_ = a.recoil_t; muzzle_flash_timer_ = a.muzzle_t; weapon_ = 0; flashlight_on_ = false;
-        mp_draw_ = &a;
-        draw_viewmodel(cmd, vp, a.view_inv);
-        mp_draw_ = nullptr;
-    }
-    recoil_timer_ = sv_recoil; muzzle_flash_timer_ = sv_muzzle; weapon_ = sv_weapon; flashlight_on_ = sv_flash;
-    body_recoil_ = sv_body_recoil;
 }
 
 void VulkanEngine::mp_hud() {

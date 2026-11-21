@@ -32,7 +32,7 @@
 #include "engine/aa_vehicle.h"
 #include "engine/rocket_sim.h"
 #include "engine/globe.h"
-#include "engine/motion_match.h"
+#include "anim/character_animator.h"
 #include "engine/texture.h"   // for BackgroundDecodeHandle
 #include "engine/vk_engine/settings_types.h"  // RtSettings / GameSettings
 #include "game/level.h"
@@ -1190,29 +1190,28 @@ private:
     // posed with IK every frame and skinned on the CPU. ----
     struct BodyBone { std::string name; int parent = -1; glm::vec3 head{0.0f}, tail{0.0f}; };
     struct BodyVert { glm::vec3 pos, nrm; glm::vec2 uv; uint8_t bone[4]; float weight[4]; };
-    // Movement from motion capture (motion matching, engine/motion_match.h): the state of one
-    // character - where it is in the database, how the clip is fitted to the real speed and
-    // direction, and the feet it has planted.
-    struct BodyAnim {
-        MotionState ms;
-        float rate = 1.0f, stride = 1.0f, warp = 0.0f, turn = 0.0f, prev_yaw = 0.0f;
-        bool  has_yaw = false;
-        int   jump = -1, jstate = 0;          // captured jump in use; 0 on the ground, 1 in the air, 2 landing
-        float air_t = 0.0f, land_t = 0.0f;
-        struct Lock { bool on = false, broken = false; glm::vec3 world{0.0f}, off{0.0f}, off_v{0.0f}; } lock[2];
-    };
-    MotionDB         body_motion_;
-    std::vector<int> body_motion_bone_;                // database bone -> soldier bone
-    MotionPose       body_pose_;
-    BodyAnim         body_anim_local_;
-    BodyAnim*        body_anim_ = &body_anim_local_;   // whose movement update_player_body is working on
-    void body_leg_fit(int up, int lo, int ft, glm::vec3 target);
+    // Animation (src/anim): one shared set (skeleton, clips, motion database) and one animator per
+    // character. The animator turns controller state - or, for another player, the interpolated
+    // network state - into joint matrices; pose_character skins them. See docs/animation.
+    anim::AnimationSet anim_set_;
+    std::unique_ptr<anim::CharacterAnimator> body_animator_;      // the local player's
+    void pose_character(anim::CharacterAnimator& a, anim::CharacterAnimationInput& in, Vertex* dst);
+    float anim_ground_height(float x, float z, float feet_y) const;   // what a foot at (x, z) stands on
+    void apply_anim_tuning(anim::AnimTuning& t) const; // QLIKE_ANIM_TUNE
+    void anim_debug_overlay();                         // QLIKE_ANIM_DEBUG=1 / the menu: chosen clip, costs, contacts, IK targets
+    bool anim_debug_ = false;
+    game::PlayerInput last_pin_{};                     // the movement keys of the last tick (what the player wants)
+    uint32_t  body_shot_seq_ = 0, body_reload_seq_ = 0;    // count the local player's shots / reloads
+    float     body_reload_left_ = 0.0f;                // seconds of reload left (cosmetic: firing ends it)
+    bool      prev_reload_key_ = false;
+    glm::mat4 body_weapon_offset_{1.0f};               // recoil, reload, equip: what is carried is drawn at view * this
+    float     anim_ms_ = 0.0f, skin_ms_ = 0.0f;        // this frame, all characters
+    int       anim_lod_count_[4]{};
     std::vector<BodyBone> body_bones_;
     std::vector<BodyVert> body_verts_;
     std::vector<Vertex>   body_skinned_;
-    std::vector<glm::mat3> body_R_, body_local_, body_skin_R_;
+    std::vector<glm::mat3> body_R_, body_skin_R_;
     std::vector<glm::vec3> body_P_, body_skin_T_;
-    std::vector<uint8_t>   body_set_;
     Mesh          body_mesh_{};                       // index buffer (+ rest pose)
     VkBuffer      body_vbuf_[kFrameOverlap]{};
     VmaAllocation body_valloc_[kFrameOverlap]{};
@@ -1221,9 +1220,6 @@ private:
     std::vector<uint32_t> body_dbg_idx_;
     float         body_scale_ = 1.0f;
     glm::mat4     body_model_{1.0f};
-    glm::vec3     body_root_off_{0.0f};
-    float         body_phase_ = 0.0f, body_move_ = 0.0f, body_air_ = 0.0f, body_recoil_ = 0.0f;
-    glm::vec2     body_dir_{0.0f, -1.0f};
     bool          body_drawn_ = false;
 
     // ---- LAN multiplayer (vk_engine/multiplayer.cpp, engine/net) ----
@@ -1233,12 +1229,18 @@ private:
         VmaAllocation valloc[kFrameOverlap]{};
         void*         mapped[kFrameOverlap]{};
         glm::mat4     model{1.0f}, prev_model{1.0f}, view_inv{1.0f};
-        glm::vec3     eye{0.0f}, root{0.0f};
-        glm::vec2     dir{0.0f, -1.0f};
-        float         phase = 0.0f, move = 0.0f, air = 0.0f, recoil_t = 0.0f, muzzle_t = 0.0f;
+        glm::vec3     eye{0.0f};
+        glm::mat4     weapon_offset{1.0f};             // from their animator (recoil, reload, equip)
+        float         settle = 0.0f, recoil_t = 0.0f, muzzle_t = 0.0f;
+        std::unique_ptr<anim::CharacterAnimator> animator;
+        int           lod = 0, skipped = 0;            // animation level of detail; frames since the last pose
+        uint32_t      reload_seq = 0;
+        bool          was_reloading = false;
+        float         combat_t = 1e9f;                 // seconds since they shot or were shot at by us
+        float         skip_dt = 0.0f;                  // time not yet given to the animator (a skipped frame)
+        bool          teleported = false;              // their state jumped (respawn): told to the animator once
         bool          drawn = false, fresh_pose = true;
         glm::vec3     foot_last{1e9f};                 // footprints in the snow
-        BodyAnim      anim;                            // their movement (motion matching state)
         bool          corpse = false;                  // drawn as a body on the ground: head, no weapon
         bool          die = false;                     // killed: the next pose becomes a ragdoll (ragdoll.cpp)
         glm::vec3     hit_pos{0.0f}, hit_dir{0.0f};    // the last shot that hit them
@@ -1251,10 +1253,9 @@ private:
     std::array<MpAvatar, net::kMaxPlayers> mp_avatars_{};
     std::vector<MpFeed> mp_feed_;
     const MpAvatar* mp_draw_ = nullptr;                // set while a remote player's body + gun are drawn
-    Vertex*   mp_pose_dst_ = nullptr;                  // set while a remote player's body is posed
     bool      mp_remote_shot_ = false;                 // fire_projectile is replaying someone else's shot
-    glm::vec3 mp_spawn_{0.0f};
-    float     mp_health_ = 100.0f, mp_hurt_ = 0.0f, mp_hitmark_ = 0.0f;
+    glm::vec3 mp_spawn_{0.0f}, mp_last_sent_pos_{0.0f};
+    float     mp_health_ = 100.0f, mp_hurt_ = 0.0f, mp_hitmark_ = 0.0f, mp_teleport_hold_ = 0.0f;
     int       mp_kills_ = 0;
     // ---- Ragdolls (ragdoll.cpp): a killed player's body, handed to the physics. ----
     static constexpr int kCorpseParts = 11;
@@ -1304,8 +1305,6 @@ private:
     void init_player_body();
     void destroy_player_body();
     int  body_bone(const char* name) const;
-    void body_fk();
-    void body_ik(int a, int b, int c, glm::vec3 target, glm::vec3 pole);
     void update_player_body(float dt);
     void draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam);
 
