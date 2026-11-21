@@ -381,6 +381,7 @@ void VulkanEngine::update_player_body(float dt) {
 
     pose_character(*body_animator_, in, &body_palette_);
     body_weapon_offset_ = body_animator_->weapon_offset();
+    body_fire_offset_ = body_animator_->weapon_fire_offset();
 
     // Test hooks: QLIKE_BODY_FRONT=<m> stands the body that far in front of the camera (turned
     // by QLIKE_BODY_TURN degrees) to look at the pose from outside; QLIKE_BODY_REST=1 shows the

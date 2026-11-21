@@ -127,6 +127,11 @@ void CharacterAnimator::reset() {
     for (Lock& l : lock_) l = Lock{};
     recoil_t_ = 0.0f; reload_t_ = -1.0f; reload_w_ = 0.0f; equip_t_ = 1.0f;
     aim_w_ = 1.0f; since_shot_ = 1e9f;
+    rng_ = 0x9E3779B9u; rng_seeded_ = false;
+    gaze_mode_ = 0; gaze_left_ = 0.0f; gaze_yaw_t_ = gaze_pitch_t_ = 0.0f;
+    gaze_yaw_ = gaze_yaw_v_ = gaze_pitch_ = gaze_pitch_v_ = gaze_w_ = 0.0f;
+    shift_left_ = 3.0f; shift_t_ = shift_ = shift_v_ = 0.0f;
+    weapon_fire_offset_ = glm::mat4(1.0f);
     stand_hips_ = set_.stand_hips;
     weapon_offset_ = glm::mat4(1.0f);
     dbg_ = AnimDebug{};
@@ -521,6 +526,11 @@ void CharacterAnimator::pelvis_and_warp(const CharacterAnimationInput& in, glm::
     }
 }
 
+float CharacterAnimator::rnd() {
+    rng_ ^= rng_ << 13; rng_ ^= rng_ >> 17; rng_ ^= rng_ << 5;
+    return float(rng_ & 0xFFFFFFu) / float(0x1000000);
+}
+
 void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
     const Rig& rig = set_.runtime->rig();
     const bool crouch_clip = match_.frame >= 0 && (set_.db.range_of(uint32_t(match_.frame)).tags & kTagCrouch) != 0;
@@ -542,6 +552,87 @@ void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
             rotate_in_model(rig[Role::Neck], glm::angleAxis(-0.10f * sight, glm::vec3(0.0f, 0.0f, 1.0f)));
             rotate_in_model(rig[Role::Head], glm::angleAxis(-0.12f * sight, glm::vec3(0.0f, 0.0f, 1.0f)) * rot_x(-0.07f * sight));
         }
+    }
+    // Not aiming, a character is not a statue: the head looks about - at somebody near, off to
+    // a side, up or down, or nowhere for a while - and standing it breathes and shifts its
+    // weight from time to time. All of it stops the moment the aim comes up or a shot is fired.
+    if (!in.first_person && in.lod <= 1) {
+        const float dt = std::clamp(in.dt, 0.0f, 0.1f);
+        if (!rng_seeded_) {
+            rng_seeded_ = true;
+            rng_ = 0x9E3779B9u ^ (in.variation * 0x85EBCA6Bu + 0x1234567u);
+            if (rng_ == 0) rng_ = 1;
+            for (int i = 0; i < 4; ++i) rnd();
+            gaze_left_ = 0.5f + 2.5f * rnd();
+            shift_left_ = 2.0f + 5.0f * rnd();
+        }
+        const float speed = glm::length(glm::vec2(in.velocity.x, in.velocity.z));
+        const bool moving = speed > 0.6f;
+        const bool busy = in.aiming || since_shot_ < 1.6f || reload_w_ > 0.05f || held_ != in.held || in.swimming || !in.grounded;
+        const float want = busy ? 0.0f : 1.0f;
+        gaze_w_ += (want - gaze_w_) * (1.0f - std::exp(-dt / (busy ? 0.08f : 0.35f)));
+        // what to look at next
+        gaze_left_ -= dt;
+        // (where somebody worth a look is, from the head)
+        float at_yaw = 0.0f, at_pitch = 0.0f;
+        bool can_see = false;
+        if (in.has_look_at) {
+            const glm::vec3 d = in.look_at - glm::vec3(model_[size_t(rig[Role::Head])][3]);
+            const float flat = std::sqrt(d.x * d.x + d.z * d.z);
+            at_yaw = std::atan2(d.x, -d.z);
+            at_pitch = std::atan2(d.y, std::max(flat, 1e-3f)) - 0.8f * pitch;       // (the aim's pitch is in the neck already)
+            can_see = flat > 0.4f && flat < 30.0f && std::abs(at_yaw) < 1.75f;
+        }
+        if (gaze_left_ <= 0.0f || (gaze_mode_ == 2 && !can_see)) {
+            const float r = rnd();
+            const float p_look = can_see ? (moving ? 0.25f : 0.42f) : 0.0f;
+            const float p_glance = moving ? 0.30f : 0.36f;
+            if (r < p_look) {
+                gaze_mode_ = 2;
+                gaze_left_ = moving ? 1.0f + 1.5f * rnd() : 2.0f + 3.5f * rnd();
+            } else if (r < p_look + p_glance) {
+                gaze_mode_ = 1;
+                const float side = rnd() < 0.5f ? -1.0f : 1.0f;
+                gaze_yaw_t_ = side * (moving ? 0.26f + 0.60f * rnd() : 0.35f + 0.90f * rnd());
+                // mostly level; now and then up at the sky or down at the ground
+                const float v = rnd();
+                gaze_pitch_t_ = v < 0.15f ? 0.25f + 0.25f * rnd() : v < 0.32f ? -0.20f - 0.25f * rnd() : (rnd() - 0.5f) * 0.20f;
+                if (moving) gaze_pitch_t_ *= 0.4f;
+                gaze_left_ = moving ? 0.8f + 1.2f * rnd() : 1.0f + 2.4f * rnd();
+            } else {
+                gaze_mode_ = 0;
+                gaze_left_ = moving ? 2.0f + 3.5f * rnd() : 1.5f + 3.0f * rnd();
+            }
+        }
+        float ty = 0.0f, tp = 0.0f;
+        if (gaze_mode_ == 2) { ty = at_yaw; tp = at_pitch; }
+        else if (gaze_mode_ == 1) { ty = gaze_yaw_t_; tp = gaze_pitch_t_; }
+        ty = std::clamp(ty, -1.25f, 1.25f) * gaze_w_ * tuning.idle_look;
+        tp = std::clamp(tp, -0.50f, 0.55f) * gaze_w_ * tuning.idle_look;
+        spring_to(gaze_yaw_, gaze_yaw_v_, ty, 0.13f, dt);
+        spring_to(gaze_pitch_, gaze_pitch_v_, tp, 0.13f, dt);
+        if (std::abs(gaze_yaw_) + std::abs(gaze_pitch_) > 1e-4f) {
+            // the eyes lead, the neck follows, the chest gives a little (+yaw looks right: about -Y)
+            const glm::vec3 kY(0.0f, 1.0f, 0.0f);
+            rotate_in_model(rig[Role::Spine2], glm::angleAxis(-0.12f * gaze_yaw_, kY));
+            rotate_in_model(rig[Role::Neck], glm::angleAxis(-0.33f * gaze_yaw_, kY) * rot_x(0.35f * gaze_pitch_));
+            rotate_in_model(rig[Role::Head], glm::angleAxis(-0.55f * gaze_yaw_, kY) * rot_x(0.65f * gaze_pitch_));
+        }
+        // standing: breathing, and the weight goes from one leg to the other now and then
+        const float still = gaze_w_ * (moving ? 0.0f : 1.0f) * tuning.idle_sway;
+        shift_left_ -= dt;
+        if (shift_left_ <= 0.0f) {
+            const float r = rnd();
+            shift_t_ = r < 0.38f ? -1.0f : r < 0.76f ? 1.0f : 0.0f;
+            shift_left_ = 3.5f + 6.0f * rnd();
+        }
+        spring_to(shift_, shift_v_, shift_t_ * still, 0.40f, dt);
+        if (std::abs(shift_) > 1e-4f) {
+            pose_[size_t(rig[Role::Hips])].t.x += 0.022f * shift_;          // (the feet stay: they are locked to the ground)
+            rotate_in_model(rig[Role::Hips], glm::angleAxis(-0.035f * shift_, glm::vec3(0.0f, 0.0f, 1.0f)));
+            rotate_in_model(rig[Role::Spine1], glm::angleAxis(0.045f * shift_, glm::vec3(0.0f, 0.0f, 1.0f)));
+        }
+        if (still > 1e-3f) rotate_in_model(rig[Role::Spine2], rot_x(0.012f * still * std::sin(time_ * 1.7f + float(in.variation & 7u))));
     }
     // A hit: the torso gives the way the shot went and comes back (a look only: the controller
     // is not moved, the aim is not thrown).
@@ -714,7 +805,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
     if (ready > 1e-4f) {
         if (in.first_person) {
             off = glm::translate(glm::mat4(1.0f), weapon.ready_shift_fp * ready) * off *
-                  about(weapon.grip_r, glm::angleAxis(weapon.ready_yaw_fp * ready, kUp) * rot_x(weapon.ready_pitch_fp * sunk) *
+                  about(weapon.grip_r, glm::angleAxis(weapon.ready_yaw_fp * sunk, kUp) * rot_x(weapon.ready_pitch_fp * sunk) *
                                        glm::angleAxis(weapon.ready_roll_fp * ready, kBack));
         } else {
             off = off * about(weapon.butt, glm::angleAxis(weapon.ready_yaw * sunk, kUp) * rot_x(weapon.ready_pitch * sunk));
@@ -747,6 +838,20 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
         off = glm::inverse(V) * W;
     }
     weapon_offset_ = off;
+    // Where a shot leaves from: this stance, level, before the recoil. (A weapon at the ready is
+    // level by the time the shot shows: the shot itself brings it up.)
+    {
+        glm::mat4 f = offset_for(0.0f);
+        if (ready > 1e-4f && in.first_person)
+            f = glm::translate(glm::mat4(1.0f), weapon.ready_shift_fp * ready) * f * about(weapon.grip_r, glm::angleAxis(weapon.ready_roll_fp * ready, kBack));
+        glm::mat4 Wf = V * f;
+        if (!in.first_person && held_ == HeldItem::Rifle && tuning.shoulder_weapon) {
+            const glm::vec3 shoulder(model_[size_t(rig[Role::RightArm])][3]);
+            const glm::vec3 anchor = shoulder + glm::mat3(V) * (weapon.shoulder_offset + weapon.ready_shift * ready);
+            Wf[3] += glm::vec4(anchor - glm::vec3(V * offset_for(0.0f) * glm::vec4(weapon.butt, 1.0f)), 0.0f);
+        }
+        weapon_fire_offset_ = glm::inverse(V) * Wf;
+    }
     mag_visible_ = false;
     const glm::mat3 Wr(W), Vr(V);
     auto wpt = [&](glm::vec3 v) { return glm::vec3(W * glm::vec4(v, 1.0f)); };

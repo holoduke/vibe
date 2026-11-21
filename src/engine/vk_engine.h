@@ -1221,6 +1221,8 @@ private:
     uint32_t  body_shot_seq_ = 0, body_reload_seq_ = 0;    // count the local player's shots / reloads
     float     body_reload_left_ = 0.0f;                // seconds of reload left (cosmetic: firing ends it)
     bool      prev_reload_key_ = false;
+    glm::mat4 body_fire_offset_{1.0f};                 // the weapon the moment a shot leaves it (level, no recoil): view * this
+    const glm::mat4* shot_weapon_offset_ = nullptr;    // set while somebody else's shot is replayed: their weapon then
     bool      body_aim_ = false;                       // right mouse held: aiming (rifle in the shoulder); else at the ready
     glm::mat4 body_weapon_offset_{1.0f};               // recoil, reload, equip: what is carried is drawn at view * this
     float     anim_ms_ = 0.0f, skin_ms_ = 0.0f;        // this frame, all characters
@@ -1292,6 +1294,7 @@ private:
         glm::mat4     model{1.0f}, prev_model{1.0f}, view_inv{1.0f};
         glm::vec3     eye{0.0f};
         glm::mat4     weapon_offset{1.0f};             // from their animator (recoil, reload, equip)
+        glm::mat4     fire_offset{1.0f};               // ... and where a shot of theirs leaves from
         float         settle = 0.0f, recoil_t = 0.0f, muzzle_t = 0.0f;
         std::unique_ptr<anim::CharacterAnimator> animator;
         int           lod = 0, skipped = 0;            // animation level of detail; frames since the last pose

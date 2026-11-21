@@ -944,3 +944,101 @@ TEST_CASE("animator: aiming the rifle is on the view; at the ready it hangs, and
         CHECK(glm::length(a.muzzle_direction() - fwd) < 1e-3f);
     }
 }
+
+TEST_CASE("animator: a shot from the hip leaves a level weapon that points where the view does", "[anim][animator]") {
+    fx::SetFixture f;
+    CharacterAnimationInput in;
+    in.dt = 1.0f / 60.0f;
+    in.ground_height = flat_ground;
+    in.eye_local = glm::vec3(0.0f, 1.6f, -0.11f);
+    in.aiming = false;
+    for (bool own : { false, true }) {
+        in.first_person = own;
+        in.shot_seq = 0;
+        CharacterAnimator a(f.set);
+        for (int i = 0; i < 120; ++i) a.update(in);
+        // at the ready the weapon hangs; where a shot would leave from is level all the same
+        CHECK(a.muzzle_direction().y < -0.08f);
+        const glm::mat4 V(glm::vec4(1, 0, 0, 0), glm::vec4(0, 1, 0, 0), glm::vec4(0, 0, 1, 0), glm::vec4(in.eye_local, 1.0f));
+        const glm::mat4 fire = V * a.weapon_fire_offset();
+        const glm::vec3 fire_dir = glm::normalize(glm::mat3(fire) * glm::vec3(0.0f, 0.0f, -1.0f));
+        const glm::vec3 fire_muzzle(fire * glm::vec4(a.weapon.muzzle, 1.0f));
+        INFO((own ? "own view" : "seen from outside") << ": fire direction " << fire_dir.x << " " << fire_dir.y << " " << fire_dir.z);
+        CHECK(glm::length(fire_dir - glm::vec3(0.0f, 0.0f, -1.0f)) < 1e-3f);
+        // the shot: one update later the weapon that is drawn is there (but for the recoil's kick)
+        in.shot_seq = 1;
+        a.update(in);
+        CHECK(glm::length(a.muzzle_direction() - glm::vec3(0.0f, 0.0f, -1.0f)) < a.weapon.recoil_pitch + 0.01f);
+        CHECK(glm::length(a.muzzle_position() - fire_muzzle) < a.weapon.recoil_stroke + 0.03f);
+    }
+}
+
+TEST_CASE("animator: not aiming, the head looks about - at somebody, to a side, nowhere - and stops for the aim", "[anim][animator]") {
+    fx::SetFixture f;
+    const Rig& rig = f.set.runtime->rig();
+    const int head = rig[Role::Head];
+    auto run_one = [&](uint32_t variation, bool moving, int counts[3], float& widest, float& highest, float& lowest, float& fastest, float& look_err) {
+        CharacterAnimator a(f.set);
+        CharacterAnimationInput in;
+        in.dt = 1.0f / 60.0f;
+        in.ground_height = flat_ground;
+        in.eye_local = glm::vec3(0.0f, 1.6f, -0.11f);
+        in.aiming = false;
+        in.variation = variation;
+        in.has_look_at = true;
+        in.look_at = glm::vec3(3.0f, 1.6f, -3.0f);            // somebody ahead and to the right
+        if (moving) { in.velocity = glm::vec3(0.0f, 0.0f, -8.0f); in.desired_velocity = in.velocity; }
+        glm::quat prev(1.0f, 0.0f, 0.0f, 0.0f);
+        std::vector<float> yaws;
+        for (int i = 0; i < 60 * 90; ++i) {
+            if (moving) in.position += in.velocity * in.dt;
+            a.update(in);
+            REQUIRE(pose_is_valid(a.model()));
+            ++counts[a.gaze_mode()];
+            widest = std::max(widest, std::abs(a.gaze_yaw()));
+            highest = std::max(highest, a.gaze_pitch());
+            lowest = std::min(lowest, a.gaze_pitch());
+            const glm::quat q = a.local()[size_t(head)].r;
+            if (i > 0 && !moving) {
+                const glm::quat d = glm::inverse(prev) * q;
+                fastest = std::max(fastest, 2.0f * std::asin(std::min(glm::length(glm::vec3(d.x, d.y, d.z)), 1.0f)) / in.dt);
+            }
+            prev = q;
+            if (a.gaze_mode() == 2) look_err = std::min(look_err, std::abs(a.gaze_yaw() - 0.785f));
+            yaws.push_back(a.gaze_yaw());
+        }
+        // the aim comes up: the head is back on it within half a second
+        in.aiming = true;
+        for (int i = 0; i < 40; ++i) a.update(in);
+        CHECK(std::abs(a.gaze_yaw()) < 0.03f);
+        CHECK(std::abs(a.gaze_pitch()) < 0.03f);
+        return yaws;
+    };
+    int c[3] = { 0, 0, 0 };
+    float widest = 0.0f, highest = 0.0f, lowest = 0.0f, fastest = 0.0f, look_err = 1e9f;
+    const std::vector<float> a1 = run_one(7, false, c, widest, highest, lowest, fastest, look_err);
+    INFO("standing 90 s: nothing " << c[0] << ", glance " << c[1] << ", looking at them " << c[2] << " frames; widest " << widest
+         << " rad, up " << highest << ", down " << lowest << ", head at most " << fastest << " rad/s, nearest to them " << look_err << " rad");
+    CHECK(c[0] > 300);                 // nothing for a while ...
+    CHECK(c[1] > 300);                 // ... a look to a side ...
+    CHECK(c[2] > 300);                 // ... and at the other player, each some of the time
+    CHECK(widest > 0.5f);
+    CHECK(widest <= 1.26f);
+    CHECK(highest > 0.1f);             // up sometimes
+    CHECK(lowest < -0.08f);            // and down
+    CHECK(look_err < 0.06f);           // when it looks at them, it looks at them
+    CHECK(fastest < 14.0f);            // a turn of the head, not a snap
+    // the same character again does the same; another one does not
+    int c2[3] = { 0, 0, 0 }; float w2 = 0, h2 = 0, l2 = 0, f2 = 0, e2 = 1e9f;
+    const std::vector<float> a2 = run_one(7, false, c2, w2, h2, l2, f2, e2);
+    CHECK(a1 == a2);
+    int c3[3] = { 0, 0, 0 }; float w3 = 0, h3 = 0, l3 = 0, f3 = 0, e3 = 1e9f;
+    const std::vector<float> a3 = run_one(8, false, c3, w3, h3, l3, f3, e3);
+    CHECK(a1 != a3);
+    // on the move: still some of it, less far
+    int c4[3] = { 0, 0, 0 }; float w4 = 0, h4 = 0, l4 = 0, f4 = 0, e4 = 1e9f;
+    run_one(7, true, c4, w4, h4, l4, f4, e4);
+    INFO("moving: nothing " << c4[0] << ", glance " << c4[1] << ", looking " << c4[2] << "; widest " << w4);
+    CHECK(c4[0] > c4[1]);
+    CHECK(c4[1] > 100);
+}

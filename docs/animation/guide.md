@@ -196,6 +196,13 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   it always was. Without it the rifle is carried at the ready: lower and canted, the muzzle down
   (`WeaponDef::ready_*`); a shot from the hip brings it level for `hip_fire_hold` seconds. A stance
   only: the shot goes where the crosshair is either way, and there is no zoom or change of speed.
+  A shot's tracer starts at the muzzle of the weapon as held (`weapon_fire_offset`: this stance,
+  level, before the recoil), the player's own and other players' alike.
+- **Idle life.** Not aiming, a soldier seen from outside looks about (`idle_look`): at the nearest
+  other soldier (`look_at`, chosen in `mp_pose_avatars`), to a side, up or down, or nowhere for a
+  few seconds; less and less far while moving. Standing it breathes and shifts its weight
+  (`idle_sway`). Each character has its own sequence (`variation`), the same every run. All of it
+  stops for the aim, a shot or a reload.
 - **Third person hold.** Seen from outside, the rifle is moved so its butt sits in the right shoulder
   (`WeaponDef::butt`, `shoulder_offset`; `AnimTuning::shoulder_weapon`) and the head leans to the
   stock (`head_to_sights`); the tablet is held in front of the chest (`tablet_chest`). The player

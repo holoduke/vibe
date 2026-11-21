@@ -91,6 +91,8 @@ struct AnimTuning {
     float speed_lean = 0.010f;           // radians per m/s, into the direction of travel
     float max_lean = 0.22f;
     float flinch = 0.22f;                // radians the torso gives under an ordinary hit (0 = none)
+    float idle_look = 1.0f;              // not aiming: the head looks about, at others, or nowhere for a while (0 = never)
+    float idle_sway = 1.0f;              // standing, not aiming: breathing and a shift of weight now and then (0 = none)
     float head_to_sights = 1.0f;         // seen from outside: the head leans to the stock (0 = stays upright)
     float chest_keep = 0.35f;            // share of the torso's lean away from its rest place that is kept (1 = all of it)
     float spine_pitch_share = 0.30f;     // share of the aim pitch taken by the spine (third person)
@@ -135,6 +137,11 @@ struct CharacterAnimationInput {
     // sights. Not aiming it is carried at the ready - lower, canted, the muzzle down until a
     // shot is fired from the hip. Default true: the stance everything had before there were two.
     bool      aiming = true;
+    // Something worth a look (another player), model space; the head turns to it now and then
+    // while the character is not aiming. `variation` makes two characters not move in step.
+    bool      has_look_at = false;
+    glm::vec3 look_at{0.0f, 1.6f, -5.0f};
+    uint32_t  variation = 0;
     bool      first_person = false;
     bool      teleported = false;        // position jumped: drop every world-space memory
     int       lod = 0;                   // 0 full .. 3 no pose (see anim_lod.h)
@@ -173,6 +180,13 @@ public:
     std::span<const Transform> local() const { return pose_; }
     // What is carried is drawn at  view frame * weapon_offset()  (recoil, reload, equip).
     const glm::mat4& weapon_offset() const { return weapon_offset_; }
+    // Where the weapon is the moment a shot leaves it: as weapon_offset, but level (a weapon at
+    // the ready comes level to fire) and before the recoil. What a tracer starts from.
+    const glm::mat4& weapon_fire_offset() const { return weapon_fire_offset_; }
+    // What the head is doing (debug views, tests): 0 nothing, 1 a glance, 2 looking at look_at.
+    int   gaze_mode() const { return gaze_mode_; }
+    float gaze_yaw() const { return gaze_yaw_; }       // radians, + right
+    float gaze_pitch() const { return gaze_pitch_; }   // radians, + up
     // Model-space muzzle position and direction (effects; never hit registration).
     glm::vec3 muzzle_position() const { return muzzle_pos_; }
     // The magazine in the support hand through the middle of a reload: its place in the weapon
@@ -220,6 +234,16 @@ private:
     glm::mat4 weapon_offset_{1.0f};
     glm::vec3 muzzle_pos_{0.0f}, muzzle_dir_{0.0f, 0.0f, -1.0f};
     glm::vec3 mag_pos_{0.0f};
+    glm::mat4 weapon_fire_offset_{1.0f};
+    // idle life: where the head looks, and the weight on the feet
+    uint32_t  rng_ = 0x9E3779B9u;
+    bool      rng_seeded_ = false;
+    int       gaze_mode_ = 0;
+    float     gaze_left_ = 0.0f;                       // seconds until the next choice
+    float     gaze_yaw_t_ = 0.0f, gaze_pitch_t_ = 0.0f;   // what a glance looks at
+    float     gaze_yaw_ = 0.0f, gaze_yaw_v_ = 0.0f, gaze_pitch_ = 0.0f, gaze_pitch_v_ = 0.0f, gaze_w_ = 0.0f;
+    float     shift_left_ = 3.0f, shift_t_ = 0.0f, shift_ = 0.0f, shift_v_ = 0.0f;
+    float     rnd();                                   // 0 .. 1, this animator's own sequence
     bool      mag_visible_ = false;
     uint32_t  hit_seq_ = 0;
     float     flinch_pitch_ = 0.0f, flinch_pitch_v_ = 0.0f, flinch_roll_ = 0.0f, flinch_roll_v_ = 0.0f;

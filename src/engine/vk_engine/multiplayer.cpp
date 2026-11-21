@@ -110,7 +110,9 @@ void VulkanEngine::mp_update(float dt) {
         if (e.kind == net::Event::Fire) {
             const glm::vec3 o(e.a[0], e.a[1], e.a[2]), d(e.b[0], e.b[1], e.b[2]);
             mp_remote_shot_ = true;
+            for (const auto& a : mp_avatars_) if (a.id == e.from && a.animator) shot_weapon_offset_ = &a.fire_offset;
             fire_projectile(o, d);
+            shot_weapon_offset_ = nullptr;
             mp_remote_shot_ = false;
             if (audio_) audio_->play_at(ClipID::Laser, o, 0.8f);
             for (auto& a : mp_avatars_) if (a.id == e.from) { a.recoil_t = kRecoilDuration; a.muzzle_t = kMuzzleFlashDuration; a.combat_t = 0.0f; }
@@ -222,6 +224,15 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         if (reloading && !a.was_reloading) ++a.reload_seq;          // a reload began (the flag is state: it survives lost packets)
         a.was_reloading = reloading;
         in.reload_seq = a.reload_seq;
+        in.variation = a.id;
+        {   // somebody worth a look: the nearest other soldier, us included
+            glm::vec3 best(0.0f);
+            float best_d2 = 30.0f * 30.0f;
+            auto consider = [&](glm::vec3 p) { const glm::vec3 d = p - eye; const float d2 = glm::dot(d, d); if (d2 > 0.25f && d2 < best_d2) { best_d2 = d2; best = p; in.has_look_at = true; } };
+            consider(cam);
+            for (const auto& o : mp_avatars_) if (o.id && o.id != a.id && o.present) consider(o.eye);
+            if (in.has_look_at) in.look_at = glm::vec3(glm::inverse(model) * glm::vec4(best, 1.0f));
+        }
         in.hit_seq = a.hit_seq;
         in.hit_power = a.hit_power;
         {   // (world -> their model space: +x their right, -z the way they face)
@@ -247,6 +258,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
             if (a.lod >= 3) a.pose_rows.clear();
             pose_character(*a.animator, in, a.lod >= 3 ? nullptr : &a.palette, &a.pose_rows);
             a.weapon_offset = a.animator->weapon_offset();
+            a.fire_offset = a.animator->weapon_fire_offset();
         }
         a.prev_model = a.fresh_pose ? model : a.model;
         a.fresh_pose = false;
