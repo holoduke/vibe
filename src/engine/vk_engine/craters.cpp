@@ -16,6 +16,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/spacejets.h"
 #include "engine/log.h"
 #include "engine/physics_world.h"
 #include "engine/terrain_clod.h"
@@ -52,7 +53,7 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     tp[0] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();   // GPU drain
     lap();
 
-    auto& R = spacejet_rng_state_;
+    auto& R = spacejet_->rng_state;
     const float Rc   = 2.4f + 2.4f * size;          // bowl radius (m): bomb ~4.8, crash ~7.9
     // A real crater: a hole with a floor, a steep wall and a raised rim (it was a shallow dish,
     // a metre deep over five metres - a dent, not a crater).
@@ -304,7 +305,7 @@ void VulkanEngine::drop_loose_objects(glm::vec3 pos, float radius) {
         if (physics_) {
             const glm::vec3 he = L.kind == 0 ? glm::vec3(0.09f, (L.hi.y - L.lo.y) * 0.5f - 0.2f, 0.09f)
                                              : glm::max((L.hi - L.lo) * 0.5f * glm::vec3(0.8f, 0.9f, 0.8f), glm::vec3(0.06f));
-            auto& R = spacejet_rng_state_;
+            auto& R = spacejet_->rng_state;
             const glm::vec3 tilt(frand_range(R, -0.22f, 0.22f), frand_range(R, 0.0f, 6.28f), frand_range(R, -0.22f, 0.22f));
             const uint32_t id = physics_->add_dynamic_box(c + glm::vec3(0.0f, 0.25f, 0.0f), he, tilt, L.kind == 0 ? 600.0f : 2400.0f);
             if (id != 0) {

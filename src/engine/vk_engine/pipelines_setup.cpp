@@ -5,6 +5,9 @@
 // Split out of setup.cpp (maintainability pass).
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/svgf.h"
+#include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/vk_engine/state/taa.h"
 #include "engine/vk_pipelines.h"
 #include "engine/window.h"
 
@@ -307,16 +310,16 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
     }
     // The low-resolution march (frame.cpp "march pre-pass"): a cut-down build of the same
     // shader, one R32F output, no depth. Small: the driver compiles it at once.
-    tr_march_module_ = vkpipe::load_shader_module(device_, sd + "/terrain_march_lo.frag.spv");
-    if (tr_march_module_) {
+    tr_->march_module = vkpipe::load_shader_module(device_, sd + "/terrain_march_lo.frag.spv");
+    if (tr_->march_module) {
         vkpipe::GraphicsPipelineConfig mo = cfg;
-        mo.frag = tr_march_module_;
+        mo.frag = tr_->march_module;
         mo.color_formats = { VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT };   // the march's distance, the shadow terms
         mo.depth_format = VK_FORMAT_UNDEFINED;
         mo.depth_test = false;
         mo.depth_write = false;
         mo.enable_vrs = false;
-        tr_march_pipeline_ = vkpipe::build_graphics_pipeline(device_, mo);
+        tr_->march_pipeline = vkpipe::build_graphics_pipeline(device_, mo);
     }
     // Three builds, each on a thread of its own (see the header): collected by
     // finish_terrain_raymarch_pipeline().
@@ -384,10 +387,10 @@ void VulkanEngine::destroy_terrain_raymarch_pipeline() {
     if (terrain_raymarch_lite_pipeline_)    vkDestroyPipeline(device_, terrain_raymarch_lite_pipeline_, nullptr);
     if (terrain_raymarch_lite_lr_pipeline_) vkDestroyPipeline(device_, terrain_raymarch_lite_lr_pipeline_, nullptr);
     if (terrain_raymarch_lite_module_)      vkDestroyShaderModule(device_, terrain_raymarch_lite_module_, nullptr);
-    if (tr_march_pipeline_) vkDestroyPipeline(device_, tr_march_pipeline_, nullptr);
-    if (tr_march_module_)   vkDestroyShaderModule(device_, tr_march_module_, nullptr);
-    tr_march_pipeline_ = VK_NULL_HANDLE;
-    tr_march_module_ = VK_NULL_HANDLE;
+    if (tr_->march_pipeline) vkDestroyPipeline(device_, tr_->march_pipeline, nullptr);
+    if (tr_->march_module)   vkDestroyShaderModule(device_, tr_->march_module, nullptr);
+    tr_->march_pipeline = VK_NULL_HANDLE;
+    tr_->march_module = VK_NULL_HANDLE;
     terrain_raymarch_lite_pipeline_ = terrain_raymarch_lite_lr_pipeline_ = VK_NULL_HANDLE;
     terrain_raymarch_lite_module_ = VK_NULL_HANDLE;
     if (terrain_raymarch_lr_pipeline_) {
@@ -559,7 +562,7 @@ bool VulkanEngine::tr_use_lowres() const {
 // low-resolution terrain: that pass is cheap already and has no depth copy to line up with).
 bool VulkanEngine::tr_march_prepass_on() const {
     return rt_.terrain_rm_prepass && rt_.terrain_raymarch_enabled && !tr_use_lowres() &&
-           tr_march_pipeline_ != VK_NULL_HANDLE && tr_march_view_ != VK_NULL_HANDLE;
+           tr_->march_pipeline != VK_NULL_HANDLE && tr_->march_view != VK_NULL_HANDLE;
 }
 
 void VulkanEngine::init_terrain_raymarch_lowres() {
@@ -576,7 +579,7 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         std::round(static_cast<float>(render_extent_.width)  * s)));
     uint32_t lh = std::max<uint32_t>(1u, static_cast<uint32_t>(
         std::round(static_cast<float>(render_extent_.height) * s)));
-    tr_lr_extent_ = { lw, lh };
+    tr_->lr_extent = { lw, lh };
 
     auto make_color = [&](VkFormat fmt, VkImage& img, VmaAllocation& alloc,
                            VkImageView& view, const char* tag) {
@@ -613,10 +616,10 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         vk_check(vkCreateImageView(device_, &vci, nullptr, &view), tag);
     };
     make_color(scene_color_format_,
-               tr_lr_color_image_,  tr_lr_color_alloc_,  tr_lr_color_view_,
+               tr_->lr_color_image,  tr_->lr_color_alloc,  tr_->lr_color_view,
                "tr_lr_color");
     make_color(motion_vec_format_,
-               tr_lr_motion_image_, tr_lr_motion_alloc_, tr_lr_motion_view_,
+               tr_->lr_motion_image, tr_->lr_motion_alloc, tr_->lr_motion_view,
                "tr_lr_motion");
 
     // Depth — the compose shader samples this as a normal sampler2D
@@ -641,12 +644,12 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         vk_check(vmaCreateImage(allocator_, &ici, &aci,
-                                 &tr_lr_depth_image_, &tr_lr_depth_alloc_, nullptr),
+                                 &tr_->lr_depth_image, &tr_->lr_depth_alloc, nullptr),
                  "tr_lr_depth image");
         VkImageViewCreateInfo vci{
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
-            .image = tr_lr_depth_image_,
+            .image = tr_->lr_depth_image,
             .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = depth_format_,
             .components = {},
             .subresourceRange = {
@@ -655,13 +658,13 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
                 .baseArrayLayer = 0, .layerCount = 1,
             },
         };
-        vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_lr_depth_view_),
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_->lr_depth_view),
                  "tr_lr_depth view");
     }
 
     // Linear sampler — the bilinear upscale is the whole reason we
     // can ship this at half-res without it looking like Minecraft.
-    if (!tr_lr_sampler_) {
+    if (!tr_->lr_sampler) {
         VkSamplerCreateInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         si.magFilter = VK_FILTER_LINEAR;
@@ -670,11 +673,11 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        vk_check(vkCreateSampler(device_, &si, nullptr, &tr_lr_sampler_),
+        vk_check(vkCreateSampler(device_, &si, nullptr, &tr_->lr_sampler),
                  "tr_lr_sampler");
     }
     // Depth-dedicated NEAREST sampler — see vk_engine.h comment.
-    if (!tr_lr_depth_sampler_) {
+    if (!tr_->lr_depth_sampler) {
         VkSamplerCreateInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         si.magFilter = VK_FILTER_NEAREST;
@@ -683,21 +686,21 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        vk_check(vkCreateSampler(device_, &si, nullptr, &tr_lr_depth_sampler_),
+        vk_check(vkCreateSampler(device_, &si, nullptr, &tr_->lr_depth_sampler),
                  "tr_lr_depth_sampler");
     }
 
     // The low-resolution march's target: R32F, a whole number of full pixels per texel.
     {
-        tr_march_div_ = std::clamp(rt_.terrain_rm_prepass_div, 2, 4);
-        tr_march_extent_ = { (render_extent_.width  + uint32_t(tr_march_div_) - 1) / uint32_t(tr_march_div_),
-                             (render_extent_.height + uint32_t(tr_march_div_) - 1) / uint32_t(tr_march_div_) };
+        tr_->march_div = std::clamp(rt_.terrain_rm_prepass_div, 2, 4);
+        tr_->march_extent = { (render_extent_.width  + uint32_t(tr_->march_div) - 1) / uint32_t(tr_->march_div),
+                             (render_extent_.height + uint32_t(tr_->march_div) - 1) / uint32_t(tr_->march_div) };
         VkImageCreateInfo ici{
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
             .imageType = VK_IMAGE_TYPE_2D,
             .format = VK_FORMAT_R32G32_SFLOAT,
-            .extent = { tr_march_extent_.width, tr_march_extent_.height, 1 },
+            .extent = { tr_->march_extent.width, tr_->march_extent.height, 1 },
             .mipLevels = 1, .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .tiling = VK_IMAGE_TILING_OPTIMAL,
@@ -708,10 +711,10 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         };
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        vk_check(vmaCreateImage(allocator_, &ici, &aci, &tr_march_image_, &tr_march_alloc_, nullptr), "tr_march image");
+        vk_check(vmaCreateImage(allocator_, &ici, &aci, &tr_->march_image, &tr_->march_alloc, nullptr), "tr_march image");
         VkImageViewCreateInfo vci{
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = nullptr, .flags = 0, .image = tr_march_image_,
+            .pNext = nullptr, .flags = 0, .image = tr_->march_image,
             .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R32G32_SFLOAT,
             .components = {},
             .subresourceRange = {
@@ -720,24 +723,24 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
                 .baseArrayLayer = 0, .layerCount = 1,
             },
         };
-        vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_march_view_), "tr_march view");
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_->march_view), "tr_march view");
         // The shadow terms: the same again in RGBA16F.
         ici.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-        vk_check(vmaCreateImage(allocator_, &ici, &aci, &tr_shade_image_, &tr_shade_alloc_, nullptr), "tr_shade image");
-        vci.image = tr_shade_image_;
+        vk_check(vmaCreateImage(allocator_, &ici, &aci, &tr_->shade_image, &tr_->shade_alloc, nullptr), "tr_shade image");
+        vci.image = tr_->shade_image;
         vci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-        vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_shade_view_), "tr_shade view");
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_->shade_view), "tr_shade view");
         // In SHADER_READ_ONLY from the start: the terrain shader's binding must be valid
         // on frames the march is switched off (it is not read then).
         vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
-            vkinit::transition_image(cb, tr_march_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+            vkinit::transition_image(cb, tr_->march_image, VK_IMAGE_LAYOUT_UNDEFINED,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            vkinit::transition_image(cb, tr_shade_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+            vkinit::transition_image(cb, tr_->shade_image, VK_IMAGE_LAYOUT_UNDEFINED,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         });
         VkDescriptorImageInfo mi{};
-        mi.sampler     = tr_lr_depth_sampler_;      // NEAREST, clamped (the shader gathers texels)
-        mi.imageView   = tr_march_view_;
+        mi.sampler     = tr_->lr_depth_sampler;      // NEAREST, clamped (the shader gathers texels)
+        mi.imageView   = tr_->march_view;
         mi.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         VkWriteDescriptorSet mw{};
         mw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -747,7 +750,7 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         mw.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         mw.pImageInfo = &mi;
         vkUpdateDescriptorSets(device_, 1, &mw, 0, nullptr);
-        mi.imageView = tr_shade_view_;
+        mi.imageView = tr_->shade_view;
         mw.dstBinding = 35;
         vkUpdateDescriptorSets(device_, 1, &mw, 0, nullptr);
     }
@@ -756,16 +759,16 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
     // resize for the lifetime of the views (we destroy + rewrite on
     // recreate).
     VkDescriptorImageInfo dii_c{};
-    dii_c.sampler     = tr_lr_sampler_;
-    dii_c.imageView   = tr_lr_color_view_;
+    dii_c.sampler     = tr_->lr_sampler;
+    dii_c.imageView   = tr_->lr_color_view;
     dii_c.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkDescriptorImageInfo dii_m{};
-    dii_m.sampler     = tr_lr_sampler_;
-    dii_m.imageView   = tr_lr_motion_view_;
+    dii_m.sampler     = tr_->lr_sampler;
+    dii_m.imageView   = tr_->lr_motion_view;
     dii_m.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkDescriptorImageInfo dii_d{};
-    dii_d.sampler     = tr_lr_depth_sampler_;   // NEAREST — see header comment
-    dii_d.imageView   = tr_lr_depth_view_;
+    dii_d.sampler     = tr_->lr_depth_sampler;   // NEAREST — see header comment
+    dii_d.imageView   = tr_->lr_depth_view;
     dii_d.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkWriteDescriptorSet writes[3] = {};
     for (int i = 0; i < 3; ++i) {
@@ -931,58 +934,58 @@ void VulkanEngine::recreate_vrs_attachment() {
 }
 
 void VulkanEngine::destroy_terrain_raymarch_lowres() {
-    if (tr_shade_view_) {
-        vkDestroyImageView(device_, tr_shade_view_, nullptr);
-        tr_shade_view_ = VK_NULL_HANDLE;
+    if (tr_->shade_view) {
+        vkDestroyImageView(device_, tr_->shade_view, nullptr);
+        tr_->shade_view = VK_NULL_HANDLE;
     }
-    if (tr_shade_image_) {
-        vmaDestroyImage(allocator_, tr_shade_image_, tr_shade_alloc_);
-        tr_shade_image_ = VK_NULL_HANDLE;
-        tr_shade_alloc_ = nullptr;
+    if (tr_->shade_image) {
+        vmaDestroyImage(allocator_, tr_->shade_image, tr_->shade_alloc);
+        tr_->shade_image = VK_NULL_HANDLE;
+        tr_->shade_alloc = nullptr;
     }
-    if (tr_march_view_) {
-        vkDestroyImageView(device_, tr_march_view_, nullptr);
-        tr_march_view_ = VK_NULL_HANDLE;
+    if (tr_->march_view) {
+        vkDestroyImageView(device_, tr_->march_view, nullptr);
+        tr_->march_view = VK_NULL_HANDLE;
     }
-    if (tr_march_image_) {
-        vmaDestroyImage(allocator_, tr_march_image_, tr_march_alloc_);
-        tr_march_image_ = VK_NULL_HANDLE;
-        tr_march_alloc_ = nullptr;
+    if (tr_->march_image) {
+        vmaDestroyImage(allocator_, tr_->march_image, tr_->march_alloc);
+        tr_->march_image = VK_NULL_HANDLE;
+        tr_->march_alloc = nullptr;
     }
-    if (tr_lr_color_view_) {
-        vkDestroyImageView(device_, tr_lr_color_view_, nullptr);
-        tr_lr_color_view_ = VK_NULL_HANDLE;
+    if (tr_->lr_color_view) {
+        vkDestroyImageView(device_, tr_->lr_color_view, nullptr);
+        tr_->lr_color_view = VK_NULL_HANDLE;
     }
-    if (tr_lr_color_image_) {
-        vmaDestroyImage(allocator_, tr_lr_color_image_, tr_lr_color_alloc_);
-        tr_lr_color_image_ = VK_NULL_HANDLE;
-        tr_lr_color_alloc_ = nullptr;
+    if (tr_->lr_color_image) {
+        vmaDestroyImage(allocator_, tr_->lr_color_image, tr_->lr_color_alloc);
+        tr_->lr_color_image = VK_NULL_HANDLE;
+        tr_->lr_color_alloc = nullptr;
     }
-    if (tr_lr_motion_view_) {
-        vkDestroyImageView(device_, tr_lr_motion_view_, nullptr);
-        tr_lr_motion_view_ = VK_NULL_HANDLE;
+    if (tr_->lr_motion_view) {
+        vkDestroyImageView(device_, tr_->lr_motion_view, nullptr);
+        tr_->lr_motion_view = VK_NULL_HANDLE;
     }
-    if (tr_lr_motion_image_) {
-        vmaDestroyImage(allocator_, tr_lr_motion_image_, tr_lr_motion_alloc_);
-        tr_lr_motion_image_ = VK_NULL_HANDLE;
-        tr_lr_motion_alloc_ = nullptr;
+    if (tr_->lr_motion_image) {
+        vmaDestroyImage(allocator_, tr_->lr_motion_image, tr_->lr_motion_alloc);
+        tr_->lr_motion_image = VK_NULL_HANDLE;
+        tr_->lr_motion_alloc = nullptr;
     }
-    if (tr_lr_depth_view_) {
-        vkDestroyImageView(device_, tr_lr_depth_view_, nullptr);
-        tr_lr_depth_view_ = VK_NULL_HANDLE;
+    if (tr_->lr_depth_view) {
+        vkDestroyImageView(device_, tr_->lr_depth_view, nullptr);
+        tr_->lr_depth_view = VK_NULL_HANDLE;
     }
-    if (tr_lr_depth_image_) {
-        vmaDestroyImage(allocator_, tr_lr_depth_image_, tr_lr_depth_alloc_);
-        tr_lr_depth_image_ = VK_NULL_HANDLE;
-        tr_lr_depth_alloc_ = nullptr;
+    if (tr_->lr_depth_image) {
+        vmaDestroyImage(allocator_, tr_->lr_depth_image, tr_->lr_depth_alloc);
+        tr_->lr_depth_image = VK_NULL_HANDLE;
+        tr_->lr_depth_alloc = nullptr;
     }
-    if (tr_lr_depth_sampler_) {
-        vkDestroySampler(device_, tr_lr_depth_sampler_, nullptr);
-        tr_lr_depth_sampler_ = VK_NULL_HANDLE;
+    if (tr_->lr_depth_sampler) {
+        vkDestroySampler(device_, tr_->lr_depth_sampler, nullptr);
+        tr_->lr_depth_sampler = VK_NULL_HANDLE;
     }
-    if (tr_lr_sampler_) {
-        vkDestroySampler(device_, tr_lr_sampler_, nullptr);
-        tr_lr_sampler_ = VK_NULL_HANDLE;
+    if (tr_->lr_sampler) {
+        vkDestroySampler(device_, tr_->lr_sampler, nullptr);
+        tr_->lr_sampler = VK_NULL_HANDLE;
     }
 }
 
@@ -995,7 +998,7 @@ void VulkanEngine::recreate_terrain_raymarch_lowres() {
 // Half-rate sun-shadow occlusion buffer: R8_UNORM at render_extent_/2.
 // Rendered by a fullscreen PCSS pass (Phase 2), bilateral-upsampled in
 // cube.frag (Phase 3). Allocated unconditionally (cheap, ~0.5 MB) so
-// the runtime toggle needs no resize; sampled via tr_lr_sampler_.
+// the runtime toggle needs no resize; sampled via tr_->lr_sampler.
 void VulkanEngine::init_shadow_lr() {
     uint32_t sw = std::max<uint32_t>(1u, render_extent_.width  / 2u);
     uint32_t sh = std::max<uint32_t>(1u, render_extent_.height / 2u);
@@ -1104,11 +1107,11 @@ void VulkanEngine::init_svgf_targets() {
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     vk_check(vmaCreateImage(allocator_, &ici, &aci,
-                            &svgf_gi_image_, &svgf_gi_alloc_, nullptr),
+                            &svgf_->gi_image, &svgf_->gi_alloc, nullptr),
              "svgf gi image");
     VkImageViewCreateInfo vci{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .pNext = nullptr, .flags = 0, .image = svgf_gi_image_,
+        .pNext = nullptr, .flags = 0, .image = svgf_->gi_image,
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
         .format = VK_FORMAT_R16G16B16A16_SFLOAT,
         .components = {},
@@ -1118,7 +1121,7 @@ void VulkanEngine::init_svgf_targets() {
             .baseArrayLayer = 0, .layerCount = 1,
         },
     };
-    vk_check(vkCreateImageView(device_, &vci, nullptr, &svgf_gi_view_),
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &svgf_->gi_view),
              "svgf gi view");
 
     // History ping-pong pair (Session 2). Same format/size. Same one-
@@ -1128,13 +1131,13 @@ void VulkanEngine::init_svgf_targets() {
     // target was last touched by F-2 (already retired by F-1's fence).
     for (int s = 0; s < 2; ++s) {
         vk_check(vmaCreateImage(allocator_, &ici, &aci,
-                                &svgf_history_image_[s],
-                                &svgf_history_alloc_[s], nullptr),
+                                &svgf_->history_image[s],
+                                &svgf_->history_alloc[s], nullptr),
                  "svgf history image");
         VkImageViewCreateInfo hvci = vci;
-        hvci.image = svgf_history_image_[s];
+        hvci.image = svgf_->history_image[s];
         vk_check(vkCreateImageView(device_, &hvci, nullptr,
-                                   &svgf_history_view_[s]),
+                                   &svgf_->history_view[s]),
                  "svgf history view");
     }
 
@@ -1153,19 +1156,19 @@ void VulkanEngine::init_svgf_targets() {
     mvci.format = VK_FORMAT_R32G32_SFLOAT;
     for (int s = 0; s < 2; ++s) {
         vk_check(vmaCreateImage(allocator_, &mici, &aci,
-                                &svgf_moments_image_[s],
-                                &svgf_moments_alloc_[s], nullptr),
+                                &svgf_->moments_image[s],
+                                &svgf_->moments_alloc[s], nullptr),
                  "svgf moments image");
-        mvci.image = svgf_moments_image_[s];
+        mvci.image = svgf_->moments_image[s];
         vk_check(vkCreateImageView(device_, &mvci, nullptr,
-                                   &svgf_moments_view_[s]),
+                                   &svgf_->moments_view[s]),
                  "svgf moments view");
     }
 
     // A-trous ping-pong pair (4a-deep). Stays as a colour-attachment +
     // sampled-image pair (no STORAGE) because svgf_atrous.frag is a
     // standard fragment-output pipeline; descriptor uses sampler2D.
-    // Format matches svgf_gi_image_/scene_color so the 3-pass chain
+    // Format matches svgf_->gi_image/scene_color so the 3-pass chain
     // (scene_color -> atrous[0] -> atrous[1] -> scene_color) doesn't
     // bottleneck on a precision drop.
     VkImageCreateInfo atici{
@@ -1197,12 +1200,12 @@ void VulkanEngine::init_svgf_targets() {
     };
     for (int s = 0; s < 2; ++s) {
         vk_check(vmaCreateImage(allocator_, &atici, &aci,
-                                &svgf_atrous_image_[s],
-                                &svgf_atrous_alloc_[s], nullptr),
+                                &svgf_->atrous_image[s],
+                                &svgf_->atrous_alloc[s], nullptr),
                  "svgf atrous image");
-        atvci.image = svgf_atrous_image_[s];
+        atvci.image = svgf_->atrous_image[s];
         vk_check(vkCreateImageView(device_, &atvci, nullptr,
-                                   &svgf_atrous_view_[s]),
+                                   &svgf_->atrous_view[s]),
                  "svgf atrous view");
     }
 
@@ -1214,24 +1217,24 @@ void VulkanEngine::init_svgf_targets() {
     // gi + history(2) + moments(2) to (0,0,0,0) so M-count=0 ->
     // temporal blend takes the fresh sample only.
     //
-    // svgf_atrous_image_ entries do not need clearing; they're written
+    // svgf_->atrous_image entries do not need clearing; they're written
     // before being read in the same frame (always fully overwritten by
     // the previous a-trous pass). They do need to land in
     // SHADER_READ_ONLY so the first atrous pass sampling its OTHER
     // ping-pong slot doesn't read UNDEFINED.
     vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_,
                             [&](VkCommandBuffer cb) {
-        vkinit::transition_image(cb, svgf_gi_image_,
+        vkinit::transition_image(cb, svgf_->gi_image,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_GENERAL);
         for (int s = 0; s < 2; ++s) {
-            vkinit::transition_image(cb, svgf_history_image_[s],
+            vkinit::transition_image(cb, svgf_->history_image[s],
                                      VK_IMAGE_LAYOUT_UNDEFINED,
                                      VK_IMAGE_LAYOUT_GENERAL);
-            vkinit::transition_image(cb, svgf_moments_image_[s],
+            vkinit::transition_image(cb, svgf_->moments_image[s],
                                      VK_IMAGE_LAYOUT_UNDEFINED,
                                      VK_IMAGE_LAYOUT_GENERAL);
-            vkinit::transition_image(cb, svgf_atrous_image_[s],
+            vkinit::transition_image(cb, svgf_->atrous_image[s],
                                      VK_IMAGE_LAYOUT_UNDEFINED,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
@@ -1251,12 +1254,12 @@ void VulkanEngine::init_svgf_targets() {
             VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1
         };
         full_barrier();
-        vkCmdClearColorImage(cb, svgf_gi_image_,
+        vkCmdClearColorImage(cb, svgf_->gi_image,
                              VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &sub);
         for (int s = 0; s < 2; ++s) {
-            vkCmdClearColorImage(cb, svgf_history_image_[s],
+            vkCmdClearColorImage(cb, svgf_->history_image[s],
                                  VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &sub);
-            vkCmdClearColorImage(cb, svgf_moments_image_[s],
+            vkCmdClearColorImage(cb, svgf_->moments_image[s],
                                  VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &sub);
         }
         full_barrier();
@@ -1265,11 +1268,11 @@ void VulkanEngine::init_svgf_targets() {
     // Initial descriptor writes at bindings 19 / 20 / 21 / 22 / 23.
     if (scene_desc_set_) {
         VkDescriptorImageInfo infos[5] = {
-            { VK_NULL_HANDLE, svgf_gi_view_,         VK_IMAGE_LAYOUT_GENERAL },
-            { VK_NULL_HANDLE, svgf_history_view_[0], VK_IMAGE_LAYOUT_GENERAL },
-            { VK_NULL_HANDLE, svgf_history_view_[1], VK_IMAGE_LAYOUT_GENERAL },
-            { VK_NULL_HANDLE, svgf_moments_view_[0], VK_IMAGE_LAYOUT_GENERAL },
-            { VK_NULL_HANDLE, svgf_moments_view_[1], VK_IMAGE_LAYOUT_GENERAL },
+            { VK_NULL_HANDLE, svgf_->gi_view,         VK_IMAGE_LAYOUT_GENERAL },
+            { VK_NULL_HANDLE, svgf_->history_view[0], VK_IMAGE_LAYOUT_GENERAL },
+            { VK_NULL_HANDLE, svgf_->history_view[1], VK_IMAGE_LAYOUT_GENERAL },
+            { VK_NULL_HANDLE, svgf_->moments_view[0], VK_IMAGE_LAYOUT_GENERAL },
+            { VK_NULL_HANDLE, svgf_->moments_view[1], VK_IMAGE_LAYOUT_GENERAL },
         };
         VkWriteDescriptorSet wr[5]{};
         for (int i = 0; i < 5; ++i) {
@@ -1287,45 +1290,45 @@ void VulkanEngine::init_svgf_targets() {
 }
 
 void VulkanEngine::destroy_svgf_targets() {
-    if (svgf_gi_view_) {
-        vkDestroyImageView(device_, svgf_gi_view_, nullptr);
-        svgf_gi_view_ = VK_NULL_HANDLE;
+    if (svgf_->gi_view) {
+        vkDestroyImageView(device_, svgf_->gi_view, nullptr);
+        svgf_->gi_view = VK_NULL_HANDLE;
     }
-    if (svgf_gi_image_) {
-        vmaDestroyImage(allocator_, svgf_gi_image_, svgf_gi_alloc_);
-        svgf_gi_image_ = VK_NULL_HANDLE;
-        svgf_gi_alloc_ = nullptr;
+    if (svgf_->gi_image) {
+        vmaDestroyImage(allocator_, svgf_->gi_image, svgf_->gi_alloc);
+        svgf_->gi_image = VK_NULL_HANDLE;
+        svgf_->gi_alloc = nullptr;
     }
     for (int s = 0; s < 2; ++s) {
-        if (svgf_history_view_[s]) {
-            vkDestroyImageView(device_, svgf_history_view_[s], nullptr);
-            svgf_history_view_[s] = VK_NULL_HANDLE;
+        if (svgf_->history_view[s]) {
+            vkDestroyImageView(device_, svgf_->history_view[s], nullptr);
+            svgf_->history_view[s] = VK_NULL_HANDLE;
         }
-        if (svgf_history_image_[s]) {
-            vmaDestroyImage(allocator_, svgf_history_image_[s],
-                            svgf_history_alloc_[s]);
-            svgf_history_image_[s] = VK_NULL_HANDLE;
-            svgf_history_alloc_[s] = nullptr;
+        if (svgf_->history_image[s]) {
+            vmaDestroyImage(allocator_, svgf_->history_image[s],
+                            svgf_->history_alloc[s]);
+            svgf_->history_image[s] = VK_NULL_HANDLE;
+            svgf_->history_alloc[s] = nullptr;
         }
-        if (svgf_moments_view_[s]) {
-            vkDestroyImageView(device_, svgf_moments_view_[s], nullptr);
-            svgf_moments_view_[s] = VK_NULL_HANDLE;
+        if (svgf_->moments_view[s]) {
+            vkDestroyImageView(device_, svgf_->moments_view[s], nullptr);
+            svgf_->moments_view[s] = VK_NULL_HANDLE;
         }
-        if (svgf_moments_image_[s]) {
-            vmaDestroyImage(allocator_, svgf_moments_image_[s],
-                            svgf_moments_alloc_[s]);
-            svgf_moments_image_[s] = VK_NULL_HANDLE;
-            svgf_moments_alloc_[s] = nullptr;
+        if (svgf_->moments_image[s]) {
+            vmaDestroyImage(allocator_, svgf_->moments_image[s],
+                            svgf_->moments_alloc[s]);
+            svgf_->moments_image[s] = VK_NULL_HANDLE;
+            svgf_->moments_alloc[s] = nullptr;
         }
-        if (svgf_atrous_view_[s]) {
-            vkDestroyImageView(device_, svgf_atrous_view_[s], nullptr);
-            svgf_atrous_view_[s] = VK_NULL_HANDLE;
+        if (svgf_->atrous_view[s]) {
+            vkDestroyImageView(device_, svgf_->atrous_view[s], nullptr);
+            svgf_->atrous_view[s] = VK_NULL_HANDLE;
         }
-        if (svgf_atrous_image_[s]) {
-            vmaDestroyImage(allocator_, svgf_atrous_image_[s],
-                            svgf_atrous_alloc_[s]);
-            svgf_atrous_image_[s] = VK_NULL_HANDLE;
-            svgf_atrous_alloc_[s] = nullptr;
+        if (svgf_->atrous_image[s]) {
+            vmaDestroyImage(allocator_, svgf_->atrous_image[s],
+                            svgf_->atrous_alloc[s]);
+            svgf_->atrous_image[s] = VK_NULL_HANDLE;
+            svgf_->atrous_alloc[s] = nullptr;
         }
     }
 }
@@ -1365,9 +1368,9 @@ void VulkanEngine::recreate_svgf_targets() {
     destroy_svgf_targets();
     init_svgf_targets();
     rewrite_svgf_storage_bindings(device_, scene_desc_set_,
-                                  svgf_gi_view_,
-                                  svgf_history_view_,
-                                  svgf_moments_view_);
+                                  svgf_->gi_view,
+                                  svgf_->history_view,
+                                  svgf_->moments_view);
     // The a-trous fragment pipeline samples scene_color / depth /
     // moments / atrous_view via its own desc sets; rewrite those too
     // so the chained 3-pass filter follows the new image handles.
@@ -1376,12 +1379,12 @@ void VulkanEngine::recreate_svgf_targets() {
 
 void VulkanEngine::init_terrain_raymarch_compose_pipeline() {
     std::string sd = VIBE_SHADER_DIR;
-    tr_compose_frag_module_ = vkpipe::load_shader_module(
+    tr_->compose_frag_module = vkpipe::load_shader_module(
         device_, sd + "/terrain_raymarch_compose.frag.spv");
 
     vkpipe::GraphicsPipelineConfig cfg{};
     cfg.vert = terrain_raymarch_vert_module_;   // reuse the fullscreen-tri vert
-    cfg.frag = tr_compose_frag_module_;
+    cfg.frag = tr_->compose_frag_module;
     cfg.layout = pipeline_layout_;
     cfg.color_formats = { scene_color_format_, motion_vec_format_,
                           gbuffer0_format_,    gbuffer1_format_ };
@@ -1394,18 +1397,18 @@ void VulkanEngine::init_terrain_raymarch_compose_pipeline() {
     // same comparison only where they're actually closer than the
     // raymarch.
     cfg.depth_compare = VK_COMPARE_OP_LESS_OR_EQUAL;
-    tr_compose_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    tr_->compose_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     log::info("terrain raymarch compose pipeline built");
 }
 
 void VulkanEngine::destroy_terrain_raymarch_compose_pipeline() {
-    if (tr_compose_pipeline_) {
-        vkDestroyPipeline(device_, tr_compose_pipeline_, nullptr);
-        tr_compose_pipeline_ = VK_NULL_HANDLE;
+    if (tr_->compose_pipeline) {
+        vkDestroyPipeline(device_, tr_->compose_pipeline, nullptr);
+        tr_->compose_pipeline = VK_NULL_HANDLE;
     }
-    if (tr_compose_frag_module_) {
-        vkDestroyShaderModule(device_, tr_compose_frag_module_, nullptr);
-        tr_compose_frag_module_ = VK_NULL_HANDLE;
+    if (tr_->compose_frag_module) {
+        vkDestroyShaderModule(device_, tr_->compose_frag_module, nullptr);
+        tr_->compose_frag_module = VK_NULL_HANDLE;
     }
 }
 
@@ -1540,7 +1543,7 @@ void VulkanEngine::init_grass_raymarch_pipeline() {
     // Reuse taa.vert (fullscreen triangle from gl_VertexIndex). The
     // taa shader module was created in init_taa() and stays alive for
     // the engine's lifetime, so it's safe to reference here.
-    cfg.vert = taa_vert_module_;
+    cfg.vert = taa_->vert_module;
     cfg.frag = grass_rm_frag_module_;
     cfg.layout = pipeline_layout_;            // shares the cube push-constant layout
     cfg.color_formats = { scene_color_format_, motion_vec_format_,

@@ -7,6 +7,7 @@
 // swapped in, writing into their own vertex buffer.
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/multiplayer.h"
 #include "engine/net/net.h"
 #include "engine/net/net_anim.h"
 #include "anim/anim_lod.h"
@@ -49,21 +50,21 @@ void VulkanEngine::mp_init() {
     const char* cn = std::getenv("COMPUTERNAME");
     net_ = new net::Session();
     if (!net_->start(cn && *cn ? cn : "player")) { delete net_; net_ = nullptr; return; }
-    mp_spawn_ = player_.position;
-    mp_health_ = 100.0f;
+    mp_->spawn = player_.position;
+    mp_->health = 100.0f;
 }
 
 void VulkanEngine::mp_shutdown() {
     if (net_) { net_->stop(); delete net_; net_ = nullptr; }
-    for (auto& a : mp_avatars_) {
+    for (auto& a : mp_->avatars) {
         a.animator.reset();
         a.id = 0;
     }
 }
 
 void VulkanEngine::mp_feed(const std::string& line) {
-    mp_feed_.push_back({ line, 6.0f });
-    if (mp_feed_.size() > 5) mp_feed_.erase(mp_feed_.begin());
+    mp_->feed.push_back({ line, 6.0f });
+    if (mp_->feed.size() > 5) mp_->feed.erase(mp_->feed.begin());
     log::infof("[net] %s", line.c_str());
 }
 
@@ -77,22 +78,22 @@ void VulkanEngine::mp_update(float dt) {
     ls.yaw = player_.yaw; ls.pitch = player_.pitch; ls.crouch = player_.crouch_factor;
     // A respawn is told as such (one state long), so nobody slides the body across the map.
     // (held for a moment: states go out 30 times a second, this runs every frame)
-    if (glm::length(player_.position - mp_last_sent_pos_) > net::kTeleportDistance + 0.1f * glm::length(player_.velocity)) mp_teleport_hold_ = 0.12f;
-    mp_last_sent_pos_ = player_.position;
-    const bool jumped = mp_teleport_hold_ > 0.0f;
-    mp_teleport_hold_ = std::max(0.0f, mp_teleport_hold_ - dt);
+    if (glm::length(player_.position - mp_->last_sent_pos) > net::kTeleportDistance + 0.1f * glm::length(player_.velocity)) mp_->teleport_hold = 0.12f;
+    mp_->last_sent_pos = player_.position;
+    const bool jumped = mp_->teleport_hold > 0.0f;
+    mp_->teleport_hold = std::max(0.0f, mp_->teleport_hold - dt);
     ls.flags = uint8_t((player_.on_ground ? net::kFlagGround : 0) | (player_swimming_ ? net::kFlagSwim : 0) | (flashlight_on_ ? net::kFlagTorch : 0) |
                        (body_reload_left_ > 0.0f ? net::kFlagReload : 0) | (body_aim_ ? net::kFlagAim : 0) | (jumped ? net::kFlagTeleport : 0));
-    ls.health = uint8_t(glm::clamp(mp_health_, 0.0f, 100.0f));
+    ls.health = uint8_t(glm::clamp(mp_->health, 0.0f, 100.0f));
     ls.weapon = uint8_t(weapon_);
     // The movement keys: what this player wants, so others can predict starts, stops and turns as the controller will make them.
     ls.move = net::move_bits(last_pin_);
     ls.shot_seq = uint16_t(body_shot_seq_);
     net_->update(glfwGetTime(), ls);
 
-    for (auto& f : mp_feed_) f.ttl -= dt;
-    mp_feed_.erase(std::remove_if(mp_feed_.begin(), mp_feed_.end(), [](const MpFeed& f) { return f.ttl <= 0.0f; }), mp_feed_.end());
-    mp_hurt_ = std::max(0.0f, mp_hurt_ - dt * 2.5f);
+    for (auto& f : mp_->feed) f.ttl -= dt;
+    mp_->feed.erase(std::remove_if(mp_->feed.begin(), mp_->feed.end(), [](const MpFeed& f) { return f.ttl <= 0.0f; }), mp_->feed.end());
+    mp_->hurt = std::max(0.0f, mp_->hurt - dt * 2.5f);
 
     // VIBE_TEST_WX=<seconds>:<type>: pick that weather type after that many seconds (sync tests).
     if (static const char* tw = std::getenv("VIBE_TEST_WX"); tw) {
@@ -109,43 +110,43 @@ void VulkanEngine::mp_update(float dt) {
     for (const net::Event& e : net_->take_events()) {
         if (e.kind == net::Event::Fire) {
             const glm::vec3 o(e.a[0], e.a[1], e.a[2]), d(e.b[0], e.b[1], e.b[2]);
-            mp_remote_shot_ = true;
-            for (const auto& a : mp_avatars_) if (a.id == e.from && a.animator) shot_weapon_offset_ = &a.fire_offset;
+            mp_->remote_shot = true;
+            for (const auto& a : mp_->avatars) if (a.id == e.from && a.animator) shot_weapon_offset_ = &a.fire_offset;
             fire_projectile(o, d);
             shot_weapon_offset_ = nullptr;
-            mp_remote_shot_ = false;
+            mp_->remote_shot = false;
             if (audio_) audio_->play_at(ClipID::Laser, o, 0.8f);
-            for (auto& a : mp_avatars_) if (a.id == e.from) { a.recoil_t = kRecoilDuration; a.muzzle_t = kMuzzleFlashDuration; a.combat_t = 0.0f; }
+            for (auto& a : mp_->avatars) if (a.id == e.from) { a.recoil_t = kRecoilDuration; a.muzzle_t = kMuzzleFlashDuration; a.combat_t = 0.0f; }
         } else if (e.kind == net::Event::Hit) {
             // (where and from where they were hit: the push their body gets if this kills them)
-            for (auto& a : mp_avatars_)
+            for (auto& a : mp_->avatars)
                 if (a.id == e.to) {
                     a.hit_pos = glm::vec3(e.a[0], e.a[1], e.a[2]); a.hit_dir = glm::vec3(e.b[0], e.b[1], e.b[2]);
                     a.hit_power = e.v / kHitDamage; a.hit_age = 0.0f;
                     ++a.hit_seq;
                 }
-            if (e.to == net_->id() && mp_health_ > 0.0f) {
-                mp_health_ -= e.v;
+            if (e.to == net_->id() && mp_->health > 0.0f) {
+                mp_->health -= e.v;
                 ++body_hit_seq_;
                 body_hit_dir_ = glm::vec3(e.b[0], e.b[1], e.b[2]);
-                mp_hurt_ = 1.0f;
+                mp_->hurt = 1.0f;
                 if (audio_) audio_->play_local(ClipID::Impact, 0.8f);
-                if (mp_health_ <= 0.0f) {
+                if (mp_->health <= 0.0f) {
                     net::Event d{}; d.kind = net::Event::Death; d.from = net_->id(); d.to = e.from;
                     net_->send_event(d);
                     mp_feed(net_->name_of(e.from) + " killed " + net_->name_of(net_->id()));
                     // Respawn where this session started.
-                    player_.position = mp_spawn_;
+                    player_.position = mp_->spawn;
                     player_.velocity = glm::vec3(0.0f);
-                    mp_health_ = 100.0f;
+                    mp_->health = 100.0f;
                 }
             }
         } else if (e.kind == net::Event::Airstrike) {
             spawn_airstrike(glm::vec3(e.a[0], e.a[1], e.a[2]), glm::normalize(glm::vec3(e.b[0], e.b[1], e.b[2]) + glm::vec3(1e-5f, 0.0f, 0.0f)), true);
             mp_feed(net_->name_of(e.from) + " called an airstrike");
         } else if (e.kind == net::Event::Death) {
-            for (auto& a : mp_avatars_) if (a.id == e.from) a.die = true;      // their body falls where it is (ragdoll.cpp)
-            if (e.to == net_->id()) ++mp_kills_;
+            for (auto& a : mp_->avatars) if (a.id == e.from) a.die = true;      // their body falls where it is (ragdoll.cpp)
+            if (e.to == net_->id()) ++mp_->kills;
             mp_feed(net_->name_of(e.to) + " killed " + net_->name_of(e.from));
         } else if (e.kind == net::Event::Leave) {
             mp_feed("a player left");
@@ -154,7 +155,7 @@ void VulkanEngine::mp_update(float dt) {
 
     // ---- avatars: one slot per remote player ----
     const auto& players = net_->players();
-    for (auto& a : mp_avatars_) {
+    for (auto& a : mp_->avatars) {
         bool alive = false;
         for (const auto& p : players) if (p.id == a.id && a.id) alive = true;
         if (!alive) { a.id = 0; a.drawn = false; }
@@ -162,9 +163,9 @@ void VulkanEngine::mp_update(float dt) {
     for (const auto& p : players) {
         if (!p.fresh) continue;
         MpAvatar* av = nullptr;
-        for (auto& a : mp_avatars_) if (a.id == p.id) av = &a;
+        for (auto& a : mp_->avatars) if (a.id == p.id) av = &a;
         if (!av) {
-            for (auto& a : mp_avatars_) if (!a.id) { av = &a; break; }
+            for (auto& a : mp_->avatars) if (!a.id) { av = &a; break; }
             if (!av) continue;
             *av = MpAvatar{};
             av->id = p.id;
@@ -190,7 +191,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
     struct Posed { MpAvatar* a; anim::CharacterAnimationInput in; net::RemoteFrame rf; bool skip; };
     Posed posed[net::kMaxPlayers];
     int n_posed = 0;
-    for (auto& a : mp_avatars_) {
+    for (auto& a : mp_->avatars) {
         a.drawn = false;
         a.present = false;
         if (!a.id) continue;
@@ -251,7 +252,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
             float best_d2 = 30.0f * 30.0f;
             auto consider = [&](glm::vec3 p) { const glm::vec3 d = p - eye; const float d2 = glm::dot(d, d); if (d2 > 0.25f && d2 < best_d2) { best_d2 = d2; best = p; in.has_look_at = true; } };
             consider(cam);
-            for (const auto& o : mp_avatars_) if (o.id && o.id != a.id && o.present) consider(o.eye);
+            for (const auto& o : mp_->avatars) if (o.id && o.id != a.id && o.present) consider(o.eye);
             if (in.has_look_at) in.look_at = glm::vec3(glm::inverse(model) * glm::vec4(best, 1.0f));
         }
         in.hit_seq = a.hit_seq;
@@ -330,7 +331,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
     }
     if (std::getenv("VIBE_ANIM_LOG") && frame_number_ % 20 == 0) {
         // (what each remote animator is doing: the evidence for a two-instance run)
-        for (const auto& a : mp_avatars_) {
+        for (const auto& a : mp_->avatars) {
             if (!a.id || !a.animator) continue;
             const anim::AnimDebug& d = a.animator->debug();
             log::infof("[anim] remote %u: L%d %s clip %s  speed %.2f rate %.2f  air %s  contact %d%d  pos %.1f %.1f %.1f", a.id, a.lod, d.mode,
@@ -350,13 +351,13 @@ void VulkanEngine::draw_remote_players(VkCommandBuffer cmd, const glm::mat4& vp)
     if (!net_) return;
     const float sv_recoil = recoil_timer_, sv_muzzle = muzzle_flash_timer_;
     const int sv_weapon = weapon_; const bool sv_flash = flashlight_on_;
-    for (auto& a : mp_avatars_) {
+    for (auto& a : mp_->avatars) {
         if (!a.id || !a.drawn) continue;
         // What they hold, as replicated: the laser gun or the tablet (a torch is not drawn for others).
         recoil_timer_ = a.recoil_t; muzzle_flash_timer_ = a.muzzle_t; weapon_ = a.st.weapon == 1 ? 1 : 0; flashlight_on_ = false;
-        mp_draw_ = &a;
+        mp_->draw = &a;
         draw_viewmodel(cmd, vp, a.view_inv);
-        mp_draw_ = nullptr;
+        mp_->draw = nullptr;
     }
     recoil_timer_ = sv_recoil; muzzle_flash_timer_ = sv_muzzle; weapon_ = sv_weapon; flashlight_on_ = sv_flash;
 }
@@ -382,11 +383,11 @@ void VulkanEngine::mp_sync_world(float dt) {
                a.day_len_min == b.day_len_min && a.change_min == b.change_min;
     };
     const bool host = net_->role() == net::Role::Host, client = net_->role() == net::Role::Client;
-    if (!client) mp_host_tgt_valid_ = false;
+    if (!client) mp_->host_tgt_valid = false;
     // ---- incoming ----
     net::WorldState in{};
     if (net_->take_world(in)) {
-        const bool choice_changed = !mp_world_init_ || !same_choice(in, mp_world_last_);
+        const bool choice_changed = !mp_->world_init || !same_choice(in, mp_->world_last);
         rt_.weather_enabled = in.weather_on != 0; rt_.day_night_enabled = in.day_night != 0;
         if (rt_.weather_preset != in.preset) wx_last_preset_ = -2;      // start that type (and its clock turn) here too
         rt_.weather_preset = in.preset; rt_.weather_manual = in.manual;
@@ -396,36 +397,36 @@ void VulkanEngine::mp_sync_world(float dt) {
             // The clock: follow the host unless a weather type is turning it right now (both turn it the same way).
             const float d = std::fmod(in.time_of_day - rt_.time_of_day + 36.0f, 24.0f) - 12.0f;
             if (wx_clock_target_ < 0.0f && !choice_changed && std::abs(d) > 0.01f) rt_.time_of_day = in.time_of_day;
-            float* t = &mp_host_tgt_.cover; float* c = &wx_cur_.cover;
+            float* t = &mp_->host_tgt.cover; float* c = &wx_cur_.cover;
             float worst = 0.0f;
             for (int i = 0; i < 9; ++i) { t[i] = in.tgt[i]; worst = std::max(worst, std::abs(c[i] - in.cur[i])); }
-            mp_host_tgt_valid_ = true;
+            mp_->host_tgt_valid = true;
             if (worst > 0.12f && !choice_changed) for (int i = 0; i < 9; ++i) c[i] = in.cur[i];     // joined late or drifted: take the sky of the host
         } else {
             rt_.time_of_day = in.time_of_day;      // host: a request (the clock set by hand included)
         }
-        mp_world_last_ = snapshot();
-        mp_world_init_ = true;
-        if (host) { net_->send_world(mp_world_last_); mp_world_timer_ = 1.0f; }    // pass the request on now
+        mp_->world_last = snapshot();
+        mp_->world_init = true;
+        if (host) { net_->send_world(mp_->world_last); mp_->world_timer = 1.0f; }    // pass the request on now
         return;
     }
     // ---- outgoing ----
     const net::WorldState now_w = snapshot();
     // (the clock was set by hand: more than it can have moved by itself)
-    const float moved = std::abs(std::fmod(now_w.time_of_day - mp_world_last_.time_of_day + 36.0f, 24.0f) - 12.0f);
-    const bool clock_set = mp_world_init_ && wx_clock_target_ < 0.0f && moved > 0.25f;
-    const bool changed = mp_world_init_ && (!same_choice(now_w, mp_world_last_) || clock_set);
-    mp_world_timer_ -= dt;
-    if (host && (changed || mp_world_timer_ <= 0.0f)) { net_->send_world(now_w); mp_world_timer_ = 1.0f; }
+    const float moved = std::abs(std::fmod(now_w.time_of_day - mp_->world_last.time_of_day + 36.0f, 24.0f) - 12.0f);
+    const bool clock_set = mp_->world_init && wx_clock_target_ < 0.0f && moved > 0.25f;
+    const bool changed = mp_->world_init && (!same_choice(now_w, mp_->world_last) || clock_set);
+    mp_->world_timer -= dt;
+    if (host && (changed || mp_->world_timer <= 0.0f)) { net_->send_world(now_w); mp_->world_timer = 1.0f; }
     else if (client && changed) net_->send_world(now_w);
-    mp_world_last_ = now_w;
-    mp_world_init_ = true;
+    mp_->world_last = now_w;
+    mp_->world_init = true;
 }
 
 // The local player fired (called from fire_projectile).
 
 void VulkanEngine::mp_on_local_fire(glm::vec3 origin, glm::vec3 dir) {
-    if (!net_ || mp_remote_shot_) return;
+    if (!net_ || mp_->remote_shot) return;
     net::Event e{};
     e.kind = net::Event::Fire; e.from = net_->id();
     e.a[0] = origin.x; e.a[1] = origin.y; e.a[2] = origin.z;
@@ -438,7 +439,7 @@ void VulkanEngine::mp_on_local_fire(glm::vec3 origin, glm::vec3 dir) {
 // the shooter aimed at - so a hit on screen is a hit.
 bool VulkanEngine::mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
     if (!net_) return false;
-    for (auto& av : mp_avatars_) {
+    for (auto& av : mp_->avatars) {
         // (whether they are drawn has nothing to do with it: animation detail never decides a hit)
         if (!av.id || !av.present) continue;
         const glm::vec3 c(av.st.px, av.st.py, av.st.pz);
@@ -454,7 +455,7 @@ bool VulkanEngine::mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
         av.hit_pos = hit; av.hit_dir = bd; av.hit_power = 1.0f; av.hit_age = 0.0f; av.combat_t = 0.0f;
         ++av.hit_seq;
         net_->send_event(e);
-        mp_hitmark_ = 0.25f;
+        mp_->hitmark = 0.25f;
         return true;
     }
     return false;
@@ -463,16 +464,16 @@ bool VulkanEngine::mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
 void VulkanEngine::mp_hud() {
     // The hit marker: four ticks round the crosshair for a quarter of a second after a shot
     // of yours landed - on another player, an aircraft or a vehicle (also without a network).
-    if (mp_hitmark_ > 0.0f && imgui_initialized_) {
+    if (mp_->hitmark > 0.0f && imgui_initialized_) {
         const ImVec2 dsz = ImGui::GetIO().DisplaySize;
         const ImVec2 c(dsz.x * 0.5f, dsz.y * 0.5f);
-        const float k = dsz.y / 1080.0f, a = glm::clamp(mp_hitmark_ / 0.12f, 0.0f, 1.0f);
+        const float k = dsz.y / 1080.0f, a = glm::clamp(mp_->hitmark / 0.12f, 0.0f, 1.0f);
         const ImU32 col = IM_COL32(255, 80, 60, int(255.0f * a));
         for (float sx : { -1.0f, 1.0f }) for (float sy : { -1.0f, 1.0f })
             ImGui::GetForegroundDrawList()->AddLine(ImVec2(c.x + sx * 6.0f * k, c.y + sy * 6.0f * k),
                                                     ImVec2(c.x + sx * 13.0f * k, c.y + sy * 13.0f * k), col, 2.0f * k);
     }
-    mp_hitmark_ = std::max(0.0f, mp_hitmark_ - ImGui::GetIO().DeltaTime);
+    mp_->hitmark = std::max(0.0f, mp_->hitmark - ImGui::GetIO().DeltaTime);
     if (!net_) return;
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImVec2 disp = ImGui::GetIO().DisplaySize;
@@ -480,9 +481,9 @@ void VulkanEngine::mp_hud() {
     char line[160];
     if (others > 0) {
         if (net_->role() == net::Role::Client)
-            std::snprintf(line, sizeof(line), "LAN: %s  |  %d players  |  ping %u ms  |  kills %d", net_->role_name(), others + 1, net_->ping_ms(), mp_kills_);
+            std::snprintf(line, sizeof(line), "LAN: %s  |  %d players  |  ping %u ms  |  kills %d", net_->role_name(), others + 1, net_->ping_ms(), mp_->kills);
         else
-            std::snprintf(line, sizeof(line), "LAN: %s  |  %d players  |  kills %d", net_->role_name(), others + 1, mp_kills_);
+            std::snprintf(line, sizeof(line), "LAN: %s  |  %d players  |  kills %d", net_->role_name(), others + 1, mp_->kills);
     } else {
         std::snprintf(line, sizeof(line), "LAN: %s for other players...", net_->role_name());
     }
@@ -491,17 +492,17 @@ void VulkanEngine::mp_hud() {
     dl->AddRectFilled(ImVec2(p0.x - 8.0f, p0.y - 4.0f), ImVec2(p0.x + ts.x + 8.0f, p0.y + ts.y + 4.0f), IM_COL32(0, 0, 0, 120), 4.0f);
     dl->AddText(p0, others > 0 ? IM_COL32(150, 255, 170, 255) : IM_COL32(220, 220, 220, 200), line);
     float y = p0.y + ts.y + 12.0f;
-    for (const auto& f : mp_feed_) {
+    for (const auto& f : mp_->feed) {
         const ImVec2 fs = ImGui::CalcTextSize(f.text.c_str());
         dl->AddText(ImVec2(disp.x - fs.x - 18.0f, y), IM_COL32(255, 255, 255, int(255.0f * glm::clamp(f.ttl, 0.0f, 1.0f))), f.text.c_str());
         y += fs.y + 3.0f;
     }
     if (others > 0) {
-        if (mp_hurt_ > 0.0f)
-            dl->AddRect(ImVec2(0, 0), disp, IM_COL32(255, 30, 20, int(170.0f * mp_hurt_)), 0.0f, 0, 28.0f);
+        if (mp_->hurt > 0.0f)
+            dl->AddRect(ImVec2(0, 0), disp, IM_COL32(255, 30, 20, int(170.0f * mp_->hurt)), 0.0f, 0, 28.0f);
         // Name tags over the other players.
         const glm::mat4 vpm = current_frame_view_.vp;
-        for (const auto& a : mp_avatars_) {
+        for (const auto& a : mp_->avatars) {
             if (!a.id || !a.drawn) continue;
             const glm::vec4 c = vpm * glm::vec4(a.eye + glm::vec3(0.0f, 0.38f, 0.0f), 1.0f);
             if (c.w < 0.3f) continue;

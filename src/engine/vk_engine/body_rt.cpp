@@ -15,6 +15,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/multiplayer.h"
 
 #include "engine/log.h"
 #include "engine/vk_pipelines.h"
@@ -225,7 +226,7 @@ void VulkanEngine::record_body_rt(VkCommandBuffer cmd) {
     };
     if (body_drawn_) add(body_model_, body_model_, body_palette_);
     if (net_)
-        for (const MpAvatar& a : mp_avatars_)
+        for (const MpAvatar& a : mp_->avatars)
             if (a.id && a.drawn) add(a.model, a.prev_model, a.palette);
     for (const Corpse& c : corpses_)
         if (c.rag && c.av.drawn) add(c.av.model, c.av.model, c.av.palette);

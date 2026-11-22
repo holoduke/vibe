@@ -3,28 +3,88 @@
 // that knows them all, to create and free them.
 
 #include "engine/vk_engine.h"
-#include "engine/vk_engine/state/ssdm.h"
+#include "engine/vk_engine/state/atmosphere.h"
+#include "engine/vk_engine/state/bloom.h"
+#include "engine/vk_engine/state/clouds.h"
 #include "engine/vk_engine/state/cluster_draw.h"
+#include "engine/vk_engine/state/clutter_shadow.h"
+#include "engine/vk_engine/state/compose.h"
+#include "engine/vk_engine/state/dlss.h"
+#include "engine/vk_engine/state/environment.h"
+#include "engine/vk_engine/state/fog.h"
+#include "engine/vk_engine/state/fsr2.h"
+#include "engine/vk_engine/state/fsr3.h"
+#include "engine/vk_engine/state/fx.h"
+#include "engine/vk_engine/state/multiplayer.h"
 #include "engine/vk_engine/state/plant_gpu.h"
-#include "engine/vk_engine/state/static_clusters.h"
 #include "engine/vk_engine/state/rr_guides.h"
+#include "engine/vk_engine/state/spacejets.h"
+#include "engine/vk_engine/state/ssdm.h"
+#include "engine/vk_engine/state/static_clusters.h"
+#include "engine/vk_engine/state/streamline.h"
+#include "engine/vk_engine/state/sun_shadow.h"
+#include "engine/vk_engine/state/svgf.h"
+#include "engine/vk_engine/state/taa.h"
+#include "engine/vk_engine/state/taau.h"
+#include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/vk_engine/state/voxel.h"
 
 namespace vibe {
 
 void VulkanEngine::alloc_private_state() {
-    ssdm_ = new SsdmState();
+    atmo_ = new AtmosphereState();
+    bloom_ = new BloomState();
+    cloud_ = new CloudState();
     cl_ = new ClusterDrawState();
+    clutter_ = new ClutterShadowState();
+    compose_ = new ComposeState();
+    dlss_ = new DlssState();
+    env_ = new EnvState();
+    fog_ = new FogState();
+    fsr2_ = new Fsr2State();
+    fsr3_ = new Fsr3State();
+    fx_ = new FxState();
+    mp_ = new MultiplayerState();
     pg_ = new PlantGpuState();
-    scl_ = new StaticClusterState();
     rr_ = new RrGuideState();
+    spacejet_ = new SpacejetState();
+    ssdm_ = new SsdmState();
+    scl_ = new StaticClusterState();
+    sl_ = new StreamlineState();
+    sun_ = new SunShadowState();
+    svgf_ = new SvgfState();
+    taa_ = new TaaState();
+    taau_ = new TaauState();
+    tr_ = new TerrainRaymarchState();
+    voxel_ = new VoxelState();
 }
 
 void VulkanEngine::free_private_state() {
-    delete ssdm_; ssdm_ = nullptr;
+    delete atmo_; atmo_ = nullptr;
+    delete bloom_; bloom_ = nullptr;
+    delete cloud_; cloud_ = nullptr;
     delete cl_; cl_ = nullptr;
+    delete clutter_; clutter_ = nullptr;
+    delete compose_; compose_ = nullptr;
+    delete dlss_; dlss_ = nullptr;
+    delete env_; env_ = nullptr;
+    delete fog_; fog_ = nullptr;
+    delete fsr2_; fsr2_ = nullptr;
+    delete fsr3_; fsr3_ = nullptr;
+    delete fx_; fx_ = nullptr;
+    delete mp_; mp_ = nullptr;
     delete pg_; pg_ = nullptr;
-    delete scl_; scl_ = nullptr;
     delete rr_; rr_ = nullptr;
+    delete spacejet_; spacejet_ = nullptr;
+    delete ssdm_; ssdm_ = nullptr;
+    delete scl_; scl_ = nullptr;
+    delete sl_; sl_ = nullptr;
+    delete sun_; sun_ = nullptr;
+    delete svgf_; svgf_ = nullptr;
+    delete taa_; taa_ = nullptr;
+    delete taau_; taau_ = nullptr;
+    delete tr_; tr_ = nullptr;
+    delete voxel_; voxel_ = nullptr;
 }
 
 } // namespace vibe

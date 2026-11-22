@@ -9,6 +9,7 @@
 // slot in the vegetation "visible" list reserved for each clustered rock).
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/vk_engine/state/cluster_draw.h"
 #include "engine/vk_engine/state/static_clusters.h"
 #include "engine/vk_pipelines.h"
@@ -525,7 +526,7 @@ void VulkanEngine::cull_static_clusters(VkCommandBuffer cmd) {
     // 2. The sun's shadow map: the same hierarchy, cut a little coarser (a shadow
     // edge is soft), culled to the light's box, nothing hidden by the camera's depth.
     {
-        const Frustum lf = extract_frustum(sun_shadow_light_vp_);
+        const Frustum lf = extract_frustum(sun_->shadow_light_vp);
         for (int i = 0; i < 6; ++i) pc.planes[i] = lf.planes[i];
         pc.params = glm::vec4(float(scl_->total), 2.0f, 0.0f, 0.0f);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scl_->layout, 0, 1, &scl_->set_shadow, 0, nullptr);

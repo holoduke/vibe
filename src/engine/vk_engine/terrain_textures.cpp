@@ -6,6 +6,8 @@
 // + fog-wisp procedural textures. Split out of world.cpp (maintainability).
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/fog.h"
+#include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/gltf_loader.h"
 #include "engine/grass.h"
 #include "engine/skybox.h"
@@ -341,7 +343,7 @@ void VulkanEngine::update_terrain_clod_instances() {
         static_cast<char*>(terrain_clod_inst_map_) + terrain_clod_shadow_offset_);
 
     const Frustum& camf = current_frame_view_.frustum;
-    const Frustum lightf = extract_frustum(sun_shadow_light_vp_);
+    const Frustum lightf = extract_frustum(sun_->shadow_light_vp);
     for (const ClodNode& n : terrain_clod_nodes_) {
         if (terrain_clod_cam_count_ < kClodMaxInstances &&
             aabb_visible(camf, n.aabb_min, n.aabb_max)) {
@@ -821,15 +823,15 @@ void VulkanEngine::init_fog_wisp_texture() {
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     vk_check(vmaCreateImage(allocator_, &ici, &aci,
-                             &fog_wisp_.image, &fog_wisp_.alloc, nullptr),
+                             &fog_->wisp.image, &fog_->wisp.alloc, nullptr),
              "fog wisp image");
     VkImageViewCreateInfo vci{};
     vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vci.image = fog_wisp_.image;
+    vci.image = fog_->wisp.image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = VK_FORMAT_R8_UNORM;
     vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vk_check(vkCreateImageView(device_, &vci, nullptr, &fog_wisp_.view),
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &fog_->wisp.view),
              "fog wisp view");
 
     // Stage + copy + transition.
@@ -853,7 +855,7 @@ void VulkanEngine::init_fog_wisp_texture() {
     std::memcpy(ai.pMappedData, data.data(), bytes);
     vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_,
                             [&](VkCommandBuffer cb) {
-        vkinit::transition_image(cb, fog_wisp_.image,
+        vkinit::transition_image(cb, fog_->wisp.image,
                                   VK_IMAGE_LAYOUT_UNDEFINED,
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         VkBufferImageCopy region{};
@@ -861,10 +863,10 @@ void VulkanEngine::init_fog_wisp_texture() {
         region.imageSubresource.layerCount = 1;
         region.imageExtent = { static_cast<uint32_t>(dim),
                                 static_cast<uint32_t>(dim), 1 };
-        vkCmdCopyBufferToImage(cb, stage, fog_wisp_.image,
+        vkCmdCopyBufferToImage(cb, stage, fog_->wisp.image,
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 1, &region);
-        vkinit::transition_image(cb, fog_wisp_.image,
+        vkinit::transition_image(cb, fog_->wisp.image,
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     });
@@ -874,9 +876,9 @@ void VulkanEngine::init_fog_wisp_texture() {
 }
 
 void VulkanEngine::destroy_fog_wisp_texture() {
-    if (fog_wisp_.view)  vkDestroyImageView(device_, fog_wisp_.view, nullptr);
-    if (fog_wisp_.image) vmaDestroyImage(allocator_, fog_wisp_.image, fog_wisp_.alloc);
-    fog_wisp_ = {};
+    if (fog_->wisp.view)  vkDestroyImageView(device_, fog_->wisp.view, nullptr);
+    if (fog_->wisp.image) vmaDestroyImage(allocator_, fog_->wisp.image, fog_->wisp.alloc);
+    fog_->wisp = {};
 }
 
 

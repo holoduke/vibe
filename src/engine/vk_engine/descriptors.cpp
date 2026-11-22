@@ -6,6 +6,13 @@
 // descriptor work (memcpy into a host-mapped UBO buffer).
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/atmosphere.h"
+#include "engine/vk_engine/state/voxel.h"
+#include "engine/vk_engine/state/clutter_shadow.h"
+#include "engine/vk_engine/state/clouds.h"
+#include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/vk_engine/state/environment.h"
+#include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/globe.h"
 #include "engine/voxel/voxel_world.h"
 
@@ -412,12 +419,12 @@ void VulkanEngine::update_scene_ubo() {
     // Descriptor set bindings are written once after init_rt().
     SceneUBO data{};
     update_clutter_shadow_vp();
-    data.clutter_vp = clutter_shadow_vp_;
-    data.atmo_params = glm::vec4((rt_.sky_mode == 1 && atmo_sky_.view) ? 1.0f : 0.0f,
+    data.clutter_vp = clutter_->shadow_vp;
+    data.atmo_params = glm::vec4((rt_.sky_mode == 1 && atmo_->sky.view) ? 1.0f : 0.0f,
                                  rt_.atmosphere_intensity * 3.14159265f, 0.0f, 0.0f);
     {
         // Road lanterns (dusk / night only): the two nearest to the eye.
-        const float night = env_night_ >= 0.0f ? env_night_
+        const float night = env_->night >= 0.0f ? env_->night
                                                : 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
         // Up to 8, nearest the eye first.
         for (auto& l : data.lamp_lights) l = glm::vec4(0.0f);
@@ -504,10 +511,10 @@ void VulkanEngine::update_scene_ubo() {
         // Elevation of the real sun (with the clock running; the light's
         // own direction otherwise). The warmth comes in slowly from mid
         // afternoon and is strongest in the last few degrees; after sunset
-        // it fades with the twilight (env_golden_).
-        const float elev = env_sun_elev_ > -500.0f ? env_sun_elev_ : glm::degrees(std::asin(glm::clamp(sun.y, -1.0f, 1.0f)));
+        // it fades with the twilight (env_->golden).
+        const float elev = env_->sun_elev > -500.0f ? env_->sun_elev : glm::degrees(std::asin(glm::clamp(sun.y, -1.0f, 1.0f)));
         float t = 1.0f - glm::smoothstep(1.0f, 34.0f, elev);
-        t = t * t * (env_applied_ ? env_golden_ : 1.0f);
+        t = t * t * (env_->applied ? env_->golden : 1.0f);
         // Warm sunset tint: orange-amber at horizon, peach at ~15°.
         // No brightness boost — just shift the spectrum. The previous
         // 1.35x lift over-cranked the sun and washed everything out.
@@ -519,7 +526,7 @@ void VulkanEngine::update_scene_ubo() {
     data.sun_color     = glm::vec4(sun_rgb, rt_.sun_intensity);
     last_sun_rgb_ = sun_rgb;   // volumetric fog uses the same (golden-hour) light
     last_sky_rgb_ = sky_rgb;
-    data.ambient       = glm::vec4(rt_.ground_ambient * env_amb_k_, rt_.terrain_ao_punch);   // darkens with the night fill light
+    data.ambient       = glm::vec4(rt_.ground_ambient * env_->amb_k, rt_.terrain_ao_punch);   // darkens with the night fill light
     data.sky_color     = glm::vec4(sky_rgb, 1.0f);
     // DLSS Ray Reconstruction resolves the noise itself, so with it active
     // the ray-traced terms are traced at a low sample count: brute-force
@@ -720,7 +727,7 @@ void VulkanEngine::update_scene_ubo() {
                                   rt_.grass_alt_max,
                                   rt_.shadow_map_world_half,
                                   static_cast<float>(rt_.terrain_debug_mode));
-    data.light_vp = sun_shadow_light_vp_;
+    data.light_vp = sun_->shadow_light_vp;
     data.terrain_extra = glm::vec4(rt_.terrain_shading_contrast,
                                     rt_.shadow_near_mult,
                                     rt_.gi_softener,
@@ -850,7 +857,7 @@ void VulkanEngine::update_scene_ubo() {
                                            0.0f, 0.0f, 0.0f);
     // Distance fog — strength=0 disables in-shader.
     // (The haze is lit by the sky: at night it darkens with the fill light.)
-    data.distance_fog_color = glm::vec4(rt_.distance_fog_color * env_amb_k_,
+    data.distance_fog_color = glm::vec4(rt_.distance_fog_color * env_->amb_k,
                                          std::max(0.0f, std::min(1.0f, rt_.distance_fog_strength)));
     data.distance_fog_params = glm::vec4(std::max(0.0f, rt_.distance_fog_density),
                                           std::max(0.0f, rt_.distance_fog_start),
@@ -869,10 +876,10 @@ void VulkanEngine::update_scene_ubo() {
     data.crater_info = glm::vec4(float(craters_.size()),
                                  (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_coverage * 0.80f, 0.0f, 1.0f) : 0.0f,
                                  // (a cumulus takes about 70% of the direct sun; the map itself goes to black under thick cloud)
-                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? env_cloud_shadow_k_ * 0.96f : 0.0f,
+                                 (rt_.clouds_enabled && rt_.sky_mode == 1) ? env_->cloud_shadow_k * 0.96f : 0.0f,
                                  // .w: light level of the haze / fog colours (1 by day, the
                                  // night fill-light factor after dark)
-                                 env_amb_k_);
+                                 env_->amb_k);
     // The cloud layer for the cloud-shadow function (scene_ubo.glsl): the
     // same numbers clouds.comp renders with, incl. its wind offset.
     {
@@ -880,16 +887,16 @@ void VulkanEngine::update_scene_ubo() {
         // time. (Was speed x time: when the weather changed the wind speed, the
         // whole sky jumped by hours of travel - the clouds raced during a change.)
         const double ct = glfwGetTime();
-        if (cloud_travel_t_ >= 0.0) cloud_travel_ += double(rt_.cloud_speed) * std::min(ct - cloud_travel_t_, 0.25);
-        else cloud_travel_ = double(rt_.cloud_speed) * ct;
-        cloud_travel_t_ = ct;
-        const glm::vec2 wind = glm::vec2(1.0f, 0.35f) * (float(cloud_travel_) * 0.6f);
-        cloud_a_ = glm::vec4(glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), glm::clamp(rt_.cloud_scale, 0.3f, 4.0f),
+        if (cloud_->travel_t >= 0.0) cloud_->travel += double(rt_.cloud_speed) * std::min(ct - cloud_->travel_t, 0.25);
+        else cloud_->travel = double(rt_.cloud_speed) * ct;
+        cloud_->travel_t = ct;
+        const glm::vec2 wind = glm::vec2(1.0f, 0.35f) * (float(cloud_->travel) * 0.6f);
+        cloud_->a = glm::vec4(glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), glm::clamp(rt_.cloud_scale, 0.3f, 4.0f),
                              glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f), glm::clamp(rt_.cloud_tower_m, 300.0f, 12000.0f));
-        cloud_b_ = glm::vec4(wind, std::max(0.0f, rt_.cloud_density), 0.0f);
-        data.cloud_a = cloud_a_;
-        data.cloud_b = cloud_b_;
-        cloud_shadow_k_now_ = data.crater_info.z;
+        cloud_->b = glm::vec4(wind, std::max(0.0f, rt_.cloud_density), 0.0f);
+        data.cloud_a = cloud_->a;
+        data.cloud_b = cloud_->b;
+        cloud_->shadow_k_now = data.crater_info.z;
     }
     for (size_t i = 0; i < 16; ++i)
         data.ripples[i] = i < water_ripples_.size()
@@ -912,16 +919,16 @@ void VulkanEngine::update_scene_ubo() {
     // Raymarched terrain, speed settings (terrain_raymarch.frag; scene_ubo.glsl rm_perf).
     data.rm_perf = glm::vec4((tr_march_prepass_on() ? 1.0f : 0.0f) + (rt_.terrain_rm_relief_lite ? 2.0f : 0.0f) +
                                  ((tr_march_prepass_on() && rt_.terrain_rm_shade_lo) ? 4.0f : 0.0f),
-                             float(tr_march_div_),
+                             float(tr_->march_div),
                              rt_.terrain_rm_converge,
                              rt_.terrain_rm_normal_px);
-    data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_rain_,
-                                   std::min(env_wet_, 0.99f) + std::floor(glm::clamp(env_snow_, 0.0f, 1.0f) * 255.0f),   // fract = wet, whole = snow (scene_ubo.glsl)
+    data.ripple_info = glm::vec4(float(std::min<size_t>(16, water_ripples_.size())), env_->rain,
+                                   std::min(env_->wet, 0.99f) + std::floor(glm::clamp(env_->snow, 0.0f, 1.0f) * 255.0f),   // fract = wet, whole = snow (scene_ubo.glsl)
                                    0.0f);
     // Hand flashlight.
     flash_vp_ = glm::mat4(0.0f);
     static const bool kNoFlashMap = std::getenv("VIBE_NO_FLASH_SHADOWMAP") != nullptr;   // A/B test hook
-    if (flashlight_on_ && clutter_shadow_flash_view_ && scatter_.plant_buffer && !kNoFlashMap) {
+    if (flashlight_on_ && clutter_->shadow_flash_view && scatter_.plant_buffer && !kNoFlashMap) {
         const glm::vec3 lens = flash_pos_ + flash_fwd_ * 0.118f;
         glm::mat4 proj = glm::perspective(glm::radians(46.0f), 1.0f, 0.15f, 60.0f);
         proj[1][1] *= -1.0f;
@@ -999,13 +1006,13 @@ void VulkanEngine::update_scene_ubo() {
         }
     }
     // Wet ground is darker and a little more saturated.
-    if (env_wet_ > 0.001f) {
-        const float k = 1.0f - 0.34f * env_wet_;
+    if (env_->wet > 0.001f) {
+        const float k = 1.0f - 0.34f * env_->wet;
         for (glm::vec4* c : { &data.rm_ground_dry, &data.rm_ground_green, &data.rm_red_sand })
             *c = glm::vec4(glm::vec3(*c) * k, c->w);
     }
-    data.rm_rock         = glm::vec4(rt_.rm_rock_color * (1.0f - 0.30f * env_wet_),
-                                     glm::clamp(rt_.rm_ground_saturation * (1.0f + 0.25f * env_wet_), 0.0f, 2.0f));
+    data.rm_rock         = glm::vec4(rt_.rm_rock_color * (1.0f - 0.30f * env_->wet),
+                                     glm::clamp(rt_.rm_ground_saturation * (1.0f + 0.25f * env_->wet), 0.0f, 2.0f));
     {
         const float deg2rad = 3.14159265358979f / 180.0f;
         if (rt_.water_style == 2) {
@@ -1047,8 +1054,8 @@ void VulkanEngine::update_scene_ubo() {
     // post-collapse frames; the sun-block AABB in terrain_raymarch is
     // approximate anyway (chunks rarely shadow much terrain) so the
     // minor regression there is the right trade.
-    if (voxel_world_ && !voxel_world_->shapes().empty()) {
-        const auto& s0 = voxel_world_->shapes()[0];
+    if (voxel_->world && !voxel_->world->shapes().empty()) {
+        const auto& s0 = voxel_->world->shapes()[0];
         glm::vec3 ext0(s0.dim_bricks[0] * voxel::kBrickSize,
                        s0.dim_bricks[1] * voxel::kBrickSize,
                        s0.dim_bricks[2] * voxel::kBrickSize);

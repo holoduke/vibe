@@ -5,6 +5,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/spacejets.h"
 #include "engine/audio.h"
 #include "engine/log.h"
 #include "engine/terrain.h"
@@ -209,7 +210,7 @@ void VulkanEngine::tick_aa(float dt) {
     uint32_t& R = aa_rng_;
 
     bool aa_threat = false;
-    for (const auto& f : spacejet_flights_)
+    for (const auto& f : spacejet_->flights)
         if (!f.dead && !f.destroying && !f.strike) { aa_threat = true; break; }
 
     for (auto& v : aa_) {
@@ -225,7 +226,7 @@ void VulkanEngine::tick_aa(float dt) {
         // Target: nearest live jet in range above the horizon.
         const SpacejetFlight* tgt = nullptr;
         float best = kRange;
-        for (const auto& f : spacejet_flights_) {
+        for (const auto& f : spacejet_->flights) {
             if (f.dead || f.destroying || f.strike) continue;   // strike = the player's own aircraft
             float d = glm::distance(f.pos, v.pos);
             if (d < best && f.pos.y > v.pos.y + 15.0f) { best = d; tgt = &f; }
@@ -322,7 +323,7 @@ void VulkanEngine::tick_aa(float dt) {
         if (r.pos.y < gh) { r.dead = true; continue; }
         glm::vec3 seg = r.pos - r.prev;
         float sl2 = glm::dot(seg, seg);
-        for (auto& f : spacejet_flights_) {
+        for (auto& f : spacejet_->flights) {
             if (f.dead || f.destroying) continue;
             float rad = 3.6f * f.scale;
             float tt = sl2 > 1e-6f ? glm::clamp(glm::dot(f.pos - r.prev, seg) / sl2, 0.0f, 1.0f) : 0.0f;
@@ -371,7 +372,7 @@ glm::mat4 VulkanEngine::sam_missile_model(glm::vec3 pos, glm::vec3 dir) const {
 void VulkanEngine::tick_sam(float dt) {
     uint32_t& R = aa_rng_;
     auto find_jet = [&](uint32_t id) -> SpacejetFlight* {
-        for (auto& f : spacejet_flights_)
+        for (auto& f : spacejet_->flights)
             if (f.id == id && !f.dead && !f.destroying) return &f;
         return nullptr;
     };
@@ -391,7 +392,7 @@ void VulkanEngine::tick_sam(float dt) {
         // Nearest live jet that no missile is already flying at.
         const SpacejetFlight* tgt = nullptr;
         float best = kSamRange;
-        for (const auto& f : spacejet_flights_) {
+        for (const auto& f : spacejet_->flights) {
             if (f.dead || f.destroying || f.strike) continue;
             if (f.pos.y < v.pos.y + 30.0f) continue;
             bool engaged = false;

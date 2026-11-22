@@ -18,11 +18,15 @@
 //              (fx.cpp), rings on the water, wet (darker) ground, rain sound,
 //              lightning + thunder in storms.
 //
-// The user's own values for the driven settings are kept in env_base_ and
+// The user's own values for the driven settings are kept in env_->base and
 // swapped back for saving, so the cfg always holds what the user chose.
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/clouds.h"
+#include "engine/vk_engine/state/environment.h"
+#include "engine/vk_engine/state/multiplayer.h"
+#include "engine/vk_engine/state/spacejets.h"
 #include "engine/globe.h"
 #include "engine/audio.h"
 
@@ -32,26 +36,26 @@
 
 namespace vibe {
 
-// rt_ <-> env_base_ for every driven field (its own inverse).
+// rt_ <-> env_->base for every driven field (its own inverse).
 void VulkanEngine::env_swap_base() {
-    std::swap(rt_.sun_pitch_deg, env_base_.sun_pitch_deg);
-    std::swap(rt_.sun_yaw_deg, env_base_.sun_yaw_deg);
-    std::swap(rt_.sun_intensity, env_base_.sun_intensity);
-    std::swap(rt_.sun_color, env_base_.sun_color);
-    std::swap(rt_.sky_color, env_base_.sky_color);
-    std::swap(rt_.atmosphere_intensity, env_base_.atmosphere_intensity);
-    std::swap(rt_.cloud_coverage, env_base_.cloud_coverage);
-    std::swap(rt_.cloud_density, env_base_.cloud_density);
-    std::swap(rt_.cloud_speed, env_base_.cloud_speed);
-    std::swap(rt_.fog_density, env_base_.fog_density);
-    std::swap(rt_.grass_wind, env_base_.grass_wind);
-    std::swap(rt_.auto_golden_hour, env_base_.auto_golden_hour);
+    std::swap(rt_.sun_pitch_deg, env_->base.sun_pitch_deg);
+    std::swap(rt_.sun_yaw_deg, env_->base.sun_yaw_deg);
+    std::swap(rt_.sun_intensity, env_->base.sun_intensity);
+    std::swap(rt_.sun_color, env_->base.sun_color);
+    std::swap(rt_.sky_color, env_->base.sky_color);
+    std::swap(rt_.atmosphere_intensity, env_->base.atmosphere_intensity);
+    std::swap(rt_.cloud_coverage, env_->base.cloud_coverage);
+    std::swap(rt_.cloud_density, env_->base.cloud_density);
+    std::swap(rt_.cloud_speed, env_->base.cloud_speed);
+    std::swap(rt_.fog_density, env_->base.fog_density);
+    std::swap(rt_.grass_wind, env_->base.grass_wind);
+    std::swap(rt_.auto_golden_hour, env_->base.auto_golden_hour);
 }
 
 // CPU copy of scene_ubo.glsl cloud_shadow() (keep in sync): how much direct
 // sun the clouds let through at a world point.
 float VulkanEngine::cloud_shadow_at(glm::vec3 wp) const {
-    const float k = cloud_shadow_k_now_;
+    const float k = cloud_->shadow_k_now;
     if (k <= 0.001f) return 1.0f;
     auto hash = [](float x, float y, float z) {
         const uint32_t qx = uint32_t(int32_t(x)) * 1597334673u, qy = uint32_t(int32_t(y)) * 3812015801u,
@@ -68,16 +72,16 @@ float VulkanEngine::cloud_shadow_at(glm::vec3 wp) const {
     };
     const float pr = glm::radians(rt_.sun_pitch_deg), yr = glm::radians(rt_.sun_yaw_deg);
     const glm::vec3 L(std::cos(pr) * std::sin(yr), std::sin(pr), std::cos(pr) * std::cos(yr));
-    const float size = std::max(cloud_a_.y, 0.2f);
-    const float alt = cloud_a_.z + 0.30f * cloud_a_.w;
+    const float size = std::max(cloud_->a.y, 0.2f);
+    const float alt = cloud_->a.z + 0.30f * cloud_->a.w;
     const glm::vec2 p = glm::vec2(wp.x, wp.z) + glm::vec2(L.x, L.z) / std::max(L.y, 0.12f) * std::max(alt - wp.y, 0.0f);
-    const glm::vec2 q = (p + glm::vec2(cloud_b_)) / (6500.0f * size);
+    const glm::vec2 q = (p + glm::vec2(cloud_->b)) / (6500.0f * size);
     const float wn = hvalue(q) * 0.7f + hvalue(q * 2.17f + 13.0f) * 0.3f;
-    const float cov = glm::clamp(cloud_a_.x, 0.0f, 1.0f);
+    const float cov = glm::clamp(cloud_->a.x, 0.0f, 1.0f);
     const float map_cov = glm::smoothstep(0.2f, 0.8f, glm::clamp(glm::smoothstep(0.2f, 0.8f, wn) + (cov - 0.5f) * 1.5f, 0.0f, 1.0f));
-    const glm::vec2 qs = (p + glm::vec2(cloud_b_) * 1.6f) / (1900.0f * size);
+    const glm::vec2 qs = (p + glm::vec2(cloud_->b) * 1.6f) / (1900.0f * size);
     const float lump = hvalue(qs) * 0.6f + hvalue(qs * 2.3f + 5.0f) * 0.4f;
-    const float opac = glm::smoothstep(0.30f, 0.78f, map_cov * (0.62f + 0.75f * lump)) * glm::clamp(cloud_b_.z, 0.3f, 1.5f);
+    const float opac = glm::smoothstep(0.30f, 0.78f, map_cov * (0.62f + 0.75f * lump)) * glm::clamp(cloud_->b.z, 0.3f, 1.5f);
     return 1.0f - k * glm::clamp(opac, 0.0f, 1.0f);
 }
 
@@ -113,24 +117,24 @@ const char* VulkanEngine::weather_name() const {
 void VulkanEngine::apply_environment(float dt) {
     const bool want = rt_.day_night_enabled || rt_.weather_enabled;
     // Back to the user's own values first; everything below derives from them.
-    if (env_applied_) { env_swap_base(); env_applied_ = false; }
+    if (env_->applied) { env_swap_base(); env_->applied = false; }
     if (!want) {
-        env_night_ = -1.0f; env_rain_ = 0.0f; env_snow_ = 0.0f; env_snowfall_ = 0.0f; env_wet_ = std::max(0.0f, env_wet_ - dt / 60.0f);
-        env_golden_ = 1.0f; env_sun_elev_ = -1000.0f; env_sky_real_ = false;
-        env_lightning_ = 0.0f; env_cloud_k_ = 1.0f; env_cloud_direct_ = 1.0f; env_cloud_shadow_k_ = 0.72f;
+        env_->night = -1.0f; env_->rain = 0.0f; env_->snow = 0.0f; env_->snowfall = 0.0f; env_->wet = std::max(0.0f, env_->wet - dt / 60.0f);
+        env_->golden = 1.0f; env_->sun_elev = -1000.0f; env_->sky_real = false;
+        env_->lightning = 0.0f; env_->cloud_k = 1.0f; env_->cloud_direct = 1.0f; env_->cloud_shadow_k = 0.72f;
         tick_rain_audio(0.0f);
         return;
     }
-    env_base_.sun_pitch_deg = rt_.sun_pitch_deg; env_base_.sun_yaw_deg = rt_.sun_yaw_deg;
-    env_base_.sun_intensity = rt_.sun_intensity; env_base_.sun_color = rt_.sun_color;
-    env_base_.sky_color = rt_.sky_color; env_base_.atmosphere_intensity = rt_.atmosphere_intensity;
-    env_base_.cloud_coverage = rt_.cloud_coverage; env_base_.cloud_density = rt_.cloud_density;
-    env_base_.cloud_speed = rt_.cloud_speed; env_base_.fog_density = rt_.fog_density;
-    env_base_.grass_wind = rt_.grass_wind; env_base_.auto_golden_hour = rt_.auto_golden_hour;
-    env_applied_ = true;
-    const EnvBase base = env_base_;
+    env_->base.sun_pitch_deg = rt_.sun_pitch_deg; env_->base.sun_yaw_deg = rt_.sun_yaw_deg;
+    env_->base.sun_intensity = rt_.sun_intensity; env_->base.sun_color = rt_.sun_color;
+    env_->base.sky_color = rt_.sky_color; env_->base.atmosphere_intensity = rt_.atmosphere_intensity;
+    env_->base.cloud_coverage = rt_.cloud_coverage; env_->base.cloud_density = rt_.cloud_density;
+    env_->base.cloud_speed = rt_.cloud_speed; env_->base.fog_density = rt_.fog_density;
+    env_->base.grass_wind = rt_.grass_wind; env_->base.auto_golden_hour = rt_.auto_golden_hour;
+    env_->applied = true;
+    const EnvBase base = env_->base;
     dt = glm::clamp(dt, 0.0f, 0.1f);
-    uint32_t& rng = spacejet_rng_state_;
+    uint32_t& rng = spacejet_->rng_state;
 
     // ---------------- weather state ----------------
     // The weather is a handful of independent amounts (cloud cover, how grey
@@ -168,8 +172,8 @@ void VulkanEngine::apply_environment(float dt) {
         } else {
             wx_last_preset_ = -1;
             weather_timer_ -= dt;
-            if (mp_host_tgt_valid_) {
-                wx_tgt_ = mp_host_tgt_;            // multiplayer client: the host picks the weather
+            if (mp_->host_tgt_valid) {
+                wx_tgt_ = mp_->host_tgt;            // multiplayer client: the host picks the weather
                 weather_timer_ = 5.0f;
             } else if (weather_timer_ <= 0.0f) {
                 const float bad = glm::clamp(rt_.weather_bad_chance, 0.0f, 1.0f);
@@ -254,12 +258,12 @@ void VulkanEngine::apply_environment(float dt) {
     const float wind_k   = wx_cur_.wind;
     // (the single 0..1 "how bad" number some displays still use)
     weather_state_ = glm::clamp(std::max({ 0.5f * overcast, rain > 0.02f ? 0.6f + 0.25f * rain : 0.0f, storm > 0.3f ? 0.9f + 0.1f * storm : 0.0f }), 0.0f, 1.0f);
-    env_rain_ = rain;
-    env_snow_ = std::max(wx_cur_.snow, winter);
-    env_snowfall_ = std::max(wx_cur_.snowfall, wx_cur_.rain * winter);
+    env_->rain = rain;
+    env_->snow = std::max(wx_cur_.snow, winter);
+    env_->snowfall = std::max(wx_cur_.snowfall, wx_cur_.rain * winter);
     // Ground gets wet in ~20 s of rain and takes minutes to dry.
-    env_wet_ += (rain > 0.02f ? (rain - env_wet_) * dt / 20.0f * (0.5f + rain) : -env_wet_ * dt / 150.0f);
-    env_wet_ = glm::clamp(env_wet_, 0.0f, 1.0f);
+    env_->wet += (rain > 0.02f ? (rain - env_->wet) * dt / 20.0f * (0.5f + rain) : -env_->wet * dt / 150.0f);
+    env_->wet = glm::clamp(env_->wet, 0.0f, 1.0f);
 
     // ---------------- clock -> sun / moon ----------------
     float sun_k = 1.0f;       // direct sunlight factor (horizon dimming, night)
@@ -269,12 +273,12 @@ void VulkanEngine::apply_environment(float dt) {
     glm::vec3 light_col = base.sun_color;
     float pitch = base.sun_pitch_deg, yaw = base.sun_yaw_deg;
     bool golden = base.auto_golden_hour;
-    env_night_ = -1.0f;
+    env_->night = -1.0f;
     float golden_k = 1.0f;         // how much of the warm low-sun tint applies
     bool  sky_real = false;        // the sky is lit by the real sun (below the horizon) while the land light is the glow
-    bool  sky_model_night = false; // the night branch ran this frame (it steers env_sky_ease_)
+    bool  sky_model_night = false; // the night branch ran this frame (it steers env_->sky_ease)
     float sky_e = 0.0f, sky_yaw = 0.0f;
-    env_sun_elev_ = -1000.0f;
+    env_->sun_elev = -1000.0f;
     if (rt_.day_night_enabled) {
         if (rt_.day_length_minutes > 0.01f)
             rt_.time_of_day += dt * 24.0f / (rt_.day_length_minutes * 60.0f);
@@ -317,8 +321,8 @@ void VulkanEngine::apply_environment(float dt) {
         // full one; nothing while it is below the horizon.
         const float moon_sky = glm::clamp(rt_.moon_brightness, 0.0f, 1.0f) * std::pow(illum, 1.8f) *
                                glm::smoothstep(-1.0f, 10.0f, em);
-        env_moon_ = moon_sky;
-        env_sun_elev_ = e;
+        env_->moon = moon_sky;
+        env_->sun_elev = e;
         if (e > 0.6f) {
             // Day and twilight: the real sun, also below the horizon - the
             // atmosphere LUT then renders dusk on its own. Direct light dies
@@ -334,7 +338,7 @@ void VulkanEngine::apply_environment(float dt) {
             sky_k = glm::mix(0.35f, 1.0f, glm::smoothstep(0.6f, 3.0f, e)) *
                     glm::mix(4.0f, 1.0f, glm::smoothstep(-6.0f, 12.0f, e));
             cloud_direct = glm::smoothstep(-6.0f, 1.0f, e);     // cloud tops stay lit after sunset
-            env_night_ = 1.0f - glm::smoothstep(0.6f, 5.0f, e);
+            env_->night = 1.0f - glm::smoothstep(0.6f, 5.0f, e);
         } else {
             // Night. What lights the land, as outdoors: the last twilight glow,
             // then the moon if it is up (by its phase), and starlight. Clouds
@@ -354,19 +358,19 @@ void VulkanEngine::apply_environment(float dt) {
             // sky is dimmed down first (4 s), the model changes while it is
             // dark, and it is brought up again (6 s).
             const bool want_moon = moon_sky > 0.02f && moon_sky >= 0.5f * 0.8f * twi && twi < 0.45f;
-            if (!env_sky_init_) { env_moon_light_ = want_moon; env_sky_ease_ = 1.0f; }
-            if (want_moon != env_moon_light_) {
-                env_sky_ease_ -= dt / 4.0f;
-                if (env_sky_ease_ <= 0.0f) { env_sky_ease_ = 0.0f; env_moon_light_ = want_moon; }
+            if (!env_->sky_init) { env_->moon_light = want_moon; env_->sky_ease = 1.0f; }
+            if (want_moon != env_->moon_light) {
+                env_->sky_ease -= dt / 4.0f;
+                if (env_->sky_ease <= 0.0f) { env_->sky_ease = 0.0f; env_->moon_light = want_moon; }
             } else {
-                env_sky_ease_ = std::min(1.0f, env_sky_ease_ + dt / 6.0f);
+                env_->sky_ease = std::min(1.0f, env_->sky_ease + dt / 6.0f);
             }
             sky_model_night = true;
-            const bool moon_is_light = env_moon_light_;
+            const bool moon_is_light = env_->moon_light;
             const float vis_now = moon_is_light ? sun_horizon_visibility(player_.eye_position()) : 1.0f;
-            env_moon_vis_ += (vis_now - env_moon_vis_) * glm::clamp(dt * 1.5f, 0.0f, 1.0f);
-            const float moon_gnd = moon_sky * cloud_tr * glm::mix(0.10f, 1.0f, env_moon_vis_);
-            { static int dbg = 0; if (std::getenv("VIBE_TEST_MOONLOG") && (++dbg % 120) == 0) log::infof("[moon] elev %.1f deg, in sky %.2f, is light %d, visible from player %.2f (now %.2f)", em, moon_sky, moon_is_light ? 1 : 0, env_moon_vis_, vis_now); }
+            env_->moon_vis += (vis_now - env_->moon_vis) * glm::clamp(dt * 1.5f, 0.0f, 1.0f);
+            const float moon_gnd = moon_sky * cloud_tr * glm::mix(0.10f, 1.0f, env_->moon_vis);
+            { static int dbg = 0; if (std::getenv("VIBE_TEST_MOONLOG") && (++dbg % 120) == 0) log::infof("[moon] elev %.1f deg, in sky %.2f, is light %d, visible from player %.2f (now %.2f)", em, moon_sky, moon_is_light ? 1 : 0, env_->moon_vis, vis_now); }
             const float star_gnd = 0.10f * glm::clamp(rt_.star_brightness, 0.0f, 1.5f) *
                                    (1.0f - overcast) * (1.0f - overcast);
             // The directional light: the moon at its real height (so mountains
@@ -403,7 +407,7 @@ void VulkanEngine::apply_environment(float dt) {
             amb_k = glm::mix(night_amb, 1.0f, twi);
             light_col = glm::mix(glm::vec3(0.60f, 0.73f, 1.0f), base.sun_color, twi * twi);
             golden_k = twi;                    // the warm tint leaves with the twilight, not at the horizon
-            env_night_ = 1.0f;
+            env_->night = 1.0f;
             cloud_direct = 0.6f;
         }
         while (yaw > 180.0f) yaw -= 360.0f;
@@ -412,13 +416,13 @@ void VulkanEngine::apply_environment(float dt) {
 
     // A change of what lights the sky (sun under the horizon <-> moon / night
     // glow) swaps the whole sky model: fade the new one in over a few seconds.
-    env_sky_real_ = sky_real;
-    env_sky_init_ = true;
-    if (!sky_model_night) env_sky_ease_ = std::min(1.0f, env_sky_ease_ + dt / 6.0f);     // by day: nothing to hide
-    sky_k *= glm::mix(0.15f, 1.0f, glm::smoothstep(0.0f, 1.0f, env_sky_ease_));
-    env_sky_pitch_ = std::max(sky_e, -14.0f);
-    env_sky_yaw_ = sky_yaw;
-    env_golden_ = golden_k;
+    env_->sky_real = sky_real;
+    env_->sky_init = true;
+    if (!sky_model_night) env_->sky_ease = std::min(1.0f, env_->sky_ease + dt / 6.0f);     // by day: nothing to hide
+    sky_k *= glm::mix(0.15f, 1.0f, glm::smoothstep(0.0f, 1.0f, env_->sky_ease));
+    env_->sky_pitch = std::max(sky_e, -14.0f);
+    env_->sky_yaw = sky_yaw;
+    env_->golden = golden_k;
 
     // ---------------- lightning ----------------
     // VIBE_TEST_LIGHTNING=1: a strike every ~0.7 s, 500 m straight ahead (captures).
@@ -449,7 +453,7 @@ void VulkanEngine::apply_environment(float dt) {
             }
         }
     }
-    env_lightning_ = 0.0f;
+    env_->lightning = 0.0f;
     if (lightning_t_ >= 0.0f) {
         lightning_t_ += dt;
         // Two or three flickers within a third of a second.
@@ -457,7 +461,7 @@ void VulkanEngine::apply_environment(float dt) {
         float k = std::exp(-t * 9.0f);
         k += 0.8f * std::exp(-std::abs(t - 0.11f - 0.05f * lightning_seed_) * 40.0f);
         k += 0.5f * std::exp(-std::abs(t - 0.24f) * 50.0f) * (lightning_seed_ > 0.4f ? 1.0f : 0.0f);
-        env_lightning_ = glm::clamp(k, 0.0f, 1.6f) * (t < 0.6f ? 1.0f : 0.0f);
+        env_->lightning = glm::clamp(k, 0.0f, 1.6f) * (t < 0.6f ? 1.0f : 0.0f);
         if (t > 0.6f) lightning_t_ = -1.0f;
     }
 
@@ -478,23 +482,23 @@ void VulkanEngine::apply_environment(float dt) {
     // The sky's brightness is LUT x sun intensity x atmosphere intensity:
     // undo the direct-light dimming there and apply the sky's own factor.
     // (a rain deck is darker still)
-    const float sky_dim = glm::mix(1.0f, 0.62f, overcast) * glm::mix(1.0f, 0.72f, rain) * (1.0f + 5.0f * env_lightning_);
+    const float sky_dim = glm::mix(1.0f, 0.62f, overcast) * glm::mix(1.0f, 0.72f, rain) * (1.0f + 5.0f * env_->lightning);
     // The cloud pass takes its light level directly (not times the sun intensity).
-    env_cloud_k_ = sky_k * sky_dim;
+    env_->cloud_k = sky_k * sky_dim;
     // Under a closed deck the light is uniformly dim: no shadow pattern.
-    env_cloud_shadow_k_ = 0.72f * (1.0f - overcast);
-    env_cloud_direct_ = cloud_direct * glm::mix(1.0f, 0.45f, overcast);
+    env_->cloud_shadow_k = 0.72f * (1.0f - overcast);
+    env_->cloud_direct = cloud_direct * glm::mix(1.0f, 0.45f, overcast);
 
     rt_.atmosphere_intensity = base.atmosphere_intensity * sky_k * sky_dim / direct;
     const float sky_lum = glm::dot(base.sky_color, glm::vec3(0.2126f, 0.7152f, 0.0722f));
     rt_.sky_color = glm::mix(base.sky_color, glm::vec3(0.92f, 0.96f, 1.04f) * sky_lum, overcast * 0.85f) * amb_k;
-    env_amb_k_ = amb_k;
+    env_->amb_k = amb_k;
     // Lightning: for the length of the flash the whole landscape is lit
     // blue-white from the sky (strongest at night, a flicker by day).
-    if (env_lightning_ > 0.01f) {
-        const float fl = std::min(env_lightning_, 1.4f);
+    if (env_->lightning > 0.01f) {
+        const float fl = std::min(env_->lightning, 1.4f);
         rt_.sky_color += glm::vec3(0.78f, 0.86f, 1.0f) * (2.4f * fl * std::max(sky_lum, 0.35f));
-        env_amb_k_ = std::max(env_amb_k_, std::min(1.0f, 0.9f * fl));
+        env_->amb_k = std::max(env_->amb_k, std::min(1.0f, 0.9f * fl));
     }
     rt_.cloud_coverage = glm::mix(std::min(base.cloud_coverage, 0.30f), 0.97f, wx_cur_.cover);
     if (!rt_.weather_enabled) rt_.cloud_coverage = base.cloud_coverage;
@@ -503,7 +507,7 @@ void VulkanEngine::apply_environment(float dt) {
     rt_.cloud_speed = base.cloud_speed * glm::mix(1.0f, 3.2f, wind_k);
     rt_.fog_density = base.fog_density * (1.0f + 0.6f * overcast + 2.0f * rain + 6.0f * wx_cur_.fog + 1.5f * wx_cur_.snowfall);
     rt_.grass_wind = base.grass_wind * glm::mix(1.0f, 2.6f, wind_k);
-    env_wind_scale_ = glm::mix(1.0f, 2.4f, wind_k);
+    env_->wind_scale = glm::mix(1.0f, 2.4f, wind_k);
 
     tick_rain_audio(rain);
     update_footprints(dt);
@@ -523,15 +527,15 @@ void VulkanEngine::update_footprints(float dt) {
     // Prints are left in snow anywhere, and (any season) on the road, where sand lies in
     // drifts: the shader presses a print in only where there is snow or sand to press.
     static bool had_snow = false;
-    const bool snow_now = env_snow_ >= 0.05f;
+    const bool snow_now = env_->snow >= 0.05f;
     if (had_snow != snow_now) {                        // thawed / first snow: the old prints are gone
         for (auto& f : footprints_) f.w = 0.0f;
         foot_last_ = glm::vec3(1e9f);
     }
     had_snow = snow_now;
-    if (env_snowfall_ > 0.05f)
-        for (auto& f : footprints_) f.w = std::max(0.0f, f.w - dt * env_snowfall_ / 240.0f);
-    const bool snowy = env_snow_ >= 0.3f;
+    if (env_->snowfall > 0.05f)
+        for (auto& f : footprints_) f.w = std::max(0.0f, f.w - dt * env_->snowfall / 240.0f);
+    const bool snowy = env_->snow >= 0.3f;
     auto prints_at = [&](const glm::vec3& p) {
         return snowy || (!castle_road_.empty() && castle_road_.distance(p.x, p.z) < castle_road_.half_width + 0.9f);
     };
@@ -558,7 +562,7 @@ void VulkanEngine::update_footprints(float dt) {
         last = pos;
     };
     step(player_.position, player_.velocity, player_.yaw, player_.on_ground && !player_swimming_, foot_last_, foot_left_);
-    for (auto& a : mp_avatars_) {
+    for (auto& a : mp_->avatars) {
         if (!a.id) continue;
         step(glm::vec3(a.st.px, a.st.py, a.st.pz), glm::vec3(a.st.vx, a.st.vy, a.st.vz), a.st.yaw,
              (a.st.flags & 1) && !(a.st.flags & 2), a.foot_last, a.foot_left);

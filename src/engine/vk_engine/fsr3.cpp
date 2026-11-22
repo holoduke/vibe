@@ -14,6 +14,9 @@
 // architecture work outside one session.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/streamline.h"
+#include "engine/vk_engine/state/compose.h"
+#include "engine/vk_engine/state/fsr3.h"
 
 #include <algorithm>
 #include <cstring>
@@ -151,7 +154,7 @@ bool allocate_fsr3_output(VmaAllocator allocator, VkDevice device,
 
 void VulkanEngine::init_fsr3() {
 #ifdef VIBE_HAVE_FSR3
-    if (fsr3_context_valid_ || swapchain_extent_.width == 0) return;
+    if (fsr3_->context_valid || swapchain_extent_.width == 0) return;
     if (!ensure_loaded()) return;
 
     // (Skipped global debug configure — ffxConfigure(nullptr, ...)
@@ -200,7 +203,7 @@ void VulkanEngine::init_fsr3() {
     // device + Vulkan SDK 1.4.341.1 combo. The root cause is unclear
     // (likely API/ABI skew between the prebuilt DLL and our driver
     // stack); a debugger session would be needed to pinpoint it.
-    // Trapping the AV keeps the engine alive — fsr3_fatal_ records
+    // Trapping the AV keeps the engine alive — fsr3_->fatal records
     // the failure so the next-frame check flips backend back to FSR2
     // and we don't retry.
     ffxContext ctx = nullptr;
@@ -214,28 +217,28 @@ void VulkanEngine::init_fsr3() {
     if (seh_av) {
         log::warnf("[fsr3] CreateContext AVed inside the SDK DLL — disabling "
                    "FSR3 backend permanently; falling back to FSR2");
-        fsr3_fatal_ = true;
+        fsr3_->fatal = true;
         return;
     }
     if (rc != FFX_API_RETURN_OK) {
         log::warnf("[fsr3] ffxCreateContext upscaler failed: %u", rc);
-        fsr3_fatal_ = true;
+        fsr3_->fatal = true;
         return;
     }
 
     if (!allocate_fsr3_output(allocator_, device_, swapchain_extent_,
                               VK_FORMAT_R16G16B16A16_SFLOAT,
-                              fsr3_output_image_, fsr3_output_alloc_,
-                              fsr3_output_view_)) {
+                              fsr3_->output_image, fsr3_->output_alloc,
+                              fsr3_->output_view)) {
         log::warnf("[fsr3] output image alloc failed");
         g_ffx.DestroyContext(&ctx, nullptr);
-        fsr3_fatal_ = true;   // don't re-create the context every frame
+        fsr3_->fatal = true;   // don't re-create the context every frame
         return;
     }
 
-    fsr3_upscaler_context_ = ctx;
-    fsr3_context_valid_    = true;
-    fsr3_reset_history_    = true;
+    fsr3_->upscaler_context = ctx;
+    fsr3_->context_valid    = true;
+    fsr3_->reset_history    = true;
     log::infof("[fsr3] upscaler context created (display=%ux%u, ffx-api DLL)",
                swapchain_extent_.width, swapchain_extent_.height);
 #endif
@@ -243,15 +246,15 @@ void VulkanEngine::init_fsr3() {
 
 void VulkanEngine::destroy_fsr3() {
 #ifdef VIBE_HAVE_FSR3
-    if (fsr3_context_valid_ && fsr3_upscaler_context_ && g_ffx_loaded) {
+    if (fsr3_->context_valid && fsr3_->upscaler_context && g_ffx_loaded) {
         if (device_) vkDeviceWaitIdle(device_);
-        ffxContext ctx = static_cast<ffxContext>(fsr3_upscaler_context_);
+        ffxContext ctx = static_cast<ffxContext>(fsr3_->upscaler_context);
         g_ffx.DestroyContext(&ctx, nullptr);
-        fsr3_upscaler_context_ = nullptr;
+        fsr3_->upscaler_context = nullptr;
     }
-    fsr3_context_valid_ = false;
-    if (fsr3_output_view_)  { vkDestroyImageView(device_, fsr3_output_view_, nullptr); fsr3_output_view_ = VK_NULL_HANDLE; }
-    if (fsr3_output_image_) { vmaDestroyImage(allocator_, fsr3_output_image_, fsr3_output_alloc_); fsr3_output_image_ = VK_NULL_HANDLE; fsr3_output_alloc_ = nullptr; }
+    fsr3_->context_valid = false;
+    if (fsr3_->output_view)  { vkDestroyImageView(device_, fsr3_->output_view, nullptr); fsr3_->output_view = VK_NULL_HANDLE; }
+    if (fsr3_->output_image) { vmaDestroyImage(allocator_, fsr3_->output_image, fsr3_->output_alloc); fsr3_->output_image = VK_NULL_HANDLE; fsr3_->output_alloc = nullptr; }
 #endif
 }
 
@@ -262,18 +265,18 @@ void VulkanEngine::recreate_fsr3_context() {
     // 1.0 render_scale) would force-init FSR3 even when the user has
     // FSR2 selected — which is bad given the SDK's session-2 init
     // currently AVs in our environment.
-    const bool was_valid = fsr3_context_valid_;
+    const bool was_valid = fsr3_->context_valid;
     destroy_fsr3();
     if (was_valid) init_fsr3();
-    compose_uses_fsr3_ = false;
+    compose_->uses_fsr3 = false;
 #endif
 }
 
 void VulkanEngine::dispatch_fsr3(VkCommandBuffer cmd) {
 #ifdef VIBE_HAVE_FSR3
-    if (!fsr3_context_valid_ || !fsr3_output_image_ || !g_ffx_loaded) return;
+    if (!fsr3_->context_valid || !fsr3_->output_image || !g_ffx_loaded) return;
 
-    vkinit::transition_image(cmd, fsr3_output_image_,
+    vkinit::transition_image(cmd, fsr3_->output_image,
                              VK_IMAGE_LAYOUT_UNDEFINED,
                              VK_IMAGE_LAYOUT_GENERAL);
 
@@ -298,7 +301,7 @@ void VulkanEngine::dispatch_fsr3(VkCommandBuffer cmd) {
     d.exposure = FfxApiResource{};
     d.reactive = FfxApiResource{};
     d.transparencyAndComposition = FfxApiResource{};
-    d.output = make_resource(fsr3_output_image_,
+    d.output = make_resource(fsr3_->output_image,
                              swapchain_extent_.width, swapchain_extent_.height,
                              vk_to_ffx_format(VK_FORMAT_R16G16B16A16_SFLOAT),
                              FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -324,21 +327,21 @@ void VulkanEngine::dispatch_fsr3(VkCommandBuffer cmd) {
     d.sharpness        = 0.0f;
     d.frameTimeDelta   = std::max(0.1f, last_frame_dt_ * 1000.0f);
     d.preExposure      = 1.0f;
-    d.reset            = fsr3_reset_history_;
-    fsr3_reset_history_ = false;
+    d.reset            = fsr3_->reset_history;
+    fsr3_->reset_history = false;
     d.cameraNear              = 0.05f;
     d.cameraFar               = view_far_;
     d.cameraFovAngleVertical  = glm::radians(view_fov_deg_);
     d.viewSpaceToMetersFactor = 1.0f;
     d.flags                   = 0;
 
-    ffxContext ctx = static_cast<ffxContext>(fsr3_upscaler_context_);
+    ffxContext ctx = static_cast<ffxContext>(fsr3_->upscaler_context);
     ffxReturnCode_t rc = g_ffx.Dispatch(&ctx, &d.header);
     if (rc != FFX_API_RETURN_OK) {
         log::warnf("[fsr3] ffxDispatch upscale failed: %u", rc);
     }
 
-    vkinit::transition_image(cmd, fsr3_output_image_,
+    vkinit::transition_image(cmd, fsr3_->output_image,
                              VK_IMAGE_LAYOUT_GENERAL,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 #else
@@ -352,7 +355,7 @@ void VulkanEngine::dispatch_fsr3(VkCommandBuffer cmd) {
 
 void VulkanEngine::init_fsr3_swapchain() {
 #ifdef VIBE_HAVE_FSR3
-    if (fsr3_swapchain_active_ || fsr3_swapchain_fatal_) return;
+    if (fsr3_->swapchain_active || fsr3_->swapchain_fatal) return;
     if (!ensure_loaded()) return;
     if (swapchain_ == VK_NULL_HANDLE) return;
 
@@ -392,24 +395,24 @@ void VulkanEngine::init_fsr3_swapchain() {
     // VK_ERROR_INITIALIZATION_FAILED otherwise). On weaker GPUs that
     // expose only 1 graphics queue, fsr3_extra_queue_* stay null and
     // we bail before the SDK can reject us.
-    if (!fsr3_extra_queue_present_ || !fsr3_extra_queue_acquire_ ||
-        !fsr3_extra_queue_compute_) {
+    if (!fsr3_->extra_queue_present || !fsr3_->extra_queue_acquire ||
+        !fsr3_->extra_queue_compute) {
         log::warnf("[fsr3 sc] need 4 distinct queues but device exposes only 1 "
                    "graphics queue — FG unavailable on this GPU");
-        fsr3_swapchain_fatal_ = true;
+        fsr3_->swapchain_fatal = true;
         return;
     }
     VkQueueInfoFFXAPI gameQ{};
     gameQ.queue = graphics_queue_; gameQ.familyIndex = graphics_queue_family_;
     VkQueueInfoFFXAPI computeQ{};
-    computeQ.queue = fsr3_extra_queue_compute_;
-    computeQ.familyIndex = (fsr3_extra_queue_compute_ == compute_queue_)
+    computeQ.queue = fsr3_->extra_queue_compute;
+    computeQ.familyIndex = (fsr3_->extra_queue_compute == compute_queue_)
                             ? compute_queue_family_ : graphics_queue_family_;
     VkQueueInfoFFXAPI presentQ{};
-    presentQ.queue = fsr3_extra_queue_present_;
+    presentQ.queue = fsr3_->extra_queue_present;
     presentQ.familyIndex = graphics_queue_family_;
     VkQueueInfoFFXAPI acquireQ{};
-    acquireQ.queue = fsr3_extra_queue_acquire_;
+    acquireQ.queue = fsr3_->extra_queue_acquire;
     acquireQ.familyIndex = graphics_queue_family_;
 
     ffxCreateBackendVKDesc backend{};
@@ -457,7 +460,7 @@ void VulkanEngine::init_fsr3_swapchain() {
         render_semaphores_.clear();
         swapchain_ = VK_NULL_HANDLE;
         init_swapchain();
-        fsr3_swapchain_fatal_ = true;
+        fsr3_->swapchain_fatal = true;
         return;
     }
 
@@ -483,7 +486,7 @@ void VulkanEngine::init_fsr3_swapchain() {
         render_semaphores_.clear();
         swapchain_ = VK_NULL_HANDLE;
         init_swapchain();
-        fsr3_swapchain_fatal_ = true;
+        fsr3_->swapchain_fatal = true;
         return;
     }
     if (rc != FFX_API_RETURN_OK) {
@@ -500,17 +503,17 @@ void VulkanEngine::init_fsr3_swapchain() {
         render_semaphores_.clear();
         swapchain_ = VK_NULL_HANDLE;
         init_swapchain();
-        fsr3_swapchain_fatal_ = true;
+        fsr3_->swapchain_fatal = true;
         return;
     }
-    fsr3_acquire_fn_     = qfns.pOutAcquireNextImageKHR;
-    fsr3_present_fn_     = qfns.pOutQueuePresentKHR;
-    fsr3_get_images_fn_  = qfns.pOutGetSwapchainImagesKHR;
-    if (!fsr3_acquire_fn_ || !fsr3_present_fn_) {
+    fsr3_->acquire_fn     = qfns.pOutAcquireNextImageKHR;
+    fsr3_->present_fn     = qfns.pOutQueuePresentKHR;
+    fsr3_->get_images_fn  = qfns.pOutGetSwapchainImagesKHR;
+    if (!fsr3_->acquire_fn || !fsr3_->present_fn) {
         log::warnf("[fsr3 sc] replacement fns null (acq=%p pres=%p)",
-                   (void*)fsr3_acquire_fn_, (void*)fsr3_present_fn_);
+                   (void*)fsr3_->acquire_fn, (void*)fsr3_->present_fn);
         ffxContext c = ctx; g_ffx.DestroyContext(&c, nullptr);
-        fsr3_swapchain_fatal_ = true;
+        fsr3_->swapchain_fatal = true;
         return;
     }
 
@@ -518,15 +521,15 @@ void VulkanEngine::init_fsr3_swapchain() {
     // every site that reads `swapchain_` (image acquisition target,
     // image-view creation target) sees the proxy.
     swapchain_ = sdk_sc;
-    fsr3_swapchain_context_ = ctx;
-    fsr3_swapchain_active_  = true;
+    fsr3_->swapchain_context = ctx;
+    fsr3_->swapchain_active  = true;
     log::infof("[fsr3 sc] SwapChain proxy active — acquire/present "
                "routed through SDK function pointers");
 
     // Re-query swapchain images via the SDK's replacement fn — our
     // cached vk-bootstrap images point at the destroyed original
     // swapchain. Same for image views + per-image semaphores.
-    if (fsr3_get_images_fn_) {
+    if (fsr3_->get_images_fn) {
         for (auto v : swapchain_views_) vkDestroyImageView(device_, v, nullptr);
         swapchain_views_.clear();
         for (auto s : render_semaphores_) {
@@ -535,9 +538,9 @@ void VulkanEngine::init_fsr3_swapchain() {
         render_semaphores_.clear();
 
         uint32_t img_count = 0;
-        fsr3_get_images_fn_(device_, swapchain_, &img_count, nullptr);
+        fsr3_->get_images_fn(device_, swapchain_, &img_count, nullptr);
         swapchain_images_.assign(img_count, VK_NULL_HANDLE);
-        fsr3_get_images_fn_(device_, swapchain_, &img_count, swapchain_images_.data());
+        fsr3_->get_images_fn(device_, swapchain_, &img_count, swapchain_images_.data());
 
         swapchain_views_.assign(img_count, VK_NULL_HANDLE);
         for (uint32_t i = 0; i < img_count; ++i) {
@@ -562,7 +565,7 @@ void VulkanEngine::init_fsr3_swapchain() {
 
     // Configure FG with this swapchain so the pacer knows to insert
     // generated frames. Requires the FG context (session 3) to exist.
-    if (fsr3_fg_context_valid_) {
+    if (fsr3_->fg_context_valid) {
         ffxConfigureDescFrameGeneration cfg{};
         cfg.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
         // CRITICAL: cfg.swapChain expects the underlying
@@ -587,9 +590,9 @@ void VulkanEngine::init_fsr3_swapchain() {
         cfg.generationRect.top  = 0;
         cfg.generationRect.width  = swapchain_extent_.width;
         cfg.generationRect.height = swapchain_extent_.height;
-        cfg.frameID = fsr3_fg_frame_id_;
+        cfg.frameID = fsr3_->fg_frame_id;
 
-        ffxContext fg_ctx = static_cast<ffxContext>(fsr3_fg_context_);
+        ffxContext fg_ctx = static_cast<ffxContext>(fsr3_->fg_context);
         ffxReturnCode_t crc = FFX_API_RETURN_ERROR;
         bool cfg_av = false;
         __try {
@@ -599,7 +602,7 @@ void VulkanEngine::init_fsr3_swapchain() {
         }
         if (cfg_av) {
             log::warnf("[fsr3 sc] FG Configure AVed inside SDK — disabling FG");
-            fsr3_fg_fatal_ = true;
+            fsr3_->fg_fatal = true;
         } else if (crc != FFX_API_RETURN_OK) {
             log::warnf("[fsr3 sc] FG Configure(enabled=true) failed: %u", crc);
         } else {
@@ -616,13 +619,13 @@ void VulkanEngine::init_fsr3_swapchain() {
 void VulkanEngine::capture_hudless_snapshot(VkCommandBuffer cmd,
                                              uint32_t swapchain_idx) {
 #ifdef VIBE_HAVE_FSR3
-    if (!fsr3_swapchain_active_ || !fsr3_hudless_image_) return;
+    if (!fsr3_->swapchain_active || !fsr3_->hudless_image) return;
 
     // swapchain → TRANSFER_SRC, hudless → TRANSFER_DST.
     vkinit::transition_image(cmd, swapchain_images_[swapchain_idx],
                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    vkinit::transition_image(cmd, fsr3_hudless_image_,
+    vkinit::transition_image(cmd, fsr3_->hudless_image,
                              VK_IMAGE_LAYOUT_UNDEFINED,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
@@ -633,7 +636,7 @@ void VulkanEngine::capture_hudless_snapshot(VkCommandBuffer cmd,
     vkCmdCopyImage(cmd,
                    swapchain_images_[swapchain_idx],
                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   fsr3_hudless_image_,
+                   fsr3_->hudless_image,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    1, &region);
 
@@ -642,7 +645,7 @@ void VulkanEngine::capture_hudless_snapshot(VkCommandBuffer cmd,
     vkinit::transition_image(cmd, swapchain_images_[swapchain_idx],
                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    vkinit::transition_image(cmd, fsr3_hudless_image_,
+    vkinit::transition_image(cmd, fsr3_->hudless_image,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 #else
@@ -656,10 +659,10 @@ void VulkanEngine::capture_hudless_snapshot(VkCommandBuffer cmd,
 // (real, generated) presents. frameID must increment by exactly 1.
 void VulkanEngine::update_fsr3_fg_per_frame_config() {
 #ifdef VIBE_HAVE_FSR3
-    if (!fsr3_fg_context_valid_ || !fsr3_swapchain_active_) return;
+    if (!fsr3_->fg_context_valid || !fsr3_->swapchain_active) return;
 
-    FfxApiResource hudless = (fsr3_hudless_image_)
-        ? make_resource(fsr3_hudless_image_,
+    FfxApiResource hudless = (fsr3_->hudless_image)
+        ? make_resource(fsr3_->hudless_image,
                         swapchain_extent_.width, swapchain_extent_.height,
                         FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM,
                         FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ)
@@ -673,7 +676,7 @@ void VulkanEngine::update_fsr3_fg_per_frame_config() {
     // wrong → world geometry never reaches the screen, only the sky-
     // clear color survives.
     const bool fg_should_run = rt_.fsr2_enabled && rt_.fg_enabled &&
-                               !fg_runtime_disabled_ && !fsr3_fg_fatal_;
+                               !fg_runtime_disabled_ && !fsr3_->fg_fatal;
     ffxConfigureDescFrameGeneration cfg{};
     cfg.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
     cfg.swapChain   = swapchain_;       // wrapped VkSwapchainKHR (= proxy ptr)
@@ -684,54 +687,54 @@ void VulkanEngine::update_fsr3_fg_per_frame_config() {
     cfg.onlyPresentGenerated = false;
     cfg.generationRect.width  = swapchain_extent_.width;
     cfg.generationRect.height = swapchain_extent_.height;
-    cfg.frameID = fsr3_fg_frame_id_;
+    cfg.frameID = fsr3_->fg_frame_id;
 
-    ffxContext fg_ctx = static_cast<ffxContext>(fsr3_fg_context_);
+    ffxContext fg_ctx = static_cast<ffxContext>(fsr3_->fg_context);
     ffxReturnCode_t rc = g_ffx.Configure(&fg_ctx, &cfg.header);
     if (rc != FFX_API_RETURN_OK) {
         log::warnf("[fsr3 fg] per-frame Configure failed: %u", rc);
     }
-    ++fsr3_fg_frame_id_;
+    ++fsr3_->fg_frame_id;
 #endif
 }
 
 void VulkanEngine::destroy_fsr3_swapchain() {
 #ifdef VIBE_HAVE_FSR3
-    if (fsr3_swapchain_active_ && fsr3_swapchain_context_ && g_ffx_loaded) {
+    if (fsr3_->swapchain_active && fsr3_->swapchain_context && g_ffx_loaded) {
         if (device_) vkDeviceWaitIdle(device_);
         // Tell the FG context to stop generating BEFORE we kill the
         // SwapChain context — otherwise the next FG dispatch could
         // reference a dangling swapchain pointer.
-        if (fsr3_fg_context_valid_) {
+        if (fsr3_->fg_context_valid) {
             ffxConfigureDescFrameGeneration cfg{};
             cfg.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
             cfg.swapChain   = swapchain_;       // same handle, matched type
             cfg.frameGenerationEnabled = false;
-            ffxContext fg_ctx = static_cast<ffxContext>(fsr3_fg_context_);
+            ffxContext fg_ctx = static_cast<ffxContext>(fsr3_->fg_context);
             g_ffx.Configure(&fg_ctx, &cfg.header);
         }
-        ffxContext ctx = static_cast<ffxContext>(fsr3_swapchain_context_);
+        ffxContext ctx = static_cast<ffxContext>(fsr3_->swapchain_context);
         g_ffx.DestroyContext(&ctx, nullptr);
-        fsr3_swapchain_context_ = nullptr;
+        fsr3_->swapchain_context = nullptr;
         // SDK destroyed our wrapped swapchain handle. Our render path
         // will hit invalid swapchain_ until init_swapchain() rebuilds
         // it. Caller (the toggle handler) is responsible for that.
         swapchain_ = VK_NULL_HANDLE;
     }
-    fsr3_swapchain_active_ = false;
-    fsr3_acquire_fn_ = nullptr;
-    fsr3_present_fn_ = nullptr;
+    fsr3_->swapchain_active = false;
+    fsr3_->acquire_fn = nullptr;
+    fsr3_->present_fn = nullptr;
 #endif
 }
 
 VkResult VulkanEngine::acquire_next_image(uint64_t timeout, VkSemaphore sem,
                                           VkFence fence, uint32_t* out_idx) {
 #ifdef VIBE_HAVE_FSR3
-    if (fsr3_swapchain_active_ && fsr3_acquire_fn_) {
-        return fsr3_acquire_fn_(device_, swapchain_, timeout, sem, fence, out_idx);
+    if (fsr3_->swapchain_active && fsr3_->acquire_fn) {
+        return fsr3_->acquire_fn(device_, swapchain_, timeout, sem, fence, out_idx);
     }
 #endif
-    if (sl_acquire_fn_) return sl_acquire_fn_(device_, swapchain_, timeout, sem, fence, out_idx);
+    if (sl_->acquire_fn) return sl_->acquire_fn(device_, swapchain_, timeout, sem, fence, out_idx);
     return vkAcquireNextImageKHR(device_, swapchain_, timeout, sem, fence, out_idx);
 }
 
@@ -747,11 +750,11 @@ VkResult VulkanEngine::queue_present_image(uint32_t image_index,
         present.pWaitSemaphores = &wait_sem;
     }
 #ifdef VIBE_HAVE_FSR3
-    if (fsr3_swapchain_active_ && fsr3_present_fn_) {
-        return fsr3_present_fn_(graphics_queue_, &present);
+    if (fsr3_->swapchain_active && fsr3_->present_fn) {
+        return fsr3_->present_fn(graphics_queue_, &present);
     }
 #endif
-    if (sl_present_fn_) return sl_present_fn_(graphics_queue_, &present);   // Streamline presentCommon
+    if (sl_->present_fn) return sl_->present_fn(graphics_queue_, &present);   // Streamline presentCommon
     return vkQueuePresentKHR(graphics_queue_, &present);
 }
 
@@ -761,13 +764,13 @@ VkResult VulkanEngine::queue_present_image(uint32_t image_index,
 //
 // Creates the FG context, runs Prepare + Generation each frame to a
 // private HR output image. Does NOT integrate with the swapchain
-// (session 4) — the generated frame sits in fsr3_fg_output_image_
+// (session 4) — the generated frame sits in fsr3_->fg_output_image
 // and goes nowhere. Goal of session 3: prove the SDK can dispatch
 // without crashing, validation clean, no GPU device-lost.
 
 void VulkanEngine::init_fsr3_fg() {
 #ifdef VIBE_HAVE_FSR3
-    if (fsr3_fg_context_valid_ || fsr3_fg_fatal_) return;
+    if (fsr3_->fg_context_valid || fsr3_->fg_fatal) return;
     if (!ensure_loaded()) return;
     if (swapchain_extent_.width == 0) return;
 
@@ -805,23 +808,23 @@ void VulkanEngine::init_fsr3_fg() {
     }
     if (seh_av) {
         log::warnf("[fsr3 fg] CreateContext AVed inside SDK — disabling FG");
-        fsr3_fg_fatal_ = true;
+        fsr3_->fg_fatal = true;
         return;
     }
     if (rc != FFX_API_RETURN_OK) {
         log::warnf("[fsr3 fg] ffxCreateContext failed: %u", rc);
-        fsr3_fg_fatal_ = true;
+        fsr3_->fg_fatal = true;
         return;
     }
 
     if (!allocate_fsr3_output(allocator_, device_, swapchain_extent_,
                               VK_FORMAT_R16G16B16A16_SFLOAT,
-                              fsr3_fg_output_image_, fsr3_fg_output_alloc_,
-                              fsr3_fg_output_view_)) {
+                              fsr3_->fg_output_image, fsr3_->fg_output_alloc,
+                              fsr3_->fg_output_view)) {
         log::warnf("[fsr3 fg] FG output image alloc failed");
         ffxContext c = ctx;
         g_ffx.DestroyContext(&c, nullptr);
-        fsr3_fg_fatal_ = true;
+        fsr3_->fg_fatal = true;
         return;
     }
 
@@ -843,19 +846,19 @@ void VulkanEngine::init_fsr3_fg() {
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;
         if (vmaCreateImage(allocator_, &ici, &aci,
-                           &fsr3_hudless_image_, &fsr3_hudless_alloc_, nullptr) == VK_SUCCESS) {
+                           &fsr3_->hudless_image, &fsr3_->hudless_alloc, nullptr) == VK_SUCCESS) {
             VkImageViewCreateInfo vci{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-            vci.image = fsr3_hudless_image_;
+            vci.image = fsr3_->hudless_image;
             vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
             vci.format = swapchain_format_;
             vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-            vkCreateImageView(device_, &vci, nullptr, &fsr3_hudless_view_);
+            vkCreateImageView(device_, &vci, nullptr, &fsr3_->hudless_view);
         }
     }
 
-    fsr3_fg_context_       = ctx;
-    fsr3_fg_context_valid_ = true;
-    fsr3_fg_frame_id_      = 0;
+    fsr3_->fg_context       = ctx;
+    fsr3_->fg_context_valid = true;
+    fsr3_->fg_frame_id      = 0;
     log::infof("[fsr3 fg] context created (display=%ux%u)",
                swapchain_extent_.width, swapchain_extent_.height);
 #endif
@@ -863,29 +866,29 @@ void VulkanEngine::init_fsr3_fg() {
 
 void VulkanEngine::destroy_fsr3_fg() {
 #ifdef VIBE_HAVE_FSR3
-    if (fsr3_fg_context_valid_ && fsr3_fg_context_ && g_ffx_loaded) {
+    if (fsr3_->fg_context_valid && fsr3_->fg_context && g_ffx_loaded) {
         if (device_) vkDeviceWaitIdle(device_);
-        ffxContext ctx = static_cast<ffxContext>(fsr3_fg_context_);
+        ffxContext ctx = static_cast<ffxContext>(fsr3_->fg_context);
         g_ffx.DestroyContext(&ctx, nullptr);
-        fsr3_fg_context_ = nullptr;
+        fsr3_->fg_context = nullptr;
     }
-    fsr3_fg_context_valid_ = false;
-    if (fsr3_fg_output_view_)  { vkDestroyImageView(device_, fsr3_fg_output_view_, nullptr); fsr3_fg_output_view_ = VK_NULL_HANDLE; }
-    if (fsr3_fg_output_image_) { vmaDestroyImage(allocator_, fsr3_fg_output_image_, fsr3_fg_output_alloc_); fsr3_fg_output_image_ = VK_NULL_HANDLE; fsr3_fg_output_alloc_ = nullptr; }
-    if (fsr3_hudless_view_)    { vkDestroyImageView(device_, fsr3_hudless_view_, nullptr); fsr3_hudless_view_ = VK_NULL_HANDLE; }
-    if (fsr3_hudless_image_)   { vmaDestroyImage(allocator_, fsr3_hudless_image_, fsr3_hudless_alloc_); fsr3_hudless_image_ = VK_NULL_HANDLE; fsr3_hudless_alloc_ = nullptr; }
+    fsr3_->fg_context_valid = false;
+    if (fsr3_->fg_output_view)  { vkDestroyImageView(device_, fsr3_->fg_output_view, nullptr); fsr3_->fg_output_view = VK_NULL_HANDLE; }
+    if (fsr3_->fg_output_image) { vmaDestroyImage(allocator_, fsr3_->fg_output_image, fsr3_->fg_output_alloc); fsr3_->fg_output_image = VK_NULL_HANDLE; fsr3_->fg_output_alloc = nullptr; }
+    if (fsr3_->hudless_view)    { vkDestroyImageView(device_, fsr3_->hudless_view, nullptr); fsr3_->hudless_view = VK_NULL_HANDLE; }
+    if (fsr3_->hudless_image)   { vmaDestroyImage(allocator_, fsr3_->hudless_image, fsr3_->hudless_alloc); fsr3_->hudless_image = VK_NULL_HANDLE; fsr3_->hudless_alloc = nullptr; }
 #endif
 }
 
 void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
 #ifdef VIBE_HAVE_FSR3
-    if (!fsr3_fg_context_valid_ || !fsr3_fg_output_image_) return;
+    if (!fsr3_->fg_context_valid || !fsr3_->fg_output_image) return;
     // FG dispatch needs the FSR3 upscaler output as presentColor — must
     // already be in SHADER_READ from dispatch_fsr3 above.
-    if (!fsr3_output_image_) return;
+    if (!fsr3_->output_image) return;
 
     // FG output → GENERAL for the SDK's compute writes.
-    vkinit::transition_image(cmd, fsr3_fg_output_image_,
+    vkinit::transition_image(cmd, fsr3_->fg_output_image,
                              VK_IMAGE_LAYOUT_UNDEFINED,
                              VK_IMAGE_LAYOUT_GENERAL);
 
@@ -894,7 +897,7 @@ void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
     {
         ffxDispatchDescFrameGenerationPrepare prep{};
         prep.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE;
-        prep.frameID     = fsr3_fg_frame_id_;
+        prep.frameID     = fsr3_->fg_frame_id;
         prep.flags       = 0;
         prep.commandList = reinterpret_cast<void*>(cmd);
         prep.renderSize.width  = render_extent_.width;
@@ -921,11 +924,11 @@ void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
                                            vk_to_ffx_format(motion_vec_format_),
                                            FFX_API_RESOURCE_STATE_COMPUTE_READ);
 
-        ffxContext ctx = static_cast<ffxContext>(fsr3_fg_context_);
+        ffxContext ctx = static_cast<ffxContext>(fsr3_->fg_context);
         ffxReturnCode_t rc = g_ffx.Dispatch(&ctx, &prep.header);
         if (rc != FFX_API_RETURN_OK) {
             log::warnf("[fsr3 fg] Prepare dispatch failed: %u (frame=%llu)",
-                       rc, (unsigned long long)fsr3_fg_frame_id_);
+                       rc, (unsigned long long)fsr3_->fg_frame_id);
             return;
         }
     }
@@ -936,11 +939,11 @@ void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
         ffxDispatchDescFrameGeneration gen{};
         gen.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION;
         gen.commandList = reinterpret_cast<void*>(cmd);
-        gen.presentColor = make_resource(fsr3_output_image_,
+        gen.presentColor = make_resource(fsr3_->output_image,
                                          swapchain_extent_.width, swapchain_extent_.height,
                                          vk_to_ffx_format(VK_FORMAT_R16G16B16A16_SFLOAT),
                                          FFX_API_RESOURCE_STATE_COMPUTE_READ);
-        gen.outputs[0] = make_resource(fsr3_fg_output_image_,
+        gen.outputs[0] = make_resource(fsr3_->fg_output_image,
                                        swapchain_extent_.width, swapchain_extent_.height,
                                        vk_to_ffx_format(VK_FORMAT_R16G16B16A16_SFLOAT),
                                        FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -954,25 +957,25 @@ void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
         gen.generationRect.top  = 0;
         gen.generationRect.width  = swapchain_extent_.width;
         gen.generationRect.height = swapchain_extent_.height;
-        gen.frameID = fsr3_fg_frame_id_;
+        gen.frameID = fsr3_->fg_frame_id;
 
-        ffxContext ctx = static_cast<ffxContext>(fsr3_fg_context_);
+        ffxContext ctx = static_cast<ffxContext>(fsr3_->fg_context);
         ffxReturnCode_t rc = g_ffx.Dispatch(&ctx, &gen.header);
         if (rc != FFX_API_RETURN_OK) {
             log::warnf("[fsr3 fg] Generation dispatch failed: %u (frame=%llu)",
-                       rc, (unsigned long long)fsr3_fg_frame_id_);
+                       rc, (unsigned long long)fsr3_->fg_frame_id);
         }
     }
 
     // FG output → SHADER_READ for compose to sample later (session 4
     // will wire that up; today it just sits unused).
-    vkinit::transition_image(cmd, fsr3_fg_output_image_,
+    vkinit::transition_image(cmd, fsr3_->fg_output_image,
                              VK_IMAGE_LAYOUT_GENERAL,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // SDK contract: frameID must increment by exactly 1 each frame.
     // Any other delta resets the FG state machine.
-    ++fsr3_fg_frame_id_;
+    ++fsr3_->fg_frame_id;
 #else
     (void)cmd;
 #endif
@@ -988,8 +991,8 @@ void VulkanEngine::rewrite_compose_for_fsr3() {
     // keeps animating. Same predicate the actual binding write uses.
     const bool want_fsr3 = rt_.fsr2_enabled &&
                            (rt_.fsr_backend == 1) &&
-                           (fsr3_output_view_ != VK_NULL_HANDLE);
-    if (want_fsr3 == compose_uses_fsr3_) return;
+                           (fsr3_->output_view != VK_NULL_HANDLE);
+    if (want_fsr3 == compose_->uses_fsr3) return;
     if (device_) vkDeviceWaitIdle(device_);
     rewrite_compose_image_bindings();
     log::infof("compose source switched to %s", want_fsr3 ? "FSR3" : "fallback");

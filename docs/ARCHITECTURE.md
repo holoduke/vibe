@@ -23,7 +23,10 @@ src/engine/                  engine modules that are NOT the VulkanEngine class
   veg_paint.h                  the editor's paint map + presets
   road.cpp, grass.cpp, audio.cpp, physics_world.cpp (Jolt), texture.cpp, window.cpp
 src/engine/vk_engine.h       the one big class: every member + method declaration
-src/engine/vk_engine.cpp     init(), run() (the frame loop + input), shutdown()
+src/engine/vk_engine.cpp     init(), run() (the frame loop), shutdown()
+src/engine/vk_engine/game_loop.cpp   one turn of run(), the game half: loop_test_input, loop_handle_keys,
+                             loop_weapons_and_edit, loop_simulate, loop_upkeep (called in that order)
+src/engine/vk_engine/state/*.h       private state of 25 subsystems (see "Private state" below)
 src/engine/vk_engine/        the class's methods, one topic per file (see below)
 shaders/                     GLSL 4.60; *.glsl = includes, compiled into the others
 tools/                       scripts (character build, rock bake, split_shader.pl, split_cpp.pl, perf/bench.sh)
@@ -95,7 +98,7 @@ its local variables and are not self-contained.
 | Tree look (crown shading, leaf cards) | `shaders/cube.frag` (foliage block after the includes); tree shapes: `world_props_meshes.inl`; where trees stand: `world_props.cpp` |
 | A flower / plant / water lily shape | `scatter_plant_meshes.inl`; its colours: `shaders/scatter.frag`; where it grows: `scatter.cpp` |
 | Ground colour, pebbles, puddles, shore | `shaders/terrain_rm_shading_helpers.glsl`, `terrain_rm_pebbles.glsl`, tail of `terrain_raymarch.frag` |
-| Water surface, foam, lake bed | `shaders/terrain_rm_water.glsl` + the water block in `terrain_raymarch.frag` |
+| Water surface, foam, lake bed | `shaders/terrain_rm_water.glsl` + `terrain_rm_main_water.glsl` (the water part of main()) |
 | Lawn grass | `shaders/grass_raymarch.frag` |
 | Fog / mist | `shaders/froxel_fog.comp`, `atmosphere.cpp` |
 | Weather, rain, thunder timing | `environment.cpp`; lightning bolt drawing: `ui_hud.cpp` |
@@ -308,3 +311,20 @@ time (afterwards it comes from `vibe_pipeline.cache` / the driver's cache). The 
 **Did not pay / not done**: `half_rate_shadows` has no effect with deferred lighting on; `terrain_raymarch_scale` 75 % helps open ground but costs in forest (the low-resolution terrain path does not stop at objects); trees switch to their impostor at 7 px because the impostor is a generic procedural silhouette - switching earlier needs baked multi-view impostors.
 
 **Corrections to "Leaving the planet" above (checked against the code, 2026-11-21):** the planet's far field comes in between 100 and 220 m of altitude (`compose.frag` `planet_surface`: `smoothstep(0.10, 0.22, alt)`), not at 1 km or 300 - 450 m; its colour target then blends toward the full sky model over 220 - 700 m. The far march's range is `1500 + 100 x altitude` metres, 80 km from about 785 m up, drawing in again between 25 and 60 km. The water plane is cut where that range ends only from 220 m up, and the cut closes in from the horizon between 220 and 1200 m (`terrain_raymarch.frag`, `t_water_plane`). The sky passes use the rotation-only inverse view-projection at every height (the full one lost the view directions in float rounding well below 2 km: bands in the sky); compose keeps the full matrix only for the terrain brush ring and the underwater view. Water: style 2 ("lake") runs the river branch (`water_style >= 1`) - the lake branch below it is never reached; left so because the look in use was tuned that way.
+
+## Private state (2026-11-22)
+
+`vk_engine.h` used to declare every subsystem's variables, so touching one rebuilt all 61 engine files. The variables of 25 subsystems now live in `src/engine/vk_engine/state/<name>.h`, each as a nested struct (`struct VulkanEngine::BloomState { ... }`) that `vk_engine.h` only forward-declares and points to: `bloom_`, `fsr3_`, `env_`, `sun_`, `tr_`, `mp_`, `pg_`, `cl_`, `scl_`, `ssdm_`, `rr_`, `sl_`, `atmo_`, `fog_`, `svgf_`, `taa_`, `taau_`, `voxel_`, `fx_`, `clutter_`, `cloud_`, `compose_`, `spacejet_`, `dlss_`, `fsr2_`.
+
+- A variable that was `bloom_extent_` is now `bloom_->extent`. A file that uses it includes `engine/vk_engine/state/bloom.h`; a change to that header rebuilds only those files (2 to 12 of them, by subsystem).
+- The structs are created in the constructor and freed in the destructor (`private_state.cpp`, which lists them all - add a new one there).
+- New subsystem state goes into a state header, not into `vk_engine.h`. Still in the big header: the vegetation, the terrain, the player's body, deferred lighting and everything without a clear prefix (about 600 variables).
+- Member functions are still declared in `vk_engine.h`.
+
+## The terrain shader's main() (2026-11-22)
+
+`terrain_raymarch.frag` holds the set-up and the march; the rest of its `main()` is in five files that are included, in this order, in the middle of it: `terrain_rm_main_water.glsl`, `terrain_rm_main_ground.glsl`, `terrain_rm_main_light.glsl`, `terrain_rm_main_gi.glsl`, `terrain_rm_main_fog.glsl`. They are not functions - they share main()'s local variables - so they cannot be included anywhere else.
+
+## Names (2026-11-22)
+
+The code's namespace is `vibe`, the libraries `vibe_core` / `vibe_anim` / `vibe_engine`, and every environment variable and shader define starts with `VIBE_` (they were `qlike` / `QLIKE_`). Only the repository's folder is still called `quake-like`.

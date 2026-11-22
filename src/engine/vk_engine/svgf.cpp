@@ -32,6 +32,8 @@
 // allocation cost.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/svgf.h"
+#include "engine/vk_engine/state/taa.h"
 #include "engine/vk_pipelines.h"
 
 #include <cstring>
@@ -71,9 +73,9 @@ static_assert(sizeof(SvgfAtrousUBO) <= kSvgfAtrousUBOStride,
 
 void VulkanEngine::init_svgf_passes() {
     std::string sd = VIBE_SHADER_DIR;
-    svgf_moments_frag_module_ = vkpipe::load_shader_module(
+    svgf_->moments_frag_module = vkpipe::load_shader_module(
         device_, sd + "/svgf_moments.frag.spv");
-    svgf_atrous_frag_module_  = vkpipe::load_shader_module(
+    svgf_->atrous_frag_module  = vkpipe::load_shader_module(
         device_, sd + "/svgf_atrous.frag.spv");
 
     // ---------- moments pass ----------
@@ -106,8 +108,8 @@ void VulkanEngine::init_svgf_passes() {
         aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
         vk_check(vmaCreateBuffer(allocator_, &bci, &aci,
-                                 &svgf_moments_ubo_buffer_,
-                                 &svgf_moments_ubo_alloc_, nullptr),
+                                 &svgf_->moments_ubo_buffer,
+                                 &svgf_->moments_ubo_alloc, nullptr),
                  "svgf moments ubo");
     }
     {
@@ -122,7 +124,7 @@ void VulkanEngine::init_svgf_passes() {
             .maxSets = 2u, .poolSizeCount = 3, .pPoolSizes = sizes,
         };
         vk_check(vkCreateDescriptorPool(device_, &pci, nullptr,
-                                         &svgf_moments_desc_pool_),
+                                         &svgf_->moments_desc_pool),
                  "svgf moments desc pool");
     }
     {
@@ -147,33 +149,33 @@ void VulkanEngine::init_svgf_passes() {
             .bindingCount = 6, .pBindings = b,
         };
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
-                                              &svgf_moments_set_layout_),
+                                              &svgf_->moments_set_layout),
                  "svgf moments set layout");
     }
     {
         VkDescriptorSetLayout layouts[2] = {
-            svgf_moments_set_layout_, svgf_moments_set_layout_,
+            svgf_->moments_set_layout, svgf_->moments_set_layout,
         };
         VkDescriptorSetAllocateInfo dai{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = nullptr,
-            .descriptorPool = svgf_moments_desc_pool_,
+            .descriptorPool = svgf_->moments_desc_pool,
             .descriptorSetCount = 2,
             .pSetLayouts = layouts,
         };
         vk_check(vkAllocateDescriptorSets(device_, &dai,
-                                          svgf_moments_desc_sets_),
+                                          svgf_->moments_desc_sets),
                  "svgf moments set alloc");
     }
     {
         VkPipelineLayoutCreateInfo plci{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
-            .setLayoutCount = 1, .pSetLayouts = &svgf_moments_set_layout_,
+            .setLayoutCount = 1, .pSetLayouts = &svgf_->moments_set_layout,
             .pushConstantRangeCount = 0, .pPushConstantRanges = nullptr,
         };
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr,
-                                         &svgf_moments_pipeline_layout_),
+                                         &svgf_->moments_pipeline_layout),
                  "svgf moments pipeline layout");
     }
     {
@@ -182,18 +184,18 @@ void VulkanEngine::init_svgf_passes() {
         // graphics pipeline because dynamic-rendering requires at
         // least one colour attachment at vkCmdBeginRendering -- so the
         // shader returns a dummy colour into a throwaway attachment
-        // we cycle through anyway (svgf_atrous_image_[0], which the
+        // we cycle through anyway (svgf_->atrous_image[0], which the
         // first a-trous pass overwrites immediately).
         vkpipe::GraphicsPipelineConfig cfg{};
-        cfg.vert = taa_vert_module_;     // reuse fullscreen-tri vert
-        cfg.frag = svgf_moments_frag_module_;
-        cfg.layout = svgf_moments_pipeline_layout_;
+        cfg.vert = taa_->vert_module;     // reuse fullscreen-tri vert
+        cfg.frag = svgf_->moments_frag_module;
+        cfg.layout = svgf_->moments_pipeline_layout;
         cfg.color_format = scene_color_format_;
         cfg.depth_format = VK_FORMAT_UNDEFINED;
         cfg.cull = VK_CULL_MODE_NONE;
         cfg.depth_test = false;
         cfg.depth_write = false;
-        svgf_moments_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+        svgf_->moments_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     }
 
     // ---------- a-trous pass ----------
@@ -223,8 +225,8 @@ void VulkanEngine::init_svgf_passes() {
         aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
         vk_check(vmaCreateBuffer(allocator_, &bci, &aci,
-                                 &svgf_atrous_ubo_buffer_,
-                                 &svgf_atrous_ubo_alloc_, nullptr),
+                                 &svgf_->atrous_ubo_buffer,
+                                 &svgf_->atrous_ubo_alloc, nullptr),
                  "svgf atrous ubo");
     }
     {
@@ -238,7 +240,7 @@ void VulkanEngine::init_svgf_passes() {
             .maxSets = 6u, .poolSizeCount = 2, .pPoolSizes = sizes,
         };
         vk_check(vkCreateDescriptorPool(device_, &pci, nullptr,
-                                         &svgf_atrous_desc_pool_),
+                                         &svgf_->atrous_desc_pool),
                  "svgf atrous desc pool");
     }
     {
@@ -259,45 +261,45 @@ void VulkanEngine::init_svgf_passes() {
             .bindingCount = 4, .pBindings = b,
         };
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
-                                              &svgf_atrous_set_layout_),
+                                              &svgf_->atrous_set_layout),
                  "svgf atrous set layout");
     }
     {
         VkDescriptorSetLayout layouts[6];
-        for (int i = 0; i < 6; ++i) layouts[i] = svgf_atrous_set_layout_;
+        for (int i = 0; i < 6; ++i) layouts[i] = svgf_->atrous_set_layout;
         VkDescriptorSetAllocateInfo dai{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = nullptr,
-            .descriptorPool = svgf_atrous_desc_pool_,
+            .descriptorPool = svgf_->atrous_desc_pool,
             .descriptorSetCount = 6,
             .pSetLayouts = layouts,
         };
         vk_check(vkAllocateDescriptorSets(device_, &dai,
-                                          svgf_atrous_desc_sets_),
+                                          svgf_->atrous_desc_sets),
                  "svgf atrous set alloc");
     }
     {
         VkPipelineLayoutCreateInfo plci{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
-            .setLayoutCount = 1, .pSetLayouts = &svgf_atrous_set_layout_,
+            .setLayoutCount = 1, .pSetLayouts = &svgf_->atrous_set_layout,
             .pushConstantRangeCount = 0, .pPushConstantRanges = nullptr,
         };
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr,
-                                         &svgf_atrous_pipeline_layout_),
+                                         &svgf_->atrous_pipeline_layout),
                  "svgf atrous pipeline layout");
     }
     {
         vkpipe::GraphicsPipelineConfig cfg{};
-        cfg.vert = taa_vert_module_;
-        cfg.frag = svgf_atrous_frag_module_;
-        cfg.layout = svgf_atrous_pipeline_layout_;
+        cfg.vert = taa_->vert_module;
+        cfg.frag = svgf_->atrous_frag_module;
+        cfg.layout = svgf_->atrous_pipeline_layout;
         cfg.color_format = scene_color_format_;
         cfg.depth_format = VK_FORMAT_UNDEFINED;
         cfg.cull = VK_CULL_MODE_NONE;
         cfg.depth_test = false;
         cfg.depth_write = false;
-        svgf_atrous_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+        svgf_->atrous_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     }
 
     recreate_svgf_pass_targets();
@@ -306,57 +308,57 @@ void VulkanEngine::init_svgf_passes() {
 }
 
 void VulkanEngine::destroy_svgf_passes() {
-    if (svgf_atrous_pipeline_) {
-        vkDestroyPipeline(device_, svgf_atrous_pipeline_, nullptr);
-        svgf_atrous_pipeline_ = VK_NULL_HANDLE;
+    if (svgf_->atrous_pipeline) {
+        vkDestroyPipeline(device_, svgf_->atrous_pipeline, nullptr);
+        svgf_->atrous_pipeline = VK_NULL_HANDLE;
     }
-    if (svgf_atrous_pipeline_layout_) {
-        vkDestroyPipelineLayout(device_, svgf_atrous_pipeline_layout_, nullptr);
-        svgf_atrous_pipeline_layout_ = VK_NULL_HANDLE;
+    if (svgf_->atrous_pipeline_layout) {
+        vkDestroyPipelineLayout(device_, svgf_->atrous_pipeline_layout, nullptr);
+        svgf_->atrous_pipeline_layout = VK_NULL_HANDLE;
     }
-    if (svgf_atrous_frag_module_) {
-        vkDestroyShaderModule(device_, svgf_atrous_frag_module_, nullptr);
-        svgf_atrous_frag_module_ = VK_NULL_HANDLE;
+    if (svgf_->atrous_frag_module) {
+        vkDestroyShaderModule(device_, svgf_->atrous_frag_module, nullptr);
+        svgf_->atrous_frag_module = VK_NULL_HANDLE;
     }
-    if (svgf_atrous_desc_pool_) {
-        vkDestroyDescriptorPool(device_, svgf_atrous_desc_pool_, nullptr);
-        svgf_atrous_desc_pool_ = VK_NULL_HANDLE;
+    if (svgf_->atrous_desc_pool) {
+        vkDestroyDescriptorPool(device_, svgf_->atrous_desc_pool, nullptr);
+        svgf_->atrous_desc_pool = VK_NULL_HANDLE;
     }
-    if (svgf_atrous_set_layout_) {
-        vkDestroyDescriptorSetLayout(device_, svgf_atrous_set_layout_, nullptr);
-        svgf_atrous_set_layout_ = VK_NULL_HANDLE;
+    if (svgf_->atrous_set_layout) {
+        vkDestroyDescriptorSetLayout(device_, svgf_->atrous_set_layout, nullptr);
+        svgf_->atrous_set_layout = VK_NULL_HANDLE;
     }
-    if (svgf_atrous_ubo_buffer_) {
-        vmaDestroyBuffer(allocator_, svgf_atrous_ubo_buffer_,
-                         svgf_atrous_ubo_alloc_);
-        svgf_atrous_ubo_buffer_ = VK_NULL_HANDLE;
-        svgf_atrous_ubo_alloc_  = nullptr;
+    if (svgf_->atrous_ubo_buffer) {
+        vmaDestroyBuffer(allocator_, svgf_->atrous_ubo_buffer,
+                         svgf_->atrous_ubo_alloc);
+        svgf_->atrous_ubo_buffer = VK_NULL_HANDLE;
+        svgf_->atrous_ubo_alloc  = nullptr;
     }
-    if (svgf_moments_pipeline_) {
-        vkDestroyPipeline(device_, svgf_moments_pipeline_, nullptr);
-        svgf_moments_pipeline_ = VK_NULL_HANDLE;
+    if (svgf_->moments_pipeline) {
+        vkDestroyPipeline(device_, svgf_->moments_pipeline, nullptr);
+        svgf_->moments_pipeline = VK_NULL_HANDLE;
     }
-    if (svgf_moments_pipeline_layout_) {
-        vkDestroyPipelineLayout(device_, svgf_moments_pipeline_layout_, nullptr);
-        svgf_moments_pipeline_layout_ = VK_NULL_HANDLE;
+    if (svgf_->moments_pipeline_layout) {
+        vkDestroyPipelineLayout(device_, svgf_->moments_pipeline_layout, nullptr);
+        svgf_->moments_pipeline_layout = VK_NULL_HANDLE;
     }
-    if (svgf_moments_frag_module_) {
-        vkDestroyShaderModule(device_, svgf_moments_frag_module_, nullptr);
-        svgf_moments_frag_module_ = VK_NULL_HANDLE;
+    if (svgf_->moments_frag_module) {
+        vkDestroyShaderModule(device_, svgf_->moments_frag_module, nullptr);
+        svgf_->moments_frag_module = VK_NULL_HANDLE;
     }
-    if (svgf_moments_desc_pool_) {
-        vkDestroyDescriptorPool(device_, svgf_moments_desc_pool_, nullptr);
-        svgf_moments_desc_pool_ = VK_NULL_HANDLE;
+    if (svgf_->moments_desc_pool) {
+        vkDestroyDescriptorPool(device_, svgf_->moments_desc_pool, nullptr);
+        svgf_->moments_desc_pool = VK_NULL_HANDLE;
     }
-    if (svgf_moments_set_layout_) {
-        vkDestroyDescriptorSetLayout(device_, svgf_moments_set_layout_, nullptr);
-        svgf_moments_set_layout_ = VK_NULL_HANDLE;
+    if (svgf_->moments_set_layout) {
+        vkDestroyDescriptorSetLayout(device_, svgf_->moments_set_layout, nullptr);
+        svgf_->moments_set_layout = VK_NULL_HANDLE;
     }
-    if (svgf_moments_ubo_buffer_) {
-        vmaDestroyBuffer(allocator_, svgf_moments_ubo_buffer_,
-                         svgf_moments_ubo_alloc_);
-        svgf_moments_ubo_buffer_ = VK_NULL_HANDLE;
-        svgf_moments_ubo_alloc_  = nullptr;
+    if (svgf_->moments_ubo_buffer) {
+        vmaDestroyBuffer(allocator_, svgf_->moments_ubo_buffer,
+                         svgf_->moments_ubo_alloc);
+        svgf_->moments_ubo_buffer = VK_NULL_HANDLE;
+        svgf_->moments_ubo_alloc  = nullptr;
     }
 }
 
@@ -368,12 +370,12 @@ void VulkanEngine::destroy_svgf_passes() {
 // checking scene_color_view_ etc. before invoking.
 
 void VulkanEngine::recreate_svgf_pass_targets() {
-    if (!svgf_moments_set_layout_ || !svgf_atrous_set_layout_) return;
+    if (!svgf_->moments_set_layout || !svgf_->atrous_set_layout) return;
     if (!linear_sampler_ || !scene_color_view_ || !depth_view_ ||
         !motion_vec_view_) {
         return;
     }
-    if (!svgf_moments_view_[0] || !svgf_atrous_view_[0]) return;
+    if (!svgf_->moments_view[0] || !svgf_->atrous_view[0]) return;
 
     // ---- moments pass -----------------------------------------------------
     // Per frame parity, the input is the OTHER moments slot (the one
@@ -393,18 +395,18 @@ void VulkanEngine::recreate_svgf_pass_targets() {
         // Spec allows sampling a STORAGE_IMAGE-usage image because we
         // also added SAMPLED usage at allocation time.
         VkDescriptorImageInfo i_prev_m { linear_sampler_,
-                                          svgf_moments_view_[prev_slot],
+                                          svgf_->moments_view[prev_slot],
                                           VK_IMAGE_LAYOUT_GENERAL };
         VkDescriptorImageInfo i_cur_m  { VK_NULL_HANDLE,
-                                          svgf_moments_view_[cur_slot],
+                                          svgf_->moments_view[cur_slot],
                                           VK_IMAGE_LAYOUT_GENERAL };
-        VkDescriptorBufferInfo i_ubo { svgf_moments_ubo_buffer_, 0,
+        VkDescriptorBufferInfo i_ubo { svgf_->moments_ubo_buffer, 0,
                                         VK_WHOLE_SIZE };
 
         VkWriteDescriptorSet w[6]{};
         for (int i = 0; i < 4; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet = svgf_moments_desc_sets_[parity];
+            w[i].dstSet = svgf_->moments_desc_sets[parity];
             w[i].dstBinding = static_cast<uint32_t>(i);
             w[i].descriptorCount = 1;
             w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -414,13 +416,13 @@ void VulkanEngine::recreate_svgf_pass_targets() {
         w[2].pImageInfo = &i_motion;
         w[3].pImageInfo = &i_prev_m;
         w[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[4].dstSet = svgf_moments_desc_sets_[parity];
+        w[4].dstSet = svgf_->moments_desc_sets[parity];
         w[4].dstBinding = 4;
         w[4].descriptorCount = 1;
         w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         w[4].pImageInfo = &i_cur_m;
         w[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[5].dstSet = svgf_moments_desc_sets_[parity];
+        w[5].dstSet = svgf_->moments_desc_sets[parity];
         w[5].dstBinding = 5;
         w[5].descriptorCount = 1;
         w[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -443,15 +445,15 @@ void VulkanEngine::recreate_svgf_pass_targets() {
             VkImageView color_src;
             switch (pass) {
                 case 0: color_src = scene_color_view_;        break;
-                case 1: color_src = svgf_atrous_view_[0];     break;
-                default:color_src = svgf_atrous_view_[1];     break;
+                case 1: color_src = svgf_->atrous_view[0];     break;
+                default:color_src = svgf_->atrous_view[1];     break;
             }
             VkDescriptorImageInfo i_color   { linear_sampler_, color_src,
                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
             VkDescriptorImageInfo i_depth   { linear_sampler_, depth_view_,
                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
             VkDescriptorImageInfo i_moments { linear_sampler_,
-                                              svgf_moments_view_[cur_m_slot],
+                                              svgf_->moments_view[cur_m_slot],
                                               VK_IMAGE_LAYOUT_GENERAL };
             // Per-pass UBO sub-region. Each pass within a parity reads
             // its own SvgfAtrousUBO slice; pre-computed offset baked
@@ -459,7 +461,7 @@ void VulkanEngine::recreate_svgf_pass_targets() {
             // descriptor mid-frame, only the UBO contents flip on
             // resolution / sigma changes.
             VkDescriptorBufferInfo i_ubo {
-                svgf_atrous_ubo_buffer_,
+                svgf_->atrous_ubo_buffer,
                 static_cast<VkDeviceSize>(set_idx) * kSvgfAtrousUBOStride,
                 sizeof(SvgfAtrousUBO),
             };
@@ -467,7 +469,7 @@ void VulkanEngine::recreate_svgf_pass_targets() {
             VkWriteDescriptorSet w[4]{};
             for (int i = 0; i < 3; ++i) {
                 w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[i].dstSet = svgf_atrous_desc_sets_[set_idx];
+                w[i].dstSet = svgf_->atrous_desc_sets[set_idx];
                 w[i].dstBinding = static_cast<uint32_t>(i);
                 w[i].descriptorCount = 1;
                 w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -476,7 +478,7 @@ void VulkanEngine::recreate_svgf_pass_targets() {
             w[1].pImageInfo = &i_depth;
             w[2].pImageInfo = &i_moments;
             w[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[3].dstSet = svgf_atrous_desc_sets_[set_idx];
+            w[3].dstSet = svgf_->atrous_desc_sets[set_idx];
             w[3].dstBinding = 3;
             w[3].descriptorCount = 1;
             w[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -500,7 +502,7 @@ void VulkanEngine::recreate_svgf_pass_targets() {
 
 void VulkanEngine::render_svgf(VkCommandBuffer cmd, uint32_t frame_parity) {
     if (!rt_.svgf_enabled) return;
-    if (!svgf_moments_pipeline_ || !svgf_atrous_pipeline_) return;
+    if (!svgf_->moments_pipeline || !svgf_->atrous_pipeline) return;
 
     const uint32_t parity = frame_parity & 1u;
     const float w = static_cast<float>(render_extent_.width);
@@ -511,21 +513,21 @@ void VulkanEngine::render_svgf(VkCommandBuffer cmd, uint32_t frame_parity) {
     // ---- moments pass: 1 fullscreen tri ----------------------------------
     //
     // The fragment shader's real output is via imageStore into
-    // svgf_moments_image_[parity] (binding 4). The dummy colour
+    // svgf_->moments_image[parity] (binding 4). The dummy colour
     // attachment exists only because dynamic-rendering requires at
-    // least one attachment; we reuse svgf_atrous_image_[0] for it
+    // least one attachment; we reuse svgf_->atrous_image[0] for it
     // (about to be overwritten by the first a-trous pass anyway). The
     // image flips into COLOR_ATTACHMENT for the moments pass, then
     // back into COLOR_ATTACHMENT (no-op) for the a-trous pass, then
     // SHADER_READ_ONLY after.
     {
-        vkinit::transition_image(cmd, svgf_atrous_image_[0],
+        vkinit::transition_image(cmd, svgf_->atrous_image[0],
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkClearValue clear_dummy{};
         clear_dummy.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
         auto color = vkinit::color_attachment_info(
-            svgf_atrous_view_[0], &clear_dummy,
+            svgf_->atrous_view[0], &clear_dummy,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingInfo ri{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
@@ -545,10 +547,10 @@ void VulkanEngine::render_svgf(VkCommandBuffer cmd, uint32_t frame_parity) {
         vkCmdSetScissor(cmd, 0, 1, &sc);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          svgf_moments_pipeline_);
+                          svgf_->moments_pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                svgf_moments_pipeline_layout_, 0, 1,
-                                &svgf_moments_desc_sets_[parity], 0, nullptr);
+                                svgf_->moments_pipeline_layout, 0, 1,
+                                &svgf_->moments_desc_sets[parity], 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRendering(cmd);
 
@@ -557,7 +559,7 @@ void VulkanEngine::render_svgf(VkCommandBuffer cmd, uint32_t frame_parity) {
         //      image so pass 0 (a-trous, samples this image at
         //      binding 2) sees the imageStore result.
         //   2. COLOR_ATTACHMENT_WRITE -> COLOR_ATTACHMENT_WRITE on
-        //      svgf_atrous_image_[0] so pass 0's render-pass write
+        //      svgf_->atrous_image[0] so pass 0's render-pass write
         //      strictly orders after the moments pass's dummy write
         //      (Vulkan requires explicit WAW sync between back-to-
         //      back render passes targeting the same image, even at
@@ -570,7 +572,7 @@ void VulkanEngine::render_svgf(VkCommandBuffer cmd, uint32_t frame_parity) {
         b[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
         b[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b[0].image = svgf_moments_image_[parity];
+        b[0].image = svgf_->moments_image[parity];
         b[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
         b[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         b[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -579,7 +581,7 @@ void VulkanEngine::render_svgf(VkCommandBuffer cmd, uint32_t frame_parity) {
         b[1].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         b[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b[1].image = svgf_atrous_image_[0];
+        b[1].image = svgf_->atrous_image[0];
         b[1].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
@@ -612,15 +614,15 @@ void VulkanEngine::render_svgf(VkCommandBuffer cmd, uint32_t frame_parity) {
         VkImageView dst_view;
         VkImage     dst_image;
         switch (pass_idx) {
-            case 0: dst_view = svgf_atrous_view_[0];
-                    dst_image = svgf_atrous_image_[0]; break;
-            case 1: dst_view = svgf_atrous_view_[1];
-                    dst_image = svgf_atrous_image_[1]; break;
+            case 0: dst_view = svgf_->atrous_view[0];
+                    dst_image = svgf_->atrous_image[0]; break;
+            case 1: dst_view = svgf_->atrous_view[1];
+                    dst_image = svgf_->atrous_image[1]; break;
             default:dst_view = scene_color_view_;
                     dst_image = scene_color_image_;    break;
         }
         if (pass_idx == 1) {
-            vkinit::transition_image(cmd, svgf_atrous_image_[1],
+            vkinit::transition_image(cmd, svgf_->atrous_image[1],
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         } else if (pass_idx == 2) {
@@ -653,10 +655,10 @@ void VulkanEngine::render_svgf(VkCommandBuffer cmd, uint32_t frame_parity) {
         VkRect2D sc{ {0, 0}, render_extent_ };
         vkCmdSetScissor(cmd, 0, 1, &sc);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          svgf_atrous_pipeline_);
+                          svgf_->atrous_pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                svgf_atrous_pipeline_layout_, 0, 1,
-                                &svgf_atrous_desc_sets_[set_idx],
+                                svgf_->atrous_pipeline_layout, 0, 1,
+                                &svgf_->atrous_desc_sets[set_idx],
                                 0, nullptr);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRendering(cmd);
@@ -674,7 +676,7 @@ void VulkanEngine::render_svgf(VkCommandBuffer cmd, uint32_t frame_parity) {
 
 
 void VulkanEngine::write_svgf_ubos() {
-    if (!rt_.svgf_enabled || !svgf_moments_pipeline_ || !svgf_atrous_pipeline_) return;
+    if (!rt_.svgf_enabled || !svgf_->moments_pipeline || !svgf_->atrous_pipeline) return;
     const float w = static_cast<float>(render_extent_.width);
     const float h = static_cast<float>(render_extent_.height);
     {
@@ -694,8 +696,8 @@ void VulkanEngine::write_svgf_ubos() {
         m.params = glm::vec4(0.1f, 1.0f,
                               prev_view_proj_valid_ ? 1.0f : 0.0f, 0.0f);
         VmaAllocationInfo ai{};
-        vmaGetAllocationInfo(allocator_, svgf_moments_ubo_alloc_, &ai);
-        upload(svgf_moments_ubo_buffer_, 0, &m, sizeof(m), ai.pMappedData);
+        vmaGetAllocationInfo(allocator_, svgf_->moments_ubo_alloc, &ai);
+        upload(svgf_->moments_ubo_buffer, 0, &m, sizeof(m), ai.pMappedData);
     }
     {
         // sigma_l: luminance edge-stop width, scaled INSIDE the shader
@@ -715,7 +717,7 @@ void VulkanEngine::write_svgf_ubos() {
         const float kSigmaN = 128.0f;
         const int strides[3] = { 1, 2, 4 };
         VmaAllocationInfo ai{};
-        vmaGetAllocationInfo(allocator_, svgf_atrous_ubo_alloc_, &ai);
+        vmaGetAllocationInfo(allocator_, svgf_->atrous_ubo_alloc, &ai);
         {
             // Write each slice at its aligned offset (per-slice stride
             // = kSvgfAtrousUBOStride, sized for the worst-case
@@ -727,7 +729,7 @@ void VulkanEngine::write_svgf_ubos() {
                     u.viewport = glm::vec4(w, h, 1.0f / w, 1.0f / h);
                     u.params = glm::vec4(static_cast<float>(strides[s]),
                                          kSigmaL, kSigmaZ, kSigmaN);
-                    upload(svgf_atrous_ubo_buffer_,
+                    upload(svgf_->atrous_ubo_buffer,
                            VkDeviceSize(p * 3 + s) * kSvgfAtrousUBOStride,
                            &u, sizeof(u), ai.pMappedData);
                 }

@@ -10,6 +10,9 @@
 // builds if the submodule wasn't initialized.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/fsr2.h"
+#include "engine/vk_engine/state/compose.h"
+#include "engine/vk_engine/state/fsr3.h"
 
 #include <algorithm>
 
@@ -72,12 +75,12 @@ void VulkanEngine::init_fsr2() {
     // Need the swapchain (= displaySize) before context creation. Using
     // displaySize as the worst-case render size lets the context handle
     // any render_scale ≤ 1.0 without recreate per scale change.
-    if (fsr2_context_valid_ || swapchain_extent_.width == 0) return;
+    if (fsr2_->context_valid || swapchain_extent_.width == 0) return;
 
-    fsr2_scratch_size_ = ffxFsr2GetScratchMemorySizeVK(physical_device_);
-    fsr2_scratch_ = std::malloc(fsr2_scratch_size_);
-    if (!fsr2_scratch_) {
-        log::warnf("[fsr2] scratch malloc failed (%zu bytes)", fsr2_scratch_size_);
+    fsr2_->scratch_size = ffxFsr2GetScratchMemorySizeVK(physical_device_);
+    fsr2_->scratch = std::malloc(fsr2_->scratch_size);
+    if (!fsr2_->scratch) {
+        log::warnf("[fsr2] scratch malloc failed (%zu bytes)", fsr2_->scratch_size);
         return;
     }
 
@@ -92,12 +95,12 @@ void VulkanEngine::init_fsr2() {
     desc.device = ffxGetDeviceVK(device_);
 
     FfxErrorCode rc = ffxFsr2GetInterfaceVK(
-        &desc.callbacks, fsr2_scratch_, fsr2_scratch_size_,
+        &desc.callbacks, fsr2_->scratch, fsr2_->scratch_size,
         physical_device_, vkGetDeviceProcAddr);
     if (rc != FFX_OK) {
         log::warnf("[fsr2] ffxFsr2GetInterfaceVK failed: %d", int(rc));
-        std::free(fsr2_scratch_);
-        fsr2_scratch_ = nullptr;
+        std::free(fsr2_->scratch);
+        fsr2_->scratch = nullptr;
         return;
     }
 
@@ -106,51 +109,51 @@ void VulkanEngine::init_fsr2() {
     if (rc != FFX_OK) {
         log::warnf("[fsr2] ffxFsr2ContextCreate failed: %d", int(rc));
         std::free(ctx);
-        std::free(fsr2_scratch_);
-        fsr2_scratch_ = nullptr;
+        std::free(fsr2_->scratch);
+        fsr2_->scratch = nullptr;
         return;
     }
 
     if (!allocate_fsr2_output(allocator_, device_, swapchain_extent_,
-                              fsr2_output_format_,
-                              fsr2_output_image_, fsr2_output_alloc_,
-                              fsr2_output_view_)) {
+                              fsr2_->output_format,
+                              fsr2_->output_image, fsr2_->output_alloc,
+                              fsr2_->output_view)) {
         log::warnf("[fsr2] output image alloc failed");
         ffxFsr2ContextDestroy(ctx);
         std::free(ctx);
-        std::free(fsr2_scratch_);
-        fsr2_scratch_ = nullptr;
+        std::free(fsr2_->scratch);
+        fsr2_->scratch = nullptr;
         return;
     }
 
-    fsr2_context_ = ctx;
-    fsr2_context_valid_ = true;
-    fsr2_reset_history_ = true;
+    fsr2_->context = ctx;
+    fsr2_->context_valid = true;
+    fsr2_->reset_history = true;
     log::infof("[fsr2] context created at displaySize=%ux%u (max render=%ux%u, scratch=%zuKB)",
                swapchain_extent_.width, swapchain_extent_.height,
                desc.maxRenderSize.width, desc.maxRenderSize.height,
-               fsr2_scratch_size_ / 1024);
+               fsr2_->scratch_size / 1024);
 #endif
 }
 
 void VulkanEngine::destroy_fsr2() {
 #ifdef VIBE_HAVE_FSR2
-    if (fsr2_context_valid_ && fsr2_context_) {
+    if (fsr2_->context_valid && fsr2_->context) {
         // Defensive wait — recreate_fsr2_context can fire mid-session
         // when the user changes render scale; engine shutdown already
         // wait-idles. ffxFsr2ContextDestroy frees the SDK's Vulkan objects.
         if (device_) vkDeviceWaitIdle(device_);
-        ffxFsr2ContextDestroy(static_cast<FfxFsr2Context*>(fsr2_context_));
-        std::free(fsr2_context_);
-        fsr2_context_ = nullptr;
+        ffxFsr2ContextDestroy(static_cast<FfxFsr2Context*>(fsr2_->context));
+        std::free(fsr2_->context);
+        fsr2_->context = nullptr;
     }
-    fsr2_context_valid_ = false;
-    if (fsr2_output_view_)  { vkDestroyImageView(device_, fsr2_output_view_, nullptr); fsr2_output_view_ = VK_NULL_HANDLE; }
-    if (fsr2_output_image_) { vmaDestroyImage(allocator_, fsr2_output_image_, fsr2_output_alloc_); fsr2_output_image_ = VK_NULL_HANDLE; fsr2_output_alloc_ = nullptr; }
-    if (fsr2_scratch_) {
-        std::free(fsr2_scratch_);
-        fsr2_scratch_ = nullptr;
-        fsr2_scratch_size_ = 0;
+    fsr2_->context_valid = false;
+    if (fsr2_->output_view)  { vkDestroyImageView(device_, fsr2_->output_view, nullptr); fsr2_->output_view = VK_NULL_HANDLE; }
+    if (fsr2_->output_image) { vmaDestroyImage(allocator_, fsr2_->output_image, fsr2_->output_alloc); fsr2_->output_image = VK_NULL_HANDLE; fsr2_->output_alloc = nullptr; }
+    if (fsr2_->scratch) {
+        std::free(fsr2_->scratch);
+        fsr2_->scratch = nullptr;
+        fsr2_->scratch_size = 0;
     }
 #endif
 }
@@ -159,27 +162,27 @@ void VulkanEngine::recreate_fsr2_context() {
 #ifdef VIBE_HAVE_FSR2
     // FSR2 bakes maxRenderSize/displaySize and the output image dims
     // into its allocations, so any swapchain change requires a full
-    // recreate. compose_uses_fsr2_ stays true if the toggle is on; the
+    // recreate. compose_->uses_fsr2 stays true if the toggle is on; the
     // post-pass rewires bindings on the next frame via rewrite_compose_for_fsr2.
     destroy_fsr2();
     init_fsr2();
     // Force a compose rebind on the new view next frame.
-    compose_uses_fsr2_ = false;
+    compose_->uses_fsr2 = false;
 #endif
 }
 
 void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
 #ifdef VIBE_HAVE_FSR2
-    if (!fsr2_context_valid_ || !fsr2_output_image_) return;
+    if (!fsr2_->context_valid || !fsr2_->output_image) return;
 
     // Pre-dispatch: output → GENERAL so FSR2's compute writes succeed.
     // FSR2 docs say declared resource state == current Vulkan layout; for
     // FFX_RESOURCE_STATE_UNORDERED_ACCESS the backend assumes GENERAL.
-    vkinit::transition_image(cmd, fsr2_output_image_,
+    vkinit::transition_image(cmd, fsr2_->output_image,
                              VK_IMAGE_LAYOUT_UNDEFINED,
                              VK_IMAGE_LAYOUT_GENERAL);
 
-    auto* ctx = static_cast<FfxFsr2Context*>(fsr2_context_);
+    auto* ctx = static_cast<FfxFsr2Context*>(fsr2_->context);
 
     FfxFsr2DispatchDescription d{};
     d.commandList = ffxGetCommandListVK(cmd);
@@ -202,9 +205,9 @@ void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
         motion_vec_format_, L"vibe_motion",
         FFX_RESOURCE_STATE_COMPUTE_READ);
     d.output = ffxGetTextureResourceVK(ctx,
-        fsr2_output_image_, fsr2_output_view_,
+        fsr2_->output_image, fsr2_->output_view,
         swapchain_extent_.width, swapchain_extent_.height,
-        fsr2_output_format_, L"vibe_fsr2_out",
+        fsr2_->output_format, L"vibe_fsr2_out",
         FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 
     // jitter conversion: world.cpp writes proj-matrix offset
@@ -228,8 +231,8 @@ void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
     d.sharpness        = std::clamp(rt_.compose_sharpen_strength * 0.5f, 0.0f, 1.0f);
     d.frameTimeDelta   = std::max(0.1f, last_frame_dt_ * 1000.0f);
     d.preExposure      = 1.0f;   // AUTO_EXPOSURE is enabled in context flags
-    d.reset            = fsr2_reset_history_;
-    fsr2_reset_history_ = false;
+    d.reset            = fsr2_->reset_history;
+    fsr2_->reset_history = false;
 
     // Camera params — must match the projection compute_frame_view used.
     // 80° vertical FOV, 0.05/1500 near/far (see world.cpp).
@@ -246,7 +249,7 @@ void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
     // Post-dispatch: FSR2 leaves the output in UNORDERED_ACCESS (= GENERAL).
     // Compose samples it via combined-image-sampler, so transition to
     // SHADER_READ_ONLY for the upcoming bloom + compose passes.
-    vkinit::transition_image(cmd, fsr2_output_image_,
+    vkinit::transition_image(cmd, fsr2_->output_image,
                              VK_IMAGE_LAYOUT_GENERAL,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 #else
@@ -256,17 +259,17 @@ void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
 
 // Compose-source toggle: when fsr2 turns on/off (or after the context
 // is recreated by a swapchain resize), point compose's history sampler
-// at fsr2_output_view_ vs the TAA history. wait_idle is only paid on
+// at fsr2_->output_view vs the TAA history. wait_idle is only paid on
 // the actual switch, not every frame.
 void VulkanEngine::rewrite_compose_for_fsr2() {
 #ifdef VIBE_HAVE_FSR2
     // Must equal rewrite_compose_image_bindings()' use_fsr2 exactly, or the
     // two disagree and this rebinds (with a device wait) every frame.
     const bool use_fsr3  = rt_.fsr2_enabled && rt_.fsr_backend == 1 &&
-                           fsr3_output_view_ != VK_NULL_HANDLE;
+                           fsr3_->output_view != VK_NULL_HANDLE;
     const bool want_fsr2 = !use_fsr3 && rt_.fsr2_enabled && !dlss_active() &&
-                           fsr2_output_view_ != VK_NULL_HANDLE;   // also the DLSS-unavailable fallback
-    if (want_fsr2 == compose_uses_fsr2_) return;
+                           fsr2_->output_view != VK_NULL_HANDLE;   // also the DLSS-unavailable fallback
+    if (want_fsr2 == compose_->uses_fsr2) return;
     if (device_) vkDeviceWaitIdle(device_);
     rewrite_compose_image_bindings();
     log::infof("compose source switched to %s", want_fsr2 ? "FSR2" : "TAA/TAAU");

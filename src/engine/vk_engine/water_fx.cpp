@@ -13,6 +13,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/spacejets.h"
 #include "engine/audio.h"
 
 #include <algorithm>
@@ -70,7 +71,7 @@ void VulkanEngine::spawn_water_splash(glm::vec3 pos, float scale) {
     pos.y = rt_.water_level;
     scale = glm::clamp(scale, 0.3f, 16.0f);
     const float vs = std::sqrt(scale);            // ballistic height ~ v^2
-    uint32_t& rng = spacejet_rng_state_;
+    uint32_t& rng = spacejet_->rng_state;
 
     WaterSplash s{ pos, 0.0f, scale, frand_range(rng, 0.0f, 100.0f) };
     water_splashes_.push_back(s);

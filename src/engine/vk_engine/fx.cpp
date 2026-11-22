@@ -20,6 +20,9 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/fx.h"
+#include "engine/vk_engine/state/environment.h"
+#include "engine/vk_engine/state/spacejets.h"
 #include "engine/audio.h"
 #include "engine/cpu_prof.h"
 #include "engine/jobs.h"
@@ -71,16 +74,16 @@ void VulkanEngine::play_explosion_audio(glm::vec3 pos, float size) {
     const float level = std::min(glm::clamp(60.0f / std::max(d, 25.0f), 0.025f, 2.4f) *
                                  std::sqrt(s) * 1.4f, 1.6f);   // cap point-blank blasts
     const float pitch = glm::clamp(1.0f / std::pow(s, 0.12f), 0.85f, 1.1f) *
-                        frand_range(spacejet_rng_state_, 0.93f, 1.06f);
+                        frand_range(spacejet_->rng_state, 0.93f, 1.06f);
     const float w_close = 1.0f - glm::smoothstep(120.0f, 320.0f, d);
     const float w_far   = glm::smoothstep(80.0f, 260.0f, d);
     if (w_close > 0.01f) {
-        int k = int(frand(spacejet_rng_state_) * 5.0f) % 5;
+        int k = int(frand(spacejet_->rng_state) * 5.0f) % 5;
         audio_->play_effect(ClipID(int(ClipID::ExplClose1) + k), pos,
                             level * w_close * kG.near_g[k], pitch, delay, lpf);
     }
     if (w_far > 0.01f) {
-        int k = int(frand(spacejet_rng_state_) * 5.0f) % 5;
+        int k = int(frand(spacejet_->rng_state) * 5.0f) % 5;
         // Distant recordings are already dull - only the extra absorption.
         audio_->play_effect(ClipID(int(ClipID::ExplFar1) + k), pos,
                             level * w_far * kG.far_g[k] * 1.3f, pitch, delay,
@@ -192,16 +195,16 @@ void VulkanEngine::spawn_explosion(glm::vec3 pos, float size, bool ground) {
     e.pos = pos;
     e.size = size;
     e.ground = ground;
-    e.seed = frand_range(spacejet_rng_state_, 0.0f, 100.0f);
+    e.seed = frand_range(spacejet_->rng_state, 0.0f, 100.0f);
     explosions_.push_back(e);
     if (explosions_.size() > 12) explosions_.erase(explosions_.begin());
 
     // Debris: sparks in an upward cone (ground bursts) or a sphere (air).
     const int bursts = ground ? 7 : 5;
     for (int i = 0; i < bursts; ++i) {
-        float a = frand(spacejet_rng_state_) * 6.2831853f;
-        float el = ground ? frand_range(spacejet_rng_state_, 0.5f, 1.3f)
-                          : frand_range(spacejet_rng_state_, -1.2f, 1.2f);
+        float a = frand(spacejet_->rng_state) * 6.2831853f;
+        float el = ground ? frand_range(spacejet_->rng_state, 0.5f, 1.3f)
+                          : frand_range(spacejet_->rng_state, -1.2f, 1.2f);
         glm::vec3 d(std::cos(a) * std::cos(el), std::sin(el), std::sin(a) * std::cos(el));
         spawn_hit_particles(pos + glm::vec3(0.0f, 1.0f, 0.0f), glm::normalize(d), -d);
     }
@@ -273,7 +276,7 @@ void VulkanEngine::tick_flags(float dt) {
     float ang = 0.6f + 0.5f * std::sin(wind_t_ * 0.031f) + 0.2f * std::sin(wind_t_ * 0.11f);
     float spd = 7.5f + 3.0f * std::sin(wind_t_ * 0.37f) + 2.0f * std::sin(wind_t_ * 1.13f + 1.7f)
               + 1.5f * std::sin(wind_t_ * 2.9f);
-    wind_vel_ = glm::vec3(std::cos(ang), 0.0f, std::sin(ang)) * (std::max(1.0f, spd) * env_wind_scale_);
+    wind_vel_ = glm::vec3(std::cos(ang), 0.0f, std::sin(ang)) * (std::max(1.0f, spd) * env_->wind_scale);
 
     // Each flag is an independent cloth: simulate them on the worker pool
     // while the main thread carries on with the rest of the frame. Nothing
@@ -460,14 +463,14 @@ void VulkanEngine::tick_fx(float dt) {
 // ---------------------------------------------------------------------
 void VulkanEngine::init_fx() {
     const std::string sd = VIBE_SHADER_DIR;
-    fx_vert_module_        = vkpipe::load_shader_module(device_, sd + "/fx.vert.spv");
-    fx_ribbon_frag_module_ = vkpipe::load_shader_module(device_, sd + "/fx_ribbon.frag.spv");
-    fx_volume_frag_module_ = vkpipe::load_shader_module(device_, sd + "/fx_volume.frag.spv");
-    fx_decal_frag_module_  = vkpipe::load_shader_module(device_, sd + "/fx_decal.frag.spv");
+    fx_->vert_module        = vkpipe::load_shader_module(device_, sd + "/fx.vert.spv");
+    fx_->ribbon_frag_module = vkpipe::load_shader_module(device_, sd + "/fx_ribbon.frag.spv");
+    fx_->volume_frag_module = vkpipe::load_shader_module(device_, sd + "/fx_volume.frag.spv");
+    fx_->decal_frag_module  = vkpipe::load_shader_module(device_, sd + "/fx_decal.frag.spv");
 
     vkpipe::GraphicsPipelineConfig cfg{};
-    cfg.vert = fx_vert_module_;
-    cfg.frag = fx_ribbon_frag_module_;
+    cfg.vert = fx_->vert_module;
+    cfg.frag = fx_->ribbon_frag_module;
     cfg.layout = pipeline_layout_;
     cfg.color_format = scene_color_format_;
     cfg.color_attachment_count = 1;
@@ -485,23 +488,23 @@ void VulkanEngine::init_fx() {
     cfg.depth_write = false;
     cfg.depth_compare = VK_COMPARE_OP_LESS_OR_EQUAL;
     cfg.premultiplied_blend = true;
-    fx_ribbon_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    fx_->ribbon_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     cfg.depth_test = false;
-    fx_ribbon_refl_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    fx_->ribbon_refl_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     cfg.depth_test = true;
 
     // Volumes: camera outside the box -> front faces, depth-tested (the
     // opaque scene occludes the box front); inside -> back faces, no test.
-    cfg.frag = fx_volume_frag_module_;
+    cfg.frag = fx_->volume_frag_module;
     cfg.cull = VK_CULL_MODE_BACK_BIT;
-    fx_volume_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    fx_->volume_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     cfg.cull = VK_CULL_MODE_FRONT_BIT;
     cfg.depth_test = false;
-    fx_volume_inside_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    fx_->volume_inside_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     // Decals: back faces of the projection box, no depth test (works with
     // the camera inside the box); the shader bounds the mark itself.
-    cfg.frag = fx_decal_frag_module_;
-    fx_decal_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    cfg.frag = fx_->decal_frag_module;
+    fx_->decal_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
 
     for (int i = 0; i < 2; ++i) {
         VkBufferCreateInfo bci{};
@@ -513,29 +516,29 @@ void VulkanEngine::init_fx() {
         aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo ai{};
-        vk_check(vmaCreateBuffer(allocator_, &bci, &aci, &fx_vbuf_[i], &fx_valloc_[i], &ai),
+        vk_check(vmaCreateBuffer(allocator_, &bci, &aci, &fx_->vbuf[i], &fx_->valloc[i], &ai),
                  "fx vertex buffer");
-        fx_vmapped_[i] = ai.pMappedData;
+        fx_->vmapped[i] = ai.pMappedData;
     }
     log::info("[fx] pipelines + ribbon buffers ready");
 }
 
 void VulkanEngine::destroy_fx() {
     jobs::wait(flags_jobs_);
-    for (VkPipeline* p : { &fx_ribbon_refl_pipeline_, &fx_ribbon_pipeline_, &fx_volume_pipeline_, &fx_volume_inside_pipeline_,
-                           &fx_decal_pipeline_ }) {
+    for (VkPipeline* p : { &fx_->ribbon_refl_pipeline, &fx_->ribbon_pipeline, &fx_->volume_pipeline, &fx_->volume_inside_pipeline,
+                           &fx_->decal_pipeline }) {
         if (*p) vkDestroyPipeline(device_, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
-    for (VkShaderModule* m : { &fx_vert_module_, &fx_ribbon_frag_module_, &fx_volume_frag_module_,
-                               &fx_decal_frag_module_ }) {
+    for (VkShaderModule* m : { &fx_->vert_module, &fx_->ribbon_frag_module, &fx_->volume_frag_module,
+                               &fx_->decal_frag_module }) {
         if (*m) vkDestroyShaderModule(device_, *m, nullptr);
         *m = VK_NULL_HANDLE;
     }
     for (int i = 0; i < 2; ++i) {
-        if (fx_vbuf_[i]) vmaDestroyBuffer(allocator_, fx_vbuf_[i], fx_valloc_[i]);
-        fx_vbuf_[i] = VK_NULL_HANDLE;
-        fx_vmapped_[i] = nullptr;
+        if (fx_->vbuf[i]) vmaDestroyBuffer(allocator_, fx_->vbuf[i], fx_->valloc[i]);
+        fx_->vbuf[i] = VK_NULL_HANDLE;
+        fx_->vmapped[i] = nullptr;
     }
 }
 
@@ -584,7 +587,7 @@ struct RibbonBuilder {
 }  // namespace
 
 void VulkanEngine::render_fx(VkCommandBuffer cmd) {
-    if (!fx_ribbon_pipeline_) return;
+    if (!fx_->ribbon_pipeline) return;
     const FrameView& fv = current_frame_view_;
     const glm::vec3 eye = fv.eye_pos;
     const glm::vec3 cam_fwd = -glm::vec3(fv.inv_view[2]);
@@ -604,7 +607,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     smoke.eye = glow.eye = flash.eye = eye;
 
     // Contrails + afterburner glow.
-    for (const auto& f : spacejet_flights_) {
+    for (const auto& f : spacejet_->flights) {
         if (f.trail.size() >= 2) {
             // Contrail (white vapour) up to the moment of the hit, then a
             // thick, dark, oily smoke column from the burning wreck. The two
@@ -960,12 +963,12 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // Lightning: a jagged channel from the cloud base to the ground with a
     // couple of dying branches, visible for the flash's quarter second.
     // Midpoint-style random walk seeded per strike (same shape every frame).
-    if (env_lightning_ > 0.02f && lightning_t_ >= 0.0f) {
+    if (env_->lightning > 0.02f && lightning_t_ >= 0.0f) {
         uint32_t ls = uint32_t(lightning_seed_ * 4.0e9f) | 1u;
         auto lr = [&ls]() { ls ^= ls << 13; ls ^= ls >> 17; ls ^= ls << 5; return float(ls & 0xFFFFFF) / 8388608.0f - 1.0f; };
         const glm::vec3 base = lightning_pos_;
         const float top = 1500.0f;
-        const float inten = std::min(env_lightning_, 1.4f) * 7.0f;
+        const float inten = std::min(env_->lightning, 1.4f) * 7.0f;
         const glm::vec3 tint(0.72f, 0.82f, 1.0f);
         auto channel = [&](glm::vec3 a, glm::vec3 b, int segs, float wdt, float jit, float k) {
             std::vector<glm::vec3> p; std::vector<float> w, al;
@@ -995,8 +998,8 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // and wrapped into the box in WORLD space, so drops keep falling where
     // they were when the camera moves. Drawn with the droplet shader.
     // Snow uses the same streaks: slow, short, wider, drifting.
-    if ((env_rain_ > 0.01f || env_snowfall_ > 0.01f) && !(rt_.water_enabled && eye.y < rt_.water_level)) {
-        const bool snowing = env_snowfall_ > env_rain_;
+    if ((env_->rain > 0.01f || env_->snowfall > 0.01f) && !(rt_.water_enabled && eye.y < rt_.water_level)) {
+        const bool snowing = env_->snowfall > env_->rain;
         const glm::vec3 box(20.0f, 14.0f, 20.0f);
         // The wind leans the rain, but only so far: at storm wind speeds it
         // used to travel more sideways than down (20 degrees at most now).
@@ -1005,7 +1008,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         if (const float dl = glm::length(drift); dl > drift_max) drift *= drift_max / dl;
         const glm::vec3 fall = drift + glm::vec3(0.0f, snowing ? -1.5f : -9.2f, 0.0f);
         const glm::vec3 fdir = glm::normalize(fall);
-        const int n = int(5200.0f * std::max(env_rain_, 0.85f * env_snowfall_));
+        const int n = int(5200.0f * std::max(env_->rain, 0.85f * env_->snowfall));
         const float tr = static_cast<float>(std::fmod(glfwGetTime(), 600.0));
         // Every streak owns six vertices at a fixed offset and its random
         // numbers depend only on its index, so the workers fill disjoint
@@ -1136,7 +1139,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
 
     // Upload ribbon vertices.
     const uint32_t slot = static_cast<uint32_t>(frame_number_ & 1);
-    Vertex* dst = static_cast<Vertex*>(fx_vmapped_[slot]);
+    Vertex* dst = static_cast<Vertex*>(fx_->vmapped[slot]);
     size_t total = 0;
     auto put = [&](const std::vector<Vertex>& src) -> std::pair<uint32_t, uint32_t> {
         size_t n = std::min(src.size(), size_t(kFxMaxVerts) - total);
@@ -1151,7 +1154,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     auto r_cloth = put(cloth.v);
     auto r_mist  = put(mist.v);
     auto r_spray = put(spray.v);
-    vmaFlushAllocation(allocator_, fx_valloc_[slot], 0, total * sizeof(Vertex));
+    vmaFlushAllocation(allocator_, fx_->valloc[slot], 0, total * sizeof(Vertex));
 
     // ---- Pass ----
     vkinit::transition_image(cmd, scene_color_image_,
@@ -1195,9 +1198,9 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // Opaque cloth FIRST: drawn after the volumes it overwrote smoke that
     // is in front of a flag (no depth write in this pass).
     if (total > 0 && r_cloth.second > 0) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_ribbon_pipeline_);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_->ribbon_pipeline);
         VkDeviceSize off = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &fx_vbuf_[slot], &off);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &fx_->vbuf[slot], &off);
         PushConstants pc{};
         pc.mvp = fv.vp;
         pc.model = glm::mat4(1.0f);
@@ -1216,7 +1219,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             glm::vec3 half(v.r, v.r * v.squash, v.r);
             glm::vec3 rel = glm::abs(eye - v.c);
             bool inside = rel.x < half.x + 0.3f && rel.y < half.y + 0.3f && rel.z < half.z + 0.3f;
-            VkPipeline want = inside ? fx_volume_inside_pipeline_ : fx_volume_pipeline_;
+            VkPipeline want = inside ? fx_->volume_inside_pipeline : fx_->volume_pipeline;
             if (want != bound) { vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, want); bound = want; }
             glm::mat4 model = glm::translate(glm::mat4(1.0f), v.c) *
                               glm::scale(glm::mat4(1.0f), half * 2.0f);
@@ -1234,9 +1237,9 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     }
     // Ribbons.
     if (total > 0) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_ribbon_pipeline_);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_->ribbon_pipeline);
         VkDeviceSize off = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &fx_vbuf_[slot], &off);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &fx_->vbuf[slot], &off);
         auto draw = [&](std::pair<uint32_t, uint32_t> r, float kind, float inten) {
             if (r.second == 0) return;
             PushConstants pc{};
@@ -1251,8 +1254,8 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         // glow, muzzle and explosion flashes): the same ribbons mirrored in
         // the water plane, drawn without depth test and kept by the shader
         // only on pixels whose surface is the water (pc.color.w = 1).
-        if (rt_.water_enabled && fx_ribbon_refl_pipeline_ && eye.y > rt_.water_level + 0.05f) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_ribbon_refl_pipeline_);
+        if (rt_.water_enabled && fx_->ribbon_refl_pipeline && eye.y > rt_.water_level + 0.05f) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_->ribbon_refl_pipeline);
             glm::mat4 mirror(1.0f);
             mirror[1][1] = -1.0f; mirror[3][1] = 2.0f * rt_.water_level;
             auto draw_refl = [&](std::pair<uint32_t, uint32_t> r, float kind) {
@@ -1268,7 +1271,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             };
             draw_refl(r_glow, 1.0f);
             draw_refl(r_flash, 2.0f);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_ribbon_pipeline_);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_->ribbon_pipeline);
         }
         draw(r_smoke, 0.0f, 1.0f);
         draw(r_mist,  5.0f, 1.0f);
@@ -1348,7 +1351,7 @@ void VulkanEngine::spawn_airstrike(glm::vec3 target, glm::vec3 dir, bool remote)
         airstrike_.phase = 1;
         airstrike_.t = 0.0f;
     }
-    if (spacejet_meshes_.empty()) {
+    if (spacejet_->meshes.empty()) {
         // No aircraft asset: release the bomb from where the run would have.
         Bomb b{};
         const float h = 110.0f, v = 125.0f;
@@ -1375,10 +1378,10 @@ void VulkanEngine::spawn_airstrike(glm::vec3 target, glm::vec3 dir, bool remote)
     f.speed = 125.0f;
     f.scale = 1.15f;
     f.sortie_max = 0;                       // one run, then egress
-    f.id = ++spacejet_next_id_;
+    f.id = ++spacejet_->next_id;
     f.prev_pos = f.pos; f.prev_fwd = f.fwd; f.prev_up = f.up;
     if (!remote) airstrike_.jet_id = f.id;
-    spacejet_flights_.push_back(f);
+    spacejet_->flights.push_back(f);
     log::infof("[airstrike] target (%.0f, %.0f, %.0f) marked%s - aircraft inbound", target.x, target.y, target.z, remote ? " by another player" : "");
 }
 
@@ -1407,7 +1410,7 @@ void VulkanEngine::tick_airstrike(float dt, bool fire_pressed) {
     case 1: {
         // Aircraft lost (shot down / timed out) before the release: ready again.
         bool alive = false;
-        for (const auto& f : spacejet_flights_)
+        for (const auto& f : spacejet_->flights)
             if (f.id == airstrike_.jet_id && !f.dead && !f.destroying && f.mode == JetMode::BombRun) alive = true;
         if (!alive || airstrike_.t > 45.0f) { airstrike_.phase = 0; airstrike_.t = 0.0f; }
         break;

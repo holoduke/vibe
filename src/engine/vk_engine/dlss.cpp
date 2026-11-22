@@ -10,6 +10,10 @@
 // source routing are shared with the FSR paths.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/streamline.h"
+#include "engine/vk_engine/state/compose.h"
+#include "engine/vk_engine/state/fsr3.h"
+#include "engine/vk_engine/state/dlss.h"
 #include "engine/vk_engine/state/rr_guides.h"
 #include "engine/vk_initializers.h"
 #include "engine/log.h"
@@ -85,13 +89,13 @@ sl::DLSSMode dlss_rr_mode_for_scale(float s) {
 #endif
 
 bool VulkanEngine::dlss_active() const {
-    return dlss_supported_ && rt_.fsr2_enabled && rt_.fsr_backend == 2 && dlss_output_view_ != VK_NULL_HANDLE;
+    return dlss_->supported && rt_.fsr2_enabled && rt_.fsr_backend == 2 && dlss_->output_view != VK_NULL_HANDLE;
 }
 
 bool VulkanEngine::dlss_rr_active() const {
     // Under a 0.5 render scale there is no valid RR mode (see
     // dlss_rr_mode_for_scale): fall back to plain super resolution.
-    return dlss_active() && dlss_rr_supported_ && rt_.dlss_rr && deferred_lighting_active_ &&
+    return dlss_active() && dlss_->rr_supported && rt_.dlss_rr && deferred_lighting_active_ &&
            rt_.render_scale >= 0.5f;
 }
 
@@ -137,20 +141,20 @@ void VulkanEngine::sl_init_early() {
         log::warnf("[dlss] slInit failed (%d) - DLSS unavailable", int(r));
         return;
     }
-    sl_ok_ = true;
+    sl_->ok = true;
     log::infof("[dlss-g] frame generation %s at start-up", load_fg ? "requested" : "not requested");
     // Proxies: SL's vkGetInstanceProcAddr returns vulkan-1 functions except
     // the ones Streamline intercepts (instance / device / swapchain / present).
     if (HMODULE m = GetModuleHandleA("sl.interposer.dll")) {
-        sl_gipa_ = reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(m, "vkGetInstanceProcAddr"));
-        sl_gdpa_ = reinterpret_cast<PFN_vkGetDeviceProcAddr>(GetProcAddress(m, "vkGetDeviceProcAddr"));
+        sl_->gipa = reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(m, "vkGetInstanceProcAddr"));
+        sl_->gdpa = reinterpret_cast<PFN_vkGetDeviceProcAddr>(GetProcAddress(m, "vkGetDeviceProcAddr"));
     }
     sl::FeatureRequirements reqs{};
     if (slGetFeatureRequirements(sl::kFeatureDLSS, reqs) == sl::Result::eOk) {
         for (uint32_t i = 0; i < reqs.vkNumInstanceExtensions; ++i)
-            sl_instance_exts_.emplace_back(reqs.vkInstanceExtensions[i]);
+            sl_->instance_exts.emplace_back(reqs.vkInstanceExtensions[i]);
         for (uint32_t i = 0; i < reqs.vkNumDeviceExtensions; ++i)
-            sl_device_exts_.emplace_back(reqs.vkDeviceExtensions[i]);
+            sl_->device_exts.emplace_back(reqs.vkDeviceExtensions[i]);
         log::infof("[dlss] Streamline up: %u instance + %u device extensions requested",
                    reqs.vkNumInstanceExtensions, reqs.vkNumDeviceExtensions);
     } else {
@@ -163,9 +167,9 @@ void VulkanEngine::sl_init_early() {
             if (std::find(v.begin(), v.end(), std::string(s)) == v.end()) v.emplace_back(s);
         };
         for (uint32_t i = 0; i < rr_reqs.vkNumInstanceExtensions; ++i)
-            add_unique(sl_instance_exts_, rr_reqs.vkInstanceExtensions[i]);
+            add_unique(sl_->instance_exts, rr_reqs.vkInstanceExtensions[i]);
         for (uint32_t i = 0; i < rr_reqs.vkNumDeviceExtensions; ++i)
-            add_unique(sl_device_exts_, rr_reqs.vkDeviceExtensions[i]);
+            add_unique(sl_->device_exts, rr_reqs.vkDeviceExtensions[i]);
     }
     // Frame Generation / Reflex: same merge (the SL device proxy adds the
     // extra queues itself).
@@ -176,26 +180,26 @@ void VulkanEngine::sl_init_early() {
         auto add_unique = [](std::vector<std::string>& v, const char* s) {
             if (std::find(v.begin(), v.end(), std::string(s)) == v.end()) v.emplace_back(s);
         };
-        for (uint32_t i = 0; i < fr.vkNumInstanceExtensions; ++i) add_unique(sl_instance_exts_, fr.vkInstanceExtensions[i]);
-        for (uint32_t i = 0; i < fr.vkNumDeviceExtensions; ++i) add_unique(sl_device_exts_, fr.vkDeviceExtensions[i]);
+        for (uint32_t i = 0; i < fr.vkNumInstanceExtensions; ++i) add_unique(sl_->instance_exts, fr.vkInstanceExtensions[i]);
+        for (uint32_t i = 0; i < fr.vkNumDeviceExtensions; ++i) add_unique(sl_->device_exts, fr.vkDeviceExtensions[i]);
     }
 #endif
 }
 
 void VulkanEngine::sl_set_vulkan_info() {
 #ifdef VIBE_HAVE_STREAMLINE
-    if (!sl_ok_) return;
-    if (sl_gipa_ && sl_gdpa_) {
+    if (!sl_->ok) return;
+    if (sl_->gipa && sl_->gdpa) {
         // Device + instance came from the SL proxies (vk-bootstrap was handed
-        // sl_gipa_), so SL already knows them - slSetVulkanInfo is skipped.
-        sl_acquire_fn_ = reinterpret_cast<PFN_vkAcquireNextImageKHR>(sl_gdpa_(device_, "vkAcquireNextImageKHR"));
-        sl_present_fn_ = reinterpret_cast<PFN_vkQueuePresentKHR>(sl_gdpa_(device_, "vkQueuePresentKHR"));
+        // sl_->gipa), so SL already knows them - slSetVulkanInfo is skipped.
+        sl_->acquire_fn = reinterpret_cast<PFN_vkAcquireNextImageKHR>(sl_->gdpa(device_, "vkAcquireNextImageKHR"));
+        sl_->present_fn = reinterpret_cast<PFN_vkQueuePresentKHR>(sl_->gdpa(device_, "vkQueuePresentKHR"));
         sl::AdapterInfo ai0{};
         ai0.vkPhysicalDevice = physical_device_;
-        dlss_supported_ = slIsFeatureSupported(sl::kFeatureDLSS, ai0) == sl::Result::eOk;
-        dlss_rr_supported_ = dlss_supported_ && slIsFeatureSupported(sl::kFeatureDLSS_RR, ai0) == sl::Result::eOk;
-        log::infof("[dlss] Ray Reconstruction %s", dlss_rr_supported_ ? "supported" : "NOT supported");
-        log::infof("[dlss] DLSS %s on this GPU (SL proxies)", dlss_supported_ ? "supported" : "NOT supported");
+        dlss_->supported = slIsFeatureSupported(sl::kFeatureDLSS, ai0) == sl::Result::eOk;
+        dlss_->rr_supported = dlss_->supported && slIsFeatureSupported(sl::kFeatureDLSS_RR, ai0) == sl::Result::eOk;
+        log::infof("[dlss] Ray Reconstruction %s", dlss_->rr_supported ? "supported" : "NOT supported");
+        log::infof("[dlss] DLSS %s on this GPU (SL proxies)", dlss_->supported ? "supported" : "NOT supported");
         sl_setup_latency_and_fg(&ai0);
         return;
     }
@@ -210,22 +214,22 @@ void VulkanEngine::sl_set_vulkan_info() {
     info.computeQueueIndex = compute_queue_distinct_ ? 1 : 2;
     if (slSetVulkanInfo(info) != sl::Result::eOk) {
         log::warn("[dlss] slSetVulkanInfo failed - DLSS unavailable");
-        sl_ok_ = false;
+        sl_->ok = false;
         return;
     }
     sl::AdapterInfo ai{};
     ai.vkPhysicalDevice = physical_device_;
-    dlss_supported_ = slIsFeatureSupported(sl::kFeatureDLSS, ai) == sl::Result::eOk;
-    dlss_rr_supported_ = dlss_supported_ && slIsFeatureSupported(sl::kFeatureDLSS_RR, ai) == sl::Result::eOk;
-    log::infof("[dlss] Ray Reconstruction %s", dlss_rr_supported_ ? "supported" : "NOT supported");
-    log::infof("[dlss] DLSS %s on this GPU", dlss_supported_ ? "supported" : "NOT supported");
+    dlss_->supported = slIsFeatureSupported(sl::kFeatureDLSS, ai) == sl::Result::eOk;
+    dlss_->rr_supported = dlss_->supported && slIsFeatureSupported(sl::kFeatureDLSS_RR, ai) == sl::Result::eOk;
+    log::infof("[dlss] Ray Reconstruction %s", dlss_->rr_supported ? "supported" : "NOT supported");
+    log::infof("[dlss] DLSS %s on this GPU", dlss_->supported ? "supported" : "NOT supported");
     sl_setup_latency_and_fg(&ai);
 #endif
 }
 
 void VulkanEngine::init_dlss() {
 #ifdef VIBE_HAVE_STREAMLINE
-    if (!dlss_supported_) return;
+    if (!dlss_->supported) return;
     destroy_dlss();
     VkImageCreateInfo ici{};
     ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -239,37 +243,37 @@ void VulkanEngine::init_dlss() {
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-    vk_check(vmaCreateImage(allocator_, &ici, &aci, &dlss_output_image_, &dlss_output_alloc_, nullptr),
+    vk_check(vmaCreateImage(allocator_, &ici, &aci, &dlss_->output_image, &dlss_->output_alloc, nullptr),
              "dlss output");
     VkImageViewCreateInfo vci{};
     vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vci.image = dlss_output_image_;
+    vci.image = dlss_->output_image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = ici.format;
     vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vk_check(vkCreateImageView(device_, &vci, nullptr, &dlss_output_view_), "dlss output view");
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &dlss_->output_view), "dlss output view");
     vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
-        vkinit::transition_image(cb, dlss_output_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+        vkinit::transition_image(cb, dlss_->output_image, VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     });
-    dlss_output_extent_ = swapchain_extent_;
-    dlss_reset_ = true;
-    log::infof("[dlss] output %ux%u", dlss_output_extent_.width, dlss_output_extent_.height);
+    dlss_->output_extent = swapchain_extent_;
+    dlss_->reset = true;
+    log::infof("[dlss] output %ux%u", dlss_->output_extent.width, dlss_->output_extent.height);
 #endif
 }
 
 void VulkanEngine::destroy_dlss() {
-    if (dlss_output_view_) vkDestroyImageView(device_, dlss_output_view_, nullptr);
-    if (dlss_output_image_) vmaDestroyImage(allocator_, dlss_output_image_, dlss_output_alloc_);
-    dlss_output_view_ = VK_NULL_HANDLE;
-    dlss_output_image_ = VK_NULL_HANDLE;
-    dlss_output_alloc_ = nullptr;
+    if (dlss_->output_view) vkDestroyImageView(device_, dlss_->output_view, nullptr);
+    if (dlss_->output_image) vmaDestroyImage(allocator_, dlss_->output_image, dlss_->output_alloc);
+    dlss_->output_view = VK_NULL_HANDLE;
+    dlss_->output_image = VK_NULL_HANDLE;
+    dlss_->output_alloc = nullptr;
 }
 
 void VulkanEngine::sl_shutdown() {
 #ifdef VIBE_HAVE_STREAMLINE
-    if (sl_ok_) slShutdown();
-    sl_ok_ = false;
+    if (sl_->ok) slShutdown();
+    sl_->ok = false;
 #endif
 }
 
@@ -279,19 +283,19 @@ void VulkanEngine::sl_shutdown() {
 // sets the frame had already bound (invalid command buffer).
 void VulkanEngine::ensure_dlss_bindings() {
 #ifdef VIBE_HAVE_STREAMLINE
-    if (dlss_supported_ && rt_.fsr2_enabled && rt_.fsr_backend == 2 &&
-        (!dlss_output_view_ || dlss_output_extent_.width != swapchain_extent_.width ||
-         dlss_output_extent_.height != swapchain_extent_.height)) {
+    if (dlss_->supported && rt_.fsr2_enabled && rt_.fsr_backend == 2 &&
+        (!dlss_->output_view || dlss_->output_extent.width != swapchain_extent_.width ||
+         dlss_->output_extent.height != swapchain_extent_.height)) {
         vkDeviceWaitIdle(device_);
         init_dlss();
         rewrite_compose_image_bindings();
     }
 #endif
-    if (dlss_active() != compose_uses_dlss_) {
+    if (dlss_active() != compose_->uses_dlss) {
         vkDeviceWaitIdle(device_);
         rewrite_compose_image_bindings();
-        dlss_reset_ = true;
-        log::infof("compose source switched to %s", compose_uses_dlss_ ? "DLSS" : "TAA/FSR");
+        dlss_->reset = true;
+        log::infof("compose source switched to %s", compose_->uses_dlss ? "DLSS" : "TAA/FSR");
     }
     if (dlss_rr_active()) {
         const bool stale = !rr_->pipeline || rr_->extent.width != render_extent_.width ||
@@ -303,19 +307,19 @@ void VulkanEngine::ensure_dlss_bindings() {
             ensure_rr_guides();
         }
     }
-    if (dlss_rr_active() != dlss_rr_was_active_) {
-        dlss_rr_was_active_ = dlss_rr_active();
-        dlss_reset_ = true;   // SR and RR keep separate histories
-        log::infof("[dlss] %s", dlss_rr_was_active_ ? "Ray Reconstruction ON" : "Super Resolution");
+    if (dlss_rr_active() != dlss_->rr_was_active) {
+        dlss_->rr_was_active = dlss_rr_active();
+        dlss_->reset = true;   // SR and RR keep separate histories
+        log::infof("[dlss] %s", dlss_->rr_was_active ? "Ray Reconstruction ON" : "Super Resolution");
     }
 }
 
 void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
 #ifdef VIBE_HAVE_STREAMLINE
-    if (!dlss_supported_ || !dlss_output_view_) return;   // set up by ensure_dlss_bindings()
+    if (!dlss_->supported || !dlss_->output_view) return;   // set up by ensure_dlss_bindings()
     // One token per frame, taken in sl_frame_begin (Reflex / PCL / DLSS-G
     // need the same frame identity from simulation to present).
-    sl::FrameToken* token = static_cast<sl::FrameToken*>(sl_frame_token_);
+    sl::FrameToken* token = static_cast<sl::FrameToken*>(sl_->frame_token);
     if (!token) {
         const uint32_t frame_idx = static_cast<uint32_t>(frame_number_);
         if (slGetNewFrameToken(token, &frame_idx) != sl::Result::eOk || !token) return;
@@ -366,8 +370,8 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
     c.cameraMotionIncluded = sl::Boolean::eTrue;
     c.motionVectors3D = sl::Boolean::eFalse;
     c.motionVectorsJittered = sl::Boolean::eFalse;
-    c.reset = dlss_reset_ ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-    dlss_reset_ = false;
+    c.reset = dlss_->reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    dlss_->reset = false;
     slSetConstants(c, *token, viewport);
 
     sl::DLSSOptions o{};
@@ -379,7 +383,7 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
     // Alpha carries the sky transmittance compose needs to rebuild the sky.
     o.alphaUpscalingEnabled = sl::Boolean::eTrue;
     slDLSSSetOptions(viewport, o);
-    if (dlss_rr_supported_) {
+    if (dlss_->rr_supported) {
         // RR tracks the DLSS options and adds its own; mode eOff parks it.
         sl::DLSSDOptions d{};
         d.mode = use_rr ? dlss_rr_mode_for_scale(rt_.render_scale) : sl::DLSSMode::eOff;
@@ -394,7 +398,7 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
     }
 
     // Resource tags (manual hooking: layouts as they are when DLSS runs).
-    vkinit::transition_image(cmd, dlss_output_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    vkinit::transition_image(cmd, dlss_->output_image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                              VK_IMAGE_LAYOUT_GENERAL);
     const uint32_t rw = render_extent_.width, rh = render_extent_.height;
     sl::Resource col = vk_res(scene_color_image_, scene_color_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -406,7 +410,7 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
     sl::Resource mv  = vk_res(motion_vec_image_, motion_vec_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                               rw, rh, motion_vec_format_,
                               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
-    sl::Resource out = vk_res(dlss_output_image_, dlss_output_view_, VK_IMAGE_LAYOUT_GENERAL,
+    sl::Resource out = vk_res(dlss_->output_image, dlss_->output_view, VK_IMAGE_LAYOUT_GENERAL,
                               swapchain_extent_.width, swapchain_extent_.height, VK_FORMAT_R16G16B16A16_SFLOAT,
                               VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     sl::Extent in_ext{ 0, 0, rw, rh };
@@ -445,7 +449,7 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
         log::warnf("[dlss] slEvaluateFeature failed (%d)", int(r));
         logged = true;
     }
-    vkinit::transition_image(cmd, dlss_output_image_, VK_IMAGE_LAYOUT_GENERAL,
+    vkinit::transition_image(cmd, dlss_->output_image, VK_IMAGE_LAYOUT_GENERAL,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 #else
     (void)cmd;
@@ -486,17 +490,17 @@ void VulkanEngine::sl_setup_latency_and_fg(const void* adapter) {
 
 void VulkanEngine::sl_frame_begin() {
 #ifdef VIBE_HAVE_STREAMLINE
-    sl_frame_token_ = nullptr;
+    sl_->frame_token = nullptr;
     dlssg_tagged_this_frame_ = false;
-    if (!sl_ok_) return;
+    if (!sl_->ok) return;
     // FSR3's frame-generation swapchain proxy replaces swapchain_ with its
     // own handle: Reflex sleep / latency markers act on the swapchain and
     // crashed in the driver (vkSetLatencyMarkerNV on a foreign handle).
-    const bool reflex_ok = reflex_ok_ && !fsr3_swapchain_active_;
+    const bool reflex_ok = reflex_ok_ && !fsr3_->swapchain_active;
     sl::FrameToken* token = nullptr;
     const uint32_t frame_idx = static_cast<uint32_t>(frame_number_);
     if (slGetNewFrameToken(token, &frame_idx) != sl::Result::eOk || !token) return;
-    sl_frame_token_ = token;
+    sl_->frame_token = token;
     if (reflex_ok) slReflexSleep(*token);
     sl_marker(0);   // simulation start
 #endif
@@ -504,12 +508,12 @@ void VulkanEngine::sl_frame_begin() {
 
 void VulkanEngine::sl_marker(int m) {
 #ifdef VIBE_HAVE_STREAMLINE
-    if (!pcl_ok_ || !sl_frame_token_ || fsr3_swapchain_active_) return;
+    if (!pcl_ok_ || !sl_->frame_token || fsr3_->swapchain_active) return;
     // Frame generation: decide right before present whether this frame
     // is a real, fully tagged game frame (menus / loading / FSR paths
     // switch it off instead of interpolating garbage).
     if (m == 4) sl_update_frame_gen(dlssg_tagged_this_frame_ && state_ == State::Playing);
-    slPCLSetMarker(static_cast<sl::PCLMarker>(m), *static_cast<sl::FrameToken*>(sl_frame_token_));
+    slPCLSetMarker(static_cast<sl::PCLMarker>(m), *static_cast<sl::FrameToken*>(sl_->frame_token));
     // Every ~2 s on the present thread: frames presented per rendered frame.
     static uint32_t rendered = 0, presented = 0;
     if (m == 5 && dlssg_mode_on_) {
@@ -576,7 +580,7 @@ void VulkanEngine::dlssg_destroy_hudless() {
 void VulkanEngine::dlssg_capture_hudless(VkCommandBuffer cmd, uint32_t img_index) {
 #ifdef VIBE_HAVE_STREAMLINE
     // Only while frame generation runs (mode set at the previous present).
-    if (!dlssg_mode_on_ || !sl_frame_token_ || !dlssg_tagged_this_frame_ ||
+    if (!dlssg_mode_on_ || !sl_->frame_token || !dlssg_tagged_this_frame_ ||
         img_index >= swapchain_images_.size()) return;
     if (!dlssg_hudless_image_ || dlssg_hudless_extent_.width != swapchain_extent_.width ||
         dlssg_hudless_extent_.height != swapchain_extent_.height) {
@@ -622,7 +626,7 @@ void VulkanEngine::dlssg_capture_hudless(VkCommandBuffer cmd, uint32_t img_index
                               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     sl::Extent ext{ 0, 0, swapchain_extent_.width, swapchain_extent_.height };
     sl::ResourceTag tag{ &hud, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &ext };
-    slSetTagForFrame(*static_cast<sl::FrameToken*>(sl_frame_token_), sl::ViewportHandle{ 0 }, &tag, 1,
+    slSetTagForFrame(*static_cast<sl::FrameToken*>(sl_->frame_token), sl::ViewportHandle{ 0 }, &tag, 1,
                      reinterpret_cast<sl::CommandBuffer*>(cmd));
 #else
     (void)cmd; (void)img_index;

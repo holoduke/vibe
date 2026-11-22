@@ -252,7 +252,9 @@ private:
     // Cloud layer target = internal render resolution (capped at the old
     // fixed 1920x1080 pixel count). Called before command recording.
     void ensure_cloud_target();
-    uint32_t cloud_w_ = 1920, cloud_h_ = 1080;
+    // (the state of this is private to its own files: vk_engine/state/clouds.h)
+    struct CloudState;
+    CloudState* cloud_ = nullptr;
     void init_fog();
     void destroy_fog();
     void dispatch_fog(VkCommandBuffer cmd);
@@ -544,45 +546,10 @@ private:
     void init_terrain_water_pipeline();
     void destroy_terrain_water_pipeline();
 
-    // Low-res raymarch render target. When `terrain_raymarch_scale` < 1
-    // the FBM ray-march renders into these (cheaper, since each pixel
-    // does ~hundreds of FBM evaluations) and a separate compose pass
-    // bilinear-upscales them into the full-res scene_color/depth with
-    // depth-aware blending so rasterised cubes/castle still occlude
-    // correctly. Each LR* image is sized at render_extent_ × scale.
-    VkImage         tr_lr_color_image_  = VK_NULL_HANDLE;
-    VmaAllocation   tr_lr_color_alloc_  = nullptr;
-    VkImageView     tr_lr_color_view_   = VK_NULL_HANDLE;
-    VkImage         tr_lr_motion_image_ = VK_NULL_HANDLE;
-    VmaAllocation   tr_lr_motion_alloc_ = nullptr;
-    VkImageView     tr_lr_motion_view_  = VK_NULL_HANDLE;
-    VkImage         tr_lr_depth_image_  = VK_NULL_HANDLE;
-    VmaAllocation   tr_lr_depth_alloc_  = nullptr;
-    VkImageView     tr_lr_depth_view_   = VK_NULL_HANDLE;
-    VkSampler       tr_lr_sampler_      = VK_NULL_HANDLE;
-    // NEAREST sampler dedicated to u_lr_depth (binding 11). Bilinear on
-    // depth values bleeds terrain↔sky across silhouettes — at low
-    // raymarch scales the >=0.9999 sky-discard then either eats valid
-    // terrain (gaps) or writes fake mid-depth halos.
-    VkSampler       tr_lr_depth_sampler_ = VK_NULL_HANDLE;
+    // (the state of this is private to its own files: vk_engine/state/terrain_raymarch.h)
+    struct TerrainRaymarchState;
+    TerrainRaymarchState* tr_ = nullptr;
 
-    // The terrain's low-resolution march ("march pre-pass", rt_.terrain_rm_prepass): one
-    // distance per block of pixels (R32F, render_extent_ / tr_march_div_) - how far a ray
-    // can go before the ground comes near. Drawn before the world pass by a cut-down build
-    // of the terrain shader (terrain_march_lo.frag.spv); the full-resolution terrain pass
-    // reads it (binding 34) and starts its march there. Made and resized with the tr_lr_*
-    // targets above.
-    VkImage         tr_march_image_ = VK_NULL_HANDLE;
-    VmaAllocation   tr_march_alloc_ = nullptr;
-    VkImageView     tr_march_view_  = VK_NULL_HANDLE;
-    // The sun's shadow terms at that march's hits (RGBA16F, same size; binding 35).
-    VkImage         tr_shade_image_ = VK_NULL_HANDLE;
-    VmaAllocation   tr_shade_alloc_ = nullptr;
-    VkImageView     tr_shade_view_  = VK_NULL_HANDLE;
-    VkExtent2D      tr_march_extent_{};
-    int             tr_march_div_   = 2;
-    VkShaderModule  tr_march_module_   = VK_NULL_HANDLE;
-    VkPipeline      tr_march_pipeline_ = VK_NULL_HANDLE;
     bool tr_march_prepass_on() const;
     void render_terrain_march_prepass(VkCommandBuffer cmd);
 
@@ -606,7 +573,6 @@ private:
     void init_vrs_attachment();
     void destroy_vrs_attachment();
     void recreate_vrs_attachment();
-    VkExtent2D      tr_lr_extent_{};
 
     // --- Half-rate sun-shadow pass (perf) ---------------------------
     // The expensive inline PCSS sun-shadow ray-query is traced at
@@ -622,88 +588,20 @@ private:
     void destroy_shadow_lr();
     void recreate_shadow_lr();
 
-    // SVGF GI denoiser foundation (Session 1 of docs/svgf_plan.md).
-    // R16G16B16A16F storage image at render_extent; cube.frag writes
-    // the raw (un-albedo-modulated) GI irradiance per pixel via
-    // imageStore. Sessions 2-5 add the temporal accumulation + 3-pass
-    // à-trous filter that read this; for now it's just allocated and
-    // written, never sampled — verifies the plumbing in isolation.
-    VkImage         svgf_gi_image_ = VK_NULL_HANDLE;
-    VmaAllocation   svgf_gi_alloc_ = nullptr;
-    VkImageView     svgf_gi_view_  = VK_NULL_HANDLE;
-    // SVGF temporal-accumulation history (Session 2). 2 R16G16B16A16F
-    // storage images at render_extent ping-ponged via frame parity
-    // (scene.rt_flags.w & 1) — same race-free model as the ReSTIR ring
-    // buffer. .rgb = accumulated irradiance, .a = M-count [1..kMmax].
-    VkImage         svgf_history_image_[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VmaAllocation   svgf_history_alloc_[2] = { nullptr, nullptr };
-    VkImageView     svgf_history_view_[2]  = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-    // SVGF variance moments (Session 4a-deep). 2 R32G32_SFLOAT images at
-    // render_extent ping-ponged by frame parity. .r = EMA mean of scene
-    // luminance, .g = EMA mean of luminance^2. Estimated variance per
-    // pixel = max(0, g - r*r); fed into the a-trous edge-stop weights so
-    // stable surfaces filter tightly while noisy GI pixels can accept
-    // bigger spatial neighbours. Bindings 22 (slot 0) / 23 (slot 1) on
-    // scene_desc; svgf_moments.frag reprojects the previous-frame slot
-    // through the existing motion_vec image and writes the new slot.
-    VkImage         svgf_moments_image_[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VmaAllocation   svgf_moments_alloc_[2] = { nullptr, nullptr };
-    VkImageView     svgf_moments_view_[2]  = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-    // SVGF a-trous ping-pong pair. Two R16G16B16A16F sampled+attachment
-    // images at render_extent. The 3-pass a-trous filter bounces:
-    //   pass 0 (stride 1): scene_color -> atrous[0]
-    //   pass 1 (stride 2): atrous[0]   -> atrous[1]
-    //   pass 2 (stride 4): atrous[1]   -> scene_color  (writes back, so
-    //                                                   TAA reads the
-    //                                                   denoised result)
-    // Only allocated when rt_.svgf_enabled; reused across frames.
-    VkImage         svgf_atrous_image_[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VmaAllocation   svgf_atrous_alloc_[2] = { nullptr, nullptr };
-    VkImageView     svgf_atrous_view_[2]  = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    // (the state of this is private to its own files: vk_engine/state/svgf.h)
+    struct SvgfState;
+    SvgfState* svgf_ = nullptr;
     void init_svgf_targets();
     void destroy_svgf_targets();
     void recreate_svgf_targets();
 
-    // SVGF moments + a-trous passes (4a-deep). The moments pass updates
-    // svgf_moments_image_ at the current frame slot; the a-trous pass
-    // runs 3 times with growing stride and edge-stop weights derived
-    // from depth, normal-from-depth and the per-pixel luminance
-    // variance computed from the moments. Both pipelines stand up at
-    // engine init alongside TAA. recreate_svgf_pass_targets() handles
-    // descriptor rewrites when scene_color / depth / moments / atrous
-    // views change after a swapchain resize.
-    VkDescriptorSetLayout svgf_moments_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool      svgf_moments_desc_pool_  = VK_NULL_HANDLE;
-    VkDescriptorSet       svgf_moments_desc_sets_[2] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VkPipelineLayout      svgf_moments_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline            svgf_moments_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule        svgf_moments_frag_module_ = VK_NULL_HANDLE;
-    VkBuffer              svgf_moments_ubo_buffer_ = VK_NULL_HANDLE;
-    VmaAllocation         svgf_moments_ubo_alloc_  = nullptr;
 
-    VkDescriptorSetLayout svgf_atrous_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool      svgf_atrous_desc_pool_  = VK_NULL_HANDLE;
-    // 3 sets per output target (scene_color, atrous0, atrous1) x 2
-    // frame parities = 6 sets total. svgf_atrous_pass_idx selects which
-    // 3-set bank to use per frame so the read views always point at
-    // the moments slot just written by svgf_moments.
-    VkDescriptorSet       svgf_atrous_desc_sets_[6] = {};
-    VkPipelineLayout      svgf_atrous_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline            svgf_atrous_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule        svgf_atrous_frag_module_ = VK_NULL_HANDLE;
-    VkBuffer              svgf_atrous_ubo_buffer_  = VK_NULL_HANDLE;
-    VmaAllocation         svgf_atrous_ubo_alloc_   = nullptr;
 
     void init_svgf_passes();
     void destroy_svgf_passes();
     void recreate_svgf_pass_targets();
     void render_svgf(VkCommandBuffer cmd, uint32_t frame_parity);
 
-    // Compose pipeline that samples the low-res raymarch and writes
-    // upscaled color/motion + gl_FragDepth into scene_color/depth with
-    // depth-test enabled (so closer rasterised geometry survives).
-    VkPipeline      tr_compose_pipeline_     = VK_NULL_HANDLE;
-    VkShaderModule  tr_compose_frag_module_  = VK_NULL_HANDLE;
 
     void init_terrain_raymarch_lowres();
     void destroy_terrain_raymarch_lowres();
@@ -836,11 +734,9 @@ private:
     void reupload_grass_mask();
     bool save_grass_mask();
     bool load_grass_mask();
-    // Fog wisp pattern, 256² R8. Pre-baked 3-octave noise so the
-    // terrain raymarch fog density + godray probe loops sample one
-    // textureLod() per tap instead of running 3× noise2() each — the
-    // dominant per-pixel cost on godray-on configs.
-    TextureSlot fog_wisp_{};
+    // (the state of this is private to its own files: vk_engine/state/fog.h)
+    struct FogState;
+    FogState* fog_ = nullptr;
     static constexpr int kFogWispDim = 256;
     VkSampler   texture_sampler_ = VK_NULL_HANDLE;
     // Texture index assigned to the four spawnable box variants (so dynamic
@@ -1201,14 +1097,13 @@ private:
     bool  flash_init_ = false;
     float flash_yaw_ = 0.0f, flash_pitch_ = 0.0f;   // eased aim
     float flash_phase_ = 0.0f;                       // step cycle
-    // Lantern small-plant shadow maps (atlas quarters in layers 3 / 4 of the
-    // small-object shadow array): one lantern is re-rendered per frame.
-    VkImageView clutter_shadow_lamp_view_[2]{};
+    // (the state of this is private to its own files: vk_engine/state/clutter_shadow.h)
+    struct ClutterShadowState;
+    ClutterShadowState* clutter_ = nullptr;
     uint32_t lamp_map_valid_ = 0;      // bit i: lantern i's map has been rendered
     int      lamp_map_slot_ = -1;      // lantern to render this frame (-1 = none)
     int      lamp_map_next_ = 0;
     glm::mat4 flash_vp_{0.0f};                       // shadow map matrix (zero = no map this frame)
-    VkImageView clutter_shadow_flash_view_ = VK_NULL_HANDLE;   // layer 2 of the small-object shadow array
     glm::vec3 flash_off_{0.0f};                      // lamp position relative to the eye
     float flash_move_ = 0.0f;                        // eased 0..1 walking amount
     glm::vec3 flash_pos_{0.0f}, flash_fwd_{0.0f, 0.0f, -1.0f}, flash_right_{1.0f, 0.0f, 0.0f}, flash_up_{0.0f, 1.0f, 0.0f};
@@ -1359,13 +1254,9 @@ private:
     };
     struct MpFeed { std::string text; float ttl; };
     net::Session* net_ = nullptr;                      // null = multiplayer off
-    std::array<MpAvatar, net::kMaxPlayers> mp_avatars_{};
-    std::vector<MpFeed> mp_feed_;
-    const MpAvatar* mp_draw_ = nullptr;                // set while a remote player's body + gun are drawn
-    bool      mp_remote_shot_ = false;                 // fire_projectile is replaying someone else's shot
-    glm::vec3 mp_spawn_{0.0f}, mp_last_sent_pos_{0.0f};
-    float     mp_health_ = 100.0f, mp_hurt_ = 0.0f, mp_hitmark_ = 0.0f, mp_teleport_hold_ = 0.0f;
-    int       mp_kills_ = 0;
+    // (the state of this is private to its own files: vk_engine/state/multiplayer.h)
+    struct MultiplayerState;
+    MultiplayerState* mp_ = nullptr;
     // ---- Ragdolls (ragdoll.cpp): a killed player's body, handed to the physics. ----
     static constexpr int kCorpseParts = 11;
     struct Corpse {
@@ -1405,10 +1296,6 @@ private:
     VkSampler   hud_icons_sampler_ = VK_NULL_HANDLE;
     uint64_t    hud_icons_id_ = 0;                     // ImTextureID (0 = not loaded)
     void mp_sync_world(float dt);                      // weather + clock: the same on every machine
-    net::WorldState mp_world_last_{};                  // what was last sent / applied (change detection)
-    bool      mp_world_init_ = false;
-    float     mp_world_timer_ = 0.0f;
-    bool      mp_host_tgt_valid_ = false;              // client: the host decides the weather that changes by itself
     void draw_remote_players(VkCommandBuffer cmd, const glm::mat4& vp);
     void init_player_body();
     void destroy_player_body();
@@ -1459,22 +1346,9 @@ private:
         float     acc = 0.0f;           // fixed-step accumulator
     };
     std::vector<Flag> flags_;
-    // Whole-map terrain sun shadow (sun_horizon.cpp): far mountains block
-    // the low sun. R16G16F, re-baked on the worker pool as the light moves.
-    VkImage       sun_horizon_image_ = VK_NULL_HANDLE;
-    VmaAllocation sun_horizon_alloc_ = nullptr;
-    VkImageView   sun_horizon_view_ = VK_NULL_HANDLE;
-    VkSampler     sun_horizon_sampler_ = VK_NULL_HANDLE;
-    VkBuffer      sun_horizon_stage_[kFrameOverlap]{};
-    VmaAllocation sun_horizon_stage_alloc_[kFrameOverlap]{};
-    void*         sun_horizon_stage_map_[kFrameOverlap]{};
-    std::vector<uint16_t> sun_horizon_bake_;     // worker output (RG half floats)
-    std::vector<float>    sun_horizon_s_bake_;   // worker: shadow-volume height
-    std::vector<float>    sun_horizon_s_;        // live copy for CPU queries
-    jobs::Group   sun_horizon_job_;
-    bool          sun_horizon_baking_ = false, sun_horizon_upload_pending_ = false;
-    int           sun_horizon_age_ = 100000;
-    glm::vec3     sun_horizon_dir_{0.0f}, sun_horizon_bake_dir_{0.0f};
+    // (the state of this is private to its own files: vk_engine/state/sun_shadow.h)
+    struct SunShadowState;
+    SunShadowState* sun_ = nullptr;
     void  init_sun_horizon();
     void  destroy_sun_horizon();
     void  bake_sun_horizon(glm::vec3 light_dir);
@@ -1507,14 +1381,11 @@ private:
         float cloud_coverage = 0, cloud_density = 0, cloud_speed = 0, fog_density = 0, grass_wind = 0;
         bool  auto_golden_hour = true;
     };
-    EnvBase env_base_{};              // the user's values while the driver overrides rt_
-    bool  env_applied_ = false;
+    // (the state of this is private to its own files: vk_engine/state/environment.h)
+    struct EnvState;
+    EnvState* env_ = nullptr;
     float weather_state_ = 0.0f, weather_target_ = 0.0f, weather_timer_ = 0.0f;
     bool  weather_init_ = false;
-    float env_rain_ = 0.0f;           // rain intensity 0..1
-    double cloud_travel_ = 0.0, cloud_travel_t_ = -1.0;   // metres the wind has carried the clouds; time of the last step
-    float env_snow_ = 0.0f;           // snow lying on the ground 0..1
-    float env_snowfall_ = 0.0f;       // snow falling 0..1
     // Footprints in the snow: a ring of the last 32 (the local player and, in multiplayer, the others).
     glm::vec4 footprints_[32]{};      // xy = world xz, z = heading, w = depth 0..1
     int       foot_next_ = 0;
@@ -1542,30 +1413,9 @@ private:
     float aim_zoom_ = 0.0f;                            // 0 .. 1, eased
     float rm_air_lod_k_ = 1.0f;        // scales the terrain march's LOD distances (world_render.cpp)
     int   veg_tlas_cache_season_ = -1; // season state the ray-traced vegetation records were made for
-    Wx    mp_host_tgt_{};             // multiplayer client: the weather target the host decided
     int   wx_last_preset_ = -1;
     float wx_clock_target_ = -1.0f;   // hour the clock is being turned to (-1 = not)
-    float env_wet_ = 0.0f;            // ground wetness 0..1
-    // Cloud layer as last sent to the shaders (for the CPU copy of the
-    // cloud-shadow function: sun glare when a cloud passes in front).
-    glm::vec4 cloud_a_{0.0f}, cloud_b_{0.0f};
-    float cloud_shadow_k_now_ = 0.0f;
     float cloud_shadow_at(glm::vec3 wp) const;
-    // Dusk / dawn (environment.cpp): warm-tint amount, the real sun's
-    // elevation (-1000 = no clock), and the sky's own sun direction while
-    // the sun is under the horizon.
-    float env_golden_ = 1.0f, env_sun_elev_ = -1000.0f;
-    bool  env_sky_real_ = false, env_sky_init_ = false;
-    float env_sky_pitch_ = 0.0f, env_sky_yaw_ = 0.0f, env_sky_ease_ = 1.0f;
-    bool  env_moon_light_ = false;     // the night sky model in use: moon (true) or the glow of the sun under the horizon
-    float env_amb_k_ = 1.0f;          // night fill-light factor (1 by day and on a clear full-moon night)
-    float env_moon_vis_ = 1.0f;       // moon not hidden by terrain from the player (eased 0..1)
-    float env_moon_ = 1.0f;           // moonlight in the sky right now, 0..1 (phase, height, setting)
-    float env_night_ = -1.0f;         // lantern factor 0..1 (< 0: clock off)
-    float env_lightning_ = 0.0f;      // current flash brightness
-    float env_wind_scale_ = 1.0f;
-    float env_cloud_k_ = 1.0f, env_cloud_direct_ = 1.0f;   // cloud light: sky level, direct factor
-    float env_cloud_shadow_k_ = 0.72f;                     // cloud-shadow contrast on the ground
     glm::vec3 lightning_pos_{0.0f};                        // ground point of the current bolt
     float lightning_timer_ = 6.0f, lightning_t_ = -1.0f, lightning_seed_ = 0.0f;
     uint32_t rain_voice_[2]{};
@@ -1578,27 +1428,16 @@ private:
     float player_water_prev_sub_ = 0.0f;
     void spawn_explosion(glm::vec3 pos, float size, bool ground);
     void tick_fx(float dt);
-    // FX pass (after deferred lighting, before TAA): premultiplied-alpha
-    // blended ribbons (contrails, laser beams, flash) + volumetric
-    // explosion volumes into scene_color, depth-tested read-only.
-    VkShaderModule fx_vert_module_       = VK_NULL_HANDLE;
-    VkShaderModule fx_ribbon_frag_module_ = VK_NULL_HANDLE;
-    VkShaderModule fx_volume_frag_module_ = VK_NULL_HANDLE;
-    VkPipeline     fx_ribbon_pipeline_   = VK_NULL_HANDLE;
-    VkPipeline     fx_ribbon_refl_pipeline_ = VK_NULL_HANDLE;   // no depth test: mirrored glow in water
-    VkPipeline     fx_volume_pipeline_   = VK_NULL_HANDLE;
-    VkPipeline     fx_volume_inside_pipeline_ = VK_NULL_HANDLE;
-    VkPipeline     fx_decal_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule fx_decal_frag_module_ = VK_NULL_HANDLE;
+    // (the state of this is private to its own files: vk_engine/state/fx.h)
+    struct FxState;
+    FxState* fx_ = nullptr;
     static constexpr uint32_t kFxMaxVerts = 65536;
-    VkBuffer       fx_vbuf_[2]{};        // per frame-slot host-visible ribbon verts
-    VmaAllocation  fx_valloc_[2]{};
-    void*          fx_vmapped_[2]{};
     void init_fx();
     void destroy_fx();
     void render_fx(VkCommandBuffer cmd);
-    std::vector<SpacejetMesh>   spacejet_meshes_;
-    std::vector<SpacejetFlight> spacejet_flights_;
+    // (the state of this is private to its own files: vk_engine/state/spacejets.h)
+    struct SpacejetState;
+    SpacejetState* spacejet_ = nullptr;
     // Last-target HUD state (top-center damage indicator). Set when a
     // bullet damages a plane, decays over kTargetHudFade s. Decoupled
     // from the per-flight hp so the bar can outlive a kill (player still
@@ -1611,8 +1450,6 @@ private:
     // draw to paint a fullscreen white overlay that fades out.
     float kill_flash_t_            = 0.0f;
     static constexpr float kKillFlashDuration = 0.35f;
-    glm::vec3 spacejet_centre_offset_{0.0f};      // gltf bbox-centre, applied per draw
-    float     spacejet_base_scale_      = 1.0f;   // gltf-bbox-derived scale
     // Break-up pieces: the jet's geometry split spatially at load into
     // wings / nose / fuselage / tail (each keeps its per-material parts).
     // centroid_raw is in raw glTF space (before centre offset / scale).
@@ -1621,7 +1458,6 @@ private:
         glm::vec3 centroid_raw{0.0f};
         float     drag_vt = 120.0f;    // terminal velocity of this piece (m/s)
     };
-    std::vector<JetChunk> spacejet_chunks_;
     // Falling wreckage from mid-air break-ups. chunk >= 0: a JetChunk;
     // -1: small generic fragment (dark box). Ballistic with quadratic drag,
     // tumbling, smoking; pops on ground impact.
@@ -1655,9 +1491,6 @@ private:
     void record_terrain_blas_refit(VkCommandBuffer cb, VkBuffer* scratch, VmaAllocation* scratch_alloc);
     void* veg_inst_mapped_ = nullptr;
     size_t veg_col_count_ = 0;
-    float     spacejet_spawn_timer_     = 1.0f;   // first wave after 2s
-    uint32_t  spacejet_rng_state_       = 0xC0DEFEEDu;
-    uint32_t  spacejet_next_id_         = 0;
     void init_spacejet();
     void destroy_spacejet();
     void tick_spacejet(float dt);                 // move + spawn + despawn
@@ -1943,7 +1776,6 @@ private:
     bool wv_nf_ok() const;
     float veg_lod_res_scale() const;
     void record_nf_upload(VkCommandBuffer cmd, uint32_t slot);
-    bool clutter_shadow_skip_ = false;                   // this frame the small plants' shadow maps keep last frame's
     bool globe_moved_player_ = false;                    // a re-anchoring changed the player's coordinates this frame
     void globe_update();                                 // re-anchor when the player has left the chart's reach
     void globe_enter(const struct GlobeChartRef& c);     // move the player (same place on the planet) into another chart
@@ -2147,21 +1979,11 @@ private:
     glm::vec3     veg_prev_eye_{0.0f};
     glm::vec3     veg_prev_fwd_{0.0f, 0.0f, -1.0f};
     uint32_t tlas_refits_ = 0;
-    VkImage        clutter_shadow_image_ = VK_NULL_HANDLE;
-    VmaAllocation  clutter_shadow_alloc_ = nullptr;
-    VkImageView    clutter_shadow_view_ = VK_NULL_HANDLE;         // layer 0 (64 m), 2D
-    VkImageView    clutter_shadow_near_view_ = VK_NULL_HANDLE;    // layer 1 (16 m, 4x finer), 2D
-    VkImageView    clutter_shadow_array_view_ = VK_NULL_HANDLE;   // both layers (deferred)
-    VkSampler      clutter_shadow_sampler_ = VK_NULL_HANDLE;   // NEAREST: depth compares must not average
-    VkPipelineLayout clutter_shadow_layout_ = VK_NULL_HANDLE;
-    VkPipeline     clutter_shadow_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule clutter_shadow_vert_ = VK_NULL_HANDLE;
     // The soldiers (the player's own body, other players, the fallen) into the same maps:
     // skin_shadow.vert on the world pipeline layout (it reads the bone palette).
     VkPipeline     skin_shadow_pipeline_ = VK_NULL_HANDLE;
     VkShaderModule skin_shadow_vert_ = VK_NULL_HANDLE;
     void draw_skinned_shadows(VkCommandBuffer cmd, const glm::mat4& light_vp, bool with_local);
-    glm::mat4      clutter_shadow_vp_{0.0f};
     void init_clutter_shadow();
     void destroy_clutter_shadow();
     void render_clutter_shadow(VkCommandBuffer cmd);
@@ -2355,19 +2177,6 @@ private:
     // else snaps to the nearest. 4096 is borderline on weak GPUs; the cap
     // keeps a typo from forcing a huge alloc.
     static constexpr int kShadowMapResolutions[] = { 512, 1024, 2048, 4096, 8192 };
-    int             sun_shadow_dim_     = 1024;     // current image side
-    VkImage         sun_shadow_image_   = VK_NULL_HANDLE;
-    VmaAllocation   sun_shadow_alloc_   = nullptr;
-    VkImageView     sun_shadow_view_    = VK_NULL_HANDLE;
-    VkSampler       sun_shadow_sampler_ = VK_NULL_HANDLE;
-    VkPipeline       sun_shadow_pipeline_ = VK_NULL_HANDLE;
-    // Dedicated pipeline layout — shadow.vert reads only push constants,
-    // not the scene descriptor set. Using the cube pipeline_layout_ here
-    // forced render_sun_shadow_pass to bind scene_desc_set (TLAS, every
-    // texture array) for nothing.
-    VkPipelineLayout sun_shadow_pipeline_layout_ = VK_NULL_HANDLE;
-    VkShaderModule   sun_shadow_vert_module_ = VK_NULL_HANDLE;
-    glm::mat4       sun_shadow_light_vp_ = glm::mat4(1.0f);
     void init_sun_shadow_resources();
     void destroy_sun_shadow_resources();
     void init_sun_shadow_pipeline();
@@ -2678,134 +2487,44 @@ private:
 
     VkSampler    linear_sampler_ = VK_NULL_HANDLE;
 
-    VkDescriptorPool       taa_desc_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout  taa_desc_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSet        taa_desc_sets_[kHistorySlots]{ VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VkBuffer               taa_ubo_buffer_ = VK_NULL_HANDLE;
-    VmaAllocation          taa_ubo_alloc_ = nullptr;
+    // (the state of this is private to its own files: vk_engine/state/taa.h)
+    struct TaaState;
+    TaaState* taa_ = nullptr;
 
-    VkPipelineLayout taa_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline       taa_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule   taa_vert_module_ = VK_NULL_HANDLE;
-    VkShaderModule   taa_frag_module_ = VK_NULL_HANDLE;
 
-    // --- TAAU (temporal upsample). Optional pass between TAA and compose.
-    // Reads LR history + LR motion + LR depth + previous-frame NATIVE
-    // upscaled, outputs native upscaled with motion-reproject + variance
-    // clamp. Compose then samples taau_view_ instead of history_view_.
-    // Sized at swapchain_extent_; ping-pong on history_write_slot_.
-    VkImage          taau_image_[kHistorySlots]{ VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VmaAllocation    taau_alloc_[kHistorySlots]{ nullptr, nullptr };
-    VkImageView      taau_view_[kHistorySlots]{ VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VkDescriptorPool      taau_desc_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout taau_desc_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSet       taau_desc_sets_[kHistorySlots]{ VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VkBuffer              taau_ubo_buffer_ = VK_NULL_HANDLE;
-    VmaAllocation         taau_ubo_alloc_ = nullptr;
-    VkPipelineLayout      taau_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline            taau_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule        taau_frag_module_ = VK_NULL_HANDLE;
-    bool                  taau_history_valid_ = false;
-    // Compose desc set is rewired when this flag toggles — tracks the
-    // currently-bound source so we only re-write on actual change.
-    bool                  compose_uses_taau_ = false;
+    // (the state of this is private to its own files: vk_engine/state/taau.h)
+    struct TaauState;
+    TaauState* taau_ = nullptr;
+    // (the state of this is private to its own files: vk_engine/state/compose.h)
+    struct ComposeState;
+    ComposeState* compose_ = nullptr;
     void init_taau();
     void destroy_taau();
     void recreate_taau_targets();
     void rewrite_compose_for_taau();
 
-    // --- FSR2 (vendored AMD FidelityFX SDK, MIT) ---
-    // Phase 3 — context lifecycle. Opaque pointer + scratch buffer so
-    // the rest of the engine doesn't drag the FSR2 headers in.
-    // Phase 4 — per-frame dispatch. Output image is HR (swapchain-sized)
-    // R16G16B16A16_SFLOAT, written by FSR2's compute shaders, sampled
-    // by compose when fsr2_enabled. compose_uses_fsr2_ tracks the
-    // currently-bound source so we only re-write desc sets on toggle.
-    void* fsr2_scratch_ = nullptr;
-    size_t fsr2_scratch_size_ = 0;
-    void* fsr2_context_ = nullptr;   // FfxFsr2Context* (heap-allocated)
-    bool  fsr2_context_valid_ = false;
-    bool  fsr2_reset_history_ = true; // first frame after context create
-    VkImage       fsr2_output_image_ = VK_NULL_HANDLE;
-    VmaAllocation fsr2_output_alloc_ = nullptr;
-    VkImageView   fsr2_output_view_  = VK_NULL_HANDLE;
-    VkFormat      fsr2_output_format_ = VK_FORMAT_R16G16B16A16_SFLOAT;
-    bool          compose_uses_fsr2_ = false;
+    // (the state of this is private to its own files: vk_engine/state/fsr2.h)
+    struct Fsr2State;
+    Fsr2State* fsr2_ = nullptr;
     void init_fsr2();
     void destroy_fsr2();
     void recreate_fsr2_context();
     void dispatch_fsr2(VkCommandBuffer cmd);
     void rewrite_compose_for_fsr2();
 
-    // --- FSR3 upscaler (FidelityFX SDK 1.1.4 ffx-api, prebuilt DLL) ---
-    // Parallel path to FSR2; selected via rt_.fsr_backend (0=FSR2 legacy,
-    // 1=FSR3 upscaler). FSR3 uses the new ffxContext + ffxDispatch ABI
-    // and the prebuilt amd_fidelityfx_vk.dll. Output image is the same
-    // HR R16G16B16A16 storage as fsr2_output_image_; compose's history
-    // binding flips to fsr3_output_view_ when the backend is FSR3.
-    void*         fsr3_upscaler_context_ = nullptr;  // ffxContext (opaque)
-    bool          fsr3_context_valid_    = false;
-    bool          fsr3_reset_history_    = true;
-    // Set when init_fsr3() AVs inside the SDK — sticks for the process
-    // lifetime so we never retry. UI auto-reverts to FSR2 backend.
-    bool          fsr3_fatal_            = false;
-    VkImage       fsr3_output_image_ = VK_NULL_HANDLE;
-    VmaAllocation fsr3_output_alloc_ = nullptr;
-    VkImageView   fsr3_output_view_  = VK_NULL_HANDLE;
-    bool          compose_uses_fsr3_ = false;
+    // (the state of this is private to its own files: vk_engine/state/fsr3.h)
+    struct Fsr3State;
+    Fsr3State* fsr3_ = nullptr;
     void init_fsr3();
     void destroy_fsr3();
     void recreate_fsr3_context();
     void dispatch_fsr3(VkCommandBuffer cmd);
     void rewrite_compose_for_fsr3();
 
-    // --- FSR3 frame generation (session 3 of docs/fsr3_plan.md) ---
-    // Separate ffxContext for the FG effect — uses the same DLL +
-    // backend as the upscaler. Lazy-init when rt_.fg_enabled goes
-    // true (and fsr_backend == 1). Output is an HR image we OWN; this
-    // session does NOT integrate with the swapchain (session 4).
-    void*         fsr3_fg_context_       = nullptr;
-    bool          fsr3_fg_context_valid_ = false;
-    bool          fsr3_fg_fatal_         = false;
-    VkImage       fsr3_fg_output_image_  = VK_NULL_HANDLE;
-    VmaAllocation fsr3_fg_output_alloc_  = nullptr;
-    VkImageView   fsr3_fg_output_view_   = VK_NULL_HANDLE;
-    uint64_t      fsr3_fg_frame_id_      = 0;  // must increment by exactly 1
     void init_fsr3_fg();
     void destroy_fsr3_fg();
     void dispatch_fsr3_fg(VkCommandBuffer cmd);
 
-    // --- FSR3 SwapChain proxy (session 4 of docs/fsr3_plan.md) ---
-    // The SDK takes ownership of our VkSwapchainKHR and gives back its
-    // own wrapped handle plus a function table that REPLACES
-    // vkAcquireNextImageKHR / vkQueuePresentKHR. The engine then routes
-    // every acquire/present through SDK-provided pointers — when FG is
-    // active, those functions internally pace + insert generated frames
-    // into the present chain.
-    //
-    // Lazy: created when fg_enabled goes true, destroyed when it goes
-    // false. SEH-guarded init falls back to plain swapchain on AV.
-    void* fsr3_swapchain_context_ = nullptr;  // ffxContext (opaque)
-    bool  fsr3_swapchain_active_  = false;
-    bool  fsr3_swapchain_init_pending_ = false;   // draw() asks; run() creates between frames
-    bool  fsr3_swapchain_fatal_   = false;
-    // Extra graphics-family queues for the SDK's distinct-queue check.
-    // Pulled at device-create when we requested 4 queues; null on
-    // hardware that exposes only 1 graphics queue (FG then unavailable).
-    VkQueue fsr3_extra_queue_present_ = VK_NULL_HANDLE;
-    VkQueue fsr3_extra_queue_acquire_ = VK_NULL_HANDLE;
-    VkQueue fsr3_extra_queue_compute_ = VK_NULL_HANDLE;
-    // SDK-provided replacement function pointers — populated after a
-    // successful init via ffxQuery. Plain Vulkan when active==false.
-    PFN_vkAcquireNextImageKHR  fsr3_acquire_fn_ = nullptr;
-    PFN_vkQueuePresentKHR      fsr3_present_fn_ = nullptr;
-    PFN_vkGetSwapchainImagesKHR fsr3_get_images_fn_ = nullptr;
-    // Session 5 — UI mask via HUDLessColor. Snapshot of swapchain
-    // post-compose pre-ImGui each frame; SDK uses it to extract UI
-    // pixels by diffing against the final backbuffer (with HUD).
-    VkImage       fsr3_hudless_image_ = VK_NULL_HANDLE;
-    VmaAllocation fsr3_hudless_alloc_ = nullptr;
-    VkImageView   fsr3_hudless_view_  = VK_NULL_HANDLE;
     void capture_hudless_snapshot(VkCommandBuffer cmd, uint32_t swapchain_idx);
     void update_fsr3_fg_per_frame_config();
     // Session 6 — auto-disable FG when base render FPS sustains below
@@ -2837,12 +2556,6 @@ private:
     void destroy_restir();
     void recreate_restir_buffers();
 
-    // --- Compose / tonemap pass ---
-    VkDescriptorPool       compose_desc_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout  compose_desc_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSet        compose_desc_sets_[kHistorySlots]{ VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VkPipelineLayout       compose_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline             compose_pipeline_ = VK_NULL_HANDLE;
     // Auto-exposure: luminance reduction compute (shaders/exposure.comp)
     // writing an adapted log-luminance SSBO that compose binding 4 reads.
     VkBuffer               exposure_buf_ = VK_NULL_HANDLE;
@@ -2866,43 +2579,15 @@ private:
     // sky-view LUTs + aerial-perspective froxel volume (atmosphere.cpp).
     // All images live in GENERAL (storage in atmosphere.comp, sampled in compose).
     struct AtmoImage { VkImage image = VK_NULL_HANDLE; VmaAllocation alloc = nullptr; VkImageView view = VK_NULL_HANDLE; };
-    AtmoImage              atmo_trans_, atmo_ms_, atmo_sky_, atmo_ap_;
-    // Sunlight let through by the cloud layer, as a map of the land
-    // (512^2 over 6144 m; written by clouds.comp mode 3 every frame).
-    AtmoImage              cloud_shadow_map_;
-    VkSampler              cloud_shadow_sampler_ = VK_NULL_HANDLE;
-    bool                   cloud_shadow_bound_ = false;
+    // (the state of this is private to its own files: vk_engine/state/atmosphere.h)
+    struct AtmosphereState;
+    AtmosphereState* atmo_ = nullptr;
     void init_cloud_shadow_map();
     void destroy_cloud_shadow_map();
-    VkSampler              atmo_sampler_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout  atmo_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool       atmo_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet        atmo_set_ = VK_NULL_HANDLE;
-    VkPipelineLayout       atmo_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline             atmo_pipeline_ = VK_NULL_HANDLE;
-    bool                   atmo_luts_ready_ = false;
-    // Volumetric clouds (clouds.comp): 960x540 cloud layer + tileable noise.
-    AtmoImage              cloud_img_, cloud_shape_, cloud_detail_;
-    VkDescriptorSetLayout  cloud_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool       cloud_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet        cloud_set_ = VK_NULL_HANDLE;
-    VkImageView            cloud_depth_bound_ = VK_NULL_HANDLE;   // rewrite binding 2 only on change
-    VkPipelineLayout       cloud_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline             cloud_pipeline_ = VK_NULL_HANDLE;
-    bool                   cloud_noise_ready_ = false;
-    VkSampler              cloud_sampler_ = VK_NULL_HANDLE;   // linear + REPEAT (tileable noise)
-    // Froxel volumetric fog (froxel_fog.comp): inject + integrated volumes.
-    AtmoImage              fog_inject_, fog_integ_;
-    VkDescriptorSetLayout  fog_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool       fog_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet        fog_set_ = VK_NULL_HANDLE;
-    VkPipelineLayout       fog_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline             fog_pipeline_ = VK_NULL_HANDLE;
-    VkAccelerationStructureKHR fog_tlas_bound_ = VK_NULL_HANDLE;
     glm::vec3              last_sun_rgb_{1.0f}, last_sky_rgb_{0.5f, 0.7f, 1.0f};
-    // Streamline / DLSS state.
-    bool                   sl_ok_ = false;
-    void*                  sl_frame_token_ = nullptr;   // sl::FrameToken* of the frame being built
+    // (the state of this is private to its own files: vk_engine/state/streamline.h)
+    struct StreamlineState;
+    StreamlineState* sl_ = nullptr;
     bool                   dlssg_loaded_ = false;       // sl.dlss_g loaded + supported (start-up choice)
     bool                   reflex_ok_ = false;
     bool                   pcl_ok_ = false;
@@ -2911,63 +2596,25 @@ private:
     uint32_t               dlssg_max_frames_ = 1;       // DLSSGState::numFramesToGenerateMax
     bool                   dlssg_tagged_this_frame_ = false;
     float                  dlssg_present_ratio_ = 0.0f; // presented / rendered (from DLSSGState)
-    bool                   dlss_supported_ = false;
-    std::vector<std::string> sl_instance_exts_, sl_device_exts_;
-    VkImage                dlss_output_image_ = VK_NULL_HANDLE;
-    VmaAllocation          dlss_output_alloc_ = nullptr;
-    VkImageView            dlss_output_view_ = VK_NULL_HANDLE;
-    VkExtent2D             dlss_output_extent_{0, 0};
-    bool                   dlss_reset_ = true;
-    bool                   compose_uses_dlss_ = false;
-    // DLSS Ray Reconstruction (dlss.cpp + rr_guides.cpp).
-    bool                   dlss_rr_supported_ = false;
-    bool                   dlss_rr_was_active_ = false;
+    // (the state of this is private to its own files: vk_engine/state/dlss.h)
+    struct DlssState;
+    DlssState* dlss_ = nullptr;
     // (the state of this is private to its own files: vk_engine/state/rr_guides.h)
     struct RrGuideState;
     RrGuideState* rr_ = nullptr;
-    // Streamline proxies (sl.interposer.dll): vk-bootstrap creates the
-    // instance / device / swapchain through sl_gipa_, acquire + present go
-    // through the proxies so SL's per-frame bookkeeping (presentCommon) runs.
-    PFN_vkGetInstanceProcAddr sl_gipa_ = nullptr;
-    PFN_vkGetDeviceProcAddr   sl_gdpa_ = nullptr;
-    PFN_vkAcquireNextImageKHR sl_acquire_fn_ = nullptr;
-    PFN_vkQueuePresentKHR     sl_present_fn_ = nullptr;
-    VkShaderModule         compose_frag_module_ = VK_NULL_HANDLE;
     VkShaderModule         sky_fill_frag_module_ = VK_NULL_HANDLE;   // compose.frag -DSKY_FILL
     VkPipeline             sky_fill_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule         sun_shafts_frag_module_ = VK_NULL_HANDLE;  // compose.frag -DSUN_SHAFTS
-    VkPipeline             sun_shafts_pipeline_ = VK_NULL_HANDLE;
     VkShaderModule         clouds_over_frag_module_ = VK_NULL_HANDLE; // compose.frag -DCLOUDS_OVER
     VkPipeline             clouds_over_pipeline_ = VK_NULL_HANDLE;
-    bool                   sun_shafts_prepass_ran_ = false;           // this frame: compose skips its own shafts
-    bool                   atmo_dispatched_this_frame_ = false;
     bool                   sky_filled_this_frame_ = false;   // the sky-fill pass ran: the scene colour holds the real sky
 
     // --- Bloom mip chain (Karis-style downsample + tent upsample) ---
     static constexpr int kBloomMips = 5;
-    VkImage      bloom_image_ = VK_NULL_HANDLE;
-    VmaAllocation bloom_alloc_ = nullptr;
-    VkImageView  bloom_mip_views_[kBloomMips]{};
-    VkExtent2D   bloom_mip_extents_[kBloomMips]{};
-    // All-mips view of bloom_image_ used by compose so cube.frag can
-    // textureLod() to the smallest mip for an auto-exposure scene-avg
-    // proxy. Per-mip views above are still needed by the down/up passes
-    // which must rasterise into each mip individually.
-    VkImageView  bloom_full_view_ = VK_NULL_HANDLE;
+    // (the state of this is private to its own files: vk_engine/state/bloom.h)
+    struct BloomState;
+    BloomState* bloom_ = nullptr;
 
-    VkDescriptorPool       bloom_desc_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout  bloom_desc_set_layout_ = VK_NULL_HANDLE;
-    // 2 sets per slot per mip: one to read history (for first downsample),
-    // (kBloomMips-1) to read mip k-1 for downsample, (kBloomMips-1) for
-    // upsample. Pre-built and indexed.
-    VkDescriptorSet bloom_down_sets_[kHistorySlots][kBloomMips]{};
-    VkDescriptorSet bloom_up_sets_[kBloomMips]{};
 
-    VkPipelineLayout bloom_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline       bloom_down_pipeline_ = VK_NULL_HANDLE;
-    VkPipeline       bloom_up_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule   bloom_down_frag_ = VK_NULL_HANDLE;
-    VkShaderModule   bloom_up_frag_ = VK_NULL_HANDLE;
 
     glm::mat4 prev_view_proj_{ 1.0f };
     glm::mat4 last_view_proj_{ 1.0f };
@@ -3044,24 +2691,9 @@ private:
     float      settings_dirty_timer_ = 0.0f;
 
     // ---- Voxel buildings (Session A) ----
-    // CPU brickmap world (owns all bricks + shape directories).
-    std::unique_ptr<voxel::VoxelWorld> voxel_world_;
-    // GPU-side: brick atlas SSBO (all bricks for all shapes), shape
-    // directory SSBO (single shape for now), and the per-frame camera
-    // UBO. Pipeline + layout are fully self-contained (no overlap with
-    // scene_desc_set_). One descriptor set, three bindings:
-    //   0 = camera UBO, 1 = brick atlas, 2 = shape directory.
-    VkBuffer              voxel_atlas_buffer_      = VK_NULL_HANDLE;
-    VmaAllocation         voxel_atlas_alloc_       = nullptr;
-    // Host-mapped pointer into the brick atlas (Session C). Carves modify
-    // the CPU brick data then memcpy the changed bricks here + flush, so
-    // the hole appears next frame with no command-buffer round-trip. The
-    // atlas lives in device-local-host-visible (ReBAR) memory when available
-    // — 4 MB fits the guaranteed 256 MB BAR window, so GPU reads stay fast.
-    void*                 voxel_atlas_mapped_      = nullptr;
-    VkDeviceSize          voxel_atlas_bytes_       = 0;
-    // World-space solid boxes (player collision) + dirty-brick scratch.
-    std::vector<collision::AABB> voxel_collision_aabbs_;
+    // (the state of this is private to its own files: vk_engine/state/voxel.h)
+    struct VoxelState;
+    VoxelState* voxel_ = nullptr;
     // Carve at world `center`/`radius`: clears voxels and flushes ONLY the
     // touched bricks to the GPU atlas (the hole appears instantly, cheap).
     // The expensive structural-collapse + collision rebuild are NOT done
@@ -3079,31 +2711,11 @@ private:
     // bullet-impact hot path. dt in seconds.
     void process_voxel_updates(float dt);
     void rebuild_voxel_collision();
-    bool  voxel_update_pending_  = false;  // a carve happened, not yet settled
-    int   voxel_removed_accum_   = 0;      // voxels carved since last collapse
-    // Shape indices that were carved this frame (or since last collapse).
-    // process_voxel_updates collapses only these — chunks split into smaller
-    // chunks when hit again, and main-shape collapse stays as before.
-    std::vector<int> voxel_dirty_shapes_;
-    float voxel_collapse_cd_     = 0.0f;   // min time between collapse BFS runs
-    float voxel_collision_cd_    = 0.0f;   // min time between collision rebuilds
     // Flush a single brick slot's payload to the host-mapped GPU atlas.
     void  flush_voxel_brick_(uint32_t slot);
     // Batched flush: memcpy each slot's brick + a single vmaFlushAllocation
     // across the [min,max] range. Saves ~200 driver calls per large carve.
     void  flush_voxel_bricks_batched_(const std::vector<uint32_t>& slots);
-    VkBuffer              voxel_dir_buffer_        = VK_NULL_HANDLE;
-    VmaAllocation         voxel_dir_alloc_         = nullptr;
-    VkBuffer              voxel_camera_ubo_        = VK_NULL_HANDLE;
-    VmaAllocation         voxel_camera_alloc_      = nullptr;
-    void*                 voxel_camera_mapped_     = nullptr;
-    VkShaderModule        voxel_vert_module_       = VK_NULL_HANDLE;
-    VkShaderModule        voxel_frag_module_       = VK_NULL_HANDLE;
-    VkDescriptorSetLayout voxel_desc_set_layout_   = VK_NULL_HANDLE;
-    VkPipelineLayout      voxel_pipeline_layout_   = VK_NULL_HANDLE;
-    VkPipeline            voxel_pipeline_          = VK_NULL_HANDLE;
-    VkDescriptorPool      voxel_desc_pool_         = VK_NULL_HANDLE;
-    VkDescriptorSet       voxel_desc_set_          = VK_NULL_HANDLE;
 
     // ---- Multi-shape chunk support (Session E) ----
     // Active falling voxel chunks. Each is a new VoxelShape in voxel_world_
@@ -3116,19 +2728,6 @@ private:
         float    ttl;             // seconds remaining before forced despawn
         float    age = 0.0f;      // seconds since spawn — gates sleep-cull
     };
-    std::vector<VoxelChunk> voxel_chunks_;
-    // Upload watermarks: how many bricks / directory entries have been
-    // pushed to the GPU. After a collapse we push the newly-added range.
-    uint32_t voxel_atlas_uploaded_ = 0;
-    uint32_t voxel_dir_uploaded_   = 0;
-    // Index of the next NEW shape whose directory needs uploading. Lets
-    // upload_voxel_growth_() skip already-pushed shapes in O(1) instead of
-    // re-scanning every shape every collapse (which grew linearly with
-    // session-long debris history).
-    uint32_t voxel_dir_next_shape_ = 0;
-    // Mapped pointers for live updates (atlas pointer already exists above).
-    void*       voxel_dir_mapped_  = nullptr;
-    VkDeviceSize voxel_dir_bytes_  = 0;
     // Push fresh chunks (their bricks + directory) to the GPU, sized once at
     // init for thousands of bricks so growth is lock-free memcpys.
     void upload_voxel_growth_();

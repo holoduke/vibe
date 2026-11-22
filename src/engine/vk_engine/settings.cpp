@@ -4,6 +4,9 @@
 // line; vec3 fields use space-separated triples.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/vk_engine/state/environment.h"
+#include "engine/vk_engine/state/dlss.h"
 #include "engine/globe.h"
 
 #include <algorithm>
@@ -167,7 +170,7 @@ void VulkanEngine::apply_quality_preset(int level) {
     // The preset change above may have flipped that ratio; recreate the
     // attachments so the next frame's LR pass writes a valid extent.
     if (std::abs(rt_.terrain_raymarch_scale - prev_tr_scale) > 0.01f &&
-        tr_lr_color_image_) {
+        tr_->lr_color_image) {
         recreate_terrain_raymarch_lowres();
     }
     log::infof("quality preset %d applied (render_scale=%.2f shadows=%d ao=%d gi=%d)",
@@ -183,7 +186,7 @@ void VulkanEngine::apply_render_scale() {
     // DLSS accepts inputs from 50 % to 100 % of the output size (measured:
     // 0.49 and below fail every evaluate with NGX InvalidParameter, for
     // super resolution and Ray Reconstruction alike, leaving a stale image).
-    if (rt_.fsr2_enabled && rt_.fsr_backend == 2 && dlss_supported_ && rt_.render_scale < 0.5f) {
+    if (rt_.fsr2_enabled && rt_.fsr_backend == 2 && dlss_->supported && rt_.render_scale < 0.5f) {
         log::infof("render_scale %.2f is below the DLSS minimum - using 0.50", rt_.render_scale);
         rt_.render_scale = 0.5f;
     }
@@ -631,8 +634,8 @@ void VulkanEngine::save_settings() const {
         // values at run time: save the user's own ones.
         struct BaseSwap {
             VulkanEngine* e;
-            explicit BaseSwap(VulkanEngine* x) : e(x) { if (e->env_applied_) e->env_swap_base(); }
-            ~BaseSwap() { if (e->env_applied_) e->env_swap_base(); }
+            explicit BaseSwap(VulkanEngine* x) : e(x) { if (e->env_->applied) e->env_swap_base(); }
+            ~BaseSwap() { if (e->env_->applied) e->env_swap_base(); }
         } base_swap(const_cast<VulkanEngine*>(this));
         // Away from home the engine's coordinates are those of a local chart of the planet
         // (engine/globe.h): the place is saved in home coordinates, which every start-up

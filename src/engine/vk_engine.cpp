@@ -28,6 +28,11 @@
 #include <filesystem>
 #include <system_error>
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/bloom.h"
+#include "engine/vk_engine/state/fog.h"
+#include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/vk_engine/state/taa.h"
+#include "engine/vk_engine/state/fsr3.h"
 #include "engine/frame_pacer.h"
 // Pulled in here (not in vk_engine.h) so the unique_ptr<voxel::VoxelWorld>
 // member's destructor can be generated in this TU where the type is
@@ -225,7 +230,7 @@ void VulkanEngine::init() {
                                      alb, nrm, kTextureCount, texture_sampler_,
                                      spom, kSpomMaterialCount,
                                      grass_mask_.view,
-                                     fog_wisp_.view,
+                                     fog_->wisp.view,
                                      // Session 3 aliases both bindings to buf[0]
                                      // (see restir.cpp::init_restir). When session
                                      // 5 ships proper FIF descriptor sets, restore
@@ -252,7 +257,7 @@ void VulkanEngine::init() {
     // consumer in session 1 — just allocates + binds.
     init_svgf_targets();
     // VRS attachment is sized in LR-tile units, so it must come after
-    // init_terrain_raymarch_lowres() has set tr_lr_extent_.
+    // init_terrain_raymarch_lowres() has set tr_->lr_extent.
     init_vrs_attachment();
     init_sun_shadow_pipeline();
     init_grass_pipeline();
@@ -280,14 +285,14 @@ void VulkanEngine::init() {
     init_sun_shadow_resources();
     present_loader_frame("Initialising UI",       0.95f);
     // Order: TAA owns linear_sampler_ + history images that compose samples;
-    // bloom must run before compose so binding 3's bloom_mip_views_[0] is
+    // bloom must run before compose so binding 3's bloom_->mip_views[0] is
     // live when compose's descriptor set is written.
     init_taa();
     init_taau();
     init_bloom();
     init_compose();
     // SVGF moments + 3-pass a-trous pipelines (4a-deep). Must run
-    // AFTER init_taa() (reuses linear_sampler_ + taa_vert_module_) and
+    // AFTER init_taa() (reuses linear_sampler_ + taa_->vert_module) and
     // AFTER init_svgf_targets() (binds the moments + atrous storage
     // image views). Toggled per-frame via rt_.svgf_enabled; pipelines
     // stand up regardless so the toggle is a per-frame branch.
@@ -295,7 +300,7 @@ void VulkanEngine::init() {
     // Must run AFTER init_taa() — needs linear_sampler_ for the binding-18
     // descriptor write that lets cube.frag sample the half-res shadow.
     init_shadow_lr_pipeline();
-    // Must run AFTER init_taa() — grass raymarch reuses taa_vert_module_
+    // Must run AFTER init_taa() — grass raymarch reuses taa_->vert_module
     // as its fullscreen-triangle vertex shader.
     init_grass_raymarch_pipeline();
     init_viewmodel();
@@ -431,7 +436,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         // generated frame is thrown away by the mailbox swapchain.
         {
             int fg_mult = dlss_fg_active() ? dlssg_frames_sent_ + 1 : 1;
-            if (fsr3_swapchain_active_ && fsr3_fg_context_valid_ && rt_.fg_enabled && !fg_runtime_disabled_)
+            if (fsr3_->swapchain_active && fsr3_->fg_context_valid && rt_.fg_enabled && !fg_runtime_disabled_)
                 fg_mult = 2;   // FSR 3 frame generation: one generated frame per rendered one
             pacer.set_period(frame_target * fg_mult);
         }
@@ -621,9 +626,9 @@ void VulkanEngine::run(const RunOptions& opts) {
             // half-prepared frame state.
             {
                 const bool fg_should_run = rt_.fsr2_enabled && rt_.fg_enabled &&
-                                           !fsr3_fg_fatal_ && !fg_runtime_disabled_ &&
+                                           !fsr3_->fg_fatal && !fg_runtime_disabled_ &&
                                            rt_.fsr_backend == 1;
-                if (!fg_should_run && fsr3_swapchain_active_) {
+                if (!fg_should_run && fsr3_->swapchain_active) {
                     log::info("[fsr3 sc] FG/FSR turned off — tearing proxy down + restoring plain swapchain");
                     vkDeviceWaitIdle(device_);
                     destroy_fsr3_swapchain();
@@ -639,9 +644,9 @@ void VulkanEngine::run(const RunOptions& opts) {
                 }
                 // Deferred from draw(): create the FG SwapChain proxy between
                 // frames (it replaces the swapchain the frame would use).
-                if (fsr3_swapchain_init_pending_) {
-                    fsr3_swapchain_init_pending_ = false;
-                    if (fg_should_run && !fsr3_swapchain_active_ && !fsr3_swapchain_fatal_) {
+                if (fsr3_->swapchain_init_pending) {
+                    fsr3_->swapchain_init_pending = false;
+                    if (fg_should_run && !fsr3_->swapchain_active && !fsr3_->swapchain_fatal) {
                         vkDeviceWaitIdle(device_);
                         init_fsr3_swapchain();
                         continue;

@@ -17,6 +17,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/spacejets.h"
 #include "engine/vk_engine/state/cluster_draw.h"
 #include <meshoptimizer.h>
 #include "engine/log.h"
@@ -802,7 +803,7 @@ void VulkanEngine::build_veg_hiz(VkCommandBuffer cmd) {
 // in the explosion (no green debris). Rocks are left alone.
 void VulkanEngine::blast_vegetation(glm::vec3 pos, float radius) {
     if (veg_inst_cpu_.empty() || radius <= 0.5f) return;
-    auto& R = spacejet_rng_state_;
+    auto& R = spacejet_->rng_state;
     std::vector<glm::vec2> trunks;
     int n_trees = 0;
     static uint32_t next_id = 0x40000000u;

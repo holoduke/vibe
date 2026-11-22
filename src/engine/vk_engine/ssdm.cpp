@@ -22,6 +22,7 @@
 //   4. depth re-projection      ssdm_depth: the displaced surface's depth into the scene depth
 //   (the main pass is taken up again, loading what is there)
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/taa.h"
 #include "engine/vk_engine/state/ssdm.h"
 #include "engine/vk_pipelines.h"
 #include "engine/vk_initializers.h"
@@ -73,7 +74,7 @@ void VulkanEngine::destroy_ssdm() {
 
 bool VulkanEngine::init_ssdm() {
     if (ssdm_ready_) return true;
-    if (ssdm_failed_ || !taa_vert_module_ || !pipeline_layout_) return false;
+    if (ssdm_failed_ || !taa_->vert_module || !pipeline_layout_) return false;
     const std::string sd = VIBE_SHADER_DIR;
     ssdm_->mesh_vert    = vkpipe::load_shader_module(device_, sd + "/ssdm_mesh.vert.spv");
     ssdm_->mesh_frag    = vkpipe::load_shader_module(device_, sd + "/ssdm_mesh.frag.spv");
@@ -145,7 +146,7 @@ bool VulkanEngine::init_ssdm() {
     // The full-screen passes.
     {
         vkpipe::GraphicsPipelineConfig cfg{};
-        cfg.vert = taa_vert_module_;
+        cfg.vert = taa_->vert_module;
         cfg.layout = ssdm_->fs_layout;
         cfg.cull = VK_CULL_MODE_NONE;
         cfg.depth_test = false; cfg.depth_write = false;

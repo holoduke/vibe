@@ -4,6 +4,15 @@
 // used to live here moved to pipelines_setup.cpp.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/streamline.h"
+#include "engine/vk_engine/state/bloom.h"
+#include "engine/vk_engine/state/svgf.h"
+#include "engine/vk_engine/state/taau.h"
+#include "engine/vk_engine/state/clouds.h"
+#include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/vk_engine/state/taa.h"
+#include "engine/vk_engine/state/fsr3.h"
+#include "engine/vk_engine/state/dlss.h"
 #include "engine/vk_pipelines.h"
 #include "engine/window.h"
 
@@ -67,7 +76,7 @@ void VulkanEngine::init_vulkan() {
     // With Streamline, vk-bootstrap goes through SL's vkGetInstanceProcAddr
     // proxy: SL adds its extensions / features / queues itself and sees the
     // swapchain.
-    vkb::InstanceBuilder builder = sl_gipa_ ? vkb::InstanceBuilder(sl_gipa_) : vkb::InstanceBuilder();
+    vkb::InstanceBuilder builder = sl_->gipa ? vkb::InstanceBuilder(sl_->gipa) : vkb::InstanceBuilder();
     auto& b = builder.set_app_name("Vibe")
                   .request_validation_layers(vk_validation_enabled())
                   .require_api_version(1, 3, 0)
@@ -103,9 +112,9 @@ void VulkanEngine::init_vulkan() {
     // hook fails with "Could not find a window" for a GLFW-made surface).
     surface_ = VK_NULL_HANDLE;
 #ifdef _WIN32
-    if (sl_gipa_ && window_->native_handle()) {
+    if (sl_->gipa && window_->native_handle()) {
         auto create_fn = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(
-            sl_gipa_(instance_, "vkCreateWin32SurfaceKHR"));
+            sl_->gipa(instance_, "vkCreateWin32SurfaceKHR"));
         if (create_fn) {
             VkWin32SurfaceCreateInfoKHR sci{};
             sci.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
@@ -347,20 +356,20 @@ void VulkanEngine::init_vulkan() {
     // proxy. Indices 1..3 are populated only when custom_queue_setup
     // requested 4 graphics queues (gfx_count >= 4). On hardware where
     // we got only 1, these stay VK_NULL_HANDLE and FG is unavailable.
-    fsr3_extra_queue_present_ = VK_NULL_HANDLE;
-    fsr3_extra_queue_acquire_ = VK_NULL_HANDLE;
-    fsr3_extra_queue_compute_ = VK_NULL_HANDLE;
+    fsr3_->extra_queue_present = VK_NULL_HANDLE;
+    fsr3_->extra_queue_acquire = VK_NULL_HANDLE;
+    fsr3_->extra_queue_compute = VK_NULL_HANDLE;
     {
         VkQueue q1 = VK_NULL_HANDLE, q2 = VK_NULL_HANDLE, q3 = VK_NULL_HANDLE;
         vkGetDeviceQueue(device_, graphics_queue_family_, 1, &q1);
         vkGetDeviceQueue(device_, graphics_queue_family_, 2, &q2);
         vkGetDeviceQueue(device_, graphics_queue_family_, 3, &q3);
-        fsr3_extra_queue_present_ = q1;
-        fsr3_extra_queue_acquire_ = q2;
+        fsr3_->extra_queue_present = q1;
+        fsr3_->extra_queue_acquire = q2;
         // Compute role for SDK: if we have 4 graphics queues, take the
         // 4th and route the SDK to it (keeps async-TLAS on its dedicated
         // family). Otherwise reuse our compute_queue_ as before.
-        fsr3_extra_queue_compute_ = q3 ? q3 : compute_queue_;
+        fsr3_->extra_queue_compute = q3 ? q3 : compute_queue_;
         log::infof("[fsr3 sc] extra graphics queues: present=%p acquire=%p compute=%p",
                    (void*)q1, (void*)q2, (void*)q3);
     }
@@ -471,7 +480,7 @@ void VulkanEngine::destroy_swapchain() {
     // first via the SDK's DestroyContext — that frees the wrapped
     // swapchain and nulls our handle, then the rest of this function
     // skips the (now-NULL) vkDestroySwapchainKHR call below.
-    if (fsr3_swapchain_active_) {
+    if (fsr3_->swapchain_active) {
         destroy_fsr3_swapchain();
     }
     for (auto v : swapchain_views_) vkDestroyImageView(device_, v, nullptr);
@@ -482,10 +491,10 @@ void VulkanEngine::destroy_swapchain() {
     }
     render_semaphores_.clear();
     if (swapchain_) {
-        // Created through Streamline's proxy (vk-bootstrap got sl_gipa_):
+        // Created through Streamline's proxy (vk-bootstrap got sl_->gipa):
         // with DLSS-G loaded the handle is SL's, so destroy it there too.
-        PFN_vkDestroySwapchainKHR destroy_fn = sl_gdpa_
-            ? reinterpret_cast<PFN_vkDestroySwapchainKHR>(sl_gdpa_(device_, "vkDestroySwapchainKHR")) : nullptr;
+        PFN_vkDestroySwapchainKHR destroy_fn = sl_->gdpa
+            ? reinterpret_cast<PFN_vkDestroySwapchainKHR>(sl_->gdpa(device_, "vkDestroySwapchainKHR")) : nullptr;
         if (destroy_fn) destroy_fn(device_, swapchain_, nullptr);
         else vkDestroySwapchainKHR(device_, swapchain_, nullptr);
     }
@@ -599,7 +608,7 @@ void VulkanEngine::recreate_swapchain() {
     dlssg_destroy_hudless();      // swapchain-sized; recreated on next use
     sl_update_frame_gen(false);   // FG off around window / swapchain changes (SDK rule)
     deferred_desc_sig_ = 0;   // handles may be recreated (even at the same address)
-    cloud_depth_bound_ = VK_NULL_HANDLE;   // (the same: the clouds' depth binding must be rewritten)
+    cloud_->depth_bound = VK_NULL_HANDLE;   // (the same: the clouds' depth binding must be rewritten)
     uint32_t w = 0, h = 0;
     window_->framebuffer_size(w, h);
     const double wait_t0 = glfwGetTime();
@@ -615,31 +624,31 @@ void VulkanEngine::recreate_swapchain() {
     init_swapchain();
     init_depth_image();
     write_depth_copy_binding();   // depth copy image was recreated
-    if (taa_desc_pool_) recreate_taa_targets();
+    if (taa_->desc_pool) recreate_taa_targets();
     // TAAU targets depend on swapchain_extent_; rebuild after swapchain change.
-    if (taau_desc_pool_) recreate_taau_targets();
+    if (taau_->desc_pool) recreate_taau_targets();
     // Bloom mip 0 is sized to render_extent_/2; if we don't recreate it
     // alongside the swapchain, compose samples a stale-sized texture and
     // bloom appears offset against everything else. The compose desc-set's
     // image bindings (history at 0, depth at 1, bloom at 3) all reference
     // image views that were just destroyed, so rebind them.
-    if (bloom_image_) recreate_bloom_targets();
+    if (bloom_->image) recreate_bloom_targets();
     // LR raymarch targets are sized at render_extent_ × scale; rebuild
     // them too so the upscale compose continues to read valid storage.
     if (shadow_lr_image_) {
         destroy_shadow_lr();
         init_shadow_lr();
     }
-    if (svgf_gi_image_) {
+    if (svgf_->gi_image) {
         // recreate_svgf_targets also rewrites scene_desc binding 19
         // so it points at the new view.
         recreate_svgf_targets();
     }
-    if (tr_lr_color_image_) {
+    if (tr_->lr_color_image) {
         destroy_terrain_raymarch_lowres();
         init_terrain_raymarch_lowres();
     }
-    // VRS attachment is sized in LR-tile units — depends on tr_lr_extent_.
+    // VRS attachment is sized in LR-tile units — depends on tr_->lr_extent.
     if (vrs_supported_) recreate_vrs_attachment();
     // FSR2 bakes maxRenderSize/displaySize into its internal allocations,
     // so any swapchain change requires a context recreate. No-op when the
@@ -649,7 +658,7 @@ void VulkanEngine::recreate_swapchain() {
     // FG context bakes display size into its allocations the same way
     // the upscaler does — recreate when the swapchain changes. No-op
     // when FG was never enabled.
-    if (fsr3_fg_context_valid_) { destroy_fsr3_fg(); init_fsr3_fg(); }
+    if (fsr3_->fg_context_valid) { destroy_fsr3_fg(); init_fsr3_fg(); }
     // ReSTIR reservoir buffers are sized to render_extent_ and rebound
     // on scene_desc bindings 15/16. recreate_restir_buffers handles the
     // destroy + alloc + descriptor rewrite atomically.
@@ -928,7 +937,7 @@ namespace vibe {
 void VulkanEngine::apply_vendor_upscaler_defaults() {
     if (!rt_.upscaler_auto) return;
     const bool nv = gpu_vendor_ == GpuVendor::Nvidia;
-    if (nv && dlss_supported_) {
+    if (nv && dlss_->supported) {
         rt_.fsr2_enabled = true;
         rt_.fsr_backend = 2;          // DLSS (+ RR / DLSS-G as configured)
         log::info("[upscaler] auto: NVIDIA -> DLSS");

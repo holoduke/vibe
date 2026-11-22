@@ -10,6 +10,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/multiplayer.h"
 #include "engine/cpu_prof.h"
 #include "engine/log.h"
 
@@ -539,7 +540,7 @@ void VulkanEngine::anim_debug_overlay() {
     const glm::vec3 mz = body_animator_->muzzle_position();
     if (project(model_pt(mz), a) && project(model_pt(mz + body_animator_->muzzle_direction() * 1.5f), b)) dl->AddLine(a, b, IM_COL32(255, 80, 60, 200), 1.5f);
     // Other players: their level of detail and clip over their heads.
-    for (const auto& av : mp_avatars_) {
+    for (const auto& av : mp_->avatars) {
         if (!av.id || !av.animator || !av.drawn) continue;
         const anim::AnimDebug& ad = av.animator->debug();
         if (!project(av.eye + glm::vec3(0.0f, 0.55f, 0.0f), a)) continue;
@@ -589,14 +590,14 @@ int VulkanEngine::body_mesh_lod(glm::vec3 pos, int previous) const {
 
 void VulkanEngine::draw_player_body(
 VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
-    if (!mp_draw_ && !body_drawn_) return;
-    const int palette = mp_draw_ ? mp_draw_->palette : body_palette_;
-    const int palette_prev = mp_draw_ ? mp_draw_->palette_prev : body_palette_prev_;
+    if (!mp_->draw && !body_drawn_) return;
+    const int palette = mp_->draw ? mp_->draw->palette : body_palette_;
+    const int palette_prev = mp_->draw ? mp_->draw->palette_prev : body_palette_prev_;
     if (palette < 0 || !skin_pipeline()) return;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skin_pipeline());
     // Which mesh: the player's own body is always the full one; others by their size on screen.
     static const int kForceMesh = std::getenv("VIBE_MESH_LOD") ? std::atoi(std::getenv("VIBE_MESH_LOD")) : -1;
-    int lod = kForceMesh >= 0 ? kForceMesh : (mp_draw_ ? mp_draw_->mesh_lod : 0);
+    int lod = kForceMesh >= 0 ? kForceMesh : (mp_->draw ? mp_->draw->mesh_lod : 0);
     lod = glm::clamp(lod, 0, kBodyLods - 1);
     auto level = [&](const SkinMesh* set) -> const SkinMesh* {
         for (int i = lod; i >= 0; --i) if (set[i].index_count) return &set[i];
@@ -604,7 +605,7 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     };
     const SkinMesh* body = level(body_lod_);
     // The head: on everybody but the player himself (who looks out of it).
-    const SkinMesh* head = (mp_draw_ || body_front_) ? level(head_lod_) : nullptr;
+    const SkinMesh* head = (mp_->draw || body_front_) ? level(head_lod_) : nullptr;
     if (!body) return;
     auto draw_mesh = [&](const SkinMesh& m) {
         const VkBuffer streams[2] = { m.rest.vertex_buffer, m.skin.vertex_buffer };
@@ -614,16 +615,16 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
         vkCmdDrawIndexed(cmd, m.index_count, 1, 0, 0, 0);
     };
     PushConstants pc{};
-    const glm::mat4 bm = mp_draw_ ? mp_draw_->model : body_model_;
+    const glm::mat4 bm = mp_->draw ? mp_->draw->model : body_model_;
     // `vp` is relative to `cam` (draw_viewmodel): so is the matrix it multiplies; the lighting keeps the world one.
     glm::mat4 bm_rel = bm;
     bm_rel[3] = glm::vec4(glm::vec3(bm[3]) - cam, 1.0f);
     pc.mvp = vp * bm_rel;
     pc.model = bm;
     pc.prev_mvp = pc.mvp;                  // rides on the camera: no motion vectors
-    if (mp_draw_) {
+    if (mp_->draw) {
         // Another player: a real object in the world, with real motion.
-        if (prev_view_proj_valid_) pc.prev_mvp = prev_view_proj_ * mp_draw_->prev_model;
+        if (prev_view_proj_valid_) pc.prev_mvp = prev_view_proj_ * mp_->draw->prev_model;
     } else if (rt_.fsr2_enabled) {
         glm::mat4 J(1.0f);
         const glm::vec2 dj = current_frame_view_.jitter - prev_jitter_;
@@ -643,7 +644,7 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     // Test hook: VIBE_BODY_CROWD=<n> draws the local body n more times in a block ahead
     // (the same pose): what n skinned characters cost the GPU (gpu-passes: w_viewmodel).
     static const int kCrowd = std::getenv("VIBE_BODY_CROWD") ? std::atoi(std::getenv("VIBE_BODY_CROWD")) : 0;
-    if (kCrowd > 0 && !mp_draw_) {
+    if (kCrowd > 0 && !mp_->draw) {
         const int side = int(std::ceil(std::sqrt(float(kCrowd))));
         for (int i = 0; i < kCrowd; ++i) {
             const glm::vec3 off = glm::vec3(bm * glm::vec4(float(i % side - side / 2) * 1.2f, 0.0f, -2.0f - float(i / side) * 1.2f, 0.0f));

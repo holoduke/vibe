@@ -4,6 +4,17 @@
 // feeds binding 3 lives in vk_engine/bloom.cpp.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/atmosphere.h"
+#include "engine/vk_engine/state/bloom.h"
+#include "engine/vk_engine/state/fsr2.h"
+#include "engine/vk_engine/state/fog.h"
+#include "engine/vk_engine/state/taau.h"
+#include "engine/vk_engine/state/clouds.h"
+#include "engine/vk_engine/state/compose.h"
+#include "engine/vk_engine/state/taa.h"
+#include "engine/vk_engine/state/fsr3.h"
+#include "engine/vk_engine/state/sun_shadow.h"
+#include "engine/vk_engine/state/dlss.h"
 #include "engine/vk_pipelines.h"
 
 #include <GLFW/glfw3.h>
@@ -12,7 +23,7 @@
 namespace vibe {
 
 void VulkanEngine::init_compose() {
-    // Compose set's binding 3 samples bloom_mip_views_[0], so init_bloom()
+    // Compose set's binding 3 samples bloom_->mip_views[0], so init_bloom()
     // must have run first. linear_sampler_ comes from init_taa(). Both are
     // sequenced from VulkanEngine::init() — this method just assumes them.
     init_exposure();   // SSBO + compute; compose binding 4 reads the buffer
@@ -27,7 +38,7 @@ void VulkanEngine::init_compose() {
             .pNext = nullptr, .flags = 0,
             .maxSets = kHistorySlots, .poolSizeCount = 2, .pPoolSizes = sizes,
         };
-        vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &compose_desc_pool_),
+        vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &compose_->desc_pool),
                  "compose desc pool");
     }
     {
@@ -45,20 +56,20 @@ void VulkanEngine::init_compose() {
             .bindingCount = 10, .pBindings = b,
         };
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
-                                             &compose_desc_set_layout_),
+                                             &compose_->desc_set_layout),
                  "compose set layout");
     }
     {
         VkDescriptorSetLayout layouts[kHistorySlots] = {
-            compose_desc_set_layout_, compose_desc_set_layout_
+            compose_->desc_set_layout, compose_->desc_set_layout
         };
         VkDescriptorSetAllocateInfo dai{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = nullptr,
-            .descriptorPool = compose_desc_pool_,
+            .descriptorPool = compose_->desc_pool,
             .descriptorSetCount = kHistorySlots, .pSetLayouts = layouts,
         };
-        vk_check(vkAllocateDescriptorSets(device_, &dai, compose_desc_sets_),
+        vk_check(vkAllocateDescriptorSets(device_, &dai, compose_->desc_sets),
                  "compose set alloc");
         rewrite_compose_image_bindings();
     }
@@ -74,26 +85,26 @@ void VulkanEngine::init_compose() {
     VkPipelineLayoutCreateInfo cplci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .setLayoutCount = 1, .pSetLayouts = &compose_desc_set_layout_,
+        .setLayoutCount = 1, .pSetLayouts = &compose_->desc_set_layout,
         .pushConstantRangeCount = 1, .pPushConstantRanges = &compose_pc,
     };
-    vk_check(vkCreatePipelineLayout(device_, &cplci, nullptr, &compose_pipeline_layout_),
+    vk_check(vkCreatePipelineLayout(device_, &cplci, nullptr, &compose_->pipeline_layout),
              "compose pipeline layout");
 
     {
         std::string sd2 = VIBE_SHADER_DIR;
-        compose_frag_module_ = vkpipe::load_shader_module(device_, sd2 + "/compose.frag.spv");
+        compose_->frag_module = vkpipe::load_shader_module(device_, sd2 + "/compose.frag.spv");
     }
     vkpipe::GraphicsPipelineConfig ccfg{};
-    ccfg.vert = taa_vert_module_;       // reuse the fullscreen-triangle VS
-    ccfg.frag = compose_frag_module_;
-    ccfg.layout = compose_pipeline_layout_;
+    ccfg.vert = taa_->vert_module;       // reuse the fullscreen-triangle VS
+    ccfg.frag = compose_->frag_module;
+    ccfg.layout = compose_->pipeline_layout;
     ccfg.color_format = swapchain_format_;
     ccfg.depth_format = VK_FORMAT_UNDEFINED;
     ccfg.cull = VK_CULL_MODE_NONE;
     ccfg.depth_test = false;
     ccfg.depth_write = false;
-    compose_pipeline_ = vkpipe::build_graphics_pipeline(device_, ccfg);
+    compose_->pipeline = vkpipe::build_graphics_pipeline(device_, ccfg);
     // Sky fill (compose.frag -DSKY_FILL): same layout / set / push
     // constants, renders into the render-res scene colour before DLSS.
     {
@@ -109,13 +120,13 @@ void VulkanEngine::init_compose() {
         scfg.dst_alpha_add_blend = true;
         sky_fill_pipeline_ = vkpipe::build_graphics_pipeline(device_, scfg);
         // Sun shafts before the upscaler: plain additive into the scene colour.
-        sun_shafts_frag_module_ = vkpipe::load_shader_module(device_, sd3 + "/sun_shafts.frag.spv");
-        if (sun_shafts_frag_module_) {
+        sun_->shafts_frag_module = vkpipe::load_shader_module(device_, sd3 + "/sun_shafts.frag.spv");
+        if (sun_->shafts_frag_module) {
             vkpipe::GraphicsPipelineConfig hcfg = ccfg;
-            hcfg.frag = sun_shafts_frag_module_;
+            hcfg.frag = sun_->shafts_frag_module;
             hcfg.color_format = scene_color_format_;
             hcfg.additive_blend = true;
-            sun_shafts_pipeline_ = vkpipe::build_graphics_pipeline(device_, hcfg);
+            sun_->shafts_pipeline = vkpipe::build_graphics_pipeline(device_, hcfg);
         }
         // The cloud layer in front of the land (camera inside / above it), before the upscaler.
         clouds_over_frag_module_ = vkpipe::load_shader_module(device_, sd3 + "/clouds_over.frag.spv");
@@ -132,7 +143,7 @@ void VulkanEngine::init_compose() {
 
 void VulkanEngine::rewrite_compose_image_bindings() {
     wait_gpu_frames_idle();   // compose set may be in use by the in-flight frame
-    if (!compose_desc_set_layout_) return;
+    if (!compose_->desc_set_layout) return;
     // Four sources for compose's history binding, in priority order:
     //   FSR3  — HR upscaled output via ffx-api (FidelityFX SDK 1.1.4)
     //   FSR2  — HR upscaled output via legacy FSR2 static lib
@@ -142,21 +153,21 @@ void VulkanEngine::rewrite_compose_image_bindings() {
     // FSR2/FSR3 selection is mutually exclusive (one upscale per frame).
     const bool use_dlss = dlss_active();   // backend 2 (Streamline)
     const bool use_fsr3 = rt_.fsr2_enabled && rt_.fsr_backend == 1 &&
-                          fsr3_output_view_ != VK_NULL_HANDLE;
+                          fsr3_->output_view != VK_NULL_HANDLE;
     const bool use_fsr2 = !use_fsr3 && rt_.fsr2_enabled &&
                           !use_dlss &&
-                          fsr2_output_view_ != VK_NULL_HANDLE;
+                          fsr2_->output_view != VK_NULL_HANDLE;
     const bool use_taau = !use_fsr3 && !use_fsr2 && !use_dlss && rt_.taau_enabled &&
-                          taau_image_[0] != VK_NULL_HANDLE;
-    compose_uses_fsr3_ = use_fsr3;
-    compose_uses_fsr2_ = use_fsr2;
-    compose_uses_taau_ = use_taau;
-    compose_uses_dlss_ = use_dlss;
+                          taau_->image[0] != VK_NULL_HANDLE;
+    compose_->uses_fsr3 = use_fsr3;
+    compose_->uses_fsr2 = use_fsr2;
+    compose_->uses_taau = use_taau;
+    compose_->uses_dlss = use_dlss;
     for (int s = 0; s < kHistorySlots; ++s) {
-        VkImageView hist_src = use_dlss ? dlss_output_view_
-                              : use_fsr3 ? fsr3_output_view_
-                              : use_fsr2 ? fsr2_output_view_
-                              : use_taau ? taau_view_[s]
+        VkImageView hist_src = use_dlss ? dlss_->output_view
+                              : use_fsr3 ? fsr3_->output_view
+                              : use_fsr2 ? fsr2_->output_view
+                              : use_taau ? taau_->view[s]
                               : history_view_[s];
         VkDescriptorImageInfo i_hist{ linear_sampler_, hist_src,
                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -165,12 +176,12 @@ void VulkanEngine::rewrite_compose_image_bindings() {
         VkDescriptorImageInfo i_sky { skybox_.sampler, skybox_.view,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo i_bloom{ linear_sampler_,
-                                        bloom_full_view_ ? bloom_full_view_
-                                                          : bloom_mip_views_[0],
+                                        bloom_->full_view ? bloom_->full_view
+                                                          : bloom_->mip_views[0],
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkWriteDescriptorSet w[4]{};
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[0].dstSet = compose_desc_sets_[s];
+        w[0].dstSet = compose_->desc_sets[s];
         w[0].dstBinding = 0;
         w[0].descriptorCount = 1;
         w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -187,13 +198,13 @@ void VulkanEngine::rewrite_compose_image_bindings() {
         vkUpdateDescriptorSets(device_, 4, w, 0, nullptr);
         if (exposure_buf_) vkUpdateDescriptorSets(device_, 1, &wb, 0, nullptr);
         // Atmosphere LUTs (GENERAL layout, see atmosphere.cpp).
-        if (atmo_sampler_) {
+        if (atmo_->sampler) {
             VkDescriptorImageInfo ai[5] = {
-                { atmo_sampler_, atmo_trans_.view, VK_IMAGE_LAYOUT_GENERAL },
-                { atmo_sampler_, atmo_sky_.view,   VK_IMAGE_LAYOUT_GENERAL },
-                { atmo_sampler_, atmo_ap_.view,    VK_IMAGE_LAYOUT_GENERAL },
-                { atmo_sampler_, cloud_img_.view ? cloud_img_.view : atmo_sky_.view, VK_IMAGE_LAYOUT_GENERAL },
-                { atmo_sampler_, fog_integ_.view ? fog_integ_.view : atmo_ap_.view, VK_IMAGE_LAYOUT_GENERAL },
+                { atmo_->sampler, atmo_->trans.view, VK_IMAGE_LAYOUT_GENERAL },
+                { atmo_->sampler, atmo_->sky.view,   VK_IMAGE_LAYOUT_GENERAL },
+                { atmo_->sampler, atmo_->ap.view,    VK_IMAGE_LAYOUT_GENERAL },
+                { atmo_->sampler, cloud_->img.view ? cloud_->img.view : atmo_->sky.view, VK_IMAGE_LAYOUT_GENERAL },
+                { atmo_->sampler, fog_->integ.view ? fog_->integ.view : atmo_->ap.view, VK_IMAGE_LAYOUT_GENERAL },
             };
             VkWriteDescriptorSet wa[5]{};
             for (int k = 0; k < 5; ++k) {
@@ -218,24 +229,24 @@ void VulkanEngine::destroy_compose() {
     destroy_exposure();
     destroy_atmosphere();
     if (sky_fill_pipeline_)        vkDestroyPipeline(device_, sky_fill_pipeline_, nullptr);
-    if (sun_shafts_pipeline_)      vkDestroyPipeline(device_, sun_shafts_pipeline_, nullptr);
+    if (sun_->shafts_pipeline)      vkDestroyPipeline(device_, sun_->shafts_pipeline, nullptr);
     if (clouds_over_pipeline_)     vkDestroyPipeline(device_, clouds_over_pipeline_, nullptr);
     if (clouds_over_frag_module_)  vkDestroyShaderModule(device_, clouds_over_frag_module_, nullptr);
     clouds_over_pipeline_ = VK_NULL_HANDLE; clouds_over_frag_module_ = VK_NULL_HANDLE;
-    if (sun_shafts_frag_module_)   vkDestroyShaderModule(device_, sun_shafts_frag_module_, nullptr);
-    sun_shafts_pipeline_ = VK_NULL_HANDLE; sun_shafts_frag_module_ = VK_NULL_HANDLE;
+    if (sun_->shafts_frag_module)   vkDestroyShaderModule(device_, sun_->shafts_frag_module, nullptr);
+    sun_->shafts_pipeline = VK_NULL_HANDLE; sun_->shafts_frag_module = VK_NULL_HANDLE;
     if (sky_fill_frag_module_)     vkDestroyShaderModule(device_, sky_fill_frag_module_, nullptr);
     sky_fill_pipeline_ = VK_NULL_HANDLE; sky_fill_frag_module_ = VK_NULL_HANDLE;
-    if (compose_pipeline_)         vkDestroyPipeline(device_, compose_pipeline_, nullptr);
-    if (compose_pipeline_layout_)  vkDestroyPipelineLayout(device_, compose_pipeline_layout_, nullptr);
-    if (compose_frag_module_)      vkDestroyShaderModule(device_, compose_frag_module_, nullptr);
-    if (compose_desc_set_layout_)  vkDestroyDescriptorSetLayout(device_, compose_desc_set_layout_, nullptr);
-    if (compose_desc_pool_)        vkDestroyDescriptorPool(device_, compose_desc_pool_, nullptr);
-    compose_pipeline_         = VK_NULL_HANDLE;
-    compose_pipeline_layout_  = VK_NULL_HANDLE;
-    compose_frag_module_      = VK_NULL_HANDLE;
-    compose_desc_set_layout_  = VK_NULL_HANDLE;
-    compose_desc_pool_        = VK_NULL_HANDLE;
+    if (compose_->pipeline)         vkDestroyPipeline(device_, compose_->pipeline, nullptr);
+    if (compose_->pipeline_layout)  vkDestroyPipelineLayout(device_, compose_->pipeline_layout, nullptr);
+    if (compose_->frag_module)      vkDestroyShaderModule(device_, compose_->frag_module, nullptr);
+    if (compose_->desc_set_layout)  vkDestroyDescriptorSetLayout(device_, compose_->desc_set_layout, nullptr);
+    if (compose_->desc_pool)        vkDestroyDescriptorPool(device_, compose_->desc_pool, nullptr);
+    compose_->pipeline         = VK_NULL_HANDLE;
+    compose_->pipeline_layout  = VK_NULL_HANDLE;
+    compose_->frag_module      = VK_NULL_HANDLE;
+    compose_->desc_set_layout  = VK_NULL_HANDLE;
+    compose_->desc_pool        = VK_NULL_HANDLE;
 }
 
 

@@ -18,6 +18,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/cpu_prof.h"
 #include "engine/log.h"
 #include "engine/vk_initializers.h"
@@ -38,9 +39,9 @@ constexpr float kHzLit = -10000.0f;       // "nothing blocks the sun here"
 
 void VulkanEngine::init_sun_horizon() {
     const size_t cells = size_t(kHzDim) * kHzDim;
-    sun_horizon_bake_.assign(cells * 2, 0);
-    sun_horizon_s_bake_.assign(cells, kHzLit);
-    sun_horizon_s_.assign(cells, kHzLit);
+    sun_->horizon_bake.assign(cells * 2, 0);
+    sun_->horizon_s_bake.assign(cells, kHzLit);
+    sun_->horizon_s.assign(cells, kHzLit);
 
     VkImageCreateInfo ici{};
     ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -54,15 +55,15 @@ void VulkanEngine::init_sun_horizon() {
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_AUTO;
-    vk_check(vmaCreateImage(allocator_, &ici, &aci, &sun_horizon_image_, &sun_horizon_alloc_, nullptr),
+    vk_check(vmaCreateImage(allocator_, &ici, &aci, &sun_->horizon_image, &sun_->horizon_alloc, nullptr),
              "sun horizon image");
     VkImageViewCreateInfo vci{};
     vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vci.image = sun_horizon_image_;
+    vci.image = sun_->horizon_image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = ici.format;
     vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vk_check(vkCreateImageView(device_, &vci, nullptr, &sun_horizon_view_), "sun horizon view");
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &sun_->horizon_view), "sun horizon view");
 
     VkSamplerCreateInfo sci{};
     sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -70,7 +71,7 @@ void VulkanEngine::init_sun_horizon() {
     sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.maxLod = 0.0f;
-    vk_check(vkCreateSampler(device_, &sci, nullptr, &sun_horizon_sampler_), "sun horizon sampler");
+    vk_check(vkCreateSampler(device_, &sci, nullptr, &sun_->horizon_sampler), "sun horizon sampler");
 
     for (uint32_t i = 0; i < kFrameOverlap; ++i) {
         VkBufferCreateInfo bci{};
@@ -82,25 +83,25 @@ void VulkanEngine::init_sun_horizon() {
         baci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
         baci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo info{};
-        vk_check(vmaCreateBuffer(allocator_, &bci, &baci, &sun_horizon_stage_[i], &sun_horizon_stage_alloc_[i], &info),
+        vk_check(vmaCreateBuffer(allocator_, &bci, &baci, &sun_->horizon_stage[i], &sun_->horizon_stage_alloc[i], &info),
                  "sun horizon staging");
-        sun_horizon_stage_map_[i] = info.pMappedData;
+        sun_->horizon_stage_map[i] = info.pMappedData;
     }
 
     // Until the first bake lands: everything lit.
     vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
-        vkinit::transition_image(cb, sun_horizon_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+        vkinit::transition_image(cb, sun_->horizon_image, VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         VkClearColorValue clr{}; clr.float32[0] = kHzLit;
         VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-        vkCmdClearColorImage(cb, sun_horizon_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clr, 1, &r);
-        vkinit::transition_image(cb, sun_horizon_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        vkCmdClearColorImage(cb, sun_->horizon_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clr, 1, &r);
+        vkinit::transition_image(cb, sun_->horizon_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     });
 
     // Scene set binding 31 (raymarched terrain, grass).
     if (scene_desc_set_) {
-        VkDescriptorImageInfo ii{ sun_horizon_sampler_, sun_horizon_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo ii{ sun_->horizon_sampler, sun_->horizon_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkWriteDescriptorSet w{};
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w.dstSet = scene_desc_set_; w.dstBinding = 31; w.descriptorCount = 1;
@@ -111,26 +112,26 @@ void VulkanEngine::init_sun_horizon() {
 }
 
 void VulkanEngine::destroy_sun_horizon() {
-    jobs::wait(sun_horizon_job_);
+    jobs::wait(sun_->horizon_job);
     for (uint32_t i = 0; i < kFrameOverlap; ++i) {
-        if (sun_horizon_stage_[i]) vmaDestroyBuffer(allocator_, sun_horizon_stage_[i], sun_horizon_stage_alloc_[i]);
-        sun_horizon_stage_[i] = VK_NULL_HANDLE; sun_horizon_stage_alloc_[i] = nullptr;
+        if (sun_->horizon_stage[i]) vmaDestroyBuffer(allocator_, sun_->horizon_stage[i], sun_->horizon_stage_alloc[i]);
+        sun_->horizon_stage[i] = VK_NULL_HANDLE; sun_->horizon_stage_alloc[i] = nullptr;
     }
-    if (sun_horizon_sampler_) vkDestroySampler(device_, sun_horizon_sampler_, nullptr);
-    if (sun_horizon_view_) vkDestroyImageView(device_, sun_horizon_view_, nullptr);
-    if (sun_horizon_image_) vmaDestroyImage(allocator_, sun_horizon_image_, sun_horizon_alloc_);
-    sun_horizon_sampler_ = VK_NULL_HANDLE; sun_horizon_view_ = VK_NULL_HANDLE;
-    sun_horizon_image_ = VK_NULL_HANDLE; sun_horizon_alloc_ = nullptr;
+    if (sun_->horizon_sampler) vkDestroySampler(device_, sun_->horizon_sampler, nullptr);
+    if (sun_->horizon_view) vkDestroyImageView(device_, sun_->horizon_view, nullptr);
+    if (sun_->horizon_image) vmaDestroyImage(allocator_, sun_->horizon_image, sun_->horizon_alloc);
+    sun_->horizon_sampler = VK_NULL_HANDLE; sun_->horizon_view = VK_NULL_HANDLE;
+    sun_->horizon_image = VK_NULL_HANDLE; sun_->horizon_alloc = nullptr;
 }
 
-// Worker thread. Reads the CPU heightmap, writes sun_horizon_s_bake_ and
-// sun_horizon_bake_ (the main thread does not touch either while a bake is
+// Worker thread. Reads the CPU heightmap, writes sun_->horizon_s_bake and
+// sun_->horizon_bake (the main thread does not touch either while a bake is
 // in flight).
 void VulkanEngine::bake_sun_horizon(glm::vec3 L) {
     CPU_SCOPE("+horizon-job");
     const int N = kHzDim;
     const float cell = kHzSide / float(N);
-    std::vector<float>& S = sun_horizon_s_bake_;
+    std::vector<float>& S = sun_->horizon_s_bake;
     static std::vector<float> H;
     H.resize(size_t(N) * N);
     for (int j = 0; j < N; ++j) {
@@ -189,7 +190,7 @@ void VulkanEngine::bake_sun_horizon(glm::vec3 L) {
             }
         }
     }
-    uint16_t* out = sun_horizon_bake_.data();
+    uint16_t* out = sun_->horizon_bake.data();
     for (size_t c = 0; c < size_t(N) * N; ++c) {
         out[c * 2 + 0] = glm::packHalf1x16(S[c]);
         out[c * 2 + 1] = glm::packHalf1x16(std::min(S[c] - H[c], 2000.0f));
@@ -199,53 +200,53 @@ void VulkanEngine::bake_sun_horizon(glm::vec3 L) {
 // Main thread, once per frame before draw(): collect a finished bake, start
 // the next one when the light has moved.
 void VulkanEngine::tick_sun_horizon() {
-    if (!sun_horizon_image_ || terrain_data_.heights.empty()) return;
-    if (sun_horizon_baking_ && !sun_horizon_job_.busy()) {
-        sun_horizon_baking_ = false;
-        sun_horizon_s_.swap(sun_horizon_s_bake_);
-        sun_horizon_dir_ = sun_horizon_bake_dir_;
-        sun_horizon_upload_pending_ = true;
+    if (!sun_->horizon_image || terrain_data_.heights.empty()) return;
+    if (sun_->horizon_baking && !sun_->horizon_job.busy()) {
+        sun_->horizon_baking = false;
+        sun_->horizon_s.swap(sun_->horizon_s_bake);
+        sun_->horizon_dir = sun_->horizon_bake_dir;
+        sun_->horizon_upload_pending = true;
     }
-    if (sun_horizon_baking_ || sun_horizon_upload_pending_) return;
+    if (sun_->horizon_baking || sun_->horizon_upload_pending) return;
     const float p = glm::radians(rt_.sun_pitch_deg), y = glm::radians(rt_.sun_yaw_deg);
     const glm::vec3 L(std::cos(p) * std::sin(y), std::sin(p), std::cos(p) * std::cos(y));
     // 0.02 degrees of light motion, or every ~4 s regardless (craters and
     // sculpting change the terrain under a stationary sun).
-    ++sun_horizon_age_;
-    if (glm::distance(L, sun_horizon_dir_) < 3.5e-4f && sun_horizon_age_ < 480) return;
-    sun_horizon_age_ = 0;
-    sun_horizon_bake_dir_ = L;
-    sun_horizon_baking_ = true;
-    jobs::run(sun_horizon_job_, [this, L] { bake_sun_horizon(L); });
+    ++sun_->horizon_age;
+    if (glm::distance(L, sun_->horizon_dir) < 3.5e-4f && sun_->horizon_age < 480) return;
+    sun_->horizon_age = 0;
+    sun_->horizon_bake_dir = L;
+    sun_->horizon_baking = true;
+    jobs::run(sun_->horizon_job, [this, L] { bake_sun_horizon(L); });
 }
 
 // Frame command buffer, before any pass samples the map.
 void VulkanEngine::record_sun_horizon_upload(VkCommandBuffer cmd, uint32_t slot) {
-    if (!sun_horizon_upload_pending_ || !sun_horizon_image_) return;
-    sun_horizon_upload_pending_ = false;
-    std::memcpy(sun_horizon_stage_map_[slot], sun_horizon_bake_.data(),
-                sun_horizon_bake_.size() * sizeof(uint16_t));
-    vmaFlushAllocation(allocator_, sun_horizon_stage_alloc_[slot], 0, VK_WHOLE_SIZE);
-    vkinit::transition_image(cmd, sun_horizon_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    if (!sun_->horizon_upload_pending || !sun_->horizon_image) return;
+    sun_->horizon_upload_pending = false;
+    std::memcpy(sun_->horizon_stage_map[slot], sun_->horizon_bake.data(),
+                sun_->horizon_bake.size() * sizeof(uint16_t));
+    vmaFlushAllocation(allocator_, sun_->horizon_stage_alloc[slot], 0, VK_WHOLE_SIZE);
+    vkinit::transition_image(cmd, sun_->horizon_image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkBufferImageCopy reg{};
     reg.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     reg.imageExtent = { uint32_t(kHzDim), uint32_t(kHzDim), 1 };
-    vkCmdCopyBufferToImage(cmd, sun_horizon_stage_[slot], sun_horizon_image_,
+    vkCmdCopyBufferToImage(cmd, sun_->horizon_stage[slot], sun_->horizon_image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &reg);
-    vkinit::transition_image(cmd, sun_horizon_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    vkinit::transition_image(cmd, sun_->horizon_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 // 0 = the terrain hides the sun from `p`, 1 = sun visible (CPU side: lens
 // flare, sun glare).
 float VulkanEngine::sun_horizon_visibility(glm::vec3 p) const {
-    if (sun_horizon_s_.empty()) return 1.0f;
+    if (sun_->horizon_s.empty()) return 1.0f;
     const float cell = kHzSide / float(kHzDim);
     const int i = int(std::floor((p.x + 0.5f * kHzSide) / cell));
     const int j = int(std::floor((p.z + 0.5f * kHzSide) / cell));
     if (i < 0 || j < 0 || i >= kHzDim || j >= kHzDim) return 1.0f;
-    return glm::smoothstep(-1.0f, 1.0f, p.y - sun_horizon_s_[size_t(j) * kHzDim + i]);
+    return glm::smoothstep(-1.0f, 1.0f, p.y - sun_->horizon_s[size_t(j) * kHzDim + i]);
 }
 
 }  // namespace vibe

@@ -3,6 +3,11 @@
 // horizontal-impulse loop. All depend on `physics_` (Jolt) being live.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/voxel.h"
+#include "engine/vk_engine/state/fx.h"
+#include "engine/vk_engine/state/multiplayer.h"
+#include "engine/vk_engine/state/sun_shadow.h"
+#include "engine/vk_engine/state/spacejets.h"
 #include "engine/audio.h"
 #include "engine/voxel/voxel_world.h"   // VoxelWorld::raycast for bullet carving
 
@@ -114,13 +119,13 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
     if (id == 0) return;
 
     mp_on_local_fire(origin, direction);   // multiplayer: tell the others (no-op for a replayed remote shot)
-    if (!mp_remote_shot_) {                // (a remote shot: their avatar kicks, the sound comes from there)
+    if (!mp_->remote_shot) {                // (a remote shot: their avatar kicks, the sound comes from there)
         ++body_shot_seq_;                  // the body's recoil; replicated, so others see it too
         body_reload_left_ = 0.0f;          // firing ends a reload at once: it never holds a shot back
         muzzle_flash_timer_ = kMuzzleFlashDuration;
         recoil_timer_       = kRecoilDuration;
     }
-    if (audio_ && !mp_remote_shot_) {
+    if (audio_ && !mp_->remote_shot) {
         // Shot is "local" — happens at the camera, mostly bypasses 3D
         // attenuation. Light pitch jitter so rapid fire doesn't sound
         // mechanical.
@@ -164,13 +169,13 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
         // else's is in their shoulder. (Same frame the weapon is drawn in: view x offset.)
         glm::vec3 m(0.18f, -0.18f, -0.72f);
         const glm::mat4* wo = shot_weapon_offset_ ? shot_weapon_offset_
-                            : (!mp_remote_shot_ && body_animator_ && game_.player_body ? &body_fire_offset_ : nullptr);
+                            : (!mp_->remote_shot && body_animator_ && game_.player_body ? &body_fire_offset_ : nullptr);
         if (wo) m = glm::vec3(*wo * glm::vec4(m, 1.0f));
         glm::vec3 barrel = origin + right * m.x + up * m.y - dir * m.z;
         p.trail_prev   = barrel;
         p.trail_offset = barrel - spawn;
     }
-    p.remote = mp_remote_shot_;
+    p.remote = mp_->remote_shot;
     projectiles_.push_back(p);
 }
 
@@ -194,7 +199,7 @@ void VulkanEngine::update_projectiles(float dt) {
     // bullets that pass through in 1 frame still register.
     auto spacejet_aabb = [&](const SpacejetFlight& f,
                               glm::vec3& mn, glm::vec3& mx) {
-        const float s = spacejet_base_scale_ * f.scale;
+        const float s = spacejet_->base_scale * f.scale;
         // Half-extents bumped (was 3.6 / 1.0 / 3.6 m) so the hit box
         // generously surrounds the visible plane silhouette — the
         // user could see clean misses on what looked like solid hits.
@@ -240,7 +245,7 @@ void VulkanEngine::update_projectiles(float dt) {
                 // cheap sphere-vs-sphere distance gate below.
                 const glm::vec3 seg_mid = 0.5f * (bp + b_prev);
                 const float     seg_half_len = 0.5f * glm::length(bp - b_prev);
-                for (auto& f : spacejet_flights_) {
+                for (auto& f : spacejet_->flights) {
                     if (f.dead || f.destroying || f.hp <= 0) continue;
                     glm::vec3 mn, mx;
                     spacejet_aabb(f, mn, mx);
@@ -284,7 +289,7 @@ void VulkanEngine::update_projectiles(float dt) {
                         // Register hit on this plane, terminate bullet.
                         f.hp           -= 1;
                         f.hit_flash_t   = 0.20f;
-                        mp_hitmark_     = 0.25f;      // (the hit marker: multiplayer.cpp, mp_hud)
+                        mp_->hitmark     = 0.25f;      // (the hit marker: multiplayer.cpp, mp_hud)
                         drop            = true;
                         was_impact      = true;
                         hit_pos         = bp;
@@ -347,7 +352,7 @@ void VulkanEngine::update_projectiles(float dt) {
                 // carve at the contact point and kill the bullet. This is
                 // why destruction is now consistent regardless of how many
                 // holes already exist or how far away the shooter is.
-                if (!drop && voxel_world_) {
+                if (!drop && voxel_->world) {
                     glm::vec3 seg = bp - b_prev;
                     float seglen = glm::length(seg);
                     if (seglen > 1e-4f) {
@@ -366,7 +371,7 @@ void VulkanEngine::update_projectiles(float dt) {
                         int   hit_shape = -1;
                         float best_t    = seglen + 0.5f;
                         glm::vec3 best_n(0.0f);
-                        const auto& shapes_v = voxel_world_->shapes();
+                        const auto& shapes_v = voxel_->world->shapes();
                         for (int si = 0; si < (int)shapes_v.size(); ++si) {
                             glm::vec3 ro_q = b_prev;
                             glm::vec3 rd_q = vd;
@@ -374,7 +379,7 @@ void VulkanEngine::update_projectiles(float dt) {
                             if (si > 0) {
                                 // Find this shape's chunk entry + body pose.
                                 const VoxelChunk* ch = nullptr;
-                                for (const auto& c : voxel_chunks_) {
+                                for (const auto& c : voxel_->chunks) {
                                     if (c.shape_index == si) { ch = &c; break; }
                                 }
                                 if (!ch) continue;
@@ -403,7 +408,7 @@ void VulkanEngine::update_projectiles(float dt) {
                                 rot_world = glm::mat3(chunk_world);
                             }
                             float st = 0.0f; glm::vec3 sn(0.0f);
-                            if (voxel_world_->raycast(si, ro_q, rd_q,
+                            if (voxel_->world->raycast(si, ro_q, rd_q,
                                                       best_t, st, sn)) {
                                 if (st < best_t) {
                                     best_t = st;
@@ -701,11 +706,11 @@ void VulkanEngine::spawn_hit_particles(glm::vec3 pos, glm::vec3 reflect_dir,
 // scene depth inside it. Caller has the FX render pass open, the scene
 // descriptor set bound and the cube mesh is bound here.
 void VulkanEngine::draw_decals(VkCommandBuffer cmd, const glm::mat4& vp, const glm::mat4& inv_vp) {
-    if (decals_.empty() || !fx_decal_pipeline_) return;
+    if (decals_.empty() || !fx_->decal_pipeline) return;
     VkDeviceSize off = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &off);
     vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_decal_pipeline_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_->decal_pipeline);
     // Spawn order = draw order: a newer burn darkens / glows over older ones.
     for (const auto& d : decals_) {
         const float life = 1.0f - (d.age / d.ttl);
@@ -897,7 +902,7 @@ void VulkanEngine::draw_shadow_debug(VkCommandBuffer cmd, const glm::mat4& vp) {
     // -------- Shadow ortho frustum (8 corners → 12 edges) --------
     // Recover world-space corners by inverting light_vp and projecting
     // the 8 NDC cube corners. Vulkan NDC: x,y ∈ [-1, 1], z ∈ [0, 1].
-    glm::mat4 inv_light = glm::inverse(sun_shadow_light_vp_);
+    glm::mat4 inv_light = glm::inverse(sun_->shadow_light_vp);
     glm::vec3 corners[8];
     int idx = 0;
     for (int z = 0; z <= 1; ++z) {

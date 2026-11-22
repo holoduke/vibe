@@ -5,6 +5,18 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/atmosphere.h"
+#include "engine/vk_engine/state/fsr2.h"
+#include "engine/vk_engine/state/fog.h"
+#include "engine/vk_engine/state/svgf.h"
+#include "engine/vk_engine/state/taau.h"
+#include "engine/vk_engine/state/clouds.h"
+#include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/vk_engine/state/compose.h"
+#include "engine/vk_engine/state/taa.h"
+#include "engine/vk_engine/state/fsr3.h"
+#include "engine/vk_engine/state/environment.h"
+#include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/globe.h"
 // Pulled in here (not in vk_engine.h) so the unique_ptr<voxel::VoxelWorld>
 // member's destructor can be generated in this TU where the type is
@@ -362,13 +374,13 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     // GPU vegetation: cull + LOD-select every instance, fill indirect draws.
     // Where the camera is on the planet's map, the water level and the snow: for the ground seen from high up (compose.frag planet_surface).
     if (exposure_buf_) {
-        const float pl[24] = { current_frame_view_.eye_pos.x * 0.001f, current_frame_view_.eye_pos.z * 0.001f, rt_.water_level, env_snow_,
+        const float pl[24] = { current_frame_view_.eye_pos.x * 0.001f, current_frame_view_.eye_pos.z * 0.001f, rt_.water_level, env_->snow,
                                rt_.terrain_h_sand_grass_start, rt_.terrain_h_sand_grass_end, rt_.terrain_h_grass_dirt_start, rt_.terrain_h_grass_dirt_end,
                                rt_.terrain_h_dirt_rock_start, rt_.terrain_h_dirt_rock_end, rt_.terrain_h_rock_snow_start, rt_.terrain_h_rock_snow_end,
                                // the local cloud layer's top (m): above it the clouds are composited over the land too
                                (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f) + glm::clamp(rt_.cloud_tower_m, 300.0f, 12000.0f) : 1.0e9f,
                                // ... and the weather field of clouds.comp (coverage, cloud size, metres the wind has carried it)
-                               glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), glm::clamp(rt_.cloud_scale, 0.3f, 4.0f), float(cloud_travel_),
+                               glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f), glm::clamp(rt_.cloud_scale, 0.3f, 4.0f), float(cloud_->travel),
                                // the layer's base (m): from above it the clouds are in front of the land
                                (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f) : 1.0e9f, 
                                // the hour angle: how far the sky has turned (the stars, compose.frag star_sky_dir)
@@ -567,13 +579,13 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     // pass below upscales it into scene_color/depth with depth-aware
     // composite so cube/castle/dyn-props (drawn afterwards) layer on top.
     if (tr_use_lowres() && (terrain_raymarch_pipeline_ || terrain_raymarch_lite_lr_pipeline_)) {
-        vkinit::transition_image(frame.command_buffer, tr_lr_color_image_,
+        vkinit::transition_image(frame.command_buffer, tr_->lr_color_image,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        vkinit::transition_image(frame.command_buffer, tr_lr_motion_image_,
+        vkinit::transition_image(frame.command_buffer, tr_->lr_motion_image,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        vkinit::transition_image_aspect(frame.command_buffer, tr_lr_depth_image_,
+        vkinit::transition_image_aspect(frame.command_buffer, tr_->lr_depth_image,
                                         VK_IMAGE_LAYOUT_UNDEFINED,
                                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                         VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -586,16 +598,16 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         lr_clear_d.depthStencil.depth = 1.0f;
 
         VkRenderingAttachmentInfo lr_color_att =
-            vkinit::color_attachment_info(tr_lr_color_view_, &lr_clear_c,
+            vkinit::color_attachment_info(tr_->lr_color_view, &lr_clear_c,
                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingAttachmentInfo lr_motion_att =
-            vkinit::color_attachment_info(tr_lr_motion_view_, &lr_clear_m,
+            vkinit::color_attachment_info(tr_->lr_motion_view, &lr_clear_m,
                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingAttachmentInfo lr_color_atts[2] = { lr_color_att, lr_motion_att };
         VkRenderingAttachmentInfo lr_depth_att{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .pNext = nullptr,
-            .imageView = tr_lr_depth_view_,
+            .imageView = tr_->lr_depth_view,
             .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .resolveMode = VK_RESOLVE_MODE_NONE,
             .resolveImageView = VK_NULL_HANDLE,
@@ -620,7 +632,7 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
             // low-res target it put coarse shading in the wrong places.
             .pNext = nullptr,
             .flags = 0,
-            .renderArea = { {0, 0}, tr_lr_extent_ },
+            .renderArea = { {0, 0}, tr_->lr_extent },
             .layerCount = 1, .viewMask = 0,
             .colorAttachmentCount = 2, .pColorAttachments = lr_color_atts,
             .pDepthAttachment = &lr_depth_att, .pStencilAttachment = nullptr,
@@ -629,11 +641,11 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
 
         VkViewport lr_vp{};
         lr_vp.x = 0.0f; lr_vp.y = 0.0f;
-        lr_vp.width  = static_cast<float>(tr_lr_extent_.width);
-        lr_vp.height = static_cast<float>(tr_lr_extent_.height);
+        lr_vp.width  = static_cast<float>(tr_->lr_extent.width);
+        lr_vp.height = static_cast<float>(tr_->lr_extent.height);
         lr_vp.minDepth = 0.0f; lr_vp.maxDepth = 1.0f;
         vkCmdSetViewport(frame.command_buffer, 0, 1, &lr_vp);
-        VkRect2D lr_sc{ {0, 0}, tr_lr_extent_ };
+        VkRect2D lr_sc{ {0, 0}, tr_->lr_extent };
         vkCmdSetScissor(frame.command_buffer, 0, 1, &lr_sc);
 
         render_terrain_raymarch_lr(frame.command_buffer);
@@ -641,13 +653,13 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         vkCmdEndRendering(frame.command_buffer);
 
         // Transition all three to SHADER_READ_ONLY for the compose pass.
-        vkinit::transition_image(frame.command_buffer, tr_lr_color_image_,
+        vkinit::transition_image(frame.command_buffer, tr_->lr_color_image,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        vkinit::transition_image(frame.command_buffer, tr_lr_motion_image_,
+        vkinit::transition_image(frame.command_buffer, tr_->lr_motion_image,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        vkinit::transition_image_aspect(frame.command_buffer, tr_lr_depth_image_,
+        vkinit::transition_image_aspect(frame.command_buffer, tr_->lr_depth_image,
                                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                         VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -659,21 +671,21 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     // the full-resolution terrain pass (in the world pass below) starts its march there.
     if (tr_march_prepass_on()) {
         VkCommandBuffer c = frame.command_buffer;
-        vkinit::transition_image(c, tr_march_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+        vkinit::transition_image(c, tr_->march_image, VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        vkinit::transition_image(c, tr_shade_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+        vkinit::transition_image(c, tr_->shade_image, VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkClearValue mc{};
         mc.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };          // 0 = nothing known: march from the eye
         VkRenderingAttachmentInfo m_att =
-            vkinit::color_attachment_info(tr_march_view_, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            vkinit::color_attachment_info(tr_->march_view, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         // (second attachment: the sun-shadow terms at the march's hits - cleared to "not valid")
         const VkRenderingAttachmentInfo m_atts[2] = {
-            m_att, vkinit::color_attachment_info(tr_shade_view_, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) };
+            m_att, vkinit::color_attachment_info(tr_->shade_view, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) };
         VkRenderingInfo m_ri{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .pNext = nullptr, .flags = 0,
-            .renderArea = { {0, 0}, tr_march_extent_ },
+            .renderArea = { {0, 0}, tr_->march_extent },
             .layerCount = 1, .viewMask = 0,
             .colorAttachmentCount = 2, .pColorAttachments = m_atts,
             .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
@@ -681,9 +693,9 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         vkCmdBeginRendering(c, &m_ri);
         render_terrain_march_prepass(c);
         vkCmdEndRendering(c);
-        vkinit::transition_image(c, tr_march_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        vkinit::transition_image(c, tr_->march_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        vkinit::transition_image(c, tr_shade_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        vkinit::transition_image(c, tr_->shade_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         prof_mark(c, "terrain_march_lo");
     }
@@ -757,13 +769,13 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     };
 
     // ---------- Pass 1: scene → scene_color_image_ + motion_vec_image_ ----------
-    // (svgf_gi_image_ is in GENERAL — transitioned once at init via
+    // (svgf_->gi_image is in GENERAL — transitioned once at init via
     // one_time_submit in init_svgf_targets, survives recreate cleanly.)
     vkCmdBeginRendering(frame.command_buffer, &rendering);
     // When LR upscaling is active, run the compose first so the
     // upscaled raymarch terrain populates scene_color/motion/depth
     // before the rasterised geometry draws on top.
-    if (tr_use_lowres() && tr_compose_pipeline_ != VK_NULL_HANDLE) {
+    if (tr_use_lowres() && tr_->compose_pipeline != VK_NULL_HANDLE) {
         VkViewport vp{};
         vp.x = 0.0f; vp.y = 0.0f;
         vp.width  = static_cast<float>(render_extent_.width);
@@ -838,7 +850,7 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         };
         vkinit::transition_images_batch(frame.command_buffer, kPostWorld, 5);
-        // cube.frag imageStore()s the raw GI (svgf_gi_image_, GENERAL) that
+        // cube.frag imageStore()s the raw GI (svgf_->gi_image, GENERAL) that
         // deferred_lighting samples next: make those writes visible.
         {
             VkMemoryBarrier2 mb{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
@@ -936,10 +948,10 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         VkRect2D sc{ {0,0}, render_extent_ };
         vkCmdSetScissor(frame.command_buffer, 0, 1, &sc);
 
-        vkCmdBindPipeline(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, taa_pipeline_);
+        vkCmdBindPipeline(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, taa_->pipeline);
         vkCmdBindDescriptorSets(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                taa_pipeline_layout_, 0, 1,
-                                &taa_desc_sets_[history_write_slot_], 0, nullptr);
+                                taa_->pipeline_layout, 0, 1,
+                                &taa_->desc_sets[history_write_slot_], 0, nullptr);
         vkCmdDraw(frame.command_buffer, 3, 1, 0, 0);
         vkCmdEndRendering(frame.command_buffer);
     }
@@ -960,15 +972,15 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
     // (FSR 3 too. Without it the sky was rebuilt after the upscaler from the jittered low-
     // resolution depth, which does not line up with FSR's anti-aliased edges: every object
     // against the sky kept a rim of the placeholder colour - bright bleeding, worst at night.)
-    atmo_dispatched_this_frame_ = false;
+    atmo_->dispatched_this_frame = false;
     sky_filled_this_frame_ = false;
-    if (rt_.fsr2_enabled && ((rt_.fsr_backend == 2 && dlss_active()) || (rt_.fsr_backend == 1 && fsr3_context_valid_)) &&
+    if (rt_.fsr2_enabled && ((rt_.fsr_backend == 2 && dlss_active()) || (rt_.fsr_backend == 1 && fsr3_->context_valid)) &&
         deferred_lighting_active_ && sky_fill_pipeline_ != VK_NULL_HANDLE) {
         sky_filled_this_frame_ = true;
         VkCommandBuffer cmd = frame.command_buffer;
         if (rt_.sky_mode == 1) {
             dispatch_atmosphere(cmd);
-            atmo_dispatched_this_frame_ = true;
+            atmo_->dispatched_this_frame = true;
         }
         vkinit::transition_image(cmd, scene_color_image_,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -994,8 +1006,8 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         VkRect2D sc{ {0, 0}, render_extent_ };
         vkCmdSetScissor(cmd, 0, 1, &sc);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sky_fill_pipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_pipeline_layout_,
-                                0, 1, &compose_desc_sets_[history_write_slot_], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_->pipeline_layout,
+                                0, 1, &compose_->desc_sets[history_write_slot_], 0, nullptr);
         ComposePC sp{};
         const float rw = float(render_extent_.width), rh = float(render_extent_.height);
         sp.viewport = glm::vec4(rw, rh, 1.0f / rw, 1.0f / rh);
@@ -1030,11 +1042,11 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
             }
             sp.bloom_params = P[0]; sp.sharpen_params = P[1]; sp.brush_indicator = P[2];
         }
-        sp.atmo = glm::vec4((rt_.sky_mode == 1 && atmo_pipeline_) ? 1.0f : 0.0f,
+        sp.atmo = glm::vec4((rt_.sky_mode == 1 && atmo_->pipeline) ? 1.0f : 0.0f,
                             std::max(0.0f, rt_.atmosphere_intensity),
                             6360.0f + std::max(current_frame_view_.eye_pos.y, 1.0f) * 0.001f,
                             std::max(0.5f, rt_.aerial_max_km));
-        vkCmdPushConstants(cmd, compose_pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+        vkCmdPushConstants(cmd, compose_->pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(sp), &sp);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRendering(cmd);
@@ -1054,7 +1066,7 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
     // here, before the upscaler - exactly as the sky's clouds do in the sky fill - so
     // they are the same clouds, as sharp and as steady. (Pasted in after the upscaler
     // they were the raw low-resolution buffer: blocks, or a blur to hide the blocks.)
-    if (clouds_over_pipeline_ != VK_NULL_HANDLE && rt_.clouds_enabled && rt_.sky_mode == 1 && atmo_pipeline_ &&
+    if (clouds_over_pipeline_ != VK_NULL_HANDLE && rt_.clouds_enabled && rt_.sky_mode == 1 && atmo_->pipeline &&
         current_frame_view_.eye_pos.y > glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f)) {
         VkCommandBuffer cmd = frame.command_buffer;
         vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -1074,21 +1086,21 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         VkRect2D sc{ {0, 0}, render_extent_ };
         vkCmdSetScissor(cmd, 0, 1, &sc);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clouds_over_pipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_pipeline_layout_,
-                                0, 1, &compose_desc_sets_[history_write_slot_], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_->pipeline_layout,
+                                0, 1, &compose_->desc_sets[history_write_slot_], 0, nullptr);
         ComposePC op{};
         const float rw = float(render_extent_.width), rh = float(render_extent_.height);
         op.viewport = glm::vec4(rw, rh, 1.0f / rw, 1.0f / rh);
         op.atmo = glm::vec4(1.0f, std::max(0.0f, rt_.atmosphere_intensity),
                             6360.0f + std::max(current_frame_view_.eye_pos.y, 1.0f) * 0.001f, std::max(0.5f, rt_.aerial_max_km));
-        vkCmdPushConstants(cmd, compose_pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(op), &op);
+        vkCmdPushConstants(cmd, compose_->pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(op), &op);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRendering(cmd);
         vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
-    sun_shafts_prepass_ran_ = false;
-    if (rt_.fsr2_enabled && sun_shafts_pipeline_ != VK_NULL_HANDLE && rt_.sun_shaft_intensity > 0.001f &&
+    sun_->shafts_prepass_ran = false;
+    if (rt_.fsr2_enabled && sun_->shafts_pipeline != VK_NULL_HANDLE && rt_.sun_shaft_intensity > 0.001f &&
         !std::getenv("VIBE_SHAFTS_LATE")) {
         const float pitch = glm::radians(rt_.sun_pitch_deg), yaw = glm::radians(rt_.sun_yaw_deg);
         const glm::vec3 sun = glm::normalize(glm::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)));
@@ -1111,9 +1123,9 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
             vkCmdSetViewport(cmd, 0, 1, &vp);
             VkRect2D sc{ {0, 0}, render_extent_ };
             vkCmdSetScissor(cmd, 0, 1, &sc);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sun_shafts_pipeline_);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_pipeline_layout_,
-                                    0, 1, &compose_desc_sets_[history_write_slot_], 0, nullptr);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sun_->shafts_pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_->pipeline_layout,
+                                    0, 1, &compose_->desc_sets[history_write_slot_], 0, nullptr);
             ComposePC hp{};
             const float rw = float(render_extent_.width), rh = float(render_extent_.height);
             hp.viewport = glm::vec4(rw, rh, 1.0f / rw, 1.0f / rh);
@@ -1121,12 +1133,12 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
             hp.sun_color = glm::vec4(rt_.sun_color, rt_.sun_intensity * rt_.sun_glare_strength);
             hp.sun_screen = glm::vec4(sun_clip.x / sun_clip.w * 0.5f + 0.5f, sun_clip.y / sun_clip.w * 0.5f + 0.5f, 1.0f, 0.0f);
             hp.flare_params = glm::vec4(float(frame_number_ % 64), 0.0f, 0.0f, 0.0f);
-            vkCmdPushConstants(cmd, compose_pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(hp), &hp);
+            vkCmdPushConstants(cmd, compose_->pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(hp), &hp);
             vkCmdDraw(cmd, 3, 1, 0, 0);
             vkCmdEndRendering(cmd);
             vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            sun_shafts_prepass_ran_ = true;
+            sun_->shafts_prepass_ran = true;
         }
     }
 
@@ -1141,12 +1153,12 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         if (rt_.fsr_backend == 2 && dlss_active()) {   // else: FSR2 fallback below
             dispatch_dlss(frame.command_buffer);   // NVIDIA DLSS (Streamline)
         } else
-        if (rt_.fsr_backend == 1 && !fsr3_fatal_) {
+        if (rt_.fsr_backend == 1 && !fsr3_->fatal) {
             // Lazy init on first frame the FSR3 backend is selected.
-            // SEH-guarded: if init AVs in the SDK, fsr3_fatal_ flips
+            // SEH-guarded: if init AVs in the SDK, fsr3_->fatal flips
             // and the next branch falls back to FSR2.
-            if (!fsr3_context_valid_) init_fsr3();
-            if (fsr3_context_valid_) {
+            if (!fsr3_->context_valid) init_fsr3();
+            if (fsr3_->context_valid) {
                 dispatch_fsr3(frame.command_buffer);
                 // Session 6 — rolling render-dt avg for low-FPS
                 // auto-disable. last_frame_dt_ excludes FG-paced
@@ -1170,27 +1182,27 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
                     fg_dt_below_count_ = 0;
                 }
                 // FG is on iff user opted in AND we're not auto-disabled.
-                const bool fg_active = rt_.fg_enabled && !fsr3_fg_fatal_ &&
+                const bool fg_active = rt_.fg_enabled && !fsr3_->fg_fatal &&
                                        !fg_runtime_disabled_;
                 if (fg_active) {
-                    if (!fsr3_fg_context_valid_) init_fsr3_fg();
-                    if (fsr3_fg_context_valid_) {
+                    if (!fsr3_->fg_context_valid) init_fsr3_fg();
+                    if (fsr3_->fg_context_valid) {
                         // Lazy-init the SwapChain proxy so generated frames
                         // actually reach the display via the SDK's pacer.
                         // NOT here: replacing the swapchain mid-draw left this
                         // frame recording into / presenting an image of the old
                         // one. run() does it before the next acquire.
-                        if (!fsr3_swapchain_active_ && !fsr3_swapchain_fatal_) {
-                            fsr3_swapchain_init_pending_ = true;
+                        if (!fsr3_->swapchain_active && !fsr3_->swapchain_fatal) {
+                            fsr3_->swapchain_init_pending = true;
                         }
                     }
                 }
                 // (FG-off teardown handled by the universal gate above.)
-            } else if (fsr3_fatal_ && fsr2_context_valid_) {
+            } else if (fsr3_->fatal && fsr2_->context_valid) {
                 rt_.fsr_backend = 0;     // permanently revert UI to FSR2
                 dispatch_fsr2(frame.command_buffer);
             }
-        } else if (fsr2_context_valid_) {
+        } else if (fsr2_->context_valid) {
             dispatch_fsr2(frame.command_buffer);
         }
     }
@@ -1200,16 +1212,16 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
     // ---------- Pass 2.25: TAAU temporal upsample (optional) ----------
     // Reads LR history (just written) + LR motion + LR depth + previous-
     // frame native upscaled. Outputs new native upscaled. Compose then
-    // samples taau_view_ instead of history_view_ (set by
+    // samples taau_->view instead of history_view_ (set by
     // rewrite_compose_image_bindings via the toggle handler).
-    if (rt_.taau_enabled && taau_pipeline_ != VK_NULL_HANDLE) {
+    if (rt_.taau_enabled && taau_->pipeline != VK_NULL_HANDLE) {
 
         vkinit::transition_image(frame.command_buffer,
-                                  taau_image_[history_write_slot_],
+                                  taau_->image[history_write_slot_],
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         auto taau_color = vkinit::color_attachment_info(
-            taau_view_[history_write_slot_], nullptr,
+            taau_->view[history_write_slot_], nullptr,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingInfo taau_ri{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
@@ -1229,22 +1241,22 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         VkRect2D tsc{ {0, 0}, swapchain_extent_ };
         vkCmdSetScissor(frame.command_buffer, 0, 1, &tsc);
         vkCmdBindPipeline(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          taau_pipeline_);
+                          taau_->pipeline);
         vkCmdBindDescriptorSets(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                taau_pipeline_layout_, 0, 1,
-                                &taau_desc_sets_[history_write_slot_], 0, nullptr);
+                                taau_->pipeline_layout, 0, 1,
+                                &taau_->desc_sets[history_write_slot_], 0, nullptr);
         vkCmdDraw(frame.command_buffer, 3, 1, 0, 0);
         vkCmdEndRendering(frame.command_buffer);
 
         vkinit::transition_image(frame.command_buffer,
-                                  taau_image_[history_write_slot_],
+                                  taau_->image[history_write_slot_],
                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        taau_history_valid_ = true;
+        taau_->history_valid = true;
     } else {
         // Mode flipped off — invalidate history so toggling back on
         // doesn't reproject stale frames.
-        taau_history_valid_ = false;
+        taau_->history_valid = false;
     }
 
     prof_mark(frame.command_buffer, "fsr_taau");
@@ -1273,8 +1285,8 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
     // Auto-exposure: reduce the final HDR image to an adapted log-luminance
     // (compose binding 4) before the compose pass reads it.
     // Physical sky LUTs + aerial perspective for compose (sky_mode 1).
-    if (rt_.sky_mode == 1 && !atmo_dispatched_this_frame_) dispatch_atmosphere(frame.command_buffer);
-    if (rt_.fog_volumetric && fog_pipeline_) dispatch_fog(frame.command_buffer);
+    if (rt_.sky_mode == 1 && !atmo_->dispatched_this_frame) dispatch_atmosphere(frame.command_buffer);
+    if (rt_.fog_volumetric && fog_->pipeline) dispatch_fog(frame.command_buffer);
     prof_mark(frame.command_buffer, "sky_clouds");
     dispatch_exposure(frame.command_buffer);
     vkinit::transition_image_src_stage(
@@ -1301,10 +1313,10 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         vkCmdSetViewport(frame.command_buffer, 0, 1, &vp);
         VkRect2D sc{ {0,0}, swapchain_extent_ };
         vkCmdSetScissor(frame.command_buffer, 0, 1, &sc);
-        vkCmdBindPipeline(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_pipeline_);
+        vkCmdBindPipeline(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_->pipeline);
         vkCmdBindDescriptorSets(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                compose_pipeline_layout_, 0, 1,
-                                &compose_desc_sets_[history_write_slot_], 0, nullptr);
+                                compose_->pipeline_layout, 0, 1,
+                                &compose_->desc_sets[history_write_slot_], 0, nullptr);
         ComposePC pc_data{};
         float w = static_cast<float>(swapchain_extent_.width);
         float h = static_cast<float>(swapchain_extent_.height);
@@ -1338,7 +1350,7 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         // (compose.frag looks at the cloud layer in front of the sun itself)
         const float sun_eye_vis = sun_horizon_visibility(current_frame_view_.eye_pos);
         // (0 when the shafts were already added before the upscaler)
-        pc_data.sun_dir   = glm::vec4(sun, sun_shafts_prepass_ran_ ? 0.0f : rt_.sun_shaft_intensity * sun_eye_vis);
+        pc_data.sun_dir   = glm::vec4(sun, sun_->shafts_prepass_ran ? 0.0f : rt_.sun_shaft_intensity * sun_eye_vis);
         // .a scaled by sun_glare_strength so the user can dial down
         // every sun-derived compose-pass effect together: procedural
         // disc + halo, lens flare, AND sun shafts (compose.frag reads
@@ -1362,7 +1374,7 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
                                            rt_.lens_flare_enabled ? 1.0f : 0.0f,
                                            // .w: 1 = sky is HDR, + star strength in the fraction (x 0.45)
                                            (skybox_.hdr ? 1.0f : 0.0f) +
-                                           glm::clamp(rt_.star_brightness * glm::mix(1.0f, 0.6f, env_moon_) * 0.45f, 0.0f, 0.99f));
+                                           glm::clamp(rt_.star_brightness * glm::mix(1.0f, 0.6f, env_->moon) * 0.45f, 0.0f, 0.99f));
         // Project the sun direction (treated as a directional light at infinity
         // — w = 0 in homogeneous coords) to NDC to find its screen-space UV.
         // The lens-flare shader uses this to gate ghost contributions to the
@@ -1415,19 +1427,19 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         // tone.x: tonemap mode, +8 = colour is DLSS output whose alpha
         // carries exact sky coverage (deferred writes geometry alpha 0).
         pc_data.tone = glm::vec4(float(rt_.tonemap_mode) +
-                                     ((compose_uses_dlss_ && deferred_lighting_active_) ? 8.0f : 0.0f) +
+                                     ((compose_->uses_dlss && deferred_lighting_active_) ? 8.0f : 0.0f) +
                                      // +16 = FSR 3 output with the sky already in it (no coverage in its alpha)
-                                     ((compose_uses_fsr3_ && sky_filled_this_frame_ && !compose_uses_dlss_) ? 16.0f : 0.0f),
-                                 (rt_.fog_volumetric && fog_pipeline_) ? std::max(20.0f, rt_.fog_max_dist) : 0.0f,
+                                     ((compose_->uses_fsr3 && sky_filled_this_frame_ && !compose_->uses_dlss) ? 16.0f : 0.0f),
+                                 (rt_.fog_volumetric && fog_->pipeline) ? std::max(20.0f, rt_.fog_max_dist) : 0.0f,
                                  hdr_active_ ? std::max(80.0f, rt_.hdr_paper_nits) : 0.0f,
                                  std::max(rt_.hdr_peak_nits, rt_.hdr_paper_nits));
         // .x: 1 = physical sky, + 0.4 x cloud cover (stars thin out under cloud)
-        pc_data.atmo = glm::vec4(((rt_.sky_mode == 1 && atmo_pipeline_) ? 1.0f : 0.0f) +
+        pc_data.atmo = glm::vec4(((rt_.sky_mode == 1 && atmo_->pipeline) ? 1.0f : 0.0f) +
                                      0.4f * (rt_.clouds_enabled ? glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f) : 0.0f),
                                  std::max(0.0f, rt_.atmosphere_intensity),
                                  6360.0f + std::max(current_frame_view_.eye_pos.y, 1.0f) * 0.001f,
                                  std::max(0.5f, rt_.aerial_max_km));
-        vkCmdPushConstants(frame.command_buffer, compose_pipeline_layout_,
+        vkCmdPushConstants(frame.command_buffer, compose_->pipeline_layout,
                            VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(pc_data), &pc_data);
         vkCmdDraw(frame.command_buffer, 3, 1, 0, 0);
@@ -1528,10 +1540,10 @@ void VulkanEngine::write_pass_ubos() {
                              prev_view_proj_valid_ ? 1.0f : 0.0f,
                              spatial);
         VmaAllocationInfo ai{};
-        vmaGetAllocationInfo(allocator_, taa_ubo_alloc_, &ai);
-        upload(taa_ubo_buffer_, 0, &u, sizeof(u), ai.pMappedData);
+        vmaGetAllocationInfo(allocator_, taa_->ubo_alloc, &ai);
+        upload(taa_->ubo_buffer, 0, &u, sizeof(u), ai.pMappedData);
     }
-    if (rt_.taau_enabled && taau_pipeline_ != VK_NULL_HANDLE) {
+    if (rt_.taau_enabled && taau_->pipeline != VK_NULL_HANDLE) {
         // Update UBO each frame — LR + native viewport sizes, params.
         struct TaauUBO { glm::vec4 lr_vp; glm::vec4 full_vp; glm::vec4 params; };
         TaauUBO u{};
@@ -1544,11 +1556,11 @@ void VulkanEngine::write_pass_ubos() {
                               1.0f / swapchain_extent_.width,
                               1.0f / swapchain_extent_.height);
         u.params = glm::vec4(rt_.taa_history_blend,
-                             taau_history_valid_ ? 1.0f : 0.0f,
+                             taau_->history_valid ? 1.0f : 0.0f,
                              0.0f, 0.0f);
         VmaAllocationInfo ai{};
-        vmaGetAllocationInfo(allocator_, taau_ubo_alloc_, &ai);
-        upload(taau_ubo_buffer_, 0, &u, sizeof(u), ai.pMappedData);
+        vmaGetAllocationInfo(allocator_, taau_->ubo_alloc, &ai);
+        upload(taau_->ubo_buffer, 0, &u, sizeof(u), ai.pMappedData);
     }
     write_svgf_ubos();
     update_voxel_camera_ubo();

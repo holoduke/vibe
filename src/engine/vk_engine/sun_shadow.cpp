@@ -8,6 +8,7 @@
 // one TU. Methods stay as VulkanEngine members.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/vk_pipelines.h"
 #include "engine/frustum.h"
 
@@ -15,7 +16,7 @@ namespace vibe {
 
 void VulkanEngine::init_sun_shadow_pipeline() {
     std::string sd = VIBE_SHADER_DIR;
-    sun_shadow_vert_module_ = vkpipe::load_shader_module(device_, sd + "/shadow.vert.spv");
+    sun_->shadow_vert_module = vkpipe::load_shader_module(device_, sd + "/shadow.vert.spv");
 
     // Dedicated pipeline layout — no descriptor sets. Shadow.vert only
     // reads `pc.mvp` (light_view_proj × model already baked on the host);
@@ -38,14 +39,14 @@ void VulkanEngine::init_sun_shadow_pipeline() {
         plci.pushConstantRangeCount = 1;
         plci.pPushConstantRanges = &pc;
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr,
-                                         &sun_shadow_pipeline_layout_),
+                                         &sun_->shadow_pipeline_layout),
                  "sun shadow pipeline layout");
     }
 
     vkpipe::GraphicsPipelineConfig cfg{};
-    cfg.vert = sun_shadow_vert_module_;
+    cfg.vert = sun_->shadow_vert_module;
     cfg.frag = VK_NULL_HANDLE;          // depth-only
-    cfg.layout = sun_shadow_pipeline_layout_;
+    cfg.layout = sun_->shadow_pipeline_layout;
     cfg.color_attachment_count = 0;
     cfg.depth_format = VK_FORMAT_D32_SFLOAT;
     // CULL_NONE on shadow casters: at a ground-contact line (cube on
@@ -71,22 +72,22 @@ void VulkanEngine::init_sun_shadow_pipeline() {
     a0.offset = offsetof(Vertex, position);
     cfg.vattrs = { a0 };
 
-    sun_shadow_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    sun_->shadow_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     log::info("sun shadow pipeline built");
 }
 
 void VulkanEngine::destroy_sun_shadow_pipeline() {
-    if (sun_shadow_pipeline_) {
-        vkDestroyPipeline(device_, sun_shadow_pipeline_, nullptr);
-        sun_shadow_pipeline_ = VK_NULL_HANDLE;
+    if (sun_->shadow_pipeline) {
+        vkDestroyPipeline(device_, sun_->shadow_pipeline, nullptr);
+        sun_->shadow_pipeline = VK_NULL_HANDLE;
     }
-    if (sun_shadow_pipeline_layout_) {
-        vkDestroyPipelineLayout(device_, sun_shadow_pipeline_layout_, nullptr);
-        sun_shadow_pipeline_layout_ = VK_NULL_HANDLE;
+    if (sun_->shadow_pipeline_layout) {
+        vkDestroyPipelineLayout(device_, sun_->shadow_pipeline_layout, nullptr);
+        sun_->shadow_pipeline_layout = VK_NULL_HANDLE;
     }
-    if (sun_shadow_vert_module_) {
-        vkDestroyShaderModule(device_, sun_shadow_vert_module_, nullptr);
-        sun_shadow_vert_module_ = VK_NULL_HANDLE;
+    if (sun_->shadow_vert_module) {
+        vkDestroyShaderModule(device_, sun_->shadow_vert_module, nullptr);
+        sun_->shadow_vert_module = VK_NULL_HANDLE;
     }
 }
 
@@ -105,9 +106,9 @@ void VulkanEngine::init_sun_shadow_resources() {
         int d = std::abs(requested - v);
         if (d < best_diff) { best_diff = d; snapped = v; }
     }
-    sun_shadow_dim_ = snapped;
+    sun_->shadow_dim = snapped;
     rt_.shadow_map_resolution = snapped;  // write-back so the UI shows the snapped value
-    const uint32_t W = static_cast<uint32_t>(sun_shadow_dim_);
+    const uint32_t W = static_cast<uint32_t>(sun_->shadow_dim);
 
     VkImageCreateInfo ici{};
     ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -124,12 +125,12 @@ void VulkanEngine::init_sun_shadow_resources() {
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     vk_check(vmaCreateImage(allocator_, &ici, &aci,
-                             &sun_shadow_image_, &sun_shadow_alloc_, nullptr),
+                             &sun_->shadow_image, &sun_->shadow_alloc, nullptr),
              "sun shadow image");
 
     VkImageViewCreateInfo vci{};
     vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vci.image = sun_shadow_image_;
+    vci.image = sun_->shadow_image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = VK_FORMAT_D32_SFLOAT;
     vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -137,7 +138,7 @@ void VulkanEngine::init_sun_shadow_resources() {
     vci.subresourceRange.levelCount = 1;
     vci.subresourceRange.baseArrayLayer = 0;
     vci.subresourceRange.layerCount = 1;
-    vk_check(vkCreateImageView(device_, &vci, nullptr, &sun_shadow_view_),
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &sun_->shadow_view),
              "sun shadow view");
 
     // Comparison sampler — sampler2DShadow returns the comparison result
@@ -154,7 +155,7 @@ void VulkanEngine::init_sun_shadow_resources() {
     si.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;  // out-of-bounds = lit
     si.compareEnable = VK_TRUE;
     si.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-    vk_check(vkCreateSampler(device_, &si, nullptr, &sun_shadow_sampler_),
+    vk_check(vkCreateSampler(device_, &si, nullptr, &sun_->shadow_sampler),
              "sun shadow sampler");
 
     // Initial transition into SHADER_READ_ONLY so render_sun_shadow_pass's
@@ -162,7 +163,7 @@ void VulkanEngine::init_sun_shadow_resources() {
     // symmetric with subsequent frames.
     vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_,
                             [&](VkCommandBuffer cb) {
-        vkinit::transition_image_aspect(cb, sun_shadow_image_,
+        vkinit::transition_image_aspect(cb, sun_->shadow_image,
                                          VK_IMAGE_LAYOUT_UNDEFINED,
                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                          VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -171,8 +172,8 @@ void VulkanEngine::init_sun_shadow_resources() {
     // Descriptor binding 7 only needs writing once — the image handle
     // doesn't change for the lifetime of the engine.
     VkDescriptorImageInfo dii{};
-    dii.sampler = sun_shadow_sampler_;
-    dii.imageView = sun_shadow_view_;
+    dii.sampler = sun_->shadow_sampler;
+    dii.imageView = sun_->shadow_view;
     dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkWriteDescriptorSet w{};
     w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -185,19 +186,19 @@ void VulkanEngine::init_sun_shadow_resources() {
 }
 
 void VulkanEngine::destroy_sun_shadow_resources() {
-    deferred_desc_sig_ = 0;   // deferred lighting samples sun_shadow_view_ (binding 5): rebind
-    if (sun_shadow_view_) {
-        vkDestroyImageView(device_, sun_shadow_view_, nullptr);
-        sun_shadow_view_ = VK_NULL_HANDLE;
+    deferred_desc_sig_ = 0;   // deferred lighting samples sun_->shadow_view (binding 5): rebind
+    if (sun_->shadow_view) {
+        vkDestroyImageView(device_, sun_->shadow_view, nullptr);
+        sun_->shadow_view = VK_NULL_HANDLE;
     }
-    if (sun_shadow_image_) {
-        vmaDestroyImage(allocator_, sun_shadow_image_, sun_shadow_alloc_);
-        sun_shadow_image_ = VK_NULL_HANDLE;
-        sun_shadow_alloc_ = nullptr;
+    if (sun_->shadow_image) {
+        vmaDestroyImage(allocator_, sun_->shadow_image, sun_->shadow_alloc);
+        sun_->shadow_image = VK_NULL_HANDLE;
+        sun_->shadow_alloc = nullptr;
     }
-    if (sun_shadow_sampler_) {
-        vkDestroySampler(device_, sun_shadow_sampler_, nullptr);
-        sun_shadow_sampler_ = VK_NULL_HANDLE;
+    if (sun_->shadow_sampler) {
+        vkDestroySampler(device_, sun_->shadow_sampler, nullptr);
+        sun_->shadow_sampler = VK_NULL_HANDLE;
     }
 }
 
@@ -231,7 +232,7 @@ void VulkanEngine::update_sun_shadow_light_vp() {
         : glm::vec3(0.0f, 1.0f, 0.0f);
     glm::vec3 right_axis = glm::normalize(glm::cross(up_ref, sun_dir));
     glm::vec3 up_axis    = glm::normalize(glm::cross(sun_dir, right_axis));
-    float texel = (2.0f * half) / static_cast<float>(sun_shadow_dim_);
+    float texel = (2.0f * half) / static_cast<float>(sun_->shadow_dim);
     float u = glm::dot(cam, right_axis);
     float v = glm::dot(cam, up_axis);
     u = std::round(u / texel) * texel;
@@ -247,12 +248,12 @@ void VulkanEngine::update_sun_shadow_light_vp() {
     glm::mat4 proj = glm::ortho(-half, half, -half, half,
                                  0.0f, depth_back + depth_front);
     proj[1][1] *= -1.0f;  // match Vulkan-y-flipped convention used elsewhere
-    sun_shadow_light_vp_ = proj * view;
+    sun_->shadow_light_vp = proj * view;
 }
 
 void VulkanEngine::render_sun_shadow_pass(VkCommandBuffer cmd) {
     // Transition into DEPTH_ATTACHMENT_OPTIMAL for the depth-only render.
-    vkinit::transition_image_aspect(cmd, sun_shadow_image_,
+    vkinit::transition_image_aspect(cmd, sun_->shadow_image,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                      VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -263,7 +264,7 @@ void VulkanEngine::render_sun_shadow_pass(VkCommandBuffer cmd) {
     VkRenderingAttachmentInfo depth_att{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
         .pNext = nullptr,
-        .imageView = sun_shadow_view_,
+        .imageView = sun_->shadow_view,
         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         .resolveMode = VK_RESOLVE_MODE_NONE,
         .resolveImageView = VK_NULL_HANDLE,
@@ -272,8 +273,8 @@ void VulkanEngine::render_sun_shadow_pass(VkCommandBuffer cmd) {
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .clearValue = clear_depth,
     };
-    VkExtent2D ext{ static_cast<uint32_t>(sun_shadow_dim_),
-                    static_cast<uint32_t>(sun_shadow_dim_) };
+    VkExtent2D ext{ static_cast<uint32_t>(sun_->shadow_dim),
+                    static_cast<uint32_t>(sun_->shadow_dim) };
     VkRenderingInfo ri{
         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
         .pNext = nullptr, .flags = 0,
@@ -286,14 +287,14 @@ void VulkanEngine::render_sun_shadow_pass(VkCommandBuffer cmd) {
 
     VkViewport vp_state{};
     vp_state.x = 0.0f; vp_state.y = 0.0f;
-    vp_state.width = static_cast<float>(sun_shadow_dim_);
-    vp_state.height = static_cast<float>(sun_shadow_dim_);
+    vp_state.width = static_cast<float>(sun_->shadow_dim);
+    vp_state.height = static_cast<float>(sun_->shadow_dim);
     vp_state.minDepth = 0.0f; vp_state.maxDepth = 1.0f;
     vkCmdSetViewport(cmd, 0, 1, &vp_state);
     VkRect2D scissor{ {0, 0}, ext };
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sun_shadow_pipeline_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sun_->shadow_pipeline);
     // No descriptor-set bind — shadow.vert consumes only push constants.
 
     // CULL_NONE makes the front (sun-facing) face write the correct
@@ -306,12 +307,12 @@ void VulkanEngine::render_sun_shadow_pass(VkCommandBuffer cmd) {
     // constant offset to absorb depth-encoding noise.
     vkCmdSetDepthBias(cmd, /*const*/ 0.5f, /*clamp*/ 0.0f, /*slope*/ 0.0f);
 
-    glm::mat4 vp = sun_shadow_light_vp_;
+    glm::mat4 vp = sun_->shadow_light_vp;
     Frustum light_frustum = extract_frustum(vp);
 
     auto push_shadow = [&](const glm::mat4& model) {
         glm::mat4 mvp = vp * model;
-        vkCmdPushConstants(cmd, sun_shadow_pipeline_layout_,
+        vkCmdPushConstants(cmd, sun_->shadow_pipeline_layout,
                            VK_SHADER_STAGE_VERTEX_BIT,
                            0, sizeof(glm::mat4), &mvp);
     };
@@ -330,9 +331,9 @@ void VulkanEngine::render_sun_shadow_pass(VkCommandBuffer cmd) {
         vkCmdDrawIndexed(cmd, cube_mesh_.index_count, 1, 0, 0, 0);
     }
     if (!castle_meshes_.empty()) {
-        draw_castle_meshes(cmd, vp, vp, light_frustum, true, sun_shadow_pipeline_layout_);
-        draw_aa(cmd, vp, vp, light_frustum, true, sun_shadow_pipeline_layout_);
-        draw_rocket(cmd, vp, vp, true, sun_shadow_pipeline_layout_);
+        draw_castle_meshes(cmd, vp, vp, light_frustum, true, sun_->shadow_pipeline_layout);
+        draw_aa(cmd, vp, vp, light_frustum, true, sun_->shadow_pipeline_layout);
+        draw_rocket(cmd, vp, vp, true, sun_->shadow_pipeline_layout);
         vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &cube_off);
         vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
     }
@@ -408,7 +409,7 @@ void VulkanEngine::render_sun_shadow_pass(VkCommandBuffer cmd) {
     vkCmdEndRendering(cmd);
 
     // Transition back to SHADER_READ_ONLY so grass.vert can sample it.
-    vkinit::transition_image_aspect(cmd, sun_shadow_image_,
+    vkinit::transition_image_aspect(cmd, sun_->shadow_image,
                                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                      VK_IMAGE_ASPECT_DEPTH_BIT);

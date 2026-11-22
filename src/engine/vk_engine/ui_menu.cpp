@@ -5,6 +5,9 @@
 // and grew large enough to crowd the main engine file.
 
 #include "engine/vk_engine.h"
+#include "engine/vk_engine/state/fsr3.h"
+#include "engine/vk_engine/state/environment.h"
+#include "engine/vk_engine/state/dlss.h"
 
 #include "engine/log.h"
 #include "engine/vk_initializers.h"   // vibe::vk_check
@@ -211,18 +214,18 @@ void VulkanEngine::build_menu_ui() {
     if (test_weather_tab > 0) --test_weather_tab;
     if (ImGui::BeginTabItem("Weather", nullptr, weather_flags)) {
         // While the clock / weather drive the world, rt_ holds the driven
-        // values and env_base_ the user's own: the sliders edit the latter.
-        const bool driven = env_applied_;
-        float&     sun_intensity = driven ? env_base_.sun_intensity : rt_.sun_intensity;
-        glm::vec3& sun_color     = driven ? env_base_.sun_color : rt_.sun_color;
-        glm::vec3& sky_color     = driven ? env_base_.sky_color : rt_.sky_color;
-        float&     atmo_int      = driven ? env_base_.atmosphere_intensity : rt_.atmosphere_intensity;
-        float&     cloud_cov     = driven ? env_base_.cloud_coverage : rt_.cloud_coverage;
-        float&     cloud_dens    = driven ? env_base_.cloud_density : rt_.cloud_density;
-        float&     cloud_speed   = driven ? env_base_.cloud_speed : rt_.cloud_speed;
-        float&     fog_density   = driven ? env_base_.fog_density : rt_.fog_density;
-        float&     sun_yaw       = driven ? env_base_.sun_yaw_deg : rt_.sun_yaw_deg;
-        bool&      golden        = driven ? env_base_.auto_golden_hour : rt_.auto_golden_hour;
+        // values and env_->base the user's own: the sliders edit the latter.
+        const bool driven = env_->applied;
+        float&     sun_intensity = driven ? env_->base.sun_intensity : rt_.sun_intensity;
+        glm::vec3& sun_color     = driven ? env_->base.sun_color : rt_.sun_color;
+        glm::vec3& sky_color     = driven ? env_->base.sky_color : rt_.sky_color;
+        float&     atmo_int      = driven ? env_->base.atmosphere_intensity : rt_.atmosphere_intensity;
+        float&     cloud_cov     = driven ? env_->base.cloud_coverage : rt_.cloud_coverage;
+        float&     cloud_dens    = driven ? env_->base.cloud_density : rt_.cloud_density;
+        float&     cloud_speed   = driven ? env_->base.cloud_speed : rt_.cloud_speed;
+        float&     fog_density   = driven ? env_->base.fog_density : rt_.fog_density;
+        float&     sun_yaw       = driven ? env_->base.sun_yaw_deg : rt_.sun_yaw_deg;
+        bool&      golden        = driven ? env_->base.auto_golden_hour : rt_.auto_golden_hour;
 
         if (ImGui::CollapsingHeader("Time of day", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Checkbox("Day / night cycle", &rt_.day_night_enabled);
@@ -427,7 +430,7 @@ void VulkanEngine::build_menu_ui() {
         // window size) for it to take effect, because resizing live render
         // targets requires a wait-idle.
         ImGui::SliderFloat("render scale", &rt_.render_scale,
-                           (rt_.fsr_backend == 2 && rt_.fsr2_enabled && dlss_supported_) ? 0.5f : 0.4f, 2.0f, "%.2fx",
+                           (rt_.fsr_backend == 2 && rt_.fsr2_enabled && dlss_->supported) ? 0.5f : 0.4f, 2.0f, "%.2fx",
                            ImGuiSliderFlags_AlwaysClamp);
         ImGui::SameLine();
         if (ImGui::Button("Apply")) {
@@ -678,13 +681,13 @@ void VulkanEngine::build_menu_ui() {
         ImGui::Combo("Upscaler backend", &rt_.fsr_backend, fsr_backends,
                      IM_ARRAYSIZE(fsr_backends));
         // DLSS needs a render scale of at least 0.50 (apply_render_scale clamps).
-        if (rt_.fsr_backend == 2 && rt_.fsr2_enabled && dlss_supported_ && rt_.render_scale < 0.5f) apply_render_scale();
+        if (rt_.fsr_backend == 2 && rt_.fsr2_enabled && dlss_->supported && rt_.render_scale < 0.5f) apply_render_scale();
         if (rt_.fsr_backend == 2) {
-            ImGui::BeginDisabled(!dlss_rr_supported_);
+            ImGui::BeginDisabled(!dlss_->rr_supported);
             ImGui::Checkbox("Ray Reconstruction (DLSS-RR)", &rt_.dlss_rr);
             ImGui::Checkbox("RR: 1-sample ray tracing", &rt_.dlss_rr_low_samples);
             ImGui::EndDisabled();
-            ImGui::TextDisabled("%s", dlss_rr_supported_
+            ImGui::TextDisabled("%s", dlss_->rr_supported
                 ? "AI denoiser + upscaler for the ray-traced lighting.\nReplaces DLSS Super Resolution while on."
                 : "DLSS Ray Reconstruction is not available on this GPU / driver.");
             // DLSS Frame Generation: 1-3 AI frames between rendered ones.
@@ -711,7 +714,7 @@ void VulkanEngine::build_menu_ui() {
                 }
             }
         }
-        if (fsr3_fatal_) {
+        if (fsr3_->fatal) {
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                 "FSR3 unavailable on this device (CreateContext AVed in SDK DLL "
                 "— see vibe.log). Backend auto-reverted to FSR2.");
@@ -721,17 +724,17 @@ void VulkanEngine::build_menu_ui() {
         // isn't presented yet — toggle visibly costs GPU time but
         // produces no perceptible delta. Session 4 wires the present
         // chain so this becomes the FPS-doubling switch.
-        if (rt_.fsr_backend == 1 && !fsr3_fatal_) {
+        if (rt_.fsr_backend == 1 && !fsr3_->fatal) {
             ImGui::Checkbox("FSR3 Frame Generation (perceived FPS ×2)",
                             &rt_.fg_enabled);
-            if (fsr3_fg_fatal_) {
+            if (fsr3_->fg_fatal) {
                 ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                     "FG unavailable (init failed) — see vibe.log");
             } else if (rt_.fg_enabled && fg_runtime_disabled_) {
                 ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
                     "FG auto-disabled (render < 50 fps base — interpolation "
                     "judder dominates below this; will re-enable above 60).");
-            } else if (rt_.fg_enabled && fsr3_swapchain_active_) {
+            } else if (rt_.fg_enabled && fsr3_->swapchain_active) {
                 ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f),
                     "FG active — SDK pacing real + generated frames");
             }

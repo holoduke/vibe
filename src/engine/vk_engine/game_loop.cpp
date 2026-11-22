@@ -8,6 +8,9 @@
 #include <filesystem>
 #include <system_error>
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/taau.h"
+#include "engine/vk_engine/state/voxel.h"
+#include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/frame_pacer.h"
 #include "engine/voxel/voxel_world.h"
 #include "engine/audio.h"
@@ -611,7 +614,7 @@ void VulkanEngine::loop_simulate(InputFrame& in, float frame_dt) {
                 static std::vector<collision::AABB> full;
                 static uint64_t ticks = 0, bad = 0;
                 full.assign(world_.aabbs.begin(), world_.aabbs.end());
-                full.insert(full.end(), voxel_collision_aabbs_.begin(), voxel_collision_aabbs_.end());
+                full.insert(full.end(), voxel_->collision_aabbs.begin(), voxel_->collision_aabbs.end());
                 const size_t full_static = full.size();
                 full.insert(full.end(), tick_aabbs_.begin() + static_cast<std::ptrdiff_t>(tick_static_count_), tick_aabbs_.end());
                 game::update_player(ref_player, pin, full, kFixedDt, full_static);
@@ -838,7 +841,7 @@ void VulkanEngine::loop_upkeep(InputFrame& in, float frame_dt) {
     // If the user changed the shadow-map resolution slider, recreate the
     // image at the new size. Cheap (one vkDeviceWaitIdle + a 4-16MB
     // alloc); only fires when the slider actually moves.
-    if (rt_.shadow_map_resolution != sun_shadow_dim_) {
+    if (rt_.shadow_map_resolution != sun_->shadow_dim) {
         vkDeviceWaitIdle(device_);
         destroy_sun_shadow_resources();
         init_sun_shadow_resources();
@@ -884,7 +887,7 @@ void VulkanEngine::loop_upkeep(InputFrame& in, float frame_dt) {
     if (rt_.grass_enabled && !rt_.grass_raymarch_enabled) {
         ensure_grass_raster_built();
     }
-    // TAAU toggle: re-point compose's history sampler at taau_view_ or
+    // TAAU toggle: re-point compose's history sampler at taau_->view or
     // history_view_. Cheap when state matches.
     rewrite_compose_for_taau();
     // FSR2 toggle: takes priority over TAAU/TAA in compose's history

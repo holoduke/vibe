@@ -4,6 +4,9 @@
 // Split out of the old monolithic world.cpp (maintainability pass).
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/voxel.h"
+#include "engine/vk_engine/state/multiplayer.h"
+#include "engine/vk_engine/state/spacejets.h"
 #include "engine/audio.h"
 #include "engine/gltf_loader.h"
 #include "engine/grass.h"
@@ -158,10 +161,10 @@ void VulkanEngine::init_spacejet() {
     glm::vec3 center = (gltf.aabb_min + gltf.aabb_max) * 0.5f;
     glm::vec3 extent = gltf.aabb_max - gltf.aabb_min;
     float max_side = std::max({extent.x, extent.y, extent.z, 1e-3f});
-    spacejet_centre_offset_ = -center;
-    spacejet_base_scale_    = 6.0f / max_side;
+    spacejet_->centre_offset = -center;
+    spacejet_->base_scale    = 6.0f / max_side;
 
-    spacejet_meshes_.reserve(gltf.primitives.size());
+    spacejet_->meshes.reserve(gltf.primitives.size());
     for (const auto& prim : gltf.primitives) {
         SpacejetMesh sm{};
         sm.mesh = create_mesh_from_data(device_, allocator_, graphics_queue_,
@@ -171,10 +174,10 @@ void VulkanEngine::init_spacejet() {
                                          prim.indices.data(),
                                          static_cast<uint32_t>(prim.indices.size()));
         sm.base_color = prim.base_color;
-        spacejet_meshes_.push_back(std::move(sm));
+        spacejet_->meshes.push_back(std::move(sm));
     }
     log::infof("spacejet: loaded %zu primitives, base_scale=%.3f — flyover system armed",
-               spacejet_meshes_.size(), spacejet_base_scale_);
+               spacejet_->meshes.size(), spacejet_->base_scale);
 
     // Break-up chunks: classify every triangle by its centroid in raw model
     // space (nose points -Z): outer |x| = left / right wing, else nose /
@@ -191,7 +194,7 @@ void VulkanEngine::init_spacejet() {
             return 4;                          // fuselage
         };
         const float vts[5] = { 70.0f, 70.0f, 160.0f, 110.0f, 190.0f };   // flat wings flutter
-        spacejet_chunks_.assign(5, JetChunk{});
+        spacejet_->chunks.assign(5, JetChunk{});
         glm::dvec3 csum[5]{}; double ccnt[5]{};
         for (const auto& prim : gltf.primitives) {
             std::vector<uint32_t> idx[5];
@@ -211,24 +214,24 @@ void VulkanEngine::init_spacejet() {
                                                 prim.vertices.data(), static_cast<uint32_t>(prim.vertices.size()),
                                                 idx[k].data(), static_cast<uint32_t>(idx[k].size()));
                 sm.base_color = prim.base_color;
-                spacejet_chunks_[size_t(k)].parts.push_back(std::move(sm));
+                spacejet_->chunks[size_t(k)].parts.push_back(std::move(sm));
             }
         }
         for (int k = 0; k < 5; ++k) {
-            spacejet_chunks_[size_t(k)].centroid_raw = ccnt[k] > 0.0 ? glm::vec3(csum[k] / ccnt[k]) : center;
-            spacejet_chunks_[size_t(k)].drag_vt = vts[k];
+            spacejet_->chunks[size_t(k)].centroid_raw = ccnt[k] > 0.0 ? glm::vec3(csum[k] / ccnt[k]) : center;
+            spacejet_->chunks[size_t(k)].drag_vt = vts[k];
         }
-        log::infof("spacejet: %d break-up chunks", int(spacejet_chunks_.size()));
+        log::infof("spacejet: %d break-up chunks", int(spacejet_->chunks.size()));
     }
 }
 
 void VulkanEngine::destroy_spacejet() {
-    for (auto& sm : spacejet_meshes_) destroy_mesh(allocator_, sm.mesh);
-    for (auto& ch : spacejet_chunks_) for (auto& sm : ch.parts) destroy_mesh(allocator_, sm.mesh);
-    spacejet_chunks_.clear();
+    for (auto& sm : spacejet_->meshes) destroy_mesh(allocator_, sm.mesh);
+    for (auto& ch : spacejet_->chunks) for (auto& sm : ch.parts) destroy_mesh(allocator_, sm.mesh);
+    spacejet_->chunks.clear();
     jet_debris_.clear();
-    spacejet_meshes_.clear();
-    spacejet_flights_.clear();
+    spacejet_->meshes.clear();
+    spacejet_->flights.clear();
 }
 
 // ---------------------------------------------------------------------
@@ -290,16 +293,16 @@ void VulkanEngine::tick_spacejet(float dt) {
     if (dt <= 0.0f) {
         // Frozen (pause menu): previous = current, so the stationary jets
         // and debris write zero motion vectors instead of last frame's.
-        for (auto& f : spacejet_flights_) { f.prev_pos = f.pos; f.prev_fwd = f.fwd; f.prev_up = f.up; }
+        for (auto& f : spacejet_->flights) { f.prev_pos = f.pos; f.prev_fwd = f.fwd; f.prev_up = f.up; }
         for (auto& d : jet_debris_) { d.prev_pos = d.pos; d.prev_rot = d.rot; }
         return;
     }
     dt = std::min(dt, 0.05f);
     // Tree splinters from any ground blast live in jet_debris_ too: keep
     // them moving even when the jet asset is missing.
-    if (spacejet_meshes_.empty()) { tick_jet_debris(dt); return; }
+    if (spacejet_->meshes.empty()) { tick_jet_debris(dt); return; }
 
-    auto& R = spacejet_rng_state_;
+    auto& R = spacejet_->rng_state;
     auto ground_h = [&](float x, float z) {
         return std::max(sample_terrain_height(x, z), rt_.water_level);
     };
@@ -349,15 +352,15 @@ void VulkanEngine::tick_spacejet(float dt) {
 
     // ---- Spawn waves ----
     int alive = 0;
-    for (const auto& f : spacejet_flights_) if (!f.dead && !f.destroying) ++alive;
+    for (const auto& f : spacejet_->flights) if (!f.dead && !f.destroying) ++alive;
     // Game setting 'Aircraft' off: no new waves, and the ones in the air are
     // withdrawn (the player's own airstrike aircraft is exempt).
     if (!game_.aircraft_enabled)
-        for (auto& f : spacejet_flights_)
+        for (auto& f : spacejet_->flights)
             if (!f.strike && !f.dead && !f.destroying) { f.dead = true; f.trail.clear(); }
-    spacejet_spawn_timer_ -= dt;
-    if (game_.aircraft_enabled && spacejet_spawn_timer_ <= 0.0f && alive < 14) {
-        spacejet_spawn_timer_ = frand_range(R, 3.5f, 8.0f);
+    spacejet_->spawn_timer -= dt;
+    if (game_.aircraft_enabled && spacejet_->spawn_timer <= 0.0f && alive < 14) {
+        spacejet_->spawn_timer = frand_range(R, 3.5f, 8.0f);
         int wave = 2 + int(xorshift32(R) % 3u);              // 2..4 jets
         float bearing = frand(R) * 6.2831853f;
         glm::vec3 from(std::cos(bearing), 0.0f, std::sin(bearing));
@@ -372,21 +375,21 @@ void VulkanEngine::tick_spacejet(float dt) {
         lead.speed = frand_range(R, 105.0f, 125.0f);
         lead.scale = 1.0f + frand_range(R, -0.1f, 0.3f);
         lead.sortie_max = 3 + int(xorshift32(R) % 3u);
-        lead.id = ++spacejet_next_id_;
+        lead.id = ++spacejet_->next_id;
         lead.prev_pos = lead.pos; lead.prev_fwd = lead.fwd; lead.prev_up = lead.up;
-        spacejet_flights_.push_back(lead);
+        spacejet_->flights.push_back(lead);
         const glm::vec3 slots[3] = { {-20.0f, -2.0f, -16.0f}, {20.0f, -3.0f, -16.0f}, {0.0f, -5.0f, -34.0f} };
         for (int i = 1; i < wave; ++i) {
             SpacejetFlight w = lead;
             w.trail.clear();
-            w.id = ++spacejet_next_id_;
+            w.id = ++spacejet_->next_id;
             w.leader_id = lead.id;
             w.slot = slots[i - 1];
             glm::vec3 right = glm::normalize(glm::cross(lead.fwd, lead.up));
             w.pos = lead.pos + right * w.slot.x + lead.up * w.slot.y + lead.fwd * w.slot.z;
             w.prev_pos = w.pos;
             w.scale = 1.0f + frand_range(R, -0.1f, 0.3f);
-            spacejet_flights_.push_back(w);
+            spacejet_->flights.push_back(w);
         }
         log::infof("[jets] wave of %d inbound from %.0f deg, alt %.0f m",
                    wave, glm::degrees(bearing), lead.cruise_alt);
@@ -394,12 +397,12 @@ void VulkanEngine::tick_spacejet(float dt) {
 
     auto find_by_id = [&](uint32_t id) -> SpacejetFlight* {
         if (id == 0) return nullptr;
-        for (auto& o : spacejet_flights_)
+        for (auto& o : spacejet_->flights)
             if (o.id == id && !o.dead && !o.destroying) return &o;
         return nullptr;
     };
 
-    for (auto& f : spacejet_flights_) {
+    for (auto& f : spacejet_->flights) {
         f.prev_pos = f.pos; f.prev_fwd = f.fwd; f.prev_up = f.up;
         f.t += dt;
         f.mode_t += dt;
@@ -790,7 +793,7 @@ void VulkanEngine::tick_spacejet(float dt) {
     if (ai_log_t > 10.0f) {
         ai_log_t = 0.0f;
         static const char* kModeName[] = { "ingress", "orbit", "bombrun", "loop", "turn", "egress", "crash" };
-        for (const auto& f : spacejet_flights_) {
+        for (const auto& f : spacejet_->flights) {
             if (f.dead) continue;
             log::infof("[jets] id %u %s%s pos (%.0f, %.0f, %.0f) agl %.0f spd %.0f g %.1f",
                        f.id, f.leader_id ? "wing " : "lead ", kModeName[int(f.mode)],
@@ -801,12 +804,12 @@ void VulkanEngine::tick_spacejet(float dt) {
     }
     tick_jet_audio(dt);
     tick_jet_debris(dt);
-    for (auto& f : spacejet_flights_)   // voices of removed jets stop with them
+    for (auto& f : spacejet_->flights)   // voices of removed jets stop with them
         if (f.dead && f.trail.empty() && f.snd_voice && audio_) audio_->stop_voice(f.snd_voice, 0.3f);
-    spacejet_flights_.erase(
-        std::remove_if(spacejet_flights_.begin(), spacejet_flights_.end(),
+    spacejet_->flights.erase(
+        std::remove_if(spacejet_->flights.begin(), spacejet_->flights.end(),
                        [](const SpacejetFlight& f) { return f.dead && f.trail.empty(); }),
-        spacejet_flights_.end());
+        spacejet_->flights.end());
 }
 
 // Predictive flyby audio. Each clip is a recorded single pass whose
@@ -830,19 +833,19 @@ void VulkanEngine::tick_spacejet(float dt) {
 // with the jet's velocity plus an outward blast kick and a random tumble;
 // plus a spray of small burning fragments.
 void VulkanEngine::spawn_jet_breakup(const SpacejetFlight& f) {
-    auto& R = spacejet_rng_state_;
+    auto& R = spacejet_->rng_state;
     const glm::vec3 z = -glm::normalize(f.fwd);
     const glm::vec3 x = glm::normalize(glm::cross(f.up, z));
     const glm::vec3 y = glm::cross(z, x);
     const glm::mat3 rot(x, y, z);
-    const float S = spacejet_base_scale_ * f.scale;
+    const float S = spacejet_->base_scale * f.scale;
     static uint32_t next_id = 1;
-    for (size_t k = 0; k < spacejet_chunks_.size(); ++k) {
-        const JetChunk& ch = spacejet_chunks_[k];
+    for (size_t k = 0; k < spacejet_->chunks.size(); ++k) {
+        const JetChunk& ch = spacejet_->chunks[k];
         if (ch.parts.empty()) continue;
         JetDebris d{};
         d.chunk = int(k);
-        d.pos = f.pos + rot * (S * (ch.centroid_raw + spacejet_centre_offset_));
+        d.pos = f.pos + rot * (S * (ch.centroid_raw + spacejet_->centre_offset));
         d.prev_pos = d.pos;
         glm::vec3 out = d.pos - f.pos;
         out = glm::length(out) > 1e-3f ? glm::normalize(out) : glm::vec3(0, 1, 0);
@@ -879,7 +882,7 @@ void VulkanEngine::spawn_jet_breakup(const SpacejetFlight& f) {
 
 void VulkanEngine::tick_jet_debris(float dt) {
     if (jet_debris_.empty()) return;
-    auto& R = spacejet_rng_state_;
+    auto& R = spacejet_->rng_state;
     // Impacts are deferred: spawn_explosion -> blast_vegetation appends
     // (and trims) jet_debris_, which would invalidate this loop.
     struct Impact { glm::vec3 pos; float size; };
@@ -922,9 +925,9 @@ void VulkanEngine::tick_jet_audio(float dt) {
     };
     const glm::vec3 eye = player_.eye_position();
     int active = 0;
-    for (const auto& f : spacejet_flights_) if (f.snd_voice && audio_->voice_playing(f.snd_voice)) ++active;
+    for (const auto& f : spacejet_->flights) if (f.snd_voice && audio_->voice_playing(f.snd_voice)) ++active;
 
-    for (auto& f : spacejet_flights_) {
+    for (auto& f : spacejet_->flights) {
         f.snd_cool = std::max(0.0f, f.snd_cool - dt);
         if (f.snd_voice) {
             if (!audio_->voice_playing(f.snd_voice)) {
@@ -1060,11 +1063,11 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
     float kick = recoil_kick(recoil_timer_, kRecoilDuration, kRecoilStroke);
     glm::mat4 recoil_offset = glm::translate(glm::mat4(1.0f),
                                              glm::vec3(0.0f, 0.0f, kick));
-    if (mp_draw_) { if (mp_draw_->animator) recoil_offset = mp_draw_->weapon_offset; }
+    if (mp_->draw) { if (mp_->draw->animator) recoil_offset = mp_->draw->weapon_offset; }
     else if (body_animator_ && game_.player_body) recoil_offset = body_weapon_offset_;
     glm::mat4 view_inv_recoil = view_inv * recoil_offset;
     draw_player_body(cmd, vp, cam);        // (vp is camera-relative here: the body's world matrix has to be too)
-    if (mp_draw_) {
+    if (mp_->draw) {
         // The head is part of the skinned soldier (draw_player_body). Without its file: a box.
         if (!head_lod_[0].index_count) {
         const glm::mat4 hb = view_inv * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.09f));
@@ -1074,7 +1077,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
                               glm::scale(glm::mat4(1.0f), glm::vec3(0.22f, 0.13f, 0.25f)),
                   glm::vec4(0.16f, 0.20f, 0.12f, 1.0f), glm::vec3(0.0f), false);
         }
-        if (mp_draw_->corpse) return;          // a body on the ground: no weapon in its hands
+        if (mp_->draw->corpse) return;          // a body on the ground: no weapon in its hands
     }
 
     if (flashlight_on_) {              // the flashlight replaces the weapon in the hand
@@ -1120,7 +1123,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
     }
     // Reloading: the magazine in the support hand (out on the way down, a fresh one back up).
     {
-        const anim::CharacterAnimator* an = mp_draw_ ? mp_draw_->animator.get() : (game_.player_body ? body_animator_.get() : nullptr);
+        const anim::CharacterAnimator* an = mp_->draw ? mp_->draw->animator.get() : (game_.player_body ? body_animator_.get() : nullptr);
         if (an && an->magazine_in_hand())
             draw_part(cube_mesh_, view_inv_recoil * glm::translate(glm::mat4(1.0f), an->magazine_position() + glm::vec3(0.0f, 0.045f, 0.0f)) *
                                   glm::rotate(glm::mat4(1.0f), glm::radians(8.0f), glm::vec3(1.0f, 0.0f, 0.0f)) *
@@ -1244,7 +1247,7 @@ void VulkanEngine::rebuild_tick_aabbs() {
     {
         constexpr float kNearRadius = 24.0f, kRefreshDist = 8.0f;
         const glm::vec2 c(player_.position.x, player_.position.z);
-        const size_t nw = world_.aabbs.size(), nv = voxel_collision_aabbs_.size();
+        const size_t nw = world_.aabbs.size(), nv = voxel_->collision_aabbs.size();
         const glm::vec2 dc = c - near_static_center_;
         if (near_static_src_[0] != nw || near_static_src_[1] != nv ||
             ++near_static_age_ >= 15 || glm::dot(dc, dc) > kRefreshDist * kRefreshDist) {
@@ -1259,7 +1262,7 @@ void VulkanEngine::rebuild_tick_aabbs() {
             take(wv_cols_);                     // trees beyond the home tile (veg_stream.cpp)
             // Voxel-tower solid boxes count as STATIC geometry (auto step-up
             // onto carved ledges works): they stay in the static prefix.
-            take(voxel_collision_aabbs_);
+            take(voxel_->collision_aabbs);
             near_static_center_ = c;
             near_static_src_[0] = nw; near_static_src_[1] = nv;
             near_static_age_ = 0;

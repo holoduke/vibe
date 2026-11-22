@@ -7,6 +7,10 @@
 // deferred output to the canonical scene_color writer.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/svgf.h"
+#include "engine/vk_engine/state/clutter_shadow.h"
+#include "engine/vk_engine/state/clouds.h"
+#include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/vk_pipelines.h"
 
 #include <algorithm>
@@ -253,7 +257,7 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo dep_ii{ linear_sampler_, depth_view_,
                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        VkDescriptorImageInfo ss_ii{ linear_sampler_, sun_shadow_view_,
+        VkDescriptorImageInfo ss_ii{ linear_sampler_, sun_->shadow_view,
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo sc_ii{ linear_sampler_, scene_color_view_,
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -271,7 +275,7 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         // with both STORAGE and SAMPLED usage bits, which init_svgf_targets
         // does (setup.cpp ~1498). Falls back to gbuffer1 view if missing
         // so the descriptor stays valid for early-init crashes.
-        VkImageView svgf_v = svgf_gi_view_ ? svgf_gi_view_ : gbuffer1_view_;
+        VkImageView svgf_v = svgf_->gi_view ? svgf_->gi_view : gbuffer1_view_;
         VkDescriptorImageInfo svgf_ii{ linear_sampler_, svgf_v,
                                        VK_IMAGE_LAYOUT_GENERAL };
         VkDescriptorImageInfo gih0_ii{ VK_NULL_HANDLE,
@@ -333,8 +337,8 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         }
         w[12].pImageInfo = &gif0_ii;
         w[13].pImageInfo = &gif1_ii;
-        VkDescriptorImageInfo cs_ii{ clutter_shadow_sampler_ ? clutter_shadow_sampler_ : linear_sampler_,
-                                     clutter_shadow_array_view_ ? clutter_shadow_array_view_ : sun_shadow_view_,
+        VkDescriptorImageInfo cs_ii{ clutter_->shadow_sampler ? clutter_->shadow_sampler : linear_sampler_,
+                                     clutter_->shadow_array_view ? clutter_->shadow_array_view : sun_->shadow_view,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         w[14].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[14].dstSet = deferred_lighting_desc_set_; w[14].dstBinding = 14;
@@ -342,7 +346,7 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         w[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[14].pImageInfo = &cs_ii;
         VkDescriptorImageInfo aux_ii{ terrain_aux_sampler_ ? terrain_aux_sampler_ : linear_sampler_,
-                                      terrain_aux_view_ ? terrain_aux_view_ : clutter_shadow_view_,
+                                      terrain_aux_view_ ? terrain_aux_view_ : clutter_->shadow_view,
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         w[15] = w[14];
         w[15].dstBinding = 15;
@@ -352,8 +356,8 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         w[19] = w[14];
         w[19].dstBinding = 19;
         w[19].pImageInfo = &leaf_ii;
-        VkDescriptorImageInfo hz_ii{ sun_horizon_sampler_ ? sun_horizon_sampler_ : linear_sampler_,
-                                     sun_horizon_view_ ? sun_horizon_view_ : aux_ii.imageView,
+        VkDescriptorImageInfo hz_ii{ sun_->horizon_sampler ? sun_->horizon_sampler : linear_sampler_,
+                                     sun_->horizon_view ? sun_->horizon_view : aux_ii.imageView,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         w[20] = w[14];
         w[20].dstBinding = 20;
@@ -366,7 +370,7 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         w[21] = w[14]; w[21].dstBinding = 21; w[21].pImageInfo = &lh_ii;
         w[22] = w[14]; w[22].dstBinding = 22; w[22].pImageInfo = &gm_ii;
         init_cloud_shadow_map();
-        VkDescriptorImageInfo cloud_sh_ii{ cloud_shadow_sampler_, cloud_shadow_map_.view, VK_IMAGE_LAYOUT_GENERAL };
+        VkDescriptorImageInfo cloud_sh_ii{ cloud_->shadow_sampler, cloud_->shadow_map.view, VK_IMAGE_LAYOUT_GENERAL };
         w[23] = w[14]; w[23].dstBinding = 23; w[23].pImageInfo = &cloud_sh_ii;
         VkDescriptorBufferInfo rc_bi[3];
         for (int i = 0; i < 3; ++i) {
@@ -478,8 +482,8 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
     }
     // Slots 2-3 of light_pos / light_col carry the clutter shadow light-VP
     // (columns 0-1 in light_pos, 2-3 in light_col; shader loop uses 0-1).
-    pcd.light_pos[2] = clutter_shadow_vp_[0]; pcd.light_pos[3] = clutter_shadow_vp_[1];
-    pcd.light_col[2] = clutter_shadow_vp_[2]; pcd.light_col[3] = clutter_shadow_vp_[3];
+    pcd.light_pos[2] = clutter_->shadow_vp[0]; pcd.light_pos[3] = clutter_->shadow_vp[1];
+    pcd.light_col[2] = clutter_->shadow_vp[2]; pcd.light_col[3] = clutter_->shadow_vp[3];
     vkCmdPushConstants(cmd, deferred_lighting_pipeline_layout_,
                        VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(pcd), &pcd);

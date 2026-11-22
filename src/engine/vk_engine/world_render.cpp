@@ -4,6 +4,9 @@
 // Split out of the old monolithic world.cpp (maintainability pass).
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/vk_engine/state/environment.h"
+#include "engine/vk_engine/state/spacejets.h"
 #include "engine/gltf_loader.h"
 #include "engine/grass.h"
 #include "engine/skybox.h"
@@ -131,11 +134,11 @@ void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
 
     VkViewport vp_state{};
     vp_state.x = 0.0f; vp_state.y = 0.0f;
-    vp_state.width  = static_cast<float>(tr_lr_extent_.width);
-    vp_state.height = static_cast<float>(tr_lr_extent_.height);
+    vp_state.width  = static_cast<float>(tr_->lr_extent.width);
+    vp_state.height = static_cast<float>(tr_->lr_extent.height);
     vp_state.minDepth = 0.0f; vp_state.maxDepth = 1.0f;
     vkCmdSetViewport(cmd, 0, 1, &vp_state);
-    VkRect2D scissor{ {0, 0}, tr_lr_extent_ };
+    VkRect2D scissor{ {0, 0}, tr_->lr_extent };
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -189,22 +192,22 @@ void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
 }
 
 // The terrain's low-resolution march (frame.cpp "march pre-pass"): the cut-down terrain shader
-// over a target 1/tr_march_div_ the size. The push constants are those of the full-resolution
+// over a target 1/tr_->march_div the size. The push constants are those of the full-resolution
 // terrain pass in render_world() - the two must cast the same rays over the same ground.
 void VulkanEngine::render_terrain_march_prepass(VkCommandBuffer cmd) {
     const FrameView& fv = current_frame_view_;
     VkViewport vps{};
-    vps.width  = static_cast<float>(tr_march_extent_.width);
-    vps.height = static_cast<float>(tr_march_extent_.height);
+    vps.width  = static_cast<float>(tr_->march_extent.width);
+    vps.height = static_cast<float>(tr_->march_extent.height);
     vps.minDepth = 0.0f; vps.maxDepth = 1.0f;
     // (the target rounds up to whole texels: the view covers render_extent_ exactly, so a
-    // texel is tr_march_div_ full pixels everywhere)
-    vps.width  = static_cast<float>(render_extent_.width)  / static_cast<float>(tr_march_div_);
-    vps.height = static_cast<float>(render_extent_.height) / static_cast<float>(tr_march_div_);
+    // texel is tr_->march_div full pixels everywhere)
+    vps.width  = static_cast<float>(render_extent_.width)  / static_cast<float>(tr_->march_div);
+    vps.height = static_cast<float>(render_extent_.height) / static_cast<float>(tr_->march_div);
     vkCmdSetViewport(cmd, 0, 1, &vps);
-    VkRect2D scissor{ {0, 0}, tr_march_extent_ };
+    VkRect2D scissor{ {0, 0}, tr_->march_extent };
     vkCmdSetScissor(cmd, 0, 1, &scissor);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr_march_pipeline_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr_->march_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &scene_desc_set_, 0, nullptr);
     PushConstants pc{};
     pc.mvp      = fv.vp;
@@ -239,7 +242,7 @@ void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd) {
     // afterwards by the rest of render_world() correctly occlude the
     // terrain where they're closer.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                       tr_compose_pipeline_);
+                       tr_->compose_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                              pipeline_layout_, 0, 1, &scene_desc_set_,
                              0, nullptr);
@@ -249,8 +252,8 @@ void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd) {
     // 4-tap kernel matches actual data, not the upscaled grid).
     PushConstants pc{};
     pc.color = glm::vec4(rt_.terrain_raymarch_sharpen,
-                         static_cast<float>(tr_lr_extent_.width),
-                         static_cast<float>(tr_lr_extent_.height),
+                         static_cast<float>(tr_->lr_extent.width),
+                         static_cast<float>(tr_->lr_extent.height),
                          0.0f);
     vkCmdPushConstants(cmd, pipeline_layout_,
                        kPushConstantStages,
@@ -624,7 +627,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         // occlude correctly. Misses (sky) discard, leaving compose's
         // sky pass to fill those pixels.
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          (env_snow_ * 255.0f < 1.0f && terrain_raymarch_summer_pipeline_ && !std::getenv("VIBE_NO_SUMMER_SHADER"))
+                          (env_->snow * 255.0f < 1.0f && terrain_raymarch_summer_pipeline_ && !std::getenv("VIBE_NO_SUMMER_SHADER"))
                               ? terrain_raymarch_summer_pipeline_
                               : terrain_raymarch_pipeline_ ? terrain_raymarch_pipeline_ : terrain_raymarch_lite_pipeline_);
         // (VIBE_LITE_TERRAIN=1: look at the first-start build)
@@ -776,8 +779,8 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // Spacejet — hovering decoration on the plateau. One draw per
     // glTF primitive. Animated via sin(time) for the bob and a
     // slow yaw rotation. Raster-only; no physics, no BLAS.
-    if (!spacejet_meshes_.empty() && !spacejet_flights_.empty()) {
-        for (const auto& f : spacejet_flights_) {
+    if (!spacejet_->meshes.empty() && !spacejet_->flights.empty()) {
+        for (const auto& f : spacejet_->flights) {
             if (f.dead) continue;
             // Full 3D attitude from the AI's fwd/up basis. The asset's
             // nose points -Z, so local Z = -fwd, Y = up, X = fwd x up.
@@ -789,8 +792,8 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
                                 glm::vec4(z, 0.0f), glm::vec4(pos, 1.0f));
                 return basis *
                        glm::scale    (glm::mat4(1.0f),
-                                       glm::vec3(spacejet_base_scale_ * f.scale)) *
-                       glm::translate(glm::mat4(1.0f), spacejet_centre_offset_);
+                                       glm::vec3(spacejet_->base_scale * f.scale)) *
+                       glm::translate(glm::mat4(1.0f), spacejet_->centre_offset);
             };
             glm::mat4 model      = build_model(f.pos,      f.fwd,      f.up);
             glm::mat4 prev_model = build_model(f.prev_pos, f.prev_fwd, f.prev_up);
@@ -810,7 +813,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
             const glm::vec4 hit_color = glm::mix(glm::vec4(1.0f),
                                                   glm::vec4(1.6f, 0.4f, 0.4f, 1.0f),
                                                   flash);
-            for (const auto& sm : spacejet_meshes_) {
+            for (const auto& sm : spacejet_->meshes) {
                 VkDeviceSize off = 0;
                 vkCmdBindVertexBuffers(cmd, 0, 1, &sm.mesh.vertex_buffer, &off);
                 vkCmdBindIndexBuffer(cmd, sm.mesh.index_buffer, 0,
@@ -836,10 +839,10 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // Break-up wreckage: airframe chunks (rotated about their own centroid,
     // scorched) and small dark fragments (cube mesh).
     if (!jet_debris_.empty()) {
-        const float S0 = spacejet_base_scale_;
+        const float S0 = spacejet_->base_scale;
         for (const auto& d : jet_debris_) {
             auto chunk_model = [&](glm::vec3 pos, const glm::mat3& r) {
-                const JetChunk& ch = spacejet_chunks_[size_t(d.chunk)];
+                const JetChunk& ch = spacejet_->chunks[size_t(d.chunk)];
                 return glm::translate(glm::mat4(1.0f), pos) * glm::mat4(r) *
                        glm::scale(glm::mat4(1.0f), glm::vec3(S0 * d.scale)) *
                        glm::translate(glm::mat4(1.0f), -ch.centroid_raw);
@@ -852,9 +855,9 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
             PushConstants pc{};
             pc.tex_params = glm::vec4(-1.0f, -1.0f, 1.0f, 0.0f);
             pc.emissive = glm::vec4(1.4f * burn, 0.35f * burn, 0.05f * burn, 0.0f);
-            if (d.chunk >= 0 && size_t(d.chunk) < spacejet_chunks_.size()) {
+            if (d.chunk >= 0 && size_t(d.chunk) < spacejet_->chunks.size()) {
                 const glm::mat4 m = chunk_model(d.pos, d.rot), pm = chunk_model(d.prev_pos, d.prev_rot);
-                for (const auto& sm : spacejet_chunks_[size_t(d.chunk)].parts) {
+                for (const auto& sm : spacejet_->chunks[size_t(d.chunk)].parts) {
                     VkDeviceSize off = 0;
                     vkCmdBindVertexBuffers(cmd, 0, 1, &sm.mesh.vertex_buffer, &off);
                     vkCmdBindIndexBuffer(cmd, sm.mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);

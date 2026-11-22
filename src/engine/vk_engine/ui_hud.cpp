@@ -5,6 +5,7 @@
 // and grew large enough to crowd the main engine file.
 
 #include "engine/vk_engine.h"
+#include "engine/vk_engine/state/environment.h"
 
 #include "engine/log.h"
 #include "engine/vk_initializers.h"   // vibe::vk_check
@@ -25,7 +26,7 @@ void VulkanEngine::build_hud_ui() {
     // Lightning bolt: a jagged, forked line from the cloud base down to
     // where the strike lands, drawn for the length of the flash. Hidden
     // where a hill stands between the camera and the bolt.
-    if (env_lightning_ > 0.03f && state_ == State::Playing) {
+    if (env_->lightning > 0.03f && state_ == State::Playing) {
         ImGuiIO& lio = ImGui::GetIO();
         ImDrawList* dl = ImGui::GetBackgroundDrawList();
         const glm::vec3 eye = player_.eye_position();
@@ -44,7 +45,7 @@ void VulkanEngine::build_hud_ui() {
             }
             return true;
         };
-        const float a = std::min(env_lightning_, 1.0f);
+        const float a = std::min(env_->lightning, 1.0f);
         const float w = glm::clamp(900.0f / std::max(dist, 150.0f), 1.2f, 4.5f);
         auto strand = [&](glm::vec3 from, glm::vec3 to, int segs, float wob, float width, int depth) {
             auto self = [&](auto& me, glm::vec3 f, glm::vec3 t, int n, float wb, float wd, int dp) -> void {

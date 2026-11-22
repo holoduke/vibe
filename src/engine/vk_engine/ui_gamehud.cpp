@@ -4,6 +4,7 @@
 // (ui_setup.cpp: font_hud_ / font_hud_big_, Bahnschrift from Windows).
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/multiplayer.h"
 
 #include <imgui.h>
 #include <GLFW/glfw3.h>
@@ -54,7 +55,7 @@ void VulkanEngine::draw_game_hud() {
 
     // ---------------- health (bottom left) ----------------
     {
-        const float hp = glm::clamp(mp_health_, 0.0f, 100.0f);
+        const float hp = glm::clamp(mp_->health, 0.0f, 100.0f);
         const float x0 = 34.0f * s, x1 = 372.0f * s;
         panel(x0, top, x1, base, lean);
         const bool low = hp <= 30.0f;

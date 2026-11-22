@@ -8,6 +8,7 @@
 // capsules' positions are read back into the skeleton and the mesh is skinned from them.
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/multiplayer.h"
 #include "engine/cpu_prof.h"
 #include "engine/log.h"
 
@@ -229,9 +230,9 @@ void VulkanEngine::draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp) {
     for (Corpse& c : corpses_) {
         if (!c.rag || !c.av.drawn) continue;
         recoil_timer_ = 0.0f; muzzle_flash_timer_ = 0.0f; weapon_ = 0; flashlight_on_ = false;
-        mp_draw_ = &c.av;
+        mp_->draw = &c.av;
         draw_viewmodel(cmd, vp, c.av.view_inv);
-        mp_draw_ = nullptr;
+        mp_->draw = nullptr;
     }
     recoil_timer_ = sv_recoil; muzzle_flash_timer_ = sv_muzzle; weapon_ = sv_weapon; flashlight_on_ = sv_flash;
 }

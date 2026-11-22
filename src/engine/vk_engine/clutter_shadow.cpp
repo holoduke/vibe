@@ -7,6 +7,8 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/clutter_shadow.h"
+#include "engine/vk_engine/state/multiplayer.h"
 
 #include <algorithm>
 #include "engine/log.h"
@@ -49,26 +51,26 @@ void VulkanEngine::init_clutter_shadow() {
     ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-    vk_check(vmaCreateImage(allocator_, &ici, &aci, &clutter_shadow_image_, &clutter_shadow_alloc_, nullptr),
+    vk_check(vmaCreateImage(allocator_, &ici, &aci, &clutter_->shadow_image, &clutter_->shadow_alloc, nullptr),
              "clutter shadow image");
     VkImageViewCreateInfo vci{};
     vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vci.image = clutter_shadow_image_;
+    vci.image = clutter_->shadow_image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = VK_FORMAT_D32_SFLOAT;
     vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
-    vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_view_), "clutter shadow view");
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_->shadow_view), "clutter shadow view");
     vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 1, 1 };
-    vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_near_view_), "clutter near view");
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_->shadow_near_view), "clutter near view");
     vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 2, 1 };
-    vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_flash_view_), "clutter flash view");
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_->shadow_flash_view), "clutter flash view");
     for (uint32_t k = 0; k < 2; ++k) {
         vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 3 + k, 1 };
-        vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_lamp_view_[k]), "clutter lamp view");
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_->shadow_lamp_view[k]), "clutter lamp view");
     }
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 5 };
-    vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_shadow_array_view_), "clutter array view");
+    vk_check(vkCreateImageView(device_, &vci, nullptr, &clutter_->shadow_array_view), "clutter array view");
     {
         VkSamplerCreateInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -76,10 +78,10 @@ void VulkanEngine::init_clutter_shadow() {
         si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.maxLod = 0.0f;
-        vk_check(vkCreateSampler(device_, &si, nullptr, &clutter_shadow_sampler_), "clutter shadow sampler");
+        vk_check(vkCreateSampler(device_, &si, nullptr, &clutter_->shadow_sampler), "clutter shadow sampler");
     }
     vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
-        vkinit::transition_image_aspect(cb, clutter_shadow_image_, VK_IMAGE_LAYOUT_UNDEFINED,
+        vkinit::transition_image_aspect(cb, clutter_->shadow_image, VK_IMAGE_LAYOUT_UNDEFINED,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                         VK_IMAGE_ASPECT_DEPTH_BIT);
     });
@@ -88,13 +90,13 @@ void VulkanEngine::init_clutter_shadow() {
     VkPipelineLayoutCreateInfo plci{};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
-    vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &clutter_shadow_layout_), "clutter layout");
-    clutter_shadow_vert_ = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/clutter_shadow.vert.spv");
+    vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &clutter_->shadow_layout), "clutter layout");
+    clutter_->shadow_vert = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/clutter_shadow.vert.spv");
 
     vkpipe::GraphicsPipelineConfig cfg{};
-    cfg.vert = clutter_shadow_vert_;
+    cfg.vert = clutter_->shadow_vert;
     cfg.frag = VK_NULL_HANDLE;
-    cfg.layout = clutter_shadow_layout_;
+    cfg.layout = clutter_->shadow_layout;
     cfg.color_attachment_count = 0;
     cfg.depth_format = VK_FORMAT_D32_SFLOAT;
     cfg.cull = VK_CULL_MODE_NONE;
@@ -109,7 +111,7 @@ void VulkanEngine::init_clutter_shadow() {
     VkVertexInputAttributeDescription a3{ 3, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0 };
     VkVertexInputAttributeDescription a4{ 4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 };
     cfg.vattrs = { a0, a2, a3, a4 };
-    clutter_shadow_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+    clutter_->shadow_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     // Skinned characters: two vertex streams (rest pose; bones and weights), the scene set for
     // the bone palette.
     skin_shadow_vert_ = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/skin_shadow.vert.spv");
@@ -126,7 +128,7 @@ void VulkanEngine::init_clutter_shadow() {
         skin_shadow_pipeline_ = vkpipe::build_graphics_pipeline(device_, sc);
     }
     {
-        VkDescriptorImageInfo ii{ clutter_shadow_sampler_, clutter_shadow_array_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo ii{ clutter_->shadow_sampler, clutter_->shadow_array_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkWriteDescriptorSet w{};
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w.dstSet = scene_desc_set_; w.dstBinding = 28; w.descriptorCount = 1;
@@ -134,7 +136,7 @@ void VulkanEngine::init_clutter_shadow() {
         w.pImageInfo = &ii;
         vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
     }
-    clutter_shadow_vp_ = glm::mat4(0.0f);
+    clutter_->shadow_vp = glm::mat4(0.0f);
     log::info("[clutter shadow] 2x 2048^2 cascades: 64 m (3.1 cm) + 16 m near (0.8 cm)");
 }
 
@@ -144,22 +146,22 @@ void VulkanEngine::destroy_clutter_shadow() {
     skin_shadow_pipeline_ = VK_NULL_HANDLE;
     skin_shadow_vert_ = VK_NULL_HANDLE;
     deferred_desc_sig_ = 0;   // handles may be recreated (even at the same address)
-    if (clutter_shadow_pipeline_) vkDestroyPipeline(device_, clutter_shadow_pipeline_, nullptr);
-    if (clutter_shadow_layout_) vkDestroyPipelineLayout(device_, clutter_shadow_layout_, nullptr);
-    if (clutter_shadow_vert_) vkDestroyShaderModule(device_, clutter_shadow_vert_, nullptr);
-    if (clutter_shadow_view_) vkDestroyImageView(device_, clutter_shadow_view_, nullptr);
-    if (clutter_shadow_near_view_) vkDestroyImageView(device_, clutter_shadow_near_view_, nullptr);
-    if (clutter_shadow_flash_view_) vkDestroyImageView(device_, clutter_shadow_flash_view_, nullptr);
-    clutter_shadow_flash_view_ = VK_NULL_HANDLE;
-    for (auto& v : clutter_shadow_lamp_view_) { if (v) vkDestroyImageView(device_, v, nullptr); v = VK_NULL_HANDLE; }
-    if (clutter_shadow_array_view_) vkDestroyImageView(device_, clutter_shadow_array_view_, nullptr);
-    clutter_shadow_near_view_ = clutter_shadow_array_view_ = VK_NULL_HANDLE;
-    if (clutter_shadow_sampler_) vkDestroySampler(device_, clutter_shadow_sampler_, nullptr);
-    clutter_shadow_sampler_ = VK_NULL_HANDLE;
-    if (clutter_shadow_image_) vmaDestroyImage(allocator_, clutter_shadow_image_, clutter_shadow_alloc_);
-    clutter_shadow_pipeline_ = VK_NULL_HANDLE; clutter_shadow_layout_ = VK_NULL_HANDLE;
-    clutter_shadow_vert_ = VK_NULL_HANDLE; clutter_shadow_view_ = VK_NULL_HANDLE;
-    clutter_shadow_image_ = VK_NULL_HANDLE;
+    if (clutter_->shadow_pipeline) vkDestroyPipeline(device_, clutter_->shadow_pipeline, nullptr);
+    if (clutter_->shadow_layout) vkDestroyPipelineLayout(device_, clutter_->shadow_layout, nullptr);
+    if (clutter_->shadow_vert) vkDestroyShaderModule(device_, clutter_->shadow_vert, nullptr);
+    if (clutter_->shadow_view) vkDestroyImageView(device_, clutter_->shadow_view, nullptr);
+    if (clutter_->shadow_near_view) vkDestroyImageView(device_, clutter_->shadow_near_view, nullptr);
+    if (clutter_->shadow_flash_view) vkDestroyImageView(device_, clutter_->shadow_flash_view, nullptr);
+    clutter_->shadow_flash_view = VK_NULL_HANDLE;
+    for (auto& v : clutter_->shadow_lamp_view) { if (v) vkDestroyImageView(device_, v, nullptr); v = VK_NULL_HANDLE; }
+    if (clutter_->shadow_array_view) vkDestroyImageView(device_, clutter_->shadow_array_view, nullptr);
+    clutter_->shadow_near_view = clutter_->shadow_array_view = VK_NULL_HANDLE;
+    if (clutter_->shadow_sampler) vkDestroySampler(device_, clutter_->shadow_sampler, nullptr);
+    clutter_->shadow_sampler = VK_NULL_HANDLE;
+    if (clutter_->shadow_image) vmaDestroyImage(allocator_, clutter_->shadow_image, clutter_->shadow_alloc);
+    clutter_->shadow_pipeline = VK_NULL_HANDLE; clutter_->shadow_layout = VK_NULL_HANDLE;
+    clutter_->shadow_vert = VK_NULL_HANDLE; clutter_->shadow_view = VK_NULL_HANDLE;
+    clutter_->shadow_image = VK_NULL_HANDLE;
 }
 
 // Computed in update_scene_ubo() (before any pass) so the deferred pass
@@ -169,10 +171,10 @@ static const bool kNoClutter = std::getenv("VIBE_NO_CLUTTER_SHADOW") != nullptr;
 void VulkanEngine::update_clutter_shadow_vp() {
     // Every other frame (in turn with the sun's shadow map); every frame while the flashlight
     // is on - its shadows move with the hand.
-    clutter_shadow_skip_ = (frame_number_ & 1) == 0 && !flashlight_on_ && clutter_shadow_vp_[3][3] > 0.5f;
-    if (clutter_shadow_skip_) return;
-    if (!clutter_shadow_pipeline_ || scatter_.instance_count == 0 || kNoClutter) {
-        clutter_shadow_vp_ = glm::mat4(0.0f);
+    clutter_->shadow_skip = (frame_number_ & 1) == 0 && !flashlight_on_ && clutter_->shadow_vp[3][3] > 0.5f;
+    if (clutter_->shadow_skip) return;
+    if (!clutter_->shadow_pipeline || scatter_.instance_count == 0 || kNoClutter) {
+        clutter_->shadow_vp = glm::mat4(0.0f);
         return;
     }
     // Light VP: ortho box around the camera along the sun, texel-snapped.
@@ -189,14 +191,14 @@ void VulkanEngine::update_clutter_shadow_vp() {
     glm::mat4 view = glm::lookAt(c + sun * kClutterDepth, c, ry);
     glm::mat4 proj = glm::ortho(-kClutterHalf, kClutterHalf, -kClutterHalf, kClutterHalf, 0.0f, 2.0f * kClutterDepth);
     proj[1][1] *= -1.0f;
-    clutter_shadow_vp_ = proj * view;
+    clutter_->shadow_vp = proj * view;
 }
 
 void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
-    if (clutter_shadow_vp_[3][3] < 0.5f || clutter_shadow_skip_) return;
+    if (clutter_->shadow_vp[3][3] < 0.5f || clutter_->shadow_skip) return;
     const glm::vec3 cam = current_frame_view_.eye_pos;
 
-    vkinit::transition_image_aspect(cmd, clutter_shadow_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    vkinit::transition_image_aspect(cmd, clutter_->shadow_image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
     // Two cascades into the two array layers: 64 m (layer 0) and the 4x
     // finer 16 m near cascade (layer 1, same centre: VP scaled in x/y).
@@ -215,11 +217,11 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
         const glm::vec3 cam = layer == 3 ? lamp_pos : view_cam;      // centre of this pass
         const float half = layer == 0 ? kClutterHalf : layer == 1 ? kClutterHalf / kClutterNearScale
                          : layer == 2 ? 26.0f : 10.3f;
-        const glm::mat4 cvp = layer == 0 ? clutter_shadow_vp_ : layer == 1 ? near_scale * clutter_shadow_vp_ : flash_vp_;
+        const glm::mat4 cvp = layer == 0 ? clutter_->shadow_vp : layer == 1 ? near_scale * clutter_->shadow_vp : flash_vp_;
         VkRenderingAttachmentInfo da{};
         da.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        da.imageView = layer == 0 ? clutter_shadow_view_ : layer == 1 ? clutter_shadow_near_view_
-                     : layer == 2 ? clutter_shadow_flash_view_ : clutter_shadow_lamp_view_[lamp_map_slot_ >> 2];
+        da.imageView = layer == 0 ? clutter_->shadow_view : layer == 1 ? clutter_->shadow_near_view
+                     : layer == 2 ? clutter_->shadow_flash_view : clutter_->shadow_lamp_view[lamp_map_slot_ >> 2];
         da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         da.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -236,14 +238,14 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
         VkRect2D sc{ { qx0, qy0 }, { qdim, qdim } };
         vkCmdSetViewport(cmd, 0, 1, &vp);
         vkCmdSetScissor(cmd, 0, 1, &sc);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clutter_shadow_pipeline_);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clutter_->shadow_pipeline);
         // p: .x wind time, .y plant (sway) flag, .z colour-pass draw distance -
         // the same fade / sway as scatter.vert so shadows match what is drawn.
         struct { glm::mat4 vp; glm::vec4 cam; glm::vec4 p; glm::vec4 lamp; } pc{ cvp, glm::vec4(cam, half * 1.42f),
             glm::vec4(anim_time_, 0.0f,
                       std::max(60.0f, rt_.grass_distance * 1.6f), 0.0f),
             layer == 3 ? glm::vec4(lamp_pos, 14.0f) : glm::vec4(0.0f) };
-        vkCmdPushConstants(cmd, clutter_shadow_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+        vkCmdPushConstants(cmd, clutter_->shadow_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
         VkDeviceSize offs[2] = { 0, 0 };
         // Only cells overlapping this cascade's box around the camera (XZ).
         const float box_r = half * 1.42f;
@@ -261,12 +263,12 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
             pc.p.y = 1.0f;
             pc.p.w = rt_.terrain_raymarch_enabled ? 1.0f : 0.0f;
             pc.p.z = std::max(45.0f, rt_.grass_distance * 0.9f);
-            vkCmdPushConstants(cmd, clutter_shadow_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+            vkCmdPushConstants(cmd, clutter_->shadow_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
             for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp) {
                 if (!scatter_.plant_count[sp]) continue;
                 if (sp == 16) continue;          // water lilies lie flat on the water: no shadow pass
                 pc.p.z = plant_max_d(sp);   // same fade as the colour pass
-                vkCmdPushConstants(cmd, clutter_shadow_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+                vkCmdPushConstants(cmd, clutter_->shadow_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
                 // The same levels of detail as the colour pass (by the cell's distance from the eye).
                 const Mesh* lods[3] = { &scatter_.plant_mesh[sp], &scatter_.plant_mesh_far[sp], &scatter_.plant_mesh_far2[sp] };
                 if (!lods[1]->vertex_buffer) lods[1] = lods[0];
@@ -291,7 +293,7 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
         if (layer <= 2) draw_skinned_shadows(cmd, cvp, layer != 2);
         vkCmdEndRendering(cmd);
     }
-    vkinit::transition_image_aspect(cmd, clutter_shadow_image_, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+    vkinit::transition_image_aspect(cmd, clutter_->shadow_image, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
@@ -328,7 +330,7 @@ void VulkanEngine::draw_skinned_shadows(VkCommandBuffer cmd, const glm::mat4& li
     };
     if (with_local && body_drawn_) draw(body_model_, body_palette_, 0);
     if (net_)
-        for (const MpAvatar& a : mp_avatars_)
+        for (const MpAvatar& a : mp_->avatars)
             if (a.id && a.drawn) draw(a.model, a.palette, a.mesh_lod);
     for (const Corpse& c : corpses_)
         if (c.rag && c.av.drawn) draw(c.av.model, c.av.palette, c.av.mesh_lod);

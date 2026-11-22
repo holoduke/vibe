@@ -14,6 +14,7 @@
 // voxel pixels.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/voxel.h"
 #include "engine/vk_pipelines.h"
 #include "engine/voxel/voxel_world.h"
 #include "engine/frustum.h"
@@ -75,7 +76,7 @@ void VulkanEngine::init_voxel() {
     using namespace voxel;
 
     // ---- CPU side: build the procedural tower ----
-    voxel_world_ = std::make_unique<VoxelWorld>();
+    voxel_->world = std::make_unique<VoxelWorld>();
 
     // 8×24×8 bricks → 12.8 × 38.4 × 12.8 m. Slimmer footprint than the
     // original 12×18×12 + a stepped narrower upper turret on top, so
@@ -100,22 +101,22 @@ void VulkanEngine::init_voxel() {
     glm::vec3 base_corner(-kTowerSizeX * 0.5f, base_y,
                           kTowerCenterZ - kTowerSizeZ * 0.5f);
     // Switched off for now ('voxel_tower_enabled' in the cfg brings it back).
-    if (rt_.voxel_tower_enabled) voxel_world_->add_procedural_tower(base_corner);
+    if (rt_.voxel_tower_enabled) voxel_->world->add_procedural_tower(base_corner);
     else {
         log::info("[voxel] destructible tower disabled");
-        voxel_world_.reset();
+        voxel_->world.reset();
         // The world shaders still declare the voxel SSBOs (scene set,
         // bindings 24 / 25): give them a small dummy buffer. They never
         // read it - scene.voxel_origin.w stays 0 without a voxel world.
-        if (scene_desc_set_ != VK_NULL_HANDLE && !voxel_dir_buffer_) {
+        if (scene_desc_set_ != VK_NULL_HANDLE && !voxel_->dir_buffer) {
             VkBufferCreateInfo bci{};
             bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             bci.size = 4608;                                  // >= one brick record
             bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
             VmaAllocationCreateInfo aci{};
             aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateBuffer(allocator_, &bci, &aci, &voxel_dir_buffer_, &voxel_dir_alloc_, nullptr) == VK_SUCCESS) {
-                VkDescriptorBufferInfo bi{ voxel_dir_buffer_, 0, VK_WHOLE_SIZE };
+            if (vmaCreateBuffer(allocator_, &bci, &aci, &voxel_->dir_buffer, &voxel_->dir_alloc, nullptr) == VK_SUCCESS) {
+                VkDescriptorBufferInfo bi{ voxel_->dir_buffer, 0, VK_WHOLE_SIZE };
                 VkWriteDescriptorSet w[2]{};
                 w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 w[0].dstSet = scene_desc_set_; w[0].dstBinding = 24;
@@ -130,11 +131,11 @@ void VulkanEngine::init_voxel() {
         return;
     }
 
-    const auto& bricks = voxel_world_->bricks();
-    const auto& shapes = voxel_world_->shapes();
+    const auto& bricks = voxel_->world->bricks();
+    const auto& shapes = voxel_->world->shapes();
     if (shapes.empty() || bricks.empty()) {
         log::error("[voxel] no shape/brick data produced; skipping init");
-        voxel_world_.reset();
+        voxel_->world.reset();
         return;
     }
     const VoxelShape& s0 = shapes[0];
@@ -213,14 +214,14 @@ void VulkanEngine::init_voxel() {
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo ai{};
         vk_check(vmaCreateBuffer(allocator_, &bci, &aci,
-                                 &voxel_atlas_buffer_, &voxel_atlas_alloc_, &ai),
+                                 &voxel_->atlas_buffer, &voxel_->atlas_alloc, &ai),
                  "voxel brick atlas");
         // Upload only the populated prefix; the rest stays uninitialised.
         const size_t init_bytes = bricks.size() * sizeof(voxel::BrickPayload);
         std::memcpy(ai.pMappedData, bricks.data(), init_bytes);
-        voxel_atlas_mapped_   = ai.pMappedData;
-        voxel_atlas_bytes_    = atlas_bytes;
-        voxel_atlas_uploaded_ = static_cast<uint32_t>(bricks.size());
+        voxel_->atlas_mapped   = ai.pMappedData;
+        voxel_->atlas_bytes    = atlas_bytes;
+        voxel_->atlas_uploaded = static_cast<uint32_t>(bricks.size());
     }
 
     // Directory: a single FLAT global array of `uint entries[]`. The main
@@ -243,22 +244,22 @@ void VulkanEngine::init_voxel() {
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo ai{};
         vk_check(vmaCreateBuffer(allocator_, &bci, &aci,
-                                 &voxel_dir_buffer_, &voxel_dir_alloc_, &ai),
+                                 &voxel_->dir_buffer, &voxel_->dir_alloc, &ai),
                  "voxel shape directory");
         std::memcpy(ai.pMappedData, s0.directory.data(),
                     s0.directory.size() * sizeof(uint32_t));
-        voxel_dir_mapped_   = ai.pMappedData;
-        voxel_dir_bytes_    = dir_bytes;
-        voxel_dir_uploaded_   = static_cast<uint32_t>(s0.directory.size());
-        voxel_dir_next_shape_ = 1;   // shape 0 (main) is already uploaded
+        voxel_->dir_mapped   = ai.pMappedData;
+        voxel_->dir_bytes    = dir_bytes;
+        voxel_->dir_uploaded   = static_cast<uint32_t>(s0.directory.size());
+        voxel_->dir_next_shape = 1;   // shape 0 (main) is already uploaded
     }
 
     log::infof("[voxel] GPU pools: atlas cap=%llu KB (%u bricks live), "
                "dir cap=%llu KB (%u entries live)",
                (unsigned long long)(atlas_bytes / 1024),
-               voxel_atlas_uploaded_,
+               voxel_->atlas_uploaded,
                (unsigned long long)(dir_bytes  / 1024),
-               voxel_dir_uploaded_);
+               voxel_->dir_uploaded);
 
     // ---- Camera UBO (host-mapped, per-frame memcpy) ----
     {
@@ -276,9 +277,9 @@ void VulkanEngine::init_voxel() {
                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
         VmaAllocationInfo ai{};
         vk_check(vmaCreateBuffer(allocator_, &bci, &aci,
-                                 &voxel_camera_ubo_, &voxel_camera_alloc_, &ai),
+                                 &voxel_->camera_ubo, &voxel_->camera_alloc, &ai),
                  "voxel camera ubo");
-        voxel_camera_mapped_ = ai.pMappedData;
+        voxel_->camera_mapped = ai.pMappedData;
     }
 
     // ---- Descriptor set layout ----
@@ -307,7 +308,7 @@ void VulkanEngine::init_voxel() {
             .bindingCount = 4, .pBindings = b,
         };
         vk_check(vkCreateDescriptorSetLayout(device_, &dlci, nullptr,
-                                              &voxel_desc_set_layout_),
+                                              &voxel_->desc_set_layout),
                  "voxel desc set layout");
     }
 
@@ -319,24 +320,24 @@ void VulkanEngine::init_voxel() {
         pc.size = sizeof(VoxelPushConstants);
         VkPipelineLayoutCreateInfo plci{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1, .pSetLayouts = &voxel_desc_set_layout_,
+            .setLayoutCount = 1, .pSetLayouts = &voxel_->desc_set_layout,
             .pushConstantRangeCount = 1, .pPushConstantRanges = &pc,
         };
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr,
-                                         &voxel_pipeline_layout_),
+                                         &voxel_->pipeline_layout),
                  "voxel pipeline layout");
     }
 
     // ---- Pipeline ----
     {
         std::string sd = VIBE_SHADER_DIR;
-        voxel_vert_module_ = vkpipe::load_shader_module(device_, sd + "/voxel.vert.spv");
-        voxel_frag_module_ = vkpipe::load_shader_module(device_, sd + "/voxel.frag.spv");
+        voxel_->vert_module = vkpipe::load_shader_module(device_, sd + "/voxel.vert.spv");
+        voxel_->frag_module = vkpipe::load_shader_module(device_, sd + "/voxel.frag.spv");
 
         vkpipe::GraphicsPipelineConfig cfg{};
-        cfg.vert = voxel_vert_module_;
-        cfg.frag = voxel_frag_module_;
-        cfg.layout = voxel_pipeline_layout_;
+        cfg.vert = voxel_->vert_module;
+        cfg.frag = voxel_->frag_module;
+        cfg.layout = voxel_->pipeline_layout;
         cfg.color_formats = { scene_color_format_, motion_vec_format_,
                               gbuffer0_format_,    gbuffer1_format_ };
         cfg.depth_format = depth_format_;
@@ -354,7 +355,7 @@ void VulkanEngine::init_voxel() {
         // No vertex buffer — vertex shader derives corners from gl_VertexIndex.
         cfg.vbindings.clear();
         cfg.vattrs.clear();
-        voxel_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+        voxel_->pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     }
 
     // ---- Descriptor pool + set + write ----
@@ -371,20 +372,20 @@ void VulkanEngine::init_voxel() {
             .poolSizeCount = 3, .pPoolSizes = sizes,
         };
         vk_check(vkCreateDescriptorPool(device_, &pci, nullptr,
-                                         &voxel_desc_pool_),
+                                         &voxel_->desc_pool),
                  "voxel desc pool");
 
         VkDescriptorSetAllocateInfo dsai{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .descriptorPool = voxel_desc_pool_,
-            .descriptorSetCount = 1, .pSetLayouts = &voxel_desc_set_layout_,
+            .descriptorPool = voxel_->desc_pool,
+            .descriptorSetCount = 1, .pSetLayouts = &voxel_->desc_set_layout,
         };
-        vk_check(vkAllocateDescriptorSets(device_, &dsai, &voxel_desc_set_),
+        vk_check(vkAllocateDescriptorSets(device_, &dsai, &voxel_->desc_set),
                  "voxel alloc desc set");
 
-        VkDescriptorBufferInfo ubo_bi  { voxel_camera_ubo_,   0, VK_WHOLE_SIZE };
-        VkDescriptorBufferInfo atlas_bi{ voxel_atlas_buffer_, 0, VK_WHOLE_SIZE };
-        VkDescriptorBufferInfo dir_bi  { voxel_dir_buffer_,   0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo ubo_bi  { voxel_->camera_ubo,   0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo atlas_bi{ voxel_->atlas_buffer, 0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo dir_bi  { voxel_->dir_buffer,   0, VK_WHOLE_SIZE };
         // Bricks078 lives at albedo index 1 (see init_textures specs[]). If
         // that ever drops below 2, the fallback writes the first available
         // albedo so the shader still gets a real texture.
@@ -396,7 +397,7 @@ void VulkanEngine::init_voxel() {
         };
         VkWriteDescriptorSet w[4]{};
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[0].dstSet = voxel_desc_set_; w[0].dstBinding = 0;
+        w[0].dstSet = voxel_->desc_set; w[0].dstBinding = 0;
         w[0].descriptorCount = 1;
         w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w[0].pBufferInfo = &ubo_bi;
@@ -421,8 +422,8 @@ void VulkanEngine::init_voxel() {
     // after init_descriptors + write_scene_descriptors_once, so the set
     // exists; we just fill the two trailing bindings here.
     if (scene_desc_set_ != VK_NULL_HANDLE) {
-        VkDescriptorBufferInfo atlas_bi{ voxel_atlas_buffer_, 0, VK_WHOLE_SIZE };
-        VkDescriptorBufferInfo dir_bi  { voxel_dir_buffer_,   0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo atlas_bi{ voxel_->atlas_buffer, 0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo dir_bi  { voxel_->dir_buffer,   0, VK_WHOLE_SIZE };
         VkWriteDescriptorSet w[2]{};
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].dstSet = scene_desc_set_; w[0].dstBinding = 24;
@@ -442,16 +443,16 @@ void VulkanEngine::init_voxel() {
 }
 
 void VulkanEngine::rebuild_voxel_collision() {
-    if (!voxel_world_ || voxel_world_->shapes().empty()) return;
+    if (!voxel_->world || voxel_->world->shapes().empty()) return;
     std::vector<voxel::CollisionBox> boxes;
-    voxel_world_->build_collision_boxes(0, boxes);
+    voxel_->world->build_collision_boxes(0, boxes);
 
     // Player kinematic collision (game::collision AABBs). Rebuilt wholesale;
     // rebuild_tick_aabbs appends these to the static prefix each frame.
-    voxel_collision_aabbs_.clear();
-    voxel_collision_aabbs_.reserve(boxes.size());
+    voxel_->collision_aabbs.clear();
+    voxel_->collision_aabbs.reserve(boxes.size());
     for (const auto& b : boxes) {
-        voxel_collision_aabbs_.push_back(
+        voxel_->collision_aabbs.push_back(
             collision::AABB{ b.center - b.half, b.center + b.half });
     }
 
@@ -465,15 +466,15 @@ void VulkanEngine::rebuild_voxel_collision() {
 }
 
 void VulkanEngine::flush_voxel_brick_(uint32_t slot) {
-    if (!voxel_atlas_mapped_) return;
-    const voxel::BrickPayload& bp = voxel_world_->brick(slot);
+    if (!voxel_->atlas_mapped) return;
+    const voxel::BrickPayload& bp = voxel_->world->brick(slot);
     size_t off = static_cast<size_t>(slot) * sizeof(voxel::BrickPayload);
-    if (off + sizeof(voxel::BrickPayload) > voxel_atlas_bytes_) return;
-    std::memcpy(static_cast<char*>(voxel_atlas_mapped_) + off,
+    if (off + sizeof(voxel::BrickPayload) > voxel_->atlas_bytes) return;
+    std::memcpy(static_cast<char*>(voxel_->atlas_mapped) + off,
                 &bp, sizeof(voxel::BrickPayload));
     // Flush just this brick's range (non-coherent memory). Cheap vs the
     // whole-atlas flush we used to do every carve.
-    vmaFlushAllocation(allocator_, voxel_atlas_alloc_, off,
+    vmaFlushAllocation(allocator_, voxel_->atlas_alloc, off,
                        sizeof(voxel::BrickPayload));
 }
 
@@ -482,7 +483,7 @@ void VulkanEngine::flush_voxel_bricks_batched_(const std::vector<uint32_t>& slot
     // range. One driver call instead of N. Wasted flush bytes for unmodified
     // bricks inside the range are cheap (non-coherent memory; flush is a
     // CPU-side cache line writeback, not a GPU upload).
-    if (!voxel_atlas_mapped_ || slots.empty()) return;
+    if (!voxel_->atlas_mapped || slots.empty()) return;
     uint32_t mn = slots.front(), mx = slots.front();
     for (uint32_t s : slots) {
         if (s < mn) mn = s;
@@ -491,23 +492,23 @@ void VulkanEngine::flush_voxel_bricks_batched_(const std::vector<uint32_t>& slot
         // in the range as-is. A whole-range memcpy would also work since the
         // host mirror IS authoritative, but per-slot is symmetric with the
         // single-brick path.
-        const voxel::BrickPayload& bp = voxel_world_->brick(s);
+        const voxel::BrickPayload& bp = voxel_->world->brick(s);
         size_t off = static_cast<size_t>(s) * sizeof(voxel::BrickPayload);
-        if (off + sizeof(voxel::BrickPayload) > voxel_atlas_bytes_) continue;
-        std::memcpy(static_cast<char*>(voxel_atlas_mapped_) + off,
+        if (off + sizeof(voxel::BrickPayload) > voxel_->atlas_bytes) continue;
+        std::memcpy(static_cast<char*>(voxel_->atlas_mapped) + off,
                     &bp, sizeof(voxel::BrickPayload));
     }
     size_t off0 = static_cast<size_t>(mn) * sizeof(voxel::BrickPayload);
     size_t bytes = static_cast<size_t>(mx - mn + 1) * sizeof(voxel::BrickPayload);
-    if (off0 + bytes > voxel_atlas_bytes_)
-        bytes = voxel_atlas_bytes_ - off0;
-    vmaFlushAllocation(allocator_, voxel_atlas_alloc_, off0, bytes);
+    if (off0 + bytes > voxel_->atlas_bytes)
+        bytes = voxel_->atlas_bytes - off0;
+    vmaFlushAllocation(allocator_, voxel_->atlas_alloc, off0, bytes);
 }
 
 int VulkanEngine::apply_voxel_carve(int shape_idx, glm::vec3 world_center,
                                     float radius) {
-    if (!voxel_world_ || shape_idx < 0 ||
-        shape_idx >= (int)voxel_world_->shapes().size()) return 0;
+    if (!voxel_->world || shape_idx < 0 ||
+        shape_idx >= (int)voxel_->world->shapes().size()) return 0;
 
     // For falling chunks (shape_idx > 0), the carve point is in world space
     // but carve_sphere works in shape-local. Compute the chunk's CURRENT
@@ -516,12 +517,12 @@ int VulkanEngine::apply_voxel_carve(int shape_idx, glm::vec3 world_center,
     // origin_world (since carve_sphere subtracts that out internally).
     glm::vec3 carve_pos = world_center;
     if (shape_idx > 0 && physics_) {
-        for (const auto& ch : voxel_chunks_) {
+        for (const auto& ch : voxel_->chunks) {
             if (ch.shape_index != shape_idx) continue;
             glm::mat4 body_world;
             if (!physics_->get_body_world_matrix_h(ch.jolt_handle, body_world))
                 return 0;
-            const auto& s = voxel_world_->shapes()[shape_idx];
+            const auto& s = voxel_->world->shapes()[shape_idx];
             glm::vec3 half = 0.5f * glm::vec3(s.dim_bricks[0],
                                               s.dim_bricks[1],
                                               s.dim_bricks[2]) * voxel::kBrickSize;
@@ -544,72 +545,72 @@ int VulkanEngine::apply_voxel_carve(int shape_idx, glm::vec3 world_center,
     // The expensive collapse + collision rebuild are deferred to
     // process_voxel_updates (debounced) so rapid fire never stalls a frame.
     std::vector<uint32_t> dirty;
-    int removed = voxel_world_->carve_sphere(shape_idx, carve_pos, radius, dirty);
+    int removed = voxel_->world->carve_sphere(shape_idx, carve_pos, radius, dirty);
     if (removed == 0) return 0;
     flush_voxel_bricks_batched_(dirty);
-    voxel_update_pending_ = true;
-    voxel_removed_accum_ += removed;
+    voxel_->update_pending = true;
+    voxel_->removed_accum += removed;
     // Mark this shape dirty (dedupe).
     bool already = false;
-    for (int s : voxel_dirty_shapes_) if (s == shape_idx) { already = true; break; }
-    if (!already) voxel_dirty_shapes_.push_back(shape_idx);
+    for (int s : voxel_->dirty_shapes) if (s == shape_idx) { already = true; break; }
+    if (!already) voxel_->dirty_shapes.push_back(shape_idx);
     return removed;
 }
 
 void VulkanEngine::upload_voxel_growth_() {
-    // Push any newly-allocated bricks (slot ≥ voxel_atlas_uploaded_) to the
+    // Push any newly-allocated bricks (slot ≥ voxel_->atlas_uploaded) to the
     // host-mapped atlas, and any newly-claimed directory entries (offset ≥
-    // voxel_dir_uploaded_) to the host-mapped dir buffer. Both are bounded
+    // voxel_->dir_uploaded) to the host-mapped dir buffer. Both are bounded
     // memcpys + a single vmaFlushAllocation each — cheap.
-    if (!voxel_world_) return;
-    if (voxel_atlas_mapped_) {
-        uint32_t target = voxel_world_->brick_pool_size();
-        if (target > voxel_atlas_uploaded_) {
-            const auto& bricks = voxel_world_->bricks();
+    if (!voxel_->world) return;
+    if (voxel_->atlas_mapped) {
+        uint32_t target = voxel_->world->brick_pool_size();
+        if (target > voxel_->atlas_uploaded) {
+            const auto& bricks = voxel_->world->bricks();
             if (target > kVoxelAtlasCapacityBricks) {
                 target = kVoxelAtlasCapacityBricks;     // bound to capacity
                 log::error("[voxel] brick atlas capacity exceeded — chunks dropped");
             }
-            size_t off = size_t(voxel_atlas_uploaded_) * sizeof(voxel::BrickPayload);
-            size_t cnt = size_t(target - voxel_atlas_uploaded_)
+            size_t off = size_t(voxel_->atlas_uploaded) * sizeof(voxel::BrickPayload);
+            size_t cnt = size_t(target - voxel_->atlas_uploaded)
                        * sizeof(voxel::BrickPayload);
-            std::memcpy((char*)voxel_atlas_mapped_ + off,
-                        bricks.data() + voxel_atlas_uploaded_, cnt);
-            vmaFlushAllocation(allocator_, voxel_atlas_alloc_, off, cnt);
-            voxel_atlas_uploaded_ = target;
+            std::memcpy((char*)voxel_->atlas_mapped + off,
+                        bricks.data() + voxel_->atlas_uploaded, cnt);
+            vmaFlushAllocation(allocator_, voxel_->atlas_alloc, off, cnt);
+            voxel_->atlas_uploaded = target;
         }
     }
-    if (voxel_dir_mapped_) {
-        uint32_t target = voxel_world_->total_directory_size();
-        if (target > voxel_dir_uploaded_) {
+    if (voxel_->dir_mapped) {
+        uint32_t target = voxel_->world->total_directory_size();
+        if (target > voxel_->dir_uploaded) {
             if (target > kVoxelDirCapacityEntries) {
                 target = kVoxelDirCapacityEntries;
                 log::error("[voxel] directory capacity exceeded — chunks dropped");
             }
             // Walk only the shapes added since the last call (tracked by
-            // voxel_dir_next_shape_). Old code re-scanned every shape ever
+            // voxel_->dir_next_shape). Old code re-scanned every shape ever
             // created on each collapse — cost grew linearly with session-
             // long debris history.
-            const auto& shapes = voxel_world_->shapes();
-            for (size_t si = voxel_dir_next_shape_; si < shapes.size(); ++si) {
+            const auto& shapes = voxel_->world->shapes();
+            for (size_t si = voxel_->dir_next_shape; si < shapes.size(); ++si) {
                 const auto& s = shapes[si];
                 size_t off = size_t(s.dir_base) * sizeof(uint32_t);
                 size_t bytes = s.directory.size() * sizeof(uint32_t);
-                if (off + bytes > size_t(voxel_dir_bytes_)) continue;
-                std::memcpy((char*)voxel_dir_mapped_ + off,
+                if (off + bytes > size_t(voxel_->dir_bytes)) continue;
+                std::memcpy((char*)voxel_->dir_mapped + off,
                             s.directory.data(), bytes);
-                vmaFlushAllocation(allocator_, voxel_dir_alloc_, off, bytes);
+                vmaFlushAllocation(allocator_, voxel_->dir_alloc, off, bytes);
             }
-            voxel_dir_next_shape_ = static_cast<uint32_t>(shapes.size());
-            voxel_dir_uploaded_   = target;
+            voxel_->dir_next_shape = static_cast<uint32_t>(shapes.size());
+            voxel_->dir_uploaded   = target;
         }
     }
 }
 
 void VulkanEngine::process_voxel_updates(float dt) {
-    if (!voxel_world_ || voxel_world_->shapes().empty()) return;
-    if (voxel_collapse_cd_  > 0.0f) voxel_collapse_cd_  -= dt;
-    if (voxel_collision_cd_ > 0.0f) voxel_collision_cd_ -= dt;
+    if (!voxel_->world || voxel_->world->shapes().empty()) return;
+    if (voxel_->collapse_cd  > 0.0f) voxel_->collapse_cd  -= dt;
+    if (voxel_->collision_cd > 0.0f) voxel_->collision_cd -= dt;
 
     // Tick chunk lifetime each frame regardless of pending state. A chunk
     // despawns when EITHER its TTL hits zero (hard cap) or Jolt has put
@@ -618,7 +619,7 @@ void VulkanEngine::process_voxel_updates(float dt) {
     // The age gate replaces a magic-number TTL threshold (was `ttl < 6.5f`,
     // which silently broke if the initial TTL was changed).
     constexpr float kMinAgeBeforeSleepCull = 1.0f;   // seconds
-    for (auto it = voxel_chunks_.begin(); it != voxel_chunks_.end(); ) {
+    for (auto it = voxel_->chunks.begin(); it != voxel_->chunks.end(); ) {
         it->ttl -= dt;
         it->age += dt;
         const bool active = physics_ &&
@@ -626,12 +627,12 @@ void VulkanEngine::process_voxel_updates(float dt) {
         const bool slept = it->age >= kMinAgeBeforeSleepCull && !active;
         if (it->ttl <= 0.0f || slept) {
             if (physics_) physics_->remove_body(it->body_id);
-            voxel_world_->drop_shape(it->shape_index);
-            it = voxel_chunks_.erase(it);
+            voxel_->world->drop_shape(it->shape_index);
+            it = voxel_->chunks.erase(it);
         } else { ++it; }
     }
 
-    if (!voxel_update_pending_) return;
+    if (!voxel_->update_pending) return;
 
     // Collapse (the ~20 ms BFS) only when enough has been carved to plausibly
     // disconnect a chunk, and rate-limited — a single bullet hole never pays
@@ -639,14 +640,14 @@ void VulkanEngine::process_voxel_updates(float dt) {
     // structural check; each detached connected component falls as its own
     // VOXEL CHUNK (own shape, own brick atlas slice, own Jolt body).
     bool collapsed = false;
-    if (voxel_removed_accum_ >= 3000 && voxel_collapse_cd_ <= 0.0f) {
-        voxel_removed_accum_ = 0;
-        voxel_collapse_cd_   = 0.25f;
+    if (voxel_->removed_accum >= 3000 && voxel_->collapse_cd <= 0.0f) {
+        voxel_->removed_accum = 0;
+        voxel_->collapse_cd   = 0.25f;
         collapsed = true;
 
         std::vector<uint32_t> main_dirty;
         std::vector<voxel::VoxelWorld::ChunkOut> chunks;
-        voxel_world_->collapse_into_chunks(0, 8, chunks, main_dirty);
+        voxel_->world->collapse_into_chunks(0, 8, chunks, main_dirty);
         // Flush the main shape's cleared voxels (batched).
         flush_voxel_bricks_batched_(main_dirty);
         // Push the new chunks' bricks + directories to the GPU buffers.
@@ -667,13 +668,13 @@ void VulkanEngine::process_voxel_updates(float dt) {
                 // visual gain — drop the shape entry, don't spawn.
                 float vol = 8.0f * he.x * he.y * he.z;
                 if (std::min({he.x, he.y, he.z}) < 0.05f || vol < 0.001f) {
-                    voxel_world_->drop_shape(chunks[i].shape_index);
+                    voxel_->world->drop_shape(chunks[i].shape_index);
                     continue;
                 }
                 uint32_t id = physics_->add_dynamic_box(
                     chunks[i].center_world, he, glm::vec3(0.0f), 250.0f);
                 if (id == 0) {
-                    voxel_world_->drop_shape(chunks[i].shape_index);
+                    voxel_->world->drop_shape(chunks[i].shape_index);
                     continue;
                 }
                 VoxelChunk vc{};
@@ -681,13 +682,13 @@ void VulkanEngine::process_voxel_updates(float dt) {
                 vc.body_id     = id;
                 vc.jolt_handle = physics_->handle_of(id);
                 vc.ttl         = 9.0f;
-                voxel_chunks_.push_back(vc);
+                voxel_->chunks.push_back(vc);
             }
             // Drop any chunks past the cap (they were extracted from the main
             // shape but we don't want a fleet of dynamic bodies — keep the
             // biggest, leak the rest as orphaned shapes that don't render).
             for (size_t i = n; i < chunks.size(); ++i)
-                voxel_world_->drop_shape(chunks[i].shape_index);
+                voxel_->world->drop_shape(chunks[i].shape_index);
             log::infof("[voxel] collapse: %zu voxel chunks spawned (of %zu)",
                        n, chunks.size());
         }
@@ -697,15 +698,15 @@ void VulkanEngine::process_voxel_updates(float dt) {
     // it into multiple pieces, drop the smaller pieces as new chunks (the
     // largest stays in the parent's Jolt body). This is the "chunks can
     // break again" path — voxels remain voxels at every level.
-    if (physics_ && !voxel_dirty_shapes_.empty()) {
+    if (physics_ && !voxel_->dirty_shapes.empty()) {
         // Snapshot inheritance: pulling the parent body's pose + velocity
         // before split lets each new piece get a Jolt body that's roughly
         // where it visibly was (no teleport) and continues the bulk motion.
-        for (int dirty_shape : voxel_dirty_shapes_) {
+        for (int dirty_shape : voxel_->dirty_shapes) {
             if (dirty_shape <= 0) continue;  // shape 0 = main, handled above
             // Find the parent chunk entry.
             VoxelChunk* parent_ch = nullptr;
-            for (auto& c : voxel_chunks_) {
+            for (auto& c : voxel_->chunks) {
                 if (c.shape_index == dirty_shape) { parent_ch = &c; break; }
             }
             if (!parent_ch) continue;
@@ -718,7 +719,7 @@ void VulkanEngine::process_voxel_updates(float dt) {
             std::vector<uint32_t> piece_dirty;
             std::vector<voxel::VoxelWorld::ChunkOut> pieces;
             constexpr int kMinPieceVoxels = 8;   // tiny shards become dust
-            int removed = voxel_world_->split_floating_chunk(
+            int removed = voxel_->world->split_floating_chunk(
                 dirty_shape, kMinPieceVoxels, pieces, piece_dirty);
             if (removed == 0 && pieces.empty()) continue;  // still 1 CC
 
@@ -729,7 +730,7 @@ void VulkanEngine::process_voxel_updates(float dt) {
             // Spawn a body per new piece. Inherit parent velocity so they
             // continue along its trajectory + a small outward kick from the
             // parent centroid so they separate visibly.
-            const auto& parent_sh = voxel_world_->shapes()[dirty_shape];
+            const auto& parent_sh = voxel_->world->shapes()[dirty_shape];
             const glm::vec3 parent_half = 0.5f * glm::vec3(
                 parent_sh.dim_bricks[0],
                 parent_sh.dim_bricks[1],
@@ -740,7 +741,7 @@ void VulkanEngine::process_voxel_updates(float dt) {
                 glm::vec3 he = p.half_extents;
                 float vol = 8.0f * he.x * he.y * he.z;
                 if (std::min({he.x, he.y, he.z}) < 0.05f || vol < 0.001f) {
-                    voxel_world_->drop_shape(p.shape_index);
+                    voxel_->world->drop_shape(p.shape_index);
                     continue;
                 }
                 // p.center_world is in the parent's SHAPE-LOCAL frame
@@ -758,103 +759,103 @@ void VulkanEngine::process_voxel_updates(float dt) {
                 glm::vec3 init_vel = parent_lin + kick;
                 uint32_t id = physics_->add_dynamic_box(
                     spawn_world, he, init_vel, 100.0f);
-                if (id == 0) { voxel_world_->drop_shape(p.shape_index); continue; }
+                if (id == 0) { voxel_->world->drop_shape(p.shape_index); continue; }
                 VoxelChunk vc{};
                 vc.shape_index = p.shape_index;
                 vc.body_id     = id;
                 vc.jolt_handle = physics_->handle_of(id);
                 vc.ttl         = 9.0f;
-                voxel_chunks_.push_back(vc);
+                voxel_->chunks.push_back(vc);
             }
             log::infof("[voxel] chunk split: shape %d -> %zu new pieces",
                        dirty_shape, pieces.size());
-            // parent_ch pointer may now dangle if voxel_chunks_ reallocated
+            // parent_ch pointer may now dangle if voxel_->chunks reallocated
             // — do NOT touch it past this point.
         }
     }
-    voxel_dirty_shapes_.clear();
+    voxel_->dirty_shapes.clear();
 
-    // Collision rebuild (player AABBs + Jolt body): voxel_update_pending_ is
+    // Collision rebuild (player AABBs + Jolt body): voxel_->update_pending is
     // the "collision is stale" flag, set by every carve. Rebuild on a slow
     // cadence (continuous hole-poking shouldn't rebuild every frame), forced
     // right after a collapse, and SKIPPED entirely while the player is far
     // from the tower — shooting it from a distance never needs up-to-date
     // physics solidity (the hole's VISUAL already updated in the carve). It
     // catches up the moment they approach. Stays flagged dirty until then.
-    if (!voxel_update_pending_) return;
-    const auto& s0 = voxel_world_->shapes()[0];
+    if (!voxel_->update_pending) return;
+    const auto& s0 = voxel_->world->shapes()[0];
     glm::vec3 tower_c = s0.origin_world + 0.5f * glm::vec3(
         s0.dim_bricks[0], s0.dim_bricks[1], s0.dim_bricks[2]) * voxel::kBrickSize;
     glm::vec3 d = player_.eye_position() - tower_c;
     const bool near_tower = glm::dot(d, d) < (45.0f * 45.0f);
-    if (collapsed) voxel_collision_cd_ = 0.0f;
-    if (near_tower && voxel_collision_cd_ <= 0.0f) {
+    if (collapsed) voxel_->collision_cd = 0.0f;
+    if (near_tower && voxel_->collision_cd <= 0.0f) {
         rebuild_voxel_collision();
-        voxel_collision_cd_   = 0.5f;
-        voxel_update_pending_ = false;
+        voxel_->collision_cd   = 0.5f;
+        voxel_->update_pending = false;
     }
 }
 
 void VulkanEngine::destroy_voxel() {
-    if (voxel_pipeline_) {
-        vkDestroyPipeline(device_, voxel_pipeline_, nullptr);
-        voxel_pipeline_ = VK_NULL_HANDLE;
+    if (voxel_->pipeline) {
+        vkDestroyPipeline(device_, voxel_->pipeline, nullptr);
+        voxel_->pipeline = VK_NULL_HANDLE;
     }
-    if (voxel_pipeline_layout_) {
-        vkDestroyPipelineLayout(device_, voxel_pipeline_layout_, nullptr);
-        voxel_pipeline_layout_ = VK_NULL_HANDLE;
+    if (voxel_->pipeline_layout) {
+        vkDestroyPipelineLayout(device_, voxel_->pipeline_layout, nullptr);
+        voxel_->pipeline_layout = VK_NULL_HANDLE;
     }
-    if (voxel_desc_pool_) {
-        vkDestroyDescriptorPool(device_, voxel_desc_pool_, nullptr);
-        voxel_desc_pool_ = VK_NULL_HANDLE;
-        voxel_desc_set_ = VK_NULL_HANDLE;
+    if (voxel_->desc_pool) {
+        vkDestroyDescriptorPool(device_, voxel_->desc_pool, nullptr);
+        voxel_->desc_pool = VK_NULL_HANDLE;
+        voxel_->desc_set = VK_NULL_HANDLE;
     }
-    if (voxel_desc_set_layout_) {
-        vkDestroyDescriptorSetLayout(device_, voxel_desc_set_layout_, nullptr);
-        voxel_desc_set_layout_ = VK_NULL_HANDLE;
+    if (voxel_->desc_set_layout) {
+        vkDestroyDescriptorSetLayout(device_, voxel_->desc_set_layout, nullptr);
+        voxel_->desc_set_layout = VK_NULL_HANDLE;
     }
-    if (voxel_vert_module_) {
-        vkDestroyShaderModule(device_, voxel_vert_module_, nullptr);
-        voxel_vert_module_ = VK_NULL_HANDLE;
+    if (voxel_->vert_module) {
+        vkDestroyShaderModule(device_, voxel_->vert_module, nullptr);
+        voxel_->vert_module = VK_NULL_HANDLE;
     }
-    if (voxel_frag_module_) {
-        vkDestroyShaderModule(device_, voxel_frag_module_, nullptr);
-        voxel_frag_module_ = VK_NULL_HANDLE;
+    if (voxel_->frag_module) {
+        vkDestroyShaderModule(device_, voxel_->frag_module, nullptr);
+        voxel_->frag_module = VK_NULL_HANDLE;
     }
-    if (voxel_camera_ubo_) {
-        vmaDestroyBuffer(allocator_, voxel_camera_ubo_, voxel_camera_alloc_);
-        voxel_camera_ubo_ = VK_NULL_HANDLE;
-        voxel_camera_alloc_ = nullptr;
-        voxel_camera_mapped_ = nullptr;
+    if (voxel_->camera_ubo) {
+        vmaDestroyBuffer(allocator_, voxel_->camera_ubo, voxel_->camera_alloc);
+        voxel_->camera_ubo = VK_NULL_HANDLE;
+        voxel_->camera_alloc = nullptr;
+        voxel_->camera_mapped = nullptr;
     }
-    if (voxel_atlas_buffer_) {
-        vmaDestroyBuffer(allocator_, voxel_atlas_buffer_, voxel_atlas_alloc_);
-        voxel_atlas_buffer_ = VK_NULL_HANDLE;
-        voxel_atlas_alloc_ = nullptr;
-        voxel_atlas_mapped_ = nullptr;
-        voxel_atlas_bytes_ = 0;
-        voxel_atlas_uploaded_ = 0;
+    if (voxel_->atlas_buffer) {
+        vmaDestroyBuffer(allocator_, voxel_->atlas_buffer, voxel_->atlas_alloc);
+        voxel_->atlas_buffer = VK_NULL_HANDLE;
+        voxel_->atlas_alloc = nullptr;
+        voxel_->atlas_mapped = nullptr;
+        voxel_->atlas_bytes = 0;
+        voxel_->atlas_uploaded = 0;
     }
-    if (voxel_dir_buffer_) {
-        vmaDestroyBuffer(allocator_, voxel_dir_buffer_, voxel_dir_alloc_);
-        voxel_dir_buffer_ = VK_NULL_HANDLE;
-        voxel_dir_alloc_ = nullptr;
-        voxel_dir_mapped_ = nullptr;
-        voxel_dir_bytes_ = 0;
-        voxel_dir_uploaded_ = 0;
-        voxel_dir_next_shape_ = 0;
+    if (voxel_->dir_buffer) {
+        vmaDestroyBuffer(allocator_, voxel_->dir_buffer, voxel_->dir_alloc);
+        voxel_->dir_buffer = VK_NULL_HANDLE;
+        voxel_->dir_alloc = nullptr;
+        voxel_->dir_mapped = nullptr;
+        voxel_->dir_bytes = 0;
+        voxel_->dir_uploaded = 0;
+        voxel_->dir_next_shape = 0;
     }
     // Remove any active chunks' Jolt bodies before tearing physics down.
     if (physics_) {
-        for (const auto& ch : voxel_chunks_) physics_->remove_body(ch.body_id);
+        for (const auto& ch : voxel_->chunks) physics_->remove_body(ch.body_id);
     }
-    voxel_chunks_.clear();
-    voxel_dirty_shapes_.clear();
-    voxel_world_.reset();
+    voxel_->chunks.clear();
+    voxel_->dirty_shapes.clear();
+    voxel_->world.reset();
 }
 
 void VulkanEngine::update_voxel_camera_ubo() {
-    if (!voxel_camera_mapped_) return;
+    if (!voxel_->camera_mapped) return;
 
     VoxelCameraUboData data{};
     const FrameView& fv = current_frame_view_;
@@ -906,17 +907,17 @@ void VulkanEngine::update_voxel_camera_ubo() {
         data.pal[i] = glm::vec4(col, 1.0f);
     }
 
-    upload(voxel_camera_ubo_, 0, &data, sizeof(data), voxel_camera_mapped_);
+    upload(voxel_->camera_ubo, 0, &data, sizeof(data), voxel_->camera_mapped);
 }
 
 void VulkanEngine::render_voxels(VkCommandBuffer cmd) {
-    if (!voxel_pipeline_ || !voxel_world_ || voxel_world_->shapes().empty()) return;
+    if (!voxel_->pipeline || !voxel_->world || voxel_->world->shapes().empty()) return;
     // (camera UBO: staged in write_pass_ubos().)
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, voxel_pipeline_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, voxel_->pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            voxel_pipeline_layout_, 0, 1,
-                            &voxel_desc_set_, 0, nullptr);
+                            voxel_->pipeline_layout, 0, 1,
+                            &voxel_->desc_set, 0, nullptr);
 
     // Helper: push a shape's PC + draw the 36-vert AABB cube.
     const Frustum& frustum = current_frame_view_.frustum;
@@ -930,9 +931,9 @@ void VulkanEngine::render_voxels(VkCommandBuffer cmd) {
         // capacity (upload_voxel_growth_ clamps and drops them). voxel.frag
         // has no bounds checks - drawing such a shape would read past both
         // buffers. Skip any shape not fully resident.
-        if (size_t(s.dir_base) + s.directory.size() > size_t(voxel_dir_uploaded_)) return;
+        if (size_t(s.dir_base) + s.directory.size() > size_t(voxel_->dir_uploaded)) return;
         for (uint32_t bp : s.directory)
-            if (bp != voxel::kEmptyBrick && bp >= voxel_atlas_uploaded_) return;
+            if (bp != voxel::kEmptyBrick && bp >= voxel_->atlas_uploaded) return;
         // World-space AABB frustum cull. Even with rotation, the shape's
         // axis-aligned box around its CURRENT transform is a conservative
         // bound — rotate the 8 local corners and take min/max. Off-screen
@@ -967,14 +968,14 @@ void VulkanEngine::render_voxels(VkCommandBuffer cmd) {
             voxel::kVoxelSize);
         pc.grid_dir = glm::ivec4(s.dim_bricks[0], s.dim_bricks[1],
                                   s.dim_bricks[2], (int)s.dir_base);
-        vkCmdPushConstants(cmd, voxel_pipeline_layout_,
+        vkCmdPushConstants(cmd, voxel_->pipeline_layout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(pc), &pc);
         vkCmdDraw(cmd, 36, 1, 0, 0);
     };
 
     // Draw the main shape (translation-only).
-    const auto& shapes = voxel_world_->shapes();
+    const auto& shapes = voxel_->world->shapes();
     {
         const voxel::VoxelShape& s = shapes[0];
         glm::mat4 model = glm::translate(glm::mat4(1.0f), s.origin_world);
@@ -987,7 +988,7 @@ void VulkanEngine::render_voxels(VkCommandBuffer cmd) {
     // own centre — translate(centre) · rotate · translate(-half) — so the
     // chunk's local centre lines up with the body's centre.
     if (physics_) {
-        for (const auto& ch : voxel_chunks_) {
+        for (const auto& ch : voxel_->chunks) {
             if (ch.shape_index < 0 || ch.shape_index >= (int)shapes.size()) continue;
             const voxel::VoxelShape& s = shapes[ch.shape_index];
             glm::mat4 body_world;
