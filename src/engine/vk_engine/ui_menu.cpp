@@ -12,6 +12,7 @@
 #include "engine/log.h"
 #include "engine/vk_initializers.h"   // vibe::vk_check
 #include "engine/window.h"
+#include "engine/globe.h"
 
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
@@ -130,6 +131,19 @@ void VulkanEngine::build_menu_ui() {
         if (ImGui::Button("Peaceful (all off)")) game_.aircraft_enabled = game_.aircraft_bombs = game_.aa_enabled = game_.weapons_enabled = false;
         ImGui::SameLine();
         if (ImGui::Button("War (all on)")) game_.aircraft_enabled = game_.aircraft_bombs = game_.aa_enabled = game_.weapons_enabled = true;
+        ImGui::SeparatorText("Travel");
+        // (home and the nearest places: there may be thousands)
+        int travel_n = 0;
+        for (int k : sites_by_distance(7)) {
+            if (travel_n++ % 4 != 0) ImGui::SameLine();
+            if (ImGui::Button((globe::site(k).name + "##site" + std::to_string(k)).c_str(), ImVec2(140.0f, 0.0f))) {
+                travel_to_site(k);
+                state_ = State::Playing;
+                window_->set_cursor_captured(true);
+            }
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sets you down at that place. You can also fly there: V, then up and away.");
+        ImGui::Checkbox("Show the places' names from high up", &rt_.site_labels);
         ImGui::SeparatorText("Physics and weapons");
         ImGui::SliderFloat("gravity (m/s^2)", &game_.gravity, 0.5f, 1250.0f, "%.1f",
                            ImGuiSliderFlags_Logarithmic);
@@ -697,6 +711,7 @@ void VulkanEngine::build_menu_ui() {
             {
                 const char* fr_labels[] = { "Exact (slow in forests)", "Exact sun shadows nearby (default)", "Solid leaf cards for all rays (fastest)" };
                 ImGui::Combo("Foliage rays", &rt_.foliage_ray_mode, fr_labels, 3);
+                ImGui::Checkbox("Lighter bounce light on leaves", &rt_.gi_leaf_lite);
             }
             if (ImGui::SliderFloat("FSR: least render scale", &rt_.fsr_min_render_scale, 0.5f, 1.0f, "%.2f") && rt_.fsr_backend == 1)
                 apply_render_scale();

@@ -709,6 +709,7 @@ struct RtSettings {
         // sun's shadow near the camera does; bounce light, ambient occlusion, the blocker
         // search and far shadows take a card as solid, 2 = all rays do.
         int   foliage_ray_mode = 1;
+        bool  gi_leaf_lite = true;     // leaves take one bounce-light ray and no second-bounce ray (deferred_lighting.frag gi_leaf1)
         // FSR3 Frame Generation. Only meaningful when fsr_backend == 1.
         // Session 3 dispatches FG to a private output image without
         // presenting it — sessions 4-6 wire it into the swapchain
@@ -776,6 +777,7 @@ struct RtSettings {
         float tree_impostor_px = 20.0f;
         // How far trees and bushes are drawn (m). The view distance still caps it; 3800 = as far as that goes.
         float tree_draw_distance = 3800.0f;
+        bool  site_labels = true;        // the sites' names on screen when seen from high up (sites.cpp)
         float fov_deg    = 80.0f;
         float mouse_sens = 1.0f;
         // FSR path only (AMD / no DLSS): the least the scene is rendered at, as a share of the

@@ -21,7 +21,7 @@ layout(std430, set = 0, binding = 4) readonly buffer Exposure {
     vec4 hl0;            // the landscape's height layers (m): sand->grass start, end, grass->dirt start, end
     vec4 hl1;            // dirt->rock start, end, rock->snow start, end
     vec4 misc;           // x: top of the local cloud layer (m), y: cloud coverage, z: cloud size, w: metres the wind has carried the clouds
-    vec4 misc2;          // x: base of the local cloud layer (m), y: the hour angle (radians, 0 at noon): how far the sky has turned (stars)
+    vec4 misc2;          // x: base of the local cloud layer (m), y: the hour angle (radians, 0 at noon): how far the sky has turned (stars); z, w and sun_land.w: the second site's place on the planet (unit vector x, y, z; all 0 = none)
     vec4 sun_land;       // rgb: the sunlight on the landscape (scene.sun_color.rgb x intensity)
     // The globe (engine/globe.h): the frame at the camera's ground point - the planet-frame
     // directions of the view's east (x), up (y) and south (z) - and the landscape FBM's lattice
@@ -307,6 +307,26 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
         col = mix(col, avg, w_avg);               // (the land's colour; where there is sea is the sea map's to say)
     }
     col = mix(sea, col, land);
+    // The sites (engine/globe.h Site), so that they can be told from high up and from orbit.
+    // Seawatch is an island the map above does not have - the landscape formula raises it only
+    // near by (terrain.cpp site_ground): drawn here as it looks from the air, a meadow top, a
+    // ring of woods on its slopes, a beach. And both sites show their lanterns at night.
+    float site_glow = 0.0;
+    {
+        float lamp_km = max(0.35, 0.003 * foot);                 // (never under about three pixels wide)
+        vec3 sg = vec3(u_exposure.misc2.z, u_exposure.misc2.w, u_exposure.sun_land.w);
+        if (dot(sg, sg) > 0.5) {
+            float dk = Rg * length(Nf - sg);                     // km from its centre
+            if (dk < 6.0) {
+                vec3 isle = mix(vec3(0.085, 0.135, 0.045), vec3(0.040, 0.075, 0.028), smoothstep(0.30, 0.36, dk));
+                isle = mix(isle, vec3(0.30, 0.26, 0.18), smoothstep(1.12, 1.22, dk));
+                col = mix(col, isle, 1.0 - smoothstep(1.24, 1.32, dk));
+                col = mix(col, vec3(0.030, 0.105, 0.120), (1.0 - smoothstep(1.32, 1.9, dk)) * smoothstep(1.24, 1.32, dk) * 0.7);   // the shallows round it
+                site_glow = exp(-dk * dk / (lamp_km * lamp_km));
+            }
+        }
+        site_glow = max(site_glow, exp(-dot(m, m) / (lamp_km * lamp_km)));       // home: the castle and its road
+    }
     // Weather systems: broad swirls of cloud over it.
     float cl = smoothstep(0.56, 0.76, pl_fbm(Nf * 7.0 + vec3(0.0, 0.0, 0.31 * pl_fbm(Nf * 3.0))) * 0.65 + pl_fbm(Nf * 38.0 + 5.0) * 0.35);
     // (...while the local layer is what you see: from 25 km up, where the raymarched land and its
@@ -335,6 +355,9 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     float day_rel = clamp(smoothstep(-0.15, 0.10, ndl) / max(smoothstep(-0.15, 0.10, sun.y), 0.06), 0.0, 1.0);
     vec3 lit = col * (u_exposure.sun_land.rgb * t_rel * max(dot(nl, sun), 0.0) +
                       pc.sky_color.rgb * (0.75 * (0.5 + 0.5 * dot(nl, N)) * day_rel)) * 0.74;
+    // (the sites' lanterns: lit where it is night at that spot, hidden by cloud)
+    // (pc.sun_dir is the moon at night: go by how much light there is)
+    lit += vec3(1.0, 0.62, 0.28) * (site_glow * (1.0 - smoothstep(0.05, 0.6, dot(atmo_sun_illum(), vec3(0.2126, 0.7152, 0.0722)))) * (1.0 - cl) * 0.9);
     // Sea glint.
     vec3 hv = normalize(sun - dir);
     lit += (1.0 - land) * (1.0 - cl) * t_sun * pow(max(dot(N, hv), 0.0), 220.0) * 0.05 * atmo_sun_illum();

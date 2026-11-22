@@ -528,8 +528,10 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_rm_temporal", s.rt_.terrain_rm_temporal);
     f("terrain_vrs", s.rt_.terrain_vrs);
     f("foliage_ray_mode", s.rt_.foliage_ray_mode);
+    f("gi_leaf_lite", s.rt_.gi_leaf_lite);
     f("tree_impostor_px", s.rt_.tree_impostor_px);
     f("tree_draw_distance", s.rt_.tree_draw_distance);
+    f("site_labels", s.rt_.site_labels);
     f("fov_deg", s.rt_.fov_deg);
     f("mouse_sens", s.rt_.mouse_sens);
     f("invert_mouse_y", s.input_.invert_mouse_y);

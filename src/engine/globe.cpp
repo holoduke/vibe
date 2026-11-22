@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <utility>
 
 namespace vibe::globe {
 
@@ -43,11 +44,40 @@ float fbm3d(glm::dvec3 p) {
 }
 }  // namespace
 
+namespace {
+std::vector<Site>& sites() {
+    static std::vector<Site> s = [] { std::vector<Site> v(1); v[0].id = "home"; v[0].name = "Home"; v[0].chart.site = 0; return v; }();
+    return s;
+}
+// (published like the charts: old snapshots are left alive for threads still reading them)
+std::atomic<const std::vector<SiteShape>*> g_nearby{ new std::vector<SiteShape>() };
+}  // namespace
+
+int site_count() { return int(sites().size()); }
+const Site& site(int k) { return sites()[size_t(k < 0 || k >= site_count() ? 0 : k)]; }
+const std::vector<SiteShape>& sites_nearby() { return *g_nearby.load(std::memory_order_acquire); }
+void set_sites_nearby(std::vector<SiteShape> v) { g_nearby.store(new std::vector<SiteShape>(std::move(v)), std::memory_order_release); }
+double ground_distance(const glm::dvec3& a, const glm::dvec3& b) {
+    return kR * std::acos(glm::clamp(glm::dot(a, b), -1.0, 1.0));
+}
+
 const Chart& current() { return *g_chart.load(std::memory_order_acquire); }
-void set_current(const Chart& c) { g_chart.store(new Chart(c), std::memory_order_release); }
+namespace {
+std::atomic<const Ring*> g_ring{new Ring()};
+std::atomic<uint32_t> g_serial{0};
+}
+const Ring& ring_now() { return *g_ring.load(std::memory_order_acquire); }
+uint32_t chart_serial() { return g_serial.load(std::memory_order_acquire); }
+void set_current(const Chart& c) {
+    // (the ring first: a reader that sees the new chart must not pair it with the old ring's
+    // "on" for home; the other way round costs one frame of the old mapping at most)
+    g_ring.store(new Ring(ring_of(c)), std::memory_order_release);
+    g_chart.store(new Chart(c), std::memory_order_release);
+    g_serial.fetch_add(1, std::memory_order_release);
+}
 
 glm::dvec3 to_planet(const Chart& c, double x, double z) {
-    const double lx = x - c.ox(), lz = z;
+    const double lx = x - c.org.x, lz = z - c.org.y;
     const double d = std::hypot(lx, lz);
     if (d < 1e-6) return c.F[1];
     const glm::dvec3 dir = (c.F[0] * lx + c.F[2] * lz) / d;
@@ -56,7 +86,7 @@ glm::dvec3 to_planet(const Chart& c, double x, double z) {
 }
 
 glm::dmat3 frame_at(const Chart& c, double x, double z) {
-    const double lx = x - c.ox(), lz = z;
+    const double lx = x - c.org.x, lz = z - c.org.y;
     const double d = std::hypot(lx, lz);
     if (d < 1e-6) return c.F;
     const glm::dvec3 dir = (c.F[0] * lx + c.F[2] * lz) / d;
@@ -79,9 +109,9 @@ glm::dvec2 home_az(const glm::dvec3& G) {
 glm::dvec2 to_chart(const Chart& c, const glm::dvec3& G) {
     const double e = glm::dot(G, c.F[0]), u = glm::dot(G, c.F[1]), s = glm::dot(G, c.F[2]);
     const double sth = std::hypot(e, s);
-    if (sth < 1e-12) return glm::dvec2(c.ox(), 0.0);
+    if (sth < 1e-12) return c.org;
     const double th = std::atan2(sth, u);
-    return glm::dvec2(c.ox() + e * (kR * th / sth), s * (kR * th / sth));
+    return c.org + glm::dvec2(e * (kR * th / sth), s * (kR * th / sth));
 }
 
 Chart far_chart(const glm::dmat3& frame) {
@@ -92,7 +122,71 @@ Chart far_chart(const glm::dmat3& frame) {
     c.F[0] = glm::normalize(c.F[0] - c.F[1] * glm::dot(c.F[0], c.F[1]));
     c.F[2] = glm::cross(c.F[0], c.F[1]);
     c.home = false;
+    c.high = true;
+    c.org = glm::dvec2(kFarX, 0.0);
     return c;
+}
+
+Ring ring_of(const Chart& c) {
+    Ring r;
+    if (c.home) return r;
+    r.wp0 = c.site > 0 ? glm::dvec2(0.0, kSiteOffZ) : c.org;      // (where the mapping is taken: under the player, or at the site)
+    r.h0 = home_az(to_planet(c, r.wp0.x, r.wp0.y));
+    if (glm::length(r.h0) > kRingReach) return r;
+    const double e = 200.0;
+    const glm::dvec2 dx = (home_az(to_planet(c, r.wp0.x + e, r.wp0.y)) - home_az(to_planet(c, r.wp0.x - e, r.wp0.y))) / (2.0 * e);
+    const glm::dvec2 dz = (home_az(to_planet(c, r.wp0.x, r.wp0.y + e)) - home_az(to_planet(c, r.wp0.x, r.wp0.y - e))) / (2.0 * e);
+    r.J = glm::dmat2(dx, dz);
+    r.on = true;
+    return r;
+}
+
+void flat_lattice(const glm::dvec2& h0, float out[kFlatOctaves][4]) {
+    glm::dvec2 q = h0 * 0.003;                             // (terrain.cpp kRmTerrainScale, the shader's TERRAIN_SCALE)
+    for (int i = 0; i < kFlatOctaves; ++i) {
+        const glm::dvec2 cell = glm::floor(q), f = q - cell;
+        const glm::dvec2 w = cell - 8388608.0 * glm::floor(cell / 8388608.0 + 0.5);
+        out[i][0] = float(f.x); out[i][1] = float(f.y); out[i][2] = float(w.x); out[i][3] = float(w.y);
+        q = glm::dvec2(0.8 * q.x + 0.6 * q.y, -0.6 * q.x + 0.8 * q.y) * 2.0;        // (the shader's m2, then the octave's doubling)
+    }
+}
+
+Chart high_chart(const Chart& c, double x, double z) { return far_chart(frame_at(c, x, z)); }
+
+Chart near_chart(const Chart& c, double x, double z) {
+    Chart r = far_chart(frame_at(c, x, z));                // unrolled round the point, its axes the old chart's there
+    r.high = false;
+    const glm::dvec2 p(x, z), anchor(0.0, kNearOffZ);
+    if (c.home || (!c.high && c.site <= 0)) {
+        // From home's chart or another near chart: the point keeps its coordinates, less a
+        // whole number of tiles (see globe.h, "Small coordinates").
+        const glm::dvec2 n = glm::round((p - anchor) / kTile);
+        r.org = p - n * kTile;
+        r.tile = c.tile + glm::ivec2(n);
+    } else {
+        r.org = anchor;                                    // (from a site's chart or a high one: a fresh start)
+        r.tile = glm::ivec2(0);
+    }
+    return r;
+}
+
+int add_site(const std::string& id, const std::string& name, const SiteShape& shape) {
+    const int k = site_count();
+    sites().emplace_back();
+    Site& s = sites().back();
+    static_cast<SiteShape&>(s) = shape;
+    s.id = id; s.name = name;
+    s.G = glm::normalize(shape.G);
+    // A frame at the site: east along the parallel round home's axis (any will do, it only
+    // has to be the same every time), then the chart whose origin lies kSiteOffZ to its north.
+    glm::dvec3 east = glm::cross(glm::dvec3(0.0, 1.0, 0.0), s.G);
+    east = glm::dot(east, east) < 1e-12 ? glm::dvec3(1.0, 0.0, 0.0) : glm::normalize(east);
+    Chart at_site = far_chart(glm::dmat3(east, s.G, glm::cross(east, s.G)));
+    at_site.site = k; at_site.high = false; at_site.org = glm::dvec2(0.0);       // (its origin is local (0, 0))
+    s.chart = far_chart(frame_at(at_site, 0.0, -kSiteOffZ));
+    s.chart.site = k; s.chart.high = false; s.chart.org = glm::dvec2(0.0);
+    s.at = to_chart(s.chart, s.G);
+    return k;
 }
 
 void lattice(const glm::dvec3& origin, int32_t cells[kOctaves][4], float fracs[kOctaves][4]) {

@@ -898,6 +898,10 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     if (!body_rt_list_.empty()) sig = mix64(sig, frame_number_);      // a pose is new every frame
     sig = mix64(sig, projectiles_.size());
     sig = mix64(sig, static_brush_dirty_ ? 1u : 0u);
+    // (a site's parts came, went, or the engine entered / left its chart: sites.cpp. Its old
+    // parts are only freed some frames after the structure was built without them.)
+    sig = mix64(sig, uint64_t(site_gen_) * 2u + (site_here() ? 1u : 0u));
+    sig = mix64(sig, uint64_t(hw_gen_) + 0x9E37u);
     sig = mix64(sig, rt_.textures_enabled ? 1u : 0u);
     sig = mix64(sig, rt_.use_merged_static_blas ? 1u : 0u);
     for (size_t i = 0; i < dyn_render_cache_.size(); ++i) {
@@ -1252,10 +1256,12 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     // space BLAS each, identity transform, full mask like the brushes.
     // GI hits shade them with world triplanar (tex .w = 0); .z = repeat
     // scale for that hit lookup.
-    for (const auto& g : castle_meshes_) {
+    for (const CastleMeshGpu* gp : mesh_parts_now()) {       // (home's, and the site's where the engine is at one)
+        const CastleMeshGpu& g = *gp;
         if (!g.blas_addr) continue;
         // Self-lit parts (stained glass, candle flames, lantern glass) let light
         // through: the sun shines in through the chapel windows.
+        if (g.tex_albedo == -3) continue;                 // glass: the sun and the bounce light go through it
         if (g.emissive.a > 0.5f) continue;
         const glm::mat4 I(1.0f);
         glm::vec4 tex = tex_on

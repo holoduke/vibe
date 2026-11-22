@@ -37,6 +37,7 @@ assets/**/*_NormalDX*
 assets/**/*_Roughness*
 assets/**/*_TONEMAPPED*
 assets/**/*.blend
+assets/**/*.blend1
 assets/**/*.usdc
 assets/**/*.tres
 assets/**/*.mtlx

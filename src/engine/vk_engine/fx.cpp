@@ -1013,6 +1013,9 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         // Every streak owns six vertices at a fixed offset and its random
         // numbers depend only on its index, so the workers fill disjoint
         // ranges of the vertex array directly (no shared state, no insert).
+        // (not under a roof: the streaks that would fall inside a shelter are left out)
+        std::vector<Shelter> roofs;
+        shelters_near(eye, 30.0f, roofs, 8);
         const size_t rain_base = spray.v.size();
         spray.v.resize(rain_base + size_t(n) * 6);
         Vertex* const rain_out = spray.v.data() + rain_base;
@@ -1032,7 +1035,10 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             glm::vec3 p = eye + rel;
             if (snowing) p += glm::vec3(std::sin(tr * 1.3f + b.x * 40.0f), 0.0f, std::cos(tr * 1.1f + b.z * 40.0f)) * 0.10f;   // flutter
             const float dist = glm::length(rel);
-            if (dist < 0.6f) {   // too close to the lens: zero-area quad
+            bool roofed = false;
+            for (const Shelter& s : roofs)
+                if (p.x > s.lo.x && p.x < s.hi.x && p.z > s.lo.y && p.z < s.hi.y && p.y < s.top) { roofed = true; break; }
+            if (dist < 0.6f || roofed) {   // too close to the lens, or under a roof: zero-area quad
                 const Vertex z{eye, glm::vec3(1.0f), {0.0f, 0.0f}};
                 for (int k = 0; k < 6; ++k) o[k] = z;
                 continue;

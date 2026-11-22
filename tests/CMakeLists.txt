@@ -2,6 +2,8 @@ add_executable(vibe_tests
     test_physics.cpp
     test_collision.cpp
     test_frustum.cpp
+    test_site_store.cpp
+    test_globe.cpp
 )
 
 target_link_libraries(vibe_tests PRIVATE

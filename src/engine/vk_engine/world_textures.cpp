@@ -738,6 +738,41 @@ void VulkanEngine::load_foliage_textures() {
             ++loaded;
         }
     }
+    // The pavilion's materials (assets/office/tex/, made with an image generator and upscaled to
+    // 2K): colour as it is; the normal map and the height (its alpha) from the picture's own
+    // light and dark, which for these surfaces - grain, weave, rust, pores - is what the relief is.
+    {
+        struct OT { const char* file; float strength; };
+        const OT ot[5] = { { "corten", 2.6f }, { "oak", 1.6f }, { "floor", 0.7f }, { "board", 3.2f }, { "fabric", 3.0f } };
+        for (int k = 0; k < 5; ++k) {
+            const std::string p = resolve(std::string("../office/tex/") + ot[k].file + ".png");
+            if (p.empty()) continue;
+            int w = 0, h = 0, c = 0;
+            unsigned char* px = ::stbi_load(p.c_str(), &w, &h, &c, 4);
+            if (!px) continue;
+            put(albedo_textures_[kTexOffice + k], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "office/albedo");
+            std::vector<float> lum(size_t(w) * size_t(h));
+            for (size_t i = 0; i < lum.size(); ++i)
+                lum[i] = (0.30f * float(px[i * 4]) + 0.59f * float(px[i * 4 + 1]) + 0.11f * float(px[i * 4 + 2])) / 255.0f;
+            std::vector<unsigned char> nrm(lum.size() * 4);
+            auto Hh = [&](int x, int y) { return lum[size_t((y + h) % h) * size_t(w) + size_t((x + w) % w)]; };
+            const float st = ot[k].strength;
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    // (over two texels: the generator's finest grain is noise, not relief)
+                    const float dx = (Hh(x + 2, y) - Hh(x - 2, y)) * st, dy = (Hh(x, y + 2) - Hh(x, y - 2)) * st;
+                    const float il = 1.0f / std::sqrt(dx * dx + dy * dy + 1.0f);
+                    unsigned char* o = &nrm[(size_t(y) * size_t(w) + size_t(x)) * 4];
+                    o[0] = static_cast<unsigned char>(std::clamp((-dx * il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
+                    o[1] = static_cast<unsigned char>(std::clamp((dy * il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
+                    o[2] = static_cast<unsigned char>(std::clamp((il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
+                    o[3] = static_cast<unsigned char>(std::clamp(Hh(x, y) * 255.0f, 0.0f, 255.0f));
+                }
+            put(normal_textures_[kTexOffice + k], nrm.data(), w, h, VK_FORMAT_R8G8B8A8_UNORM, "office/normal");
+            stbi_image_free(px);
+            ++loaded;
+        }
+    }
     // The launch site's own materials: colour from <name>.png, the normal map from the height
     // in <name>_h.png (tools/rocket/make_rocket.py writes both).
     for (int which = 0; which < 2; ++which) {
@@ -838,6 +873,8 @@ void VulkanEngine::load_terrain_pbr_overrides() {
         { kTexRoof,  "RoofingTiles012A" },
         { kTexRoad,  "PavingStones131" },
         { kTexBark,  "Bark012" },
+        { kTexAsphalt, "Asphalt031" },
+        { kTexGravel,  "Gravel040" },
     };
     auto resolve = [](const std::string& tail) -> std::string {
         const std::string roots[] = {
@@ -1332,6 +1369,15 @@ void VulkanEngine::bake_terrain_materials() {
         { TM_ROCK,  kTexVegShade,  "veg_shade_placeholder" },
         { TM_ROCK,  kTexHull,      "rocket/hull_placeholder" },
         { TM_ROCK,  kTexConcrete,  "rocket/concrete_placeholder" },
+        { TM_ROCK,  kTexAsphalt, "road/asphalt_placeholder" },
+        { TM_ROCK,  kTexGravel,  "road/gravel_placeholder" },
+        { TM_ROCK,  kTexRoadField + 0, "road_field/placeholder" },
+        { TM_ROCK,  kTexRoadField + 1, "road_field/placeholder" },
+        { TM_ROCK,  kTexOffice + 0, "office/placeholder" },
+        { TM_DIRT,  kTexOffice + 1, "office/placeholder" },
+        { TM_ROCK,  kTexOffice + 2, "office/placeholder" },
+        { TM_ROCK,  kTexOffice + 3, "office/placeholder" },
+        { TM_ROCK,  kTexOffice + 4, "office/placeholder" },
     };
     // CPU generation of all materials in parallel (pure functions of
     // kind + size); uploads stay on this thread (queue owner).

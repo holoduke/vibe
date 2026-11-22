@@ -108,13 +108,9 @@ void build_ssdm_shell(const game::LevelMesh& lm, float inset, std::vector<Vertex
 }
 }  // namespace
 
-void VulkanEngine::init_castle_meshes() {
-    size_t total_tris = 0;
-    castle_of_level_mesh_.assign(world_.meshes.size(), -1);
-    for (size_t lmi = 0; lmi < world_.meshes.size(); ++lmi) {
-        const auto& lm = world_.meshes[lmi];
-        if (lm.verts.empty() || lm.idx.empty()) continue;
-        castle_of_level_mesh_[lmi] = int(castle_meshes_.size());
+// One mesh part of a level onto the GPU (home's at start-up; a site's when it is loaded).
+VulkanEngine::CastleMeshGpu VulkanEngine::make_mesh_part(const game::LevelMesh& lm) {
+    {
         CastleMeshGpu g{};
         g.mesh = create_mesh_from_data(
             device_, allocator_, graphics_queue_, graphics_queue_family_,
@@ -139,8 +135,19 @@ void VulkanEngine::init_castle_meshes() {
             g.ssdm_mesh = create_mesh_from_data(device_, allocator_, graphics_queue_, graphics_queue_family_,
                                                 sv.data(), uint32_t(sv.size()), si.data(), uint32_t(si.size()));
         }
-        g.emissive = glm::vec4(lm.emissive, lm.full_emissive ? 1.0f : 0.0f);
-        castle_meshes_.push_back(g);
+        g.emissive = glm::vec4(lm.emissive, lm.full_emissive ? (lm.lit_by_day ? 2.0f : 1.0f) : 0.0f);      // (.a 2: as bright by day)
+        return g;
+    }
+}
+
+void VulkanEngine::init_castle_meshes() {
+    size_t total_tris = 0;
+    castle_of_level_mesh_.assign(world_.meshes.size(), -1);
+    for (size_t lmi = 0; lmi < world_.meshes.size(); ++lmi) {
+        const auto& lm = world_.meshes[lmi];
+        if (lm.verts.empty() || lm.idx.empty()) continue;
+        castle_of_level_mesh_[lmi] = int(castle_meshes_.size());
+        castle_meshes_.push_back(make_mesh_part(lm));
         total_tris += lm.idx.size() / 3;
     }
     log::infof("[castle] %zu static mesh parts, %zu tris", castle_meshes_.size(), total_tris);
@@ -236,14 +243,31 @@ void VulkanEngine::build_mesh_part_blas(std::vector<CastleMeshGpu>& parts) {
     }
 }
 
+// Every static mesh part there is to draw or trace now: home's, and the site's while the
+// engine is in its chart.
+const std::vector<const VulkanEngine::CastleMeshGpu*>& VulkanEngine::mesh_parts_now() {
+    mesh_parts_now_.clear();
+    // (home's own parts only in home's chart: in any other the same coordinates are another place)
+    if (globe::current().home) for (const auto& g : castle_meshes_) mesh_parts_now_.push_back(&g);
+    if (site_here()) for (const auto& g : site_meshes_) mesh_parts_now_.push_back(&g);
+    for (const auto& ch : hw_chunks_) for (const auto& g : ch.second) mesh_parts_now_.push_back(&g);       // (a highway's roadside objects: highway_furniture.cpp)
+    return mesh_parts_now_;
+}
+
 void VulkanEngine::destroy_castle_meshes() {
-    for (auto& g : castle_meshes_) {
+    destroy_sites();
+    hw_objects_destroy();
+    destroy_mesh_parts(castle_meshes_);
+}
+
+void VulkanEngine::destroy_mesh_parts(std::vector<CastleMeshGpu>& parts) {
+    for (auto& g : parts) {
         if (g.blas) g_rt.destroy_as(device_, g.blas, nullptr);
         if (g.blas_buf) vmaDestroyBuffer(allocator_, g.blas_buf, g.blas_alloc);
         if (g.mesh.vertex_buffer) destroy_mesh(allocator_, g.mesh);
         if (g.ssdm_mesh.vertex_buffer) destroy_mesh(allocator_, g.ssdm_mesh);
     }
-    castle_meshes_.clear();
+    parts.clear();
 }
 
 void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
@@ -252,8 +276,12 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
     if (castle_meshes_.empty()) return;
     const bool tex_on = rt_.textures_enabled;
     VkDeviceSize off = 0;
-    for (const auto& g : castle_meshes_) {
+    for (const CastleMeshGpu* gp : mesh_parts_now()) {
+        const CastleMeshGpu& g = *gp;
         if (!aabb_visible(fr, g.bmin, g.bmax)) continue;
+        // Glass (material -3): not in the depth pre-pass nor in any shadow pass - it is drawn
+        // see-through (cube.frag), and what is behind it must be there to see.
+        if (depth_only && g.tex_albedo == -3) continue;
         // Depth PRE-pass: skip the relief stone parts. cube.frag discards
         // their silhouette pixels (parallax relief clipping on curved
         // towers); the flat pre-pass depth would hide those cut-outs.
@@ -283,7 +311,7 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
                 pc.color = glm::vec4(tex_on ? g.tint : g.fallback, 1.0f);
                 // Self-lit parts (lantern glass) glow faintly by day, fully at night.
                 pc.emissive = g.emissive;
-                if (g.emissive.a > 0.5f && g.emissive.r < 3.5f) {       // (flames burn at full strength by day too)
+                if (g.emissive.a > 0.5f && g.emissive.a < 1.5f && g.emissive.r < 3.5f) {       // (flames burn at full strength by day too)
                     const float night = 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
                     pc.emissive = glm::vec4(glm::vec3(g.emissive) * glm::mix(0.12f, 1.0f, night), g.emissive.a);
                     pc.color = glm::vec4(glm::vec3(pc.color) * glm::mix(0.45f, 1.0f, night), 1.0f);

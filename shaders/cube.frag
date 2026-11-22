@@ -148,7 +148,7 @@ layout(set = 0, binding = 25, std430) readonly buffer VoxShapeDir {
 const uint kVoxEmpty = 0xFFFFFFFFu;
 
 // Bound texture arrays (must match kTextureCount on the C++ side).
-const int kTextureCount = 25;     // +1 for kTexProcGrass (slot 12)
+const int kTextureCount = 34;     // +1 for kTexProcGrass (slot 12)
 // Procedurally-baked terrain material slots (see bake_terrain_materials
 // in world.cpp). Must match kTexRock/.. in vk_engine.h.
 const int kMatRock  = 7;
@@ -298,6 +298,19 @@ void main() {
         }
     }
 
+    // ---- Glass (static mesh parts with material -3: castle_mesh.cpp) ----
+    // Seen through: only a part of its pixels is drawn, in a pattern that changes every frame,
+    // which the temporal pass blends into a tinted pane. More of them toward a grazing view,
+    // where real glass turns into a mirror. (It is not in the depth pre-pass, casts no shadow
+    // and is not ray traced, so the room behind it is simply there.)
+    if (pc.grass_params.w < -0.5 && pc.grass_params.x <= 0.5 && vTexParams.x < -2.5) {
+        vec3  gv = normalize(scene.camera_pos.xyz - vWorldPos);
+        float gf = 1.0 - abs(dot(normalize(vNormal), gv));
+        float cover = mix(0.13, 0.80, gf * gf * gf);
+        float gn = fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * float(uint(scene.rt_flags.w) & 7u),
+                                                 vec2(0.06711056, 0.00583715)) + 0.61));
+        if (gn > cover) discard;
+    }
     // ---- Vegetation: LOD cross-fade dither + procedural impostors ----
     // vVegInfo.x = fade f, .y = 1 for the finer LOD of a fading pair,
     // .z = impostor kind (1 pine, 2 broadleaf). Screen-door dither with a

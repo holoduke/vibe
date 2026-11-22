@@ -182,20 +182,20 @@ float foot_depth(vec2 p) {
 // layer of its own in the marched height (like the snow), so it has an outline, buries the
 // cobbles and takes footprints. 0..1 where it lies; none under snow.
 float sand_road_patch(vec2 wp) {
-    float a = noise2(wp * 0.085 + 53.0);                                   // stretches of road with sand
+    float a = tile_noise2(wp, 0.085, vec2(53.0));                                   // stretches of road with sand
     if (a < 0.50) return 0.0;
-    float b = noise2(wp * 0.42 + 21.0) * 0.72 + noise2(wp * 1.7 + 8.0) * 0.28;
+    float b = tile_noise2(wp, 0.42, vec2(21.0)) * 0.72 + tile_noise2(wp, 1.7, vec2(8.0)) * 0.28;
     return smoothstep(0.50, 0.62, a) * smoothstep(0.43, 0.55, b) * (1.0 - smoothstep(0.05, 0.3, g_snow));    // (a drift ends in a lip, not a long fade)
 }
 // Its height (m) above the paving, prints pressed in.
 float sand_road_h(vec2 wp) {
     float p = sand_road_patch(wp);
     if (p <= 0.0) return 0.0;
-    float wn = noise2(wp * 0.6 + 3.0);
+    float wn = tile_noise2(wp, 0.6, vec2(3.0));
     // drift, the lumps in it, and wind ripples with a sharp crest (a gentle windward side, a steep lee)
     float rs = fract((dot(wp, vec2(21.0, 9.0)) + 7.0 * wn) * 0.15915);
     float rr = rs < 0.72 ? rs / 0.72 : (1.0 - rs) / 0.28;
-    float s = p * (0.030 + 0.055 * noise2(wp * 1.1 + 5.0) + 0.010 * noise2(wp * 4.3 + 11.0) + 0.007 * rr * rr);
+    float s = p * (0.030 + 0.055 * tile_noise2(wp, 1.1, vec2(5.0)) + 0.010 * tile_noise2(wp, 4.3, vec2(11.0)) + 0.007 * rr * rr);
     float fd = foot_depth(wp);
     if (fd > 0.0) s -= min(fd * 0.45, s * 0.85);
     return s;
@@ -204,7 +204,7 @@ float sand_road_h(vec2 wp) {
 // The fine wind ripples of the sand (about 9 cm apart, too fine for the march: they go into
 // the normal and the colour). 0 in the trough .. 1 on the crest; they fork and die out.
 float sand_fine_ripple(vec2 wp, float wn) {
-    float ph = (dot(wp, vec2(64.0, 24.0)) + 10.0 * wn + 3.0 * noise2(wp * 2.3 + 7.0)) * 0.15915;
+    float ph = (dot(wp, vec2(64.0, 24.0)) + 10.0 * wn + 3.0 * tile_noise2(wp, 2.3, vec2(7.0))) * 0.15915;
     float rs = fract(ph);
     float rr = rs < 0.70 ? rs / 0.70 : (1.0 - rs) / 0.30;
     return rr * rr * (3.0 - 2.0 * rr);
@@ -248,13 +248,13 @@ vec3 ice_albedo(vec2 wp, vec3 rd, vec3 n, float water_depth) {
         float h = hash21(ip);
         vec2 o = vec2(h, hash21(ip + 5.1));
         float bub = (1.0 - smoothstep(0.05, 0.16 * h + 0.06, length(fract(q) - o))) * step(0.72, hash21(ip + 9.3)) *
-                    smoothstep(0.45, 0.7, noise2(wp * 0.35 + 3.0));
+                    smoothstep(0.45, 0.7, tile_noise2(wp, 0.35, vec2(3.0)));
         col = mix(col, vec3(0.85, 0.95, 1.0), bub * 0.7);
     }
     // The surface: frost and scuffs, and wind-blown snow lying on it.
-    float frost = noise2(wp * 2.7) * 0.5 + noise2(wp * 9.0) * 0.3 + noise2(wp * 0.33) * 0.2;
+    float frost = tile_noise2(wp, 2.7, vec2(0.0)) * 0.5 + tile_noise2(wp, 9.0, vec2(0.0)) * 0.3 + tile_noise2(wp, 0.33, vec2(0.0)) * 0.2;
     col = mix(col, vec3(0.62, 0.78, 0.86), smoothstep(0.45, 0.85, frost) * 0.45);
-    float snow = smoothstep(0.52, 0.66, noise2(wp * 0.21 + 11.0) * 0.7 + noise2(wp * 1.3) * 0.3);
+    float snow = smoothstep(0.52, 0.66, tile_noise2(wp, 0.21, vec2(11.0)) * 0.7 + tile_noise2(wp, 1.3, vec2(0.0)) * 0.3);
     col = mix(col, vec3(0.90, 0.93, 0.97), snow * 0.9);
     return col;
 }

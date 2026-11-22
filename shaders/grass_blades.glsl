@@ -32,9 +32,9 @@ float gs_blade(vec3 p, float th) {
 // the shaders that draw it), so they cost nothing in the march.
 const float kGsMaxH = 1.2;            // tallest type, x the height setting
 float gs_type_noise(vec2 w) {
-    vec2 a = w * 0.11, b = w * 0.37;
-    float n = sin(a.x + 1.7 * sin(a.y * 0.83 + 0.6)) * sin(a.y * 1.13 + 1.3 * sin(a.x * 0.71 + 2.1));
-    n += 0.35 * sin(b.x + sin(b.y * 1.3)) * sin(b.y + sin(b.x * 0.9 + 1.0));
+    // (every frequency snapped to fit a tile: the same field wherever the engine re-centres)
+    float n = sin(w.x * TILE_W(0.11) + 1.7 * sin(w.y * TILE_W(0.0913) + 0.6)) * sin(w.y * TILE_W(0.1243) + 1.3 * sin(w.x * TILE_W(0.0781) + 2.1));
+    n += 0.35 * sin(w.x * TILE_W(0.37) + sin(w.y * TILE_W(0.481))) * sin(w.y * TILE_W(0.37) + sin(w.x * TILE_W(0.333) + 1.0));
     return clamp(0.5 + 0.42 * n, 0.0, 1.0);
 }
 // x: height, y: width, z: lean (all x the plain blade), w: dry stalks 0..1.
@@ -54,14 +54,14 @@ float gs_blade_s(float rw) { return 0.3 + 0.7 * rw * (1.4 - 0.4 * rw); }
 // Distance to the nearest blade; `gy` = ground height (blade roots),
 // `tp` = gs_type() of the patch.
 float gs_map(vec3 p, float gy, vec4 tp) {
-    const float kPeriod = 0.17;
+    const float kPeriod = TILE_CELL(0.17);
     const float kPi2 = 6.28318530718;
     vec3 lp = p; lp.y -= gy;
     if (lp.y > 0.9) return lp.y - 0.6;
     // Gusts: the same travelling wave as grass_raymarch.frag (keep in sync).
     {
         float gt = scene.grass_rm_params.z;
-        vec2  gw = sin(gt * 1.6 + p.xz * 0.30 - cos(gt * 0.45 - p.xz * 0.13));
+        vec2  gw = sin(gt * 1.6 + p.xz * TILE_W(0.30) - cos(gt * 0.45 - p.xz * TILE_W(0.13)));
         float gh = clamp(lp.y / 0.75, 0.0, 1.0);
         lp.xz -= (gw * 0.65 + vec2(0.35, 0.20)) * (scene.grass_rm_params.y * 0.22 * gh * gh);
     }
@@ -79,7 +79,7 @@ float gs_map(vec3 p, float gy, vec4 tp) {
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             vec2 nId = cellId + vec2(float(dx), float(dy));
-            vec4 r = gs_hash42(nId);
+            vec4 r = gs_hash42(tile_wrap(nId, TILE_N(0.17)));
             if (r.x > scene.grass_rm_params.w) continue;
             vec3 np = lp - vec3(float(dx), 0.0, float(dy)) * kPeriod;
             float a = r.z * kPi2;

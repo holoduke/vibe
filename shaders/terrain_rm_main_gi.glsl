@@ -298,6 +298,18 @@
         }
     }
     vec3 col = mate * lin + gi_indirect;
+    // A highway's sheen: asphalt is matt seen from above and glares toward a low sun; the
+    // polished wheel tracks and the tar more so.
+    if (hw_pave > 0.001) {
+        vec3  hv = normalize(sunDir - rd);
+        float nh = max(dot(nor, hv), 0.0), vh = max(dot(-rd, hv), 0.0);
+        float f5 = 1.0 - vh; f5 *= f5 * f5 * f5 * f5;
+        float shin = mix(18.0, 260.0, hw_gloss);
+        col += scene.sun_color.rgb * scene.sun_color.a * sha * (0.04 + 0.96 * f5) * pow(nh, shin) * (shin + 8.0) * 0.04
+               * max(dot(nor, sunDir), 0.0) * hw_pave * (0.5 + 1.5 * hw_gloss);
+        float g5 = fre_in * fre_in; g5 *= g5 * fre_in;
+        col += scene.sky_color.rgb * (0.04 + 0.96 * g5) * (0.25 + hw_gloss) * hw_pave * ao_shaped;
+    }
     // Rain: a wet sheen on the ground and standing water in the flats.
     // A puddle is a small mirror: flat normal (plus rain rings), darker
     // bed, Fresnel reflection of the sky and a sun glint.
@@ -315,12 +327,12 @@
             shore_foam = (1.0 - smoothstep(0.0, 0.022, abs(above - 0.010))) * flat_w;
             // The beach itself: bare sand with darker grit and pebbles from
             // the waterline up to about 70 cm above it (also under water).
-            float beach = (1.0 - smoothstep(0.30, 0.75, above + 0.10 * noise2(pos.xz * 0.9))) * flat_w;
+            float beach = (1.0 - smoothstep(0.30, 0.75, above + 0.10 * tile_noise2(pos.xz, 0.9, vec2(0.0)))) * flat_w;
             if (beach > 0.01) {
-                float grit = noise2(pos.xz * 6.0) * 0.6 + noise2(pos.xz * 19.0) * 0.4;
-                float peb = smoothstep(0.62, 0.72, noise2(pos.xz * 11.0 + 3.7)) * smoothstep(0.35, 0.6, noise2(pos.xz * 2.3));
+                float grit = tile_noise2(pos.xz, 6.0, vec2(0.0)) * 0.6 + tile_noise2(pos.xz, 19.0, vec2(0.0)) * 0.4;
+                float peb = smoothstep(0.62, 0.72, tile_noise2(pos.xz, 11.0, vec2(3.7))) * smoothstep(0.35, 0.6, tile_noise2(pos.xz, 2.3, vec2(0.0)));
                 vec3 sandc = mix(scene.terrain_sand_color.rgb, vec3(0.200, 0.172, 0.125), 0.65) * mix(0.78, 1.12, grit);
-                sandc = mix(sandc, vec3(0.10, 0.097, 0.09) * mix(0.6, 1.3, noise2(pos.xz * 5.1)), peb * 0.8);
+                sandc = mix(sandc, vec3(0.10, 0.097, 0.09) * mix(0.6, 1.3, tile_noise2(pos.xz, 5.1, vec2(0.0))), peb * 0.8);
                 // Lit with a smoothed normal: sand is fine-grained, the rocky
                 // relief of the ground it replaces would show through as veins.
                 vec3 bn = normalize(mix(nor, vec3(0.0, 1.0, 0.0), 0.8));
@@ -333,7 +345,7 @@
         float pd = distance(pos, ro);
         if (wet > 0.01 && pd < 400.0) {
             float flatn = smoothstep(0.80, 0.95, nor.y);            // (was 0.90..0.985: almost no ground qualified)
-            float pn = noise2(pos.xz * 0.33) * 0.65 + noise2(pos.xz * 1.21 + 7.0) * 0.35;
+            float pn = tile_noise2(pos.xz, 0.33, vec2(0.0)) * 0.65 + tile_noise2(pos.xz, 1.21, vec2(7.0)) * 0.35;
             float thr = 0.66 - 0.34 * wet;
             float puddle = flatn * smoothstep(thr, thr + 0.06, pn) * smoothstep(0.2, 0.6, wet);
             vec3 pn_n = normalize(mix(nor, vec3(0.0, 1.0, 0.0), max(max(puddle, 0.5 * wet), 0.92 * shore)));
@@ -360,7 +372,7 @@
             col += scene.sun_color.rgb * scene.sun_color.a * sg64 * sg64 * sha * cl_sh * max(puddle, 0.12 * film) * 1.5;
             // A thin line of foam where the water runs out.
             if (shore_foam > 0.01) {
-                float fb = noise2(pos.xz * 9.0 + vec2(scene.water_params.w * 0.4, 0.0)) * 0.6 + noise2(pos.xz * 23.0) * 0.4;
+                float fb = tile_noise2(pos.xz, 9.0, vec2(scene.water_params.w * 0.4, 0.0)) * 0.6 + tile_noise2(pos.xz, 23.0, vec2(0.0)) * 0.4;
                 col = mix(col, (scene.sun_color.rgb * scene.sun_color.a * (0.25 + 0.75 * sha) + scene.sky_color.rgb * 0.6) * 0.55,
                           shore_foam * smoothstep(0.48, 0.74, fb) * 0.5);
             }

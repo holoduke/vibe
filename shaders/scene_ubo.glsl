@@ -105,10 +105,83 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     // the wave field, that point's coordinate in the octave's own space, split up so that no
     // large number reaches the shader: sea_a.xy = it modulo 2 pi (for the sines), .zw = its
     // fraction and sea_b.xy = its whole part modulo 4096 (for the noise lattice).
+    // A site's shaped ground (engine/globe.h Site; terrain_rm_noise_road.glsl rm_site_ground):
+    // xy = the centre, in this chart's coordinates, of the site that is within sight;
+    // z = 1 when there is one; w = its number.
+    vec4   site_ground;
+    vec4   site_shape;       // that site's ground: x level within (m), y meets the natural ground at (m), z height above the water (m), w no woods within (m)
     vec4   sea_org;
     vec4   sea_a[5];
     vec4   sea_b[5];
+    // Shelters: the roofed boxes nearest the camera - no rain, no wet, no snow inside them
+    // (scene_sheltered below). a = min x, min z, max x, max z; b.x = the roof's height (y),
+    // b.y = 1 when the entry is used (they are packed from 0).
+    vec4   shelter_a[4];
+    vec4   shelter_b[4];
+    // The highways' field (engine/highway.h): hw_info = the window's centre x, z; 1 when there
+    // is road in it; its side (m). hw_bbox = where the shelf is: min x, min z, max x, max z.
+    vec4   hw_info;
+    vec4   hw_bbox;
+    // Home's flat landscape formula from a chart that is not home's (engine/globe.h Ring;
+    // terrain_rm_noise_road.glsl rm_ring*): ring_info.x = 1 when it applies, .yz = the chart
+    // point the mapping is taken at; home coordinates = ring_h0.xy + (dot(ring_j.xy, l),
+    // dot(ring_j.zw, l)) for l = p - ring_info.yz. ring_cell[i]: octave i of the formula's FBM
+    // at ring_h0 - xy = position in the lattice cell, zw = the cell.
+    vec4   ring_info;
+    vec4   ring_h0;
+    vec4   ring_j;
+    vec4   ring_cell[24];
+    // The grass's blade lattice, from the camera (grass_raymarch.frag map): xy = the number of
+    // the lattice cell the camera is in, zw = the camera's place in it (m). Worked out in doubles.
+    vec4   grass_cam;
+    // Screen to view ray, with the camera at the origin: inverse(projection x the view's
+    // rotation), worked out in doubles (scene_ray below).
+    mat4   ray_mat;
 } scene;
+
+// The view ray through a point of the screen (ndc: -1 .. 1), unit length. Use this - never
+// inverse(view_proj) x ndc less the camera's position: that puts the camera's coordinates
+// into the sum and takes them out again, and where they are large (a float resolves 1 mm at
+// 10 km) the direction is left with two digits; neighbouring pixels then share a ray and
+// whatever is ray-marched comes out in blocks. scene.ray_mat has no position in it.
+vec3 scene_ray(vec2 ndc) {
+    vec4 a = scene.ray_mat * vec4(ndc, 0.0, 1.0), b = scene.ray_mat * vec4(ndc, 1.0, 1.0);
+    vec4 q = abs(a.w) > abs(b.w) ? a : b;          // (the near plane's point: the far plane may lie at infinity)
+    return normalize(q.xyz / q.w);
+}
+
+// ---- Tiles ---------------------------------------------------------------------------------
+// The engine's coordinates are small everywhere: far from home they are the land's own
+// coordinates less a whole number of tiles (engine/globe.h, "Small coordinates"; kTile there).
+// Whatever is worked out from a position and REPEATS ONCE A TILE is therefore the same before
+// and after the engine re-centres - so the fine patterns (grass blades, ground textures, the
+// ground's fine noise) are made to: a cell size or a frequency is snapped to the nearest that
+// fits a whole number of times into a tile (a change of a few parts in 100,000), and a cell's
+// number is wrapped at the tile before it is hashed. Use these for anything new that is drawn
+// from world coordinates at a scale of metres or less.
+const float kTile = 6400.0;
+#define TILE_N(cell)    (max(round(kTile / (cell)), 1.0))                   /* cells of about `cell` metres in a tile */
+#define TILE_CELL(cell) (kTile / TILE_N(cell))                               /* that cell's exact size */
+#define TILE_FREQ(k)    (max(round(kTile * (k)), 1.0) / kTile)               /* cells per metre, snapped */
+#define TILE_W(w)       (max(round(kTile * (w) / 6.28318530718), 1.0) * 6.28318530718 / kTile)   /* radians per metre, snapped */
+// A cell's number, wrapped at the tile (n = cells in a tile). Numbers within half a tile of
+// zero are left as they are.
+vec2 tile_wrap(vec2 id, float n) { return id - n * floor(id / n + 0.5); }
+float tile_h21(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract((p3.x + p3.y) * p3.z);
+}
+// Value noise of the position wp at about k cells a metre (+ off, in cells), the same in every tile.
+float tile_noise2(vec2 wp, float k, vec2 off) {
+    float n = max(round(kTile * k), 1.0);
+    vec2 p = wp * (n / kTile) + off;
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    vec2 i0 = tile_wrap(i, n), i1 = tile_wrap(i + 1.0, n);
+    float a = tile_h21(i0), b = tile_h21(vec2(i1.x, i0.y)), c = tile_h21(vec2(i0.x, i1.y)), d = tile_h21(i1);
+    return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
+}
 
 // Leaves through the year. `h`: a number 0..1 of the tree (each tree turns
 // its own colour and at its own pace in autumn). Returns the leaf colour to use.
@@ -126,6 +199,16 @@ vec3 season_leaf(vec3 col, float h) {
 }
 
 // Weather on surfaces (packed in ripple_info.z by descriptors.cpp).
+// Under a roof: inside one of the shelter boxes (the engine lists what is roofed: fx.cpp
+// keeps the rain itself out of the same boxes).
+bool scene_sheltered(vec3 wp) {
+    for (int i = 0; i < 4; ++i) {
+        if (scene.shelter_b[i].y < 0.5) break;
+        vec4 r = scene.shelter_a[i];
+        if (wp.x > r.x && wp.z > r.y && wp.x < r.z && wp.z < r.w && wp.y < scene.shelter_b[i].x) return true;
+    }
+    return false;
+}
 float scene_wet()  { return fract(scene.ripple_info.z); }
 #ifdef VIBE_SUMMER
 float scene_snow() { return 0.0; }       // the no-snow build of a shader: all winter code folds away
@@ -135,7 +218,7 @@ float scene_snow() { return floor(scene.ripple_info.z) / 255.0; }
 // Snow lying on a surface: on what faces up, patchy while it is still thin.
 float snow_cover(vec3 n, vec3 wp) {
     float s = scene_snow();
-    if (s < 0.004) return 0.0;
+    if (s < 0.004 || scene_sheltered(wp)) return 0.0;
     float pn = fract(sin(dot(floor(wp.xz * 3.0), vec2(12.9898, 78.233))) * 43758.5453) * 0.25
              + 0.75 * (0.5 + 0.5 * sin(wp.x * 0.9) * sin(wp.z * 1.1 + 1.3));
     return smoothstep(0.25, 0.75, n.y) * smoothstep(pn * 0.8, pn * 0.8 + 0.25, s * 1.05);

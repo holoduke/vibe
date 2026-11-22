@@ -10,6 +10,7 @@
 #include "engine/world_props.h"
 #include "engine/grass.h"
 #include "engine/terrain.h"
+#include "engine/highway.h"
 #include "engine/texture.h"
 
 #include <algorithm>
@@ -17,6 +18,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <fstream>
 #include <vector>
 
@@ -89,6 +93,13 @@ void VulkanEngine::init_world() {
         // approach instead.
         hp.plateau_extent = glm::vec2(11.5f, 11.5f);
         hp.plateau_height = 22.0f;
+        init_sites();                    // (sites.cpp: needs the water level, and must be known before any ground height is asked for)
+        highway::build(rt_.water_level);           // (engine/highway.h: the coast road; the ground's height includes its shelf from here on)
+        { const glm::vec4 tb = highway::tightest_bend(); log::infof("highway: tightest bend: radius %.0f m at (%.1f, %.1f, %.1f)", double(tb.w), double(tb.x), double(tb.y), double(tb.z)); }
+        for (float m : { -6000.0f, -2000.0f, -1200.0f, -600.0f, -250.0f, 0.0f, 250.0f, 600.0f, 2000.0f, 6000.0f }) {
+            glm::vec3 hp; glm::vec2 hd;
+            if (highway::point_along(m, hp, hd)) log::infof("highway: %+.0f m along: (%.1f, %.1f, %.1f) heading (%.2f, %.2f)", double(m), double(hp.x), double(hp.y), double(hp.z), double(hd.x), double(hd.y));
+        }
         hp.water_level    = rt_.water_level;
         hp.plateau_blend  = 20.0f;
         hp.frequency      = 0.0014f;

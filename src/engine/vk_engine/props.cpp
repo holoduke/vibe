@@ -1279,6 +1279,7 @@ void VulkanEngine::rebuild_tick_aabbs() {
                         near_static_.push_back(a);
             };
             take(world_.aabbs);
+            if (site_here()) take(site_cols_);  // the site's, where the engine is at one (sites.cpp)
             take(wv_cols_);                     // trees beyond the home tile (veg_stream.cpp)
             // Voxel-tower solid boxes count as STATIC geometry (auto step-up
             // onto carved ledges works): they stay in the static prefix.

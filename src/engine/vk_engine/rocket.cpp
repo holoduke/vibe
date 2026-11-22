@@ -50,7 +50,8 @@ struct Mat {
     glm::vec3 emissive;
     bool full_emissive;
 };
-// Slots: 5 = Tiles130, 23 = hull steel, 24 = concrete.
+// Slots: 5 = Tiles130, 23 = hull steel, 24 = concrete; 25..29 = the pavilion's (weathering
+// steel, oak boards, polished concrete, board-marked concrete, woven fabric).
 const Mat kMats[] = {
     { "hull",        23, { 1.18f, 1.18f, 1.20f }, 3.6f, {}, false },
     { "dark",        -1, { 0.030f, 0.030f, 0.034f }, 1.0f, {}, false },
@@ -80,6 +81,32 @@ const Mat kMats[] = {
     { "console_top", -1, { 0.06f, 0.06f, 0.07f }, 1.0f, {}, false },
     { "screen",      -1, { 0.10f, 0.60f, 0.35f }, 1.0f, { 0.5f, 2.6f, 1.5f }, true },
     { "button",      -1, { 0.85f, 0.04f, 0.03f }, 1.0f, { 3.6f, 0.10f, 0.06f }, true },
+    // The launch operations pavilion (assets/office/office.mesh, tools/office/make_office.py).
+    // -3 = glass: see-through (cube.frag), casts no shadow, lets the sun in (rt.cpp).
+    { "o_concrete",  28, { 1.12f, 1.10f, 1.07f }, 3.6f, {}, false },
+    { "o_joint",     -1, { 0.17f, 0.17f, 0.165f }, 1.0f, {}, false },
+    { "o_floor",     27, { 1.02f, 1.02f, 1.03f }, 4.5f, { 0.085f, 0.085f, 0.088f }, false },
+    { "o_soffit",    -1, { 0.80f, 0.80f, 0.78f }, 1.0f, { 0.20f, 0.195f, 0.18f }, false },
+    { "o_steel",     -1, { 0.045f, 0.047f, 0.052f }, 1.0f, {}, false },
+    { "o_metal",     -2, { 0.50f, 0.52f, 0.54f }, 1.0f, {}, false },
+    { "o_roof",      -2, { 0.20f, 0.21f, 0.23f }, 1.0f, {}, false },
+    { "o_corten",    25, { 0.80f, 0.66f, 0.60f }, 2.8f, {}, false },
+    { "o_wall",      -1, { 0.66f, 0.65f, 0.62f }, 1.0f, { 0.19f, 0.185f, 0.17f }, false },       // (a little light of its own: a room's walls are never as dark as the sky's share of them)
+    { "o_ceiling",   26, { 1.04f, 1.00f, 0.95f }, 2.6f, { 0.30f, 0.245f, 0.17f }, false },
+    { "o_wood",      26, { 1.00f, 0.97f, 0.92f }, 2.0f, { 0.07f, 0.055f, 0.036f }, false },
+    { "o_glass",     -3, { 0.055f, 0.085f, 0.095f }, 1.0f, {}, false },
+    { "o_white",     -1, { 0.84f, 0.84f, 0.82f }, 1.0f, {}, false },
+    { "o_black",     -1, { 0.016f, 0.016f, 0.018f }, 1.0f, {}, false },
+    { "o_fabric",    29, { 0.26f, 0.44f, 0.52f }, 0.45f, {}, false },
+    { "o_orange",    -1, { 0.80f, 0.27f, 0.045f }, 1.0f, {}, false },
+    { "o_rug",       29, { 0.95f, 0.88f, 0.80f }, 0.9f, {}, false },
+    { "o_soil",      -1, { 0.050f, 0.038f, 0.028f }, 1.0f, {}, false },
+    { "o_bark",      -1, { 0.16f, 0.11f, 0.07f }, 1.0f, {}, false },
+    { "o_plant",     -1, { 0.075f, 0.23f, 0.060f }, 1.0f, {}, false },
+    { "o_plant_d",   -1, { 0.040f, 0.135f, 0.045f }, 1.0f, {}, false },
+    { "o_light",     -1, { 1.0f, 0.95f, 0.84f }, 1.0f, { 2.8f, 2.55f, 2.1f }, true },
+    { "o_screen",    -1, { 0.30f, 0.62f, 0.85f }, 1.0f, { 0.22f, 0.62f, 0.95f }, true },
+    { "o_screen_b",  -1, { 1.0f, 0.62f, 0.20f }, 1.0f, { 0.95f, 0.50f, 0.10f }, true },
 };
 const Mat* find_mat(const std::string& n) {
     for (const auto& m : kMats) if (n == m.name) return &m;
@@ -93,6 +120,7 @@ void dress(game::LevelMesh& m, const std::string& name, glm::vec3 base) {
     m.tex_albedo = m.tex_normal = mt->tex;
     m.tint = mt->tint; m.fallback = mt->tex >= 0 ? mt->tint * 0.5f : mt->tint;
     m.emissive = mt->emissive; m.full_emissive = mt->full_emissive;
+    m.lit_by_day = mt->full_emissive && name.rfind("o_", 0) == 0;       // (the pavilion's screens and room lights)
     m.relief = 0.0f;
     m.bmin = glm::vec3(1e9f); m.bmax = glm::vec3(-1e9f);
     for (auto& v : m.verts) {
@@ -116,6 +144,29 @@ float hash1(float n) { return glm::fract(std::sin(n * 127.1f) * 43758.5453f); }
 }  // namespace
 
 // ------------------------------------------------------------------ the site
+// One small stone house (assets/rocket/house.mesh: the launch site's control house; the
+// second site's cottages - sites.cpp), its floor's underside at `hp`: mesh parts + colliders.
+void VulkanEngine::place_house(game::Level& lv, glm::vec3 hp) {
+    (&lv == &world_ ? shelters_ : site_shelters_).push_back({ glm::vec2(hp.x - 3.9f, hp.z - 3.4f), glm::vec2(hp.x + 3.9f, hp.z + 3.4f), hp.y + kHouseFloor + 3.25f });
+    auto col = [&](glm::vec3 base, glm::vec3 lo, glm::vec3 hi) { lv.aabbs.push_back({ base + lo, base + hi }); };
+    auto house = game::load_mesh_groups("assets/rocket/house.mesh");
+    for (auto& g : house) { dress(g.mesh, g.name, hp); lv.meshes.push_back(std::move(g.mesh)); }
+    const float F = kHouseFloor, W = F + 3.0f;
+    col(hp, { -3.8f, -3.0f, -3.3f }, { 3.8f, F, 3.3f });                                 // plinth + floor
+    col(hp, { -3.5f, F, -3.0f }, { -3.2f, W, 3.0f });                                    // west wall
+    col(hp, { 3.2f, F, -3.0f }, { 3.5f, W, 3.0f });                                      // east wall (window)
+    col(hp, { -3.5f, F, -3.0f }, { 3.5f, W, -2.7f });                                    // north wall
+    col(hp, { -3.5f, F, 2.7f }, { -2.5f, W, 3.0f });                                     // south wall, either side of the door
+    col(hp, { -1.5f, F, 2.7f }, { 3.5f, W, 3.0f });
+    col(hp, { -2.5f, F + 2.1f, 2.7f }, { -1.5f, W, 3.0f });
+    col(hp, { -4.0f, W, -3.5f }, { 4.0f, W + 0.34f, 3.5f });                             // roof
+    col(hp, { 2.05f, F, -2.2f }, { 3.2f, F + 0.96f, 2.2f });                             // console
+    col(hp, { -3.2f, F, -2.7f }, { -2.1f, F + 1.9f, -2.15f });                           // locker
+    col(hp, { -2.8f, -1.5f, 3.0f }, { -1.2f, F - 0.02f, 3.9f });                         // steps
+    col(hp, { -2.8f, -1.5f, 3.9f }, { -1.2f, F - 0.17f, 4.6f });
+
+}
+
 void VulkanEngine::place_launch_site() {
     const glm::vec3 pad(kLaunchSiteX, kLaunchSiteH, kLaunchSiteZ);
     auto site = game::load_mesh_groups("assets/rocket/site.mesh");
@@ -147,21 +198,9 @@ void VulkanEngine::place_launch_site() {
     for (float dx : { -3.8f, 0.0f, 3.8f }) for (float dz : { -3.3f, 0.0f, 3.3f })
         top = std::max(top, world_ground_height(hp.x + dx, hp.z + dz, rt_.water_level, 9));
     hp.y = top - 0.05f;
-    auto house = game::load_mesh_groups("assets/rocket/house.mesh");
-    for (auto& g : house) { dress(g.mesh, g.name, hp); world_.meshes.push_back(std::move(g.mesh)); }
-    const float F = kHouseFloor, W = F + 3.0f;
-    col(hp, { -3.8f, -3.0f, -3.3f }, { 3.8f, F, 3.3f });                                 // plinth + floor
-    col(hp, { -3.5f, F, -3.0f }, { -3.2f, W, 3.0f });                                    // west wall
-    col(hp, { 3.2f, F, -3.0f }, { 3.5f, W, 3.0f });                                      // east wall (window)
-    col(hp, { -3.5f, F, -3.0f }, { 3.5f, W, -2.7f });                                    // north wall
-    col(hp, { -3.5f, F, 2.7f }, { -2.5f, W, 3.0f });                                     // south wall, either side of the door
-    col(hp, { -1.5f, F, 2.7f }, { 3.5f, W, 3.0f });
-    col(hp, { -2.5f, F + 2.1f, 2.7f }, { -1.5f, W, 3.0f });
-    col(hp, { -4.0f, W, -3.5f }, { 4.0f, W + 0.34f, 3.5f });                             // roof
-    col(hp, { 2.05f, F, -2.2f }, { 3.2f, F + 0.96f, 2.2f });                             // console
-    col(hp, { -3.2f, F, -2.7f }, { -2.1f, F + 1.9f, -2.15f });                           // locker
-    col(hp, { -2.8f, -1.5f, 3.0f }, { -1.2f, F - 0.02f, 3.9f });                         // steps
-    col(hp, { -2.8f, -1.5f, 3.9f }, { -1.2f, F - 0.17f, 4.6f });
+    place_house(world_, hp);
+
+    place_office();
 
     launch_pad_ = pad;
     launch_house_ = hp;
@@ -170,6 +209,59 @@ void VulkanEngine::place_launch_site() {
     rocket_.sim.reset(RocketSim::kPlanetR + double(pad.y) + double(kMountTop));
     log::infof("[rocket] launch site at (%.0f, %.1f, %.0f), control house at (%.0f, %.1f, %.0f)",
                pad.x, pad.y, pad.z, hp.x, hp.y, hp.z);
+}
+
+// The launch operations pavilion: the office north of the pad, its glass front to the rocket.
+// Modelled in Blender (tools/office/make_office.py -> assets/office/): office.mesh, one group
+// per material, and office.col - what the player bumps into and where its lights hang.
+// The shelters within `reach` of the eye, nearest first, at most max_n.
+void VulkanEngine::shelters_near(glm::vec3 eye, float reach, std::vector<Shelter>& out, size_t max_n) const {
+    out.clear();
+    std::vector<std::pair<float, const Shelter*>> order;
+    auto take = [&](const std::vector<Shelter>& list) {
+        for (const Shelter& s : list) {
+            const glm::vec2 c = glm::clamp(glm::vec2(eye.x, eye.z), s.lo, s.hi);
+            const float d = glm::distance(c, glm::vec2(eye.x, eye.z));
+            if (d < reach) order.push_back({ d, &s });
+        }
+    };
+    if (globe::current().home) take(shelters_);
+    if (site_here()) take(site_shelters_);
+    std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (size_t i = 0; i < order.size() && i < max_n; ++i) out.push_back(*order[i].second);
+}
+
+void VulkanEngine::place_office() {
+    auto groups = game::load_mesh_groups("assets/office/office.mesh");
+    if (groups.empty()) { log::warnf("[office] assets/office/office.mesh missing - no office (blender -b --python tools/office/make_office.py)"); return; }
+    // On the launch terrace (level within 100 m of the pad): 86 m north of the pad's centre,
+    // clear of the apron (70 m) and of the tower.
+    const glm::vec3 base(kLaunchSiteX, kLaunchSiteH, kLaunchSiteZ - 86.0f);
+    size_t tris = 0;
+    for (auto& g : groups) { tris += g.mesh.idx.size() / 3; dress(g.mesh, g.name, base); world_.meshes.push_back(std::move(g.mesh)); }
+    int boxes = 0, lights = 0;
+    if (FILE* fp = std::fopen("assets/office/office.col", "r")) {
+        char line[160];
+        while (std::fgets(line, sizeof(line), fp)) {
+            glm::vec3 a, b;
+            if (std::sscanf(line, "box %f %f %f %f %f %f", &a.x, &a.y, &a.z, &b.x, &b.y, &b.z) == 6) {
+                world_.aabbs.push_back({ base + glm::min(a, b), base + glm::max(a, b) });
+                ++boxes;
+            } else if (std::sscanf(line, "light %f %f %f", &a.x, &a.y, &a.z) == 3) {
+                lamp_lights_.push_back(base + a);
+                office_lights_.push_back(base + a);
+                ++lights;
+            }
+        }
+        std::fclose(fp);
+    }
+    // Roofed: the hall and the concrete core (not the terrace under the slatted canopy).
+    shelters_.push_back({ glm::vec2(base.x - 18.25f, base.z - 7.25f), glm::vec2(base.x + 19.4f, base.z + 7.2f), base.y + 9.3f });
+    // No grass through its floor or its terrace (the near ground's bake: veg_stream.cpp).
+    home_grass_cuts_.push_back(glm::vec4(base.x - 19.7f, base.z - 7.8f, base.x + 20.8f, base.z + 14.2f));
+    office_pos_ = base;
+    log::infof("[office] the pavilion at (%.0f, %.1f, %.0f): %zu mesh parts, %zu tris, %d colliders, %d lights",
+               base.x, base.y, base.z, groups.size(), tris, boxes, lights);
 }
 
 void VulkanEngine::init_rocket_meshes() {
@@ -268,7 +360,8 @@ void VulkanEngine::globe_enter(const GlobeChartRef& ref) {
     prev_player_position_ = player_.position;
     globe::set_current(nw);
     globe_moved_player_ = true;
-    wv_reset();                                          // the streamed woods are laid out in chart coordinates
+    wv_rechart(old, nw);                                 // the streamed woods: the same trees, in the new chart's coordinates
+    near_static_src_[0] = SIZE_MAX;                      // the player's colliders: taken again (a site's exist only in its chart)
     rocket_.cam_yaw = player_.yaw;
     const glm::dvec2 hz = globe::home_az(G);
     if (nw.home != old.home) log::infof("[globe] %s chart, %.0f km from home (%.0f km east, %.0f km south)", nw.home ? "home" : "far",
@@ -282,18 +375,49 @@ void VulkanEngine::globe_go_home() {
 }
 
 void VulkanEngine::globe_update() {
+    update_sites();                 // which sites are near, and the one whose content is loaded (sites.cpp)
     const globe::Chart& c = globe::current();
+    const double up = double(player_.position.y) - double(rt_.water_level);       // (height over the water: which kind of wandering chart)
     const double x = double(player_.position.x), z = double(player_.position.z);
+    double rh;                      // metres from home
     if (c.home) {
-        if (x * x + z * z < globe::kHomeReach * globe::kHomeReach) return;
+        rh = std::hypot(x, z);
+        // Home's chart: always near home; further out only high above the ground, where its
+        // large coordinates do no harm (engine/globe.h, "Small coordinates").
+        // VIBE_TEST_NEAR_CHART=1: leave home's chart 3 km out already (the same place in both kinds of chart, for comparing).
+        static const bool test_near = std::getenv("VIBE_TEST_NEAR_CHART") != nullptr;
+        if (rh < (test_near ? 3000.0 : globe::kHomeNear) || (up > globe::kHighDown && rh < globe::kHomeReach)) return;
     } else {
         const glm::dvec3 G = globe::to_planet(c, x, z);
-        if (glm::length(globe::home_az(G)) < globe::kHomeBack) { globe_go_home(); return; }
-        const double lx = x - c.ox();
-        if (lx * lx + z * z < globe::kFarReach * globe::kFarReach) return;
+        rh = glm::length(globe::home_az(G));
+        static const bool test_near2 = std::getenv("VIBE_TEST_NEAR_CHART") != nullptr;
+        if (rh < (test_near2 ? 2500.0 : globe::kHomeNearBack) || (rh < globe::kHomeBack && up > globe::kHighUp)) { globe_go_home(); return; }
+        // A site's own chart (engine/globe.h): taken up near the site, kept until well away.
+        if (c.site > 0 && globe::ground_distance(G, globe::site(c.site).G) < globe::kSiteLeave) return;     // (fixed: never re-anchored)
+        if (site_near_ > 0 && site_near_ != c.site && site_near_dist_ < globe::kSiteReach) {
+            GlobeChartRef sc; sc.c = globe::site(site_near_).chart;
+            globe_enter(sc);
+            log::infof("[globe] %s: its chart, %.1f km away", globe::site(site_near_).name.c_str(), site_near_dist_ * 0.001);
+            return;
+        }
+        if (c.site <= 0) {
+            // A wandering chart is kept while the player is near its anchor and at the height
+            // its kind is for (engine/globe.h, "Small coordinates").
+            if (c.high) {
+                const double lx = x - c.org.x, lz = z - c.org.y;
+                if (lx * lx + lz * lz < globe::kFarReach * globe::kFarReach && up > globe::kHighDown) return;
+            } else {
+                const double lz = z - globe::kNearOffZ;
+                if (std::max(std::abs(x), std::abs(lz)) < globe::kNearReach && up < globe::kHighUp) return;
+            }
+        }
+        // (otherwise: a site was left, or the chart has been outrun or outclimbed - a new one under the player)
     }
     GlobeChartRef nw;
-    nw.c = globe::far_chart(globe::frame_at(c, x, z));
+    // (near the ground the small-coordinate kind; with some margin either way, so that a chart
+    // is not taken up only to be dropped at the next step)
+    const bool want_high = up > 0.5 * (globe::kHighUp + globe::kHighDown) && rh >= globe::kHomeBack;      // (high above the ground near home: home's chart, above)
+    nw.c = want_high ? globe::high_chart(c, x, z) : globe::near_chart(c, x, z);
     globe_enter(nw);
 }
 

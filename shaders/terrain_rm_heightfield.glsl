@@ -36,7 +36,18 @@ bool g_rm_relief_lite = false;
 // The hit then lies up to ~0.3 m under the drawn ground - near enough to ask "is the sun
 // blocked here", which is all it is used for.
 bool g_rm_no_relief = false;
+float rm_ground_detail_raw(vec2 wp, float t, float h);
+// The close relief, less on a highway: none on the asphalt, growing over the verge (a hard stop
+// at the asphalt's edge stood up as a wall of streaks).
 float rm_ground_detail(vec2 wp, float t, float h) {
+    float keep = 1.0;
+    if (t < 26.0 && rm_hw_in(wp)) {
+        keep = smoothstep(5.4, 8.4, abs(rm_hw_dh(wp).x));
+        if (keep <= 0.0) return 0.0;
+    }
+    return rm_ground_detail_raw(wp, t, h) * keep;
+}
+float rm_ground_detail_raw(vec2 wp, float t, float h) {
     float w = 1.0 - smoothstep(10.0, 26.0, t);
     if (w <= 0.0 || RMDBG(1024) || g_rm_no_relief) return 0.0;
     // Not on the road: the paving is flat (crouching on it showed the
@@ -109,13 +120,13 @@ float nf_height(vec2 wp) {
 float terrainM(vec2 p) {
 
     vec2 wp = p;
-    p *= TERRAIN_SCALE;
+    p = rm_flat_p0(p);
     float a = 0.0, b = 1.0;
     vec2 d = vec2(0.0);
     int kOct = int(pc.tex_params.z);
-    int kOctFlat = rm_far_chart() ? 0 : kOct;            // (a far chart: the sphere's formula, rm_shape below)
+    int kOctFlat = rm_flat_on() ? kOct : 0;              // (a chart beyond the flat formula's reach: the sphere's alone, rm_shape below)
     for (int i = 0; i < kOctFlat; i++) {
-        vec3 n = noised(p);
+        vec3 n = rm_noised_i(p, i);
         d += n.yz;
         a += b * n.x / (1.0 + dot(d, d));
         b *= 0.5;
@@ -179,7 +190,7 @@ float terrainM(vec2 p) {
 bool g_rm_fp_only = false;
 float terrainM_lod(vec2 p, float ray_t) {
     vec2 wp = p;
-    p *= TERRAIN_SCALE;
+    p = rm_flat_p0(p);
     int oct_full = int(pc.tex_params.z);
     int oct_min  = max(2, min(oct_full, int(pc.emissive.w)));
     float lod_f  = g_rm_fp_only ? 0.0 : smoothstep(pc.emissive.y, pc.emissive.z, ray_t);
@@ -203,8 +214,8 @@ float terrainM_lod(vec2 p, float ray_t) {
     vec2 d = vec2(0.0);
     const int kMaxOct = 24;
     for (int i = 0; i < kMaxOct; i++) {
-        if (i >= oct || rm_far_chart()) break;
-        vec3 n = noised(p);
+        if (i >= oct || !rm_flat_on()) break;
+        vec3 n = rm_noised_i(p, i);
         float w = (i == oct - 1) ? frac : 1.0;
         d += n.yz * w;
         a += b * n.x * w / (1.0 + dot(d, d));
@@ -241,7 +252,7 @@ float terrainM_lod(vec2 p, float ray_t) {
 // relief on it changes - so its slope is worked out once and reused (calcNormal, g_nb).
 float terrainB_lod_pw(vec2 p, float ray_t, float tpl) {
     vec2 wp = p;
-    p *= TERRAIN_SCALE;
+    p = rm_flat_p0(p);
     int oct_full = int(pc.tex_params.w);
     int oct_min  = max(2, min(oct_full, int(pc.emissive.w)));
     float lod_f  = smoothstep(pc.emissive.y, pc.emissive.z, ray_t);
@@ -258,8 +269,8 @@ float terrainB_lod_pw(vec2 p, float ray_t, float tpl) {
     vec2 d = vec2(0.0);
     const int kMaxOct = 32;
     for (int i = 0; i < kMaxOct; i++) {
-        if (i >= oct || rm_far_chart()) break;
-        vec3 n = noised(p);
+        if (i >= oct || !rm_flat_on()) break;
+        vec3 n = rm_noised_i(p, i);
         float w = (i == oct - 1) ? frac : 1.0;
         d += n.yz * w;
         a += b * n.x * w / (1.0 + dot(d, d));
@@ -325,7 +336,7 @@ float terrainMaxHeight() { return max(TERRAIN_HEIGHT, pc.color.w) + 80.0; }
 // would mismatch the primary terrain there).
 float terrainM_shadow(vec2 p, float ray_t) {
     vec2 wp = p;
-    p *= TERRAIN_SCALE;
+    p = rm_flat_p0(p);
     int oct_full = int(pc.tex_params.z);
     int oct_min  = max(2, min(oct_full, int(pc.emissive.w)));
     float lod_f  = smoothstep(pc.emissive.y, pc.emissive.z, ray_t);
@@ -336,8 +347,8 @@ float terrainM_shadow(vec2 p, float ray_t) {
     vec2 d = vec2(0.0);
     const int kMaxOct = 24;
     for (int i = 0; i < kMaxOct; i++) {
-        if (i >= oct || rm_far_chart()) break;
-        vec3 n = noised(p);
+        if (i >= oct || !rm_flat_on()) break;
+        vec3 n = rm_noised_i(p, i);
         float w = (i == oct - 1) ? frac : 1.0;
         d += n.yz * w;
         a += b * n.x * w / (1.0 + dot(d, d));
@@ -511,7 +522,7 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
             // The FBM's extra octaves stand up to ~0.5 m proud of it; seen
             // from a low eye along the road they formed a lumpy, spiky
             // hump across the paving a few metres ahead.
-            if (!coarse && h < 0.65 && t < 90.0 && rd.y > -0.16) {   // grazing rays only: steep ones are fixed by the slide in main()
+            if (!coarse && h < 0.65 && t < 90.0 && rd.y > -0.16 && !rm_far_chart()) {   // (home only: a site's road lies on formula ground, there is no baked surface) grazing rays only: steep ones are fixed by the slide in main()
                 float keep = scene.road_info.y;
                 float rdist = rm_road_dist_thr(pos.xz, keep + 0.9);
                 if (rdist < keep + 0.9)

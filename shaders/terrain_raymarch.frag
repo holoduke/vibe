@@ -416,8 +416,10 @@ layout(set = 0, binding = 30) uniform sampler2D u_skyview;
 
 // Material texture arrays (same set-0 slots as cube.frag): only the castle
 // road cobbles are sampled here - the rest of this terrain is procedural.
-const int kRmTextureCount = 23;   // = cube.frag kTextureCount
+const int kRmTextureCount = 34;   // = cube.frag kTextureCount
 const int kRmMatRoad = 14;        // = cube.frag kMatRoad (PavingStones131)
+const int kRmMatAsphalt = 32;     // the highway's asphalt (Asphalt031)
+const int kRmMatGravel  = 33;     // its verge (Gravel040)
 layout(set = 0, binding = 3) uniform sampler2D u_albedo[kRmTextureCount];
 layout(set = 0, binding = 4) uniform sampler2D u_normal[kRmTextureCount];
 #define LEAF_ATLAS u_albedo[15]

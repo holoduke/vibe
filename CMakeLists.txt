@@ -282,6 +282,8 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan glfw)
 
 # vibe_core: pure logic with no Vulkan/GLFW deps. Tests link this directly.
 add_library(vibe_core STATIC
+    src/engine/site_store.cpp
+    src/engine/globe.cpp
     src/game/physics.cpp
     src/game/collision.cpp
     src/game/level.cpp
@@ -342,6 +344,9 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine.cpp
     src/engine/vk_engine/game_loop.cpp
     src/engine/vk_engine/private_state.cpp
+    src/engine/vk_engine/sites.cpp
+    src/engine/vk_engine/highway_field.cpp
+    src/engine/vk_engine/highway_furniture.cpp
     src/engine/vk_engine/frame.cpp
     src/engine/vk_engine/frame_upload.cpp
     src/engine/frame_pacer.cpp
@@ -420,11 +425,11 @@ add_library(vibe_engine STATIC
     src/engine/grass.cpp
     src/engine/scatter.cpp
     src/engine/road.cpp
+    src/engine/highway.cpp
     src/engine/eztree.cpp
     src/engine/world_props.cpp
     src/engine/aa_vehicle.cpp
     src/engine/rocket_sim.cpp
-    src/engine/globe.cpp
 )
 target_include_directories(vibe_engine PUBLIC src)
 target_include_directories(vibe_engine PRIVATE

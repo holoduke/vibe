@@ -468,6 +468,11 @@ void VulkanEngine::update_scene_ubo() {
         } else {
             lamp_map_slot_ = -1;
         }
+        // The pavilion's room lights by day (at night they are lanterns like the rest, above): a
+        // deep room is not lit by its windows alone.
+        if (night <= 0.01f && !office_lights_.empty() && glm::distance(player_.eye_position(), office_pos_) < 110.0f)
+            for (size_t k = 0; k < office_lights_.size() && k < 6; ++k)
+                data.lamp_lights[k] = glm::vec4(office_lights_[k], 3.4f);
         // The launch site's own lights, day and night: the lamp in the control house, and the
         // rocket's exhaust while it burns nearby.
         if (launch_site_placed_) {
@@ -549,7 +554,7 @@ void VulkanEngine::update_scene_ubo() {
     // .x: 0 = RT shadows off, 1 = on, 3 = on + Ray Reconstruction quality
     // mode (deferred_lighting.frag: longer / rougher reflections, a second
     // GI bounce on every ray). Shaders test != 0 for "shadows on".
-    data.rt_flags = glm::ivec4(rt_.shadow_enabled ? ((rr_low ? 3 : 1) | (std::clamp(rt_.foliage_ray_mode, 0, 2) << 2)) : 0,   // bits 2-3: foliage ray mode
+    data.rt_flags = glm::ivec4(rt_.shadow_enabled ? ((rr_low ? 3 : 1) | (std::clamp(rt_.foliage_ray_mode, 0, 2) << 2) | (rt_.gi_leaf_lite ? 16 : 0)) : 0,   // bits 2-3: foliage ray mode; bit 4: one bounce-light ray on leaves
                                shadow_samples_eff,
                                ao_samples_eff,
                                static_cast<int>(frame_number_));
@@ -661,6 +666,17 @@ void VulkanEngine::update_scene_ubo() {
     // matrix used the smoothed render_pos.
     glm::vec3 eye = current_frame_view_.eye_pos;
     data.camera_pos = glm::vec4(eye, 0.0f);
+    // (scene_ray: the projection and the view's rotation only - no position)
+    data.ray_mat = glm::mat4(glm::inverse(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view))));
+    {   // The grass's blade lattice at the camera: which cell the camera is in and where in it,
+        // in doubles - the shader then works from the camera outward, in small numbers, and a
+        // blade (millimetres wide) is whole however large the engine's coordinates are.
+        // (kPeriod as grass_raymarch.frag has it: TILE_CELL(0.17).)
+        const float P = 6400.0f / std::max(std::round(6400.0f / 0.17f), 1.0f);
+        const glm::dvec2 U = glm::dvec2(double(eye.x), double(eye.z)) + 0.5 * double(P);
+        const glm::dvec2 n0 = glm::floor(U / double(P)), f0 = U - n0 * double(P);
+        data.grass_cam = glm::vec4(float(n0.x), float(n0.y), float(f0.x), float(f0.y));
+    }
     // Distance LOD: 15 m = full samples (gameplay-relevant range — shadows
     // and AO are most visible up close); past 50 m fades to 1 sample so the
     // skybox-distance cubes don't waste a full ray budget per pixel.
@@ -923,6 +939,28 @@ void VulkanEngine::update_scene_ubo() {
             data.globe_frac[i] = glm::vec4(fracs[i][0], fracs[i][1], fracs[i][2], 0.0f);
         }
     }
+    data.site_ground = site_uniform(&data.site_shape);       // (sites.cpp)
+    data.hw_info = hw_info_;
+    data.hw_bbox = hw_bbox_;
+    {   // home's flat formula from this chart, where it applies (engine/globe.h Ring)
+        const globe::Ring& rg = globe::ring_now();
+        data.ring_info = glm::vec4(rg.on ? 1.0f : 0.0f, float(rg.wp0.x), float(rg.wp0.y), float(globe::current().org.y));     // (.w: the chart origin's local z; its x is globe_info.y)
+        data.ring_h0 = glm::vec4(float(rg.h0.x), float(rg.h0.y), 0.0f, 0.0f);
+        data.ring_j = glm::vec4(float(rg.J[0][0]), float(rg.J[1][0]), float(rg.J[0][1]), float(rg.J[1][1]));
+        float lat[globe::kFlatOctaves][4];
+        globe::flat_lattice(rg.h0, lat);
+        for (int i = 0; i < globe::kFlatOctaves; ++i)
+            data.ring_cell[i] = rg.on ? glm::vec4(lat[i][0], lat[i][1], lat[i][2], lat[i][3]) : glm::vec4(0.0f);
+    }
+    {   // what is roofed near the camera (no rain, wet or snow inside: scene_ubo.glsl scene_sheltered)
+        std::vector<Shelter> sh;
+        shelters_near(player_.eye_position(), 400.0f, sh, 4);
+        for (int i = 0; i < 4; ++i) {
+            const bool on = size_t(i) < sh.size();
+            data.shelter_a[i] = on ? glm::vec4(sh[size_t(i)].lo, sh[size_t(i)].hi) : glm::vec4(0.0f);
+            data.shelter_b[i] = on ? glm::vec4(sh[size_t(i)].top, 1.0f, 0.0f, 0.0f) : glm::vec4(0.0f);
+        }
+    }
     // The sea's wave field (terrain_raymarch.frag sea_map). It is a sum of octaves, each a
     // pattern of its own coordinate  c = f_i * M_i * (0.75 x, z)  - turned and 1.9 x finer per
     // octave, up to 34 x the world coordinate. Worked out from world coordinates in floats
@@ -1109,20 +1147,26 @@ void VulkanEngine::update_scene_ubo() {
         static std::vector<glm::vec4> road_gpu;
         static size_t road_sig = 0;
         static glm::ivec2 road_spur(0);
-        size_t sig = castle_road_.pts.size();
-        if (!castle_road_.pts.empty()) {
-            const glm::vec3 a = castle_road_.pts.front(), b = castle_road_.pts.back();
+        // (the road of where the engine is: home's in home's chart, a site's in its own, none
+        // anywhere else - the shaders know one road at a time)
+        static const Road kNoRoad{};
+        const globe::Chart& road_chart = globe::current();
+        const Road& the_road = road_chart.home ? castle_road_ : site_here() ? site_road_ : kNoRoad;
+        size_t sig = the_road.pts.size();
+        if (!the_road.pts.empty()) {
+            const glm::vec3 a = the_road.pts.front(), b = the_road.pts.back();
             sig = sig * 1000003u ^ std::hash<float>{}(a.x + 7.0f * a.z) ^ (std::hash<float>{}(b.x - 3.0f * b.z) << 1);
         }
         if (sig != road_sig) {
-            road_gpu = castle_road_.empty() ? std::vector<glm::vec4>{} : road_gpu_points(castle_road_, 64, &road_spur);
+            road_spur = glm::ivec2(0);
+            road_gpu = the_road.empty() ? std::vector<glm::vec4>{} : road_gpu_points(the_road, 64, &road_spur);
             road_sig = sig;
         }
         const int n = static_cast<int>(std::min<size_t>(road_gpu.size(), 64));
         // .w: the side road's segments (first * 128 + one-past-last; 0 = none).
-        data.road_info = glm::vec4(static_cast<float>(n), castle_road_.half_width,
-                                   castle_road_.shoulder, float(road_spur.x * 128 + road_spur.y));
-        data.road_bbox = glm::vec4(castle_road_.bb_min, castle_road_.bb_max);
+        data.road_info = glm::vec4(static_cast<float>(n), the_road.half_width,
+                                   the_road.shoulder, float(road_spur.x * 128 + road_spur.y));
+        data.road_bbox = glm::vec4(the_road.bb_min, the_road.bb_max);
         for (int i = 0; i < n; ++i) data.road_pts[i] = road_gpu[size_t(i)];
     }
 

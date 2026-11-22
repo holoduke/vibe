@@ -402,7 +402,7 @@ void main() {
     // trapped) and much smoother (a film of water). Mostly on faces the
     // rain can reach; leaves just get glossier.
     {
-        float wet = scene_wet();
+        float wet = scene_sheltered(world_pos) ? 0.0 : scene_wet();       // (dry under a roof)
         if (wet > 0.01) {
             float up = mix(0.35, 1.0, smoothstep(-0.2, 0.6, N.y));
             float wk = wet * up;
@@ -922,6 +922,12 @@ void main() {
         // deferred path so RT bandwidth doesn't explode (cube.frag also
         // caps internally via the half-rate parity trick).
         int taken_gi = min(lod_samples(N_gi, cam_dist), 16);
+        // Leaves: one ray, and no second-bounce ray (its average is added without the ray,
+        // below). A leaf's own texture hides the grain, its history rarely survives the sway,
+        // and under trees these pixels were most of what this pass costs (forest on an
+        // RX 9070 XT: 13.1 -> 10.2 ms). scene.rt_flags.x bit 4: gi_leaf_lite.
+        bool gi_leaf1 = (scene.rt_flags.x & 16) != 0 && leafy;
+        if (gi_leaf1) taken_gi = 1;
         vec3 N_up  = abs(N.y) < 0.999 ? vec3(0,1,0) : vec3(1,0,0);
         vec3 N_tan = normalize(cross(N_up, N));
         vec3 N_bit = cross(N, N_tan);
@@ -1012,7 +1018,7 @@ void main() {
                     // RR quality mode: the bounce on EVERY ray at half weight
                     // (same energy, half the variance) and out to 80 m.
                     bool rr_gi = (scene.rt_flags.x & 2) != 0;
-                    if ((rr_gi || (i & 1) == 0) && cam_dist < (rr_gi ? 80.0 : 40.0)) {
+                    if (!gi_leaf1 && (rr_gi || (i & 1) == 0) && cam_dist < (rr_gi ? 80.0 : 40.0)) {
                         float b1 = hash12(gl_FragCoord.xy + fseed +
                                           vec2(i * 13.0, 119.0));
                         float b2 = hash12(gl_FragCoord.xy + fseed +
@@ -1047,6 +1053,8 @@ void main() {
                         }
                         hit_light += b_rad * (rr_gi ? 0.5 : 1.0);
                     }
+                    if (gi_leaf1 && cam_dist < 40.0)
+                        hit_light += 0.2 * (0.5 * scene.ambient.rgb + 0.5 * scene.sky_color.rgb);
                     gi_indirect += hit_alb * hit_light;
                 }
             } else {

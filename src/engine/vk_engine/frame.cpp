@@ -369,11 +369,14 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     flush_frame_uploads(frame.command_buffer);
     record_sun_horizon_upload(frame.command_buffer, gpu_query_slot);
     record_nf_upload(frame.command_buffer, gpu_query_slot);
+    record_hw_upload(frame.command_buffer, gpu_query_slot);
     record_tlas_publish(frame.command_buffer);   // this frame's TLAS -> tlas_
     prof_mark(frame.command_buffer, "uploads_tlas");
     // GPU vegetation: cull + LOD-select every instance, fill indirect draws.
     // Where the camera is on the planet's map, the water level and the snow: for the ground seen from high up (compose.frag planet_surface).
     if (exposure_buf_) {
+        // (the nearest site: the one the view from high up can show - compose.frag planet_surface)
+        const glm::vec3 site_planet = site_near_ > 0 ? glm::vec3(globe::site(site_near_).G) : glm::vec3(0.0f);
         const float pl[24] = { current_frame_view_.eye_pos.x * 0.001f, current_frame_view_.eye_pos.z * 0.001f, rt_.water_level, env_->snow,
                                rt_.terrain_h_sand_grass_start, rt_.terrain_h_sand_grass_end, rt_.terrain_h_grass_dirt_start, rt_.terrain_h_grass_dirt_end,
                                rt_.terrain_h_dirt_rock_start, rt_.terrain_h_dirt_rock_end, rt_.terrain_h_rock_snow_start, rt_.terrain_h_rock_snow_end,
@@ -384,9 +387,11 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
                                // the layer's base (m): from above it the clouds are in front of the land
                                (rt_.clouds_enabled && rt_.sky_mode == 1) ? glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f) : 1.0e9f, 
                                // the hour angle: how far the sky has turned (the stars, compose.frag star_sky_dir)
-                               rt_.day_night_enabled ? (rt_.time_of_day - 12.0f) / 24.0f * 6.2831853f : 0.0f, 0.0f, 0.0f,
+                               rt_.day_night_enabled ? (rt_.time_of_day - 12.0f) / 24.0f * 6.2831853f : 0.0f,
+                               // the second site's place on the planet (x, y here; z in the last slot below)
+                               site_planet.x, site_planet.y,
                                // the sunlight as the landscape gets it (scene.sun_color: golden-hour colour x intensity)
-                               last_sun_rgb_.x * rt_.sun_intensity, last_sun_rgb_.y * rt_.sun_intensity, last_sun_rgb_.z * rt_.sun_intensity, 0.0f };
+                               last_sun_rgb_.x * rt_.sun_intensity, last_sun_rgb_.y * rt_.sun_intensity, last_sun_rgb_.z * rt_.sun_intensity, site_planet.z };
         vkCmdUpdateBuffer(frame.command_buffer, exposure_buf_, 16, sizeof(pl), pl);
         // The globe: the frame at the camera's ground point and the FBM lattice there.
         {

@@ -425,6 +425,25 @@ void VulkanEngine::run(const RunOptions& opts) {
     auto demo_start = last;
     prev_player_position_ = player_.position;
 
+    // Test hook: VIBE_TEST_SITE=<site>[,<east>,<south>,<yaw>,<pitch>,<height>] starts at that
+    // site, that far from its arrival point (captures; with VIBE_TEST_HOLD the camera stays).
+    if (const char* ts = std::getenv("VIBE_TEST_SITE")) {
+        int k = 0; float dx = 0.0f, dz = 0.0f, yaw = 0.0f, pitch = 0.0f, up = 0.0f;
+        std::sscanf(ts, "%d,%f,%f,%f,%f,%f", &k, &dx, &dz, &yaw, &pitch, &up);
+        travel_to_site(std::abs(k));
+        player_.position += glm::vec3(dx, up, dz);
+        if (k < 0) {
+            // (a negative number: arrive as a traveller does - in a wandering chart anchored
+            // at that spot; globe_update then has to take up the site's chart, or not)
+            const globe::Chart sc = globe::current();
+            GlobeChartRef w; w.c = globe::near_chart(sc, double(player_.position.x), double(player_.position.z));
+            globe_enter(w);
+        }
+        player_.yaw = yaw; player_.pitch = pitch;
+        prev_player_position_ = player_.position;
+        if (up > 3.0f) fly_mode_ = true;
+    }
+
     while (!window_->should_close()) {
         { CPU_SCOPE("poll-events"); window_->poll_events(); }
         if (resize_requested_) recreate_swapchain();
@@ -594,6 +613,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             ImGui::NewFrame();
             build_hud_ui();
             mp_hud();
+            site_labels_hud();                 // the sites' names, from high up (sites.cpp)
             anim_debug_overlay();
             if (terrain_shaders_compiling()) {
                 // First start: say why the ground looks plain for a minute.

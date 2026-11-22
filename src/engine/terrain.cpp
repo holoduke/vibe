@@ -1,4 +1,5 @@
 #include "engine/terrain.h"
+#include "engine/highway.h"
 #include "engine/globe.h"
 
 #include "engine/log.h"
@@ -257,7 +258,80 @@ inline float forest_globe(glm::vec2 hp, const glm::dvec3& G, float h, float ny, 
 }
 }  // namespace wm
 
+// A site's ground (engine/globe.h: Site): level round its centre, then sloping to the natural
+// ground. `h`: the natural height at the planet point G. (shaders: rm_site_ground in
+// terrain_rm_noise_road.glsl - keep in step.)
+static float site_ground(float h, const glm::dvec3& G, float water_level) {
+    for (const globe::SiteShape& s : globe::sites_nearby()) {       // (the few near the player, of thousands)
+        const glm::dvec3 d = G - s.G;
+        const double r2 = glm::dot(d, d) * globe::kR * globe::kR;           // (the chord: as good as the arc here)
+        if (r2 > double(s.slope) * double(s.slope)) continue;
+        const float w = 1.0f - wm::sstep(s.flat, s.slope, float(std::sqrt(r2)));
+        return glm::mix(h, water_level + s.rise, w);
+    }
+    return h;
+}
+static bool site_clearing(const glm::dvec3& G) {
+    for (const globe::SiteShape& s : globe::sites_nearby()) {
+        const glm::dvec3 d = G - s.G;
+        if (glm::dot(d, d) * globe::kR * globe::kR < double(s.clearing) * double(s.clearing)) return true;
+    }
+    return false;
+}
+
+float natural_height_impl(const glm::dvec3& G, float water_level, int octaves) {
+    return wm::height_globe(globe::shape3(G * globe::kR, float(octaves)), glm::vec2(globe::home_az(G)), G, water_level);
+}
+
+// The flat formula's FBM at home coordinates given in doubles: per octave the lattice cell and
+// the position in it, so that it is as exact 90 km out as at home (the shader does the same
+// from a chart that is not home's: terrain_rm_noise_road.glsl rm_noised_i). Cells are wrapped
+// to +-2^22 as there.
+static float flat_fbm_d(glm::dvec2 hp, int octaves) {
+    glm::dvec2 q = hp * double(kRmTerrainScale);
+    float a = 0.0f, b = 1.0f;
+    glm::vec2 d(0.0f);
+    for (int i = 0; i < octaves; i++) {
+        const glm::dvec2 cd = glm::floor(q);
+        const glm::vec2 f = glm::vec2(q - cd);
+        const glm::vec2 c = glm::vec2(cd - 8388608.0 * glm::floor(cd / 8388608.0 + 0.5));
+        const glm::vec2 u  = f * f * (3.0f - 2.0f * f);
+        const glm::vec2 du = 6.0f * f * (1.0f - f);
+        const float h00 = rm_hash21(c), h10 = rm_hash21(c + glm::vec2(1, 0)), h01 = rm_hash21(c + glm::vec2(0, 1)), h11 = rm_hash21(c + glm::vec2(1, 1));
+        const float n = h00 + (h10 - h00) * u.x + (h01 - h00) * u.y + (h00 - h10 - h01 + h11) * u.x * u.y;
+        d += du * (glm::vec2(h10 - h00, h01 - h00) + (h00 - h10 - h01 + h11) * glm::vec2(u.y, u.x));
+        a += b * n / (1.0f + glm::dot(d, d));
+        b *= 0.5f;
+        q = glm::dvec2(0.8 * q.x + 0.6 * q.y, -0.6 * q.x + 0.8 * q.y) * 2.0;
+    }
+    return a;
+}
+// A place given in the current chart, in home coordinates - when the chart is home's, or lies
+// in the region where home's own rules hold (globe::Ring). False otherwise.
+static bool home_coords(float x, float z, glm::dvec2& hp) {
+    const globe::Chart& C = globe::current();
+    if (C.home) { hp = glm::dvec2(x, z); return true; }
+    if (!globe::ring_now().on) return false;
+    hp = globe::home_az(globe::to_planet(C, x, z));
+    return true;
+}
+
 float world_ground_height_impl(float x, float z, float water_level, int octaves) {
+    if (!globe::current().home) {
+        // Another chart (shaders: rm_shape / rm_world_h in terrain_rm_noise_road.glsl).
+        const globe::Chart& C = globe::current();
+        const glm::dvec3 G = globe::to_planet(C, x, z);
+        const glm::dvec2 hp = globe::home_az(G);
+        const double r = glm::length(hp);
+        float a;
+        if (globe::ring_now().on && r < globe::kBlend1) {
+            a = flat_fbm_d(hp, octaves);                   // within reach of home's flat formula
+            if (r > globe::kBlend0) a = glm::mix(a, globe::shape3(G * globe::kR, float(octaves)), wm::sstep(float(globe::kBlend0), float(globe::kBlend1), float(r)));
+        } else {
+            a = globe::shape3(G * globe::kR, float(octaves));
+        }
+        return site_ground(wm::height_globe(a, glm::vec2(hp), G, water_level), G, water_level);
+    }
     glm::vec2 q = glm::vec2(x, z) * kRmTerrainScale;
     float a = 0.0f, b = 1.0f;
     glm::vec2 d(0.0f);
@@ -279,8 +353,7 @@ float world_ground_height_impl(float x, float z, float water_level, int octaves)
         }
         return wm::height(a, glm::vec2(x, z), water_level);
     }
-    const glm::dvec3 G = globe::to_planet(C, x, z);
-    return wm::height_globe(globe::shape3(G * globe::kR, float(octaves)), glm::vec2(globe::home_az(G)), G, water_level);
+    return 0.0f;        // (not reached: the other charts are handled at the top)
 }
 
 float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
@@ -313,9 +386,23 @@ float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
 
 float world_forest(float x, float z, float h, float ny, float water_level) {
     const globe::Chart& C = globe::current();
-    if (C.home && x * x + z * z < float(globe::kBlend0 * globe::kBlend0)) return wm::forest(glm::vec2(x, z), h, ny, water_level);
+    glm::dvec2 hpd;
+    const bool at_home = home_coords(x, z, hpd);
+    if (at_home && highway::ready() && highway::distance(float(hpd.x), float(hpd.y)) < highway::kVerge + 6.0f) return 0.0f;      // (no woods on a highway)
+    if (at_home && glm::dot(hpd, hpd) < globe::kBlend0 * globe::kBlend0) {
+        if (!C.home && site_clearing(globe::to_planet(C, x, z))) return 0.0f;
+        return wm::forest(glm::vec2(hpd), h, ny, water_level);
+    }
     const glm::dvec3 G = globe::to_planet(C, x, z);
+    if (site_clearing(G)) return 0.0f;        // (a site's own ground: what grows there is placed by hand)
     return wm::forest_globe(C.home ? glm::vec2(x, z) : glm::vec2(globe::home_az(G)), G, h, ny, water_level);
+}
+
+float world_forest_flat(float hx, float hz, float h, float ny, float water_level) { return wm::forest(glm::vec2(hx, hz), h, ny, water_level); }
+
+float world_highway_distance(float x, float z) {
+    glm::dvec2 hp;
+    return (highway::ready() && home_coords(x, z, hp)) ? highway::distance(float(hp.x), float(hp.y)) : 1e9f;
 }
 
 float world_river_cut(float h, float x, float z, float water_level) {
@@ -326,8 +413,20 @@ float world_river_distance(float x, float z) {
     return globe::current().home ? wm::river_edge(glm::vec2(x, z)) : 1e9f;
 }
 
-float world_ground_height(float x, float z, float water_level, int octaves) {
+float world_natural_height(const glm::dvec3& G, float water_level, int octaves) {
+    return natural_height_impl(G, water_level, octaves);
+}
+
+float world_ground_height_natural(float x, float z, float water_level, int octaves) {
     return world_ground_height_impl(x, z, water_level, octaves);
+}
+float world_continent_home(float x, float z) { return wm::continent(glm::vec2(x, z) * 0.001f); }
+
+float world_ground_height(float x, float z, float water_level, int octaves) {
+    const float h = world_ground_height_impl(x, z, water_level, octaves);
+    // A highway's shelf (its lines are in home coordinates; shaders: rm_highway).
+    glm::dvec2 hp;
+    return (highway::ready() && home_coords(x, z, hp)) ? highway::ground(h, float(hp.x), float(hp.y)) : h;
 }
 
 float raymarch_fine_correction(const Heightmap& hm, const HeightmapParams& p,
@@ -805,6 +904,13 @@ float road_edge_jitter(float x, float z) {
     return (rm_noised(q * 1.7f, d) - 0.5f) * 0.45f + (rm_noised(q * 0.31f + glm::vec2(17.0f), d) - 0.5f) * 0.6f;
 }
 float raymarch_ground_relief(float x, float z, float h, float water_level) {
+    float hw_keep = 1.0f;                // (a highway: none on the asphalt, growing over the verge - as the shader)
+    glm::dvec2 hw_hp;
+    if (highway::ready() && home_coords(x, z, hw_hp)) {
+        const float t = std::clamp((highway::distance(float(hw_hp.x), float(hw_hp.y)) - 5.4f) / 3.0f, 0.0f, 1.0f);
+        hw_keep = t * t * (3.0f - 2.0f * t);
+        if (hw_keep <= 0.0f) return 0.0f;
+    }
     // Mirror of terrain_raymarch.frag rm_ground_detail() (keep in sync).
     auto noise2 = [](glm::vec2 p) { glm::vec2 d; return rm_noised(p, d); };
     auto sstep = [](float a, float b, float v) { float t = std::clamp((v - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
@@ -816,6 +922,6 @@ float raymarch_ground_relief(float x, float z, float h, float water_level) {
     float d = 0.11f * (1.0f - g1) + 0.045f * (1.0f - g2) + 0.09f * 0.5f;
     const float sand = 1.0f - sstep(water_level + 0.4f, water_level + 2.5f, h);
     d += sand * 0.03f * (0.5f + 0.5f * std::sin(glm::dot(wp, glm::vec2(9.0f, 3.5f)) + 6.0f * wn));
-    return d;
+    return d * hw_keep;
 }
 }  // namespace vibe

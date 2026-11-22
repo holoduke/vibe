@@ -402,7 +402,7 @@ vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
 vec3 getMaterial(vec3 pos, vec3 nor) {
     float slope = nor.y;
     float h = pos.y;
-    float nz = noise2(pos.xz * 0.04) * noise2(pos.xz * 0.005);
+    float nz = tile_noise2(pos.xz, 0.04, vec2(0.0)) * tile_noise2(pos.xz, 0.005, vec2(0.0));
     vec3 rock  = scene.rm_rock.rgb;
     // Dry earth .. green ground (settings palette). `green amount` pushes
     // the noise toward green (0 = the old mostly-brown mix).
@@ -442,7 +442,7 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
         float flat_w = smoothstep(0.55, 0.85, slope);
         float alt_w  = 1.0 - smoothstep(55.0, 80.0, h);
         float red_w  = patchm * flat_w * alt_w * (1.0 - 0.65 * grass_amt) * min(1.0, red_amt * 1.4) * 0.85;
-        vec3 red = scene.rm_red_sand.rgb * mix(0.85, 1.15, noise2(pos.xz * 0.9));
+        vec3 red = scene.rm_red_sand.rgb * mix(0.85, 1.15, tile_noise2(pos.xz, 0.9, vec2(0.0)));
         col = mix(col, red, red_w);
         // Stain on the bare dry ground around the patches.
         col = mix(col, col * mix(vec3(1.0), scene.rm_red_sand.rgb / max(dot(scene.rm_red_sand.rgb, vec3(0.333)), 1e-3), 0.35),
@@ -525,7 +525,7 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
             float ang = atan(dv.y, dv.x);
             float ray = noise2(vec2(ang * 4.0 + c.x * 0.37, c.z * 0.37)) * 0.65 +
                         noise2(vec2(ang * 11.0 - c.z * 0.21, c.x * 0.21)) * 0.35;      // ejecta rays
-            float n1 = noise2(pos.xz * 1.7 + 3.0), n2 = noise2(pos.xz * 6.3);
+            float n1 = tile_noise2(pos.xz, 1.7, vec2(3.0)), n2 = tile_noise2(pos.xz, 6.3, vec2(0.0));
             float bowl   = 1.0 - smoothstep(0.82, 1.06 + 0.12 * (n1 - 0.5), r);
             float ejecta = (1.0 - smoothstep(1.0, 1.15 + 0.9 * ray, r)) * (1.0 - bowl);
             vec3  soil = vec3(0.115, 0.085, 0.055) * mix(0.78, 1.22, n1);

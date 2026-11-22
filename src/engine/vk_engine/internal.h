@@ -396,9 +396,21 @@ struct SceneUBO {
     glm::ivec4 globe_cell[12];
     glm::vec4  globe_frac[12];
     glm::vec4  rm_perf;          // raymarched terrain, speed settings (scene_ubo.glsl)
+    glm::vec4  site_ground;      // the site in sight: centre in this chart, flag (scene_ubo.glsl)
+    glm::vec4  site_shape;       // ... and the shape of its ground
     glm::vec4  sea_org;          // the sea's wave field: local origin + per-octave constants (scene_ubo.glsl)
     glm::vec4  sea_a[5];
     glm::vec4  sea_b[5];
+    glm::vec4  shelter_a[4];     // the roofed boxes nearest the camera (scene_ubo.glsl scene_sheltered)
+    glm::vec4  shelter_b[4];
+    glm::vec4  hw_info;          // the highways' field (highway_field.cpp; shaders: rm_highway)
+    glm::vec4  hw_bbox;
+    glm::vec4  ring_info;        // home's flat formula from another chart (engine/globe.h Ring; shaders: rm_ring*)
+    glm::vec4  ring_h0;
+    glm::vec4  ring_j;
+    glm::vec4  ring_cell[24];
+    glm::vec4  grass_cam;        // the grass's blade lattice at the camera (grass_raymarch.frag map)
+    glm::mat4  ray_mat;          // screen -> view ray, camera at the origin (scene_ubo.glsl scene_ray)
 };
 
 // ---- KHR ray tracing entry points ----

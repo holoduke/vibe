@@ -34,6 +34,7 @@
 #include "engine/aa_vehicle.h"
 #include "engine/rocket_sim.h"
 #include "engine/globe.h"
+#include "engine/site_store.h"
 #include "anim/character_animator.h"
 #include "engine/texture.h"   // for BackgroundDecodeHandle
 #include "engine/vk_engine/settings_types.h"  // RtSettings / GameSettings
@@ -648,7 +649,7 @@ private:
     // terrain PBR materials (incl. proc grass, roof, road), 15 the leaf
     // atlas, 16 bark, 17 lamp timber, 18 the small-plant atlas.
     static constexpr int kFileTextureCount   = 7;
-    static constexpr int kTerrainMatCount    = 18;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
+    static constexpr int kTerrainMatCount    = 27;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
     static constexpr int kTextureCount       = kFileTextureCount +
                                                kTerrainMatCount;   // 20
     // Albedo/normal-array indices of the baked terrain materials.
@@ -680,6 +681,14 @@ private:
     static constexpr int kTexGrave   = kFileTextureCount + 13;  // 20: old gravestone (assets/church/grave_stone.png)
     static constexpr int kTexHull     = kFileTextureCount + 16;  // 23: the rocket's stainless hull (assets/rocket/hull.png)
     static constexpr int kTexConcrete = kFileTextureCount + 17;  // 24: concrete slabs (assets/rocket/concrete.png)
+    // 25..29: the pavilion's materials (assets/office/tex/*.png, 2K; world_textures.cpp): weathering
+    // steel, oak boards, polished concrete, board-marked concrete, woven fabric.
+    static constexpr int kTexOffice = kFileTextureCount + 18;   // 25: the first of the five
+    // 30, 31: the highways' field round the camera (highway_field.cpp; engine/highway.h bake()).
+    static constexpr int kTexRoadField = kFileTextureCount + 23;
+    // 32, 33: the highway's surface - scanned asphalt and roadside gravel (assets/terrain_pbr).
+    static constexpr int kTexAsphalt = kFileTextureCount + 25;
+    static constexpr int kTexGravel  = kFileTextureCount + 26;
     struct TextureSlot {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation alloc = nullptr;
@@ -1712,6 +1721,42 @@ private:
     // heightmap is cached; drives carving, grass/scatter keep-out and
     // the terrain shader road polyline (SceneUBO road_pts).
     Road castle_road_{};
+    // Sites: the planet's hand-made places other than home (vk_engine/sites.cpp explains).
+    // The engine holds one site's content at a time, in this slot.
+    SiteStore site_store_;                       // where their descriptions come from (engine/site_store.h)
+    int       site_loaded_ = -1;                 // the site whose content the slot holds (-1: none)
+    uint32_t  site_gen_ = 0;                     // counts the slot's changes (the ray-tracing structure is rebuilt on one)
+    int       site_near_ = -1;                   // the nearest site, and how far over the ground (m)
+    double    site_near_dist_ = 1e12;
+    std::vector<int> site_nearby_idx_;           // the sites the landscape knows now (globe::sites_nearby)
+    double    site_retry_at_ = 0.0;              // a missing description is looked for again from then
+    int       site_missing_logged_ = -1;
+    Road      site_road_{};                      // its street
+    glm::vec3 site_center_{0.0f};                // its centre, in its chart
+    std::vector<collision::AABB> site_cols_;     // its colliders
+    std::vector<glm::vec2> site_phys_xz_;        // ... as given to the physics world (for taking them out again)
+    size_t    site_lamp0_ = 0;                   // its lanterns: lamp_lights_ from here on
+    void      init_sites();
+    void      update_sites();
+    bool      load_site(int k);
+    void      unload_site();
+    void      destroy_sites();
+    bool      site_here() const;                 // the slot's content exists where the engine is now
+    void      place_house(game::Level& lv, glm::vec3 hp);    // (rocket.cpp)
+    void      place_office();                    // (rocket.cpp) the pavilion by the launch pad
+    // Shelters: what has a roof - a box on the ground plan and the roof's height. Rain and snow
+    // do not fall inside them (fx.cpp) and nothing in them gets wet or snowed on (the shaders:
+    // scene_sheltered). shelters_: home's; site_shelters_: the loaded site's (sites.cpp).
+    struct Shelter { glm::vec2 lo{0.0f}, hi{0.0f}; float top = 0.0f; };
+    std::vector<Shelter> shelters_, site_shelters_;
+    void      shelters_near(glm::vec3 eye, float reach, std::vector<Shelter>& out, size_t max_n) const;
+    glm::vec3 office_pos_{0.0f};
+    std::vector<glm::vec3> office_lights_;       // its room lights (also in lamp_lights_): on by day too
+    std::vector<glm::vec4> home_grass_cuts_;     // home's chart: where no grass may grow beyond the home tile (min x, min z, max x, max z)
+    void      travel_to_site(int k);
+    std::vector<int> sites_by_distance(int max_n) const;
+    glm::vec4 site_uniform(glm::vec4* shape = nullptr) const;
+    void      site_labels_hud();
     std::vector<glm::vec3> lamp_lights_;   // road lantern positions (point lights)
     // Castle mesh parts (round towers, roofs, gate arch) from
     // Level::meshes, lifted to the plateau. Raster through the world
@@ -1736,6 +1781,16 @@ private:
         uint32_t cl_count = 0, cl_cmd_base = 0;
     };
     std::vector<CastleMeshGpu> castle_meshes_;
+    // The site's mesh parts (the slot: sites.cpp); what was the site's before, waiting to be
+    // freed (frames in flight may still draw or trace it); and every part to draw this frame.
+    std::vector<CastleMeshGpu> site_meshes_;
+    std::vector<std::pair<int, std::vector<CastleMeshGpu>>> site_retired_;
+    std::vector<const CastleMeshGpu*> mesh_parts_now_;
+    const std::vector<const CastleMeshGpu*>& mesh_parts_now();
+    CastleMeshGpu make_mesh_part(const game::LevelMesh& lm);
+    void destroy_mesh_parts(std::vector<CastleMeshGpu>& parts);
+    void wv_nf_invalidate();                     // (veg_stream.cpp) the near ground is baked again
+    void wv_rechart(const globe::Chart& from, const globe::Chart& to);       // (veg_stream.cpp) the streamed woods carried into another chart
     // The launch site and its rocket (vk_engine/rocket.cpp).
     struct RocketTrailPt { glm::vec3 p; float t; float alt; glm::vec3 v; };
     struct Rocket {
@@ -1895,6 +1950,19 @@ private:
     void      wv_update(glm::vec3 eye);
     void      wv_shutdown();
     void      wv_nf_poll();                      // the baked ground around the camera for the world's grass (frame start)
+    // The highways' field (highway_field.cpp): baked round the camera, uploaded with the frame.
+    void      hw_poll();
+    void      record_hw_upload(VkCommandBuffer cmd, uint32_t slot);
+    void      hw_shutdown();
+    // What stands beside a highway (highway_furniture.cpp): streamed - a stretch's objects are
+    // made when the camera comes near and freed when it has left.
+    void      hw_objects_poll();
+    void      hw_objects_destroy();
+    std::vector<std::pair<int, std::vector<CastleMeshGpu>>> hw_chunks_;      // stretch index, its parts
+    std::vector<std::pair<int, std::vector<CastleMeshGpu>>> hw_retired_;     // frames left, parts waiting to be destroyed
+    uint32_t  hw_gen_ = 0;                       // counts the changes (the ray-tracing structure is rebuilt on one)
+    glm::vec4 hw_info_{0.0f};      // window centre x, z; 1 = there is road in it; the window's side (m)
+    glm::vec4 hw_bbox_{0.0f};      // where in the window the shelf is: min x, min z, max x, max z
     struct VegLodRange { uint32_t first_vertex, vertex_count, first_index, index_count;
                          uint32_t card_start = 0xFFFFFFFFu; int card_cell = 0; };
     std::vector<VegLodRange>  veg_lod_ranges_;

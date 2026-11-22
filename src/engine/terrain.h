@@ -82,10 +82,24 @@ float raymarch_ground_relief(float x, float z, float h, float water_level);
 // raymarcher uses) through the world map - the CPU's copy of shaders/world_map.glsl
 // wm_height. For everything outside the baked home tile: walking, flying low, placing things.
 float world_ground_height(float x, float z, float water_level, int octaves);
+// The same without the highways' shelf (engine/highway.h builds its lines from this).
+float world_ground_height_natural(float x, float z, float water_level, int octaves);
+// The landscape formula's land / sea value at a place in home's chart (0 at the waterline,
+// rising inland).
+float world_continent_home(float x, float z);
+
+// The natural ground at a point of the planet (unit vector G), by the sphere's formula and
+// without any site's shaping: for choosing where a site goes.
+float world_natural_height(const glm::dvec3& G, float water_level, int octaves);
 
 // Where woods grow, 0..1 (shaders/world_map.glsl wm_forest): the rule trees beyond the home
 // tile are placed by and the far landscape is coloured by. `ny`: the ground normal's y.
 float world_forest(float x, float z, float h, float ny, float water_level);
+// The home formula's woods at home coordinates, whichever chart the engine is in (the streamed
+// woods use it as a noise for their old-growth patches).
+float world_forest_flat(float hx, float hz, float h, float ny, float water_level);
+// Metres from a place in the current chart to the nearest highway's centre line (1e9: none near).
+float world_highway_distance(float x, float z);
 // The launch site: the centre and level of its terrace (shaders/world_map.glsl wm_pad_c / wm_pad_h).
 constexpr float kLaunchSiteX = 1600.0f, kLaunchSiteZ = 830.0f, kLaunchSiteH = 36.0f;
 

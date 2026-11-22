@@ -807,6 +807,8 @@ void VulkanEngine::loop_upkeep(InputFrame& in, float frame_dt) {
         start_veg_replant();                 // placement runs in the background
     }
     wv_nf_poll();
+    hw_poll();
+    hw_objects_poll();
     if (veg_job_active_ && veg_job_.valid() &&
         veg_job_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         VegJobResult r = veg_job_.get();

@@ -330,6 +330,9 @@ struct MapCtx {
 float g_blade_rot = 0.0;
 vec3  g_blade_r   = vec3(0.5);   // that blade's hashes (colour variation)
 int   g_blade_kind = 0;          // 0 blade, 1 seed head, 2 flower
+// The march's place relative to the camera, on the ground plan (set before every map()):
+// the blade lattice is worked out from it, not from the world position - see map().
+vec2 g_rel_xz = vec2(0.0);
 float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     out_blade_hit = false;
     // Open air (raymarched terrain): one fetch of the baked heightmap
@@ -379,20 +382,31 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     }
 
     vec2 cellId;
-    const float kPeriod = 0.17;        // ~35 blades per m²
+    const float kPeriod = TILE_CELL(0.17);        // ~35 blades per m²
     vec3 lp = p;
     lp.y -= terrainY;                  // ground-relative
+    vec2 gust_sh = vec2(0.0);
     // Gusts (the wind of "Grass Scene #1" by Yusef28, shadertoy 7stSzf): the
     // space the blades stand in is bent by a travelling wave, more the higher
     // above the ground - so the blades of a patch lean together and waves
     // roll across the meadow. (Each blade's own small sway is added below.)
     {
         float gt = pc.color.z;
-        vec2  gw = sin(gt * 1.6 + p.xz * 0.30 - cos(gt * 0.45 - p.xz * 0.13));
+        vec2  gw = sin(gt * 1.6 + p.xz * TILE_W(0.30) - cos(gt * 0.45 - p.xz * TILE_W(0.13)));
         float gh = clamp(lp.y / (1.75 * clamp(pc.grass_params.w, 0.05, 3.0) * 0.36), 0.0, 1.0);
-        lp.xz -= (gw * 0.65 + vec2(0.35, 0.20)) * (pc.color.y * 0.22 * gh * gh);
+        gust_sh = (gw * 0.65 + vec2(0.35, 0.20)) * (pc.color.y * 0.22 * gh * gh);
     }
-    lp.xz = opRepeat(lp.xz, vec2(kPeriod), cellId);
+    {
+        // The blade lattice, from the camera outward: the camera's cell and its place in it
+        // come from the CPU in doubles (scene.grass_cam), the march's offset from the camera
+        // is a small number, and so is everything below. Worked out from the world position
+        // a blade - a few millimetres wide - broke into blocks wherever the coordinates were
+        // large (a float resolves 1 mm at 14 km).
+        vec2 v = scene.grass_cam.zw + g_rel_xz - gust_sh;
+        vec2 cl = floor(v / kPeriod);
+        cellId = scene.grass_cam.xy + cl;
+        lp.xz = v - cl * kPeriod - 0.5 * kPeriod;
+    }
 
     // Altitude + water gates — match terrain_raymarch.frag's
     // grassEligibility so the grass shader and the green terrain tint
@@ -460,6 +474,8 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
                        (1.0 - smoothstep(ctx.slope_max * 0.7, ctx.slope_max * 1.2, length(sg))) *
                        (1.0 - smoothstep(200.0, 245.0, max(lc.x, lc.y))) *
                        smoothstep(84.0, 92.0, distance(cw, vec2(1600.0, 830.0)));       // (the launch site's apron: world_map.glsl wm_pad_c)
+                // (a site's street and buildings: cut out in the bake's alpha - veg_stream.cpp)
+                elig *= smoothstep(0.25, 0.75, textureLod(u_normal[22], (cw - g_nf_org + 0.5) / 512.0, 0.0).a);
             }
         } else if (!g_nf_ok) {
             // (thinning out over the last 170 m, where terrain_raymarch.frag brings in its turf;
@@ -521,7 +537,7 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
             // hashes are skipped - this loop runs 9x per march step.
             float edge_k = 1.0;
             if (elig < kEligThresh + 0.55 + 0.18 * edge_soft) {
-                float en = hash12(floor(cw / 0.9)) * 0.6 + hash12(floor(cw / 2.7) + 17.0) * 0.4;
+                float en = hash12(tile_wrap(floor(cw / TILE_CELL(0.9)), TILE_N(0.9))) * 0.6 + hash12(tile_wrap(floor(cw / TILE_CELL(2.7)), TILE_N(2.7)) + 17.0) * 0.4;
                 float elig_n = elig + (en - 0.5) * 0.35 * edge_soft * elig_gate;
                 if (elig_n < kEligThresh) continue;
                 edge_k = mix(1.0, smoothstep(kEligThresh, kEligThresh + 0.55, elig_n), edge_soft);
@@ -534,7 +550,7 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
             }
             const int nb = (rad > 0) ? clamp(int(ceil(dens_n)), 1, 3) : 1;
             for (int bi = 0; bi < nb; ++bi) {
-            vec4 r = hash42(nId + vec2(31.7, 47.3) * float(bi));
+            vec4 r = hash42(tile_wrap(nId, TILE_N(0.17)) + vec2(31.7, 47.3) * float(bi));
             if (r.x > (dens_n - float(bi)) * mix(0.25, 1.0, edge_k)) continue;
             vec3 np = lp - vec3(float(dx), 0.0, float(dy)) * kPeriod;
             // Per-blade rotation + sub-cell xy offset.
@@ -616,9 +632,8 @@ void main() {
     // Reconstruct world ray from screen UV via inverse view-proj.
     vec2 uv  = gl_FragCoord.xy * scene.viewport.zw;
     vec4 ndc = vec4(uv * 2.0 - 1.0, 1.0, 1.0);
-    vec4 wp4 = pc.model * ndc;        // model = inv(view_proj)
     vec3 ro  = scene.camera_pos.xyz;
-    vec3 rd  = normalize(wp4.xyz / wp4.w - ro);
+    vec3 rd  = scene_ray(ndc.xy);          // (not from pc.model: see scene_ray - the grass came out in blocks far from the origin)
 
     // (Removed early-out on rd.y > 0. Mountains rise above eye height,
     // so an upward-pointing ray can still hit terrain on a peak — the
@@ -737,6 +752,7 @@ void main() {
         if (i + i_bias >= 16 && t > step_cap_b) break;
         vec3 p = ro + t * rd;
         bool step_blade;
+        g_rel_xz = t * rd.xz;
         float d = map(p, t, ctx, step_blade);
         // Hit threshold loosens with distance so the loop terminates on
         // sub-pixel features instead of trying to converge on a blade
@@ -818,7 +834,7 @@ void main() {
     vec4  type_p  = gs_type(type_n);
     float bh_max  = 1.7 * clamp(pc.grass_params.w, 0.05, 3.0) * 0.36 * type_p.x;
     float h_t     = min(h_above / bh_max, 1.0);
-    float clump   = hash12(floor(p.xz * 0.5)) * 0.15;   // ±15% per-clump tint shift
+    float clump   = hash12(tile_wrap(floor(p.xz / TILE_CELL(2.0)), TILE_N(2.0))) * 0.15;   // ±15% per-clump tint shift
     vec3 grassCol = mix(scene.grass_color_bottom.rgb,
                         scene.grass_color_top.rgb, h_t);
     grassCol *= 1.0 - clump;
@@ -875,7 +891,7 @@ void main() {
     // effective n_dot_l so adjacent blades on the same flat ground
     // don't all shade identically. ±0.25 around base, then half-
     // Lambert wrap so the shadow side isn't pitch-black.
-    float blade_var = hash12(floor(p.xz / 0.20)) - 0.5;  // [-0.5, 0.5]
+    float blade_var = hash12(tile_wrap(floor(p.xz / TILE_CELL(0.20)), TILE_N(0.20))) - 0.5;  // [-0.5, 0.5]
     // Blade face normal from the hit blade's rotation (the blade is a
     // flat strip with its face along local z), turned toward the viewer
     // and leaned toward the ground normal for the blade's curl. The face

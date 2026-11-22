@@ -243,7 +243,7 @@
         } else {
             woods = rm_forest(pos.xz, pos.y, nor.y, scene.water_params.y);     // (the rule the trees there are placed by)
         }
-        vec3 canopy = mix(vec3(0.028, 0.052, 0.024), vec3(0.058, 0.082, 0.034), noise2(pos.xz * 0.11));
+        vec3 canopy = mix(vec3(0.028, 0.052, 0.024), vec3(0.058, 0.082, 0.034), tile_noise2(pos.xz, 0.11, vec2(0.0)));
         mate = mix(mate, canopy, woods * smoothstep(1200.0, 1700.0, t));
     }
     // The sea's shore (beyond home's lakes): a beach of sand from just under the high-water
@@ -253,20 +253,20 @@
         float sea_k = smoothstep(1350.0, 1750.0, rm_home_dist(pos.xz));
         if (sea_k > 0.0 && scene.water_params.x > 0.5) {
             float wl = scene.water_params.y;
-            float edge = wl + 0.5 + 1.0 * noise2(pos.xz * 0.045) + 0.35 * noise2(pos.xz * 0.31);
+            float edge = wl + 0.5 + 1.0 * tile_noise2(pos.xz, 0.045, vec2(0.0)) + 0.35 * tile_noise2(pos.xz, 0.31, vec2(0.0));
             float sand = sea_k * (1.0 - smoothstep(edge - 0.5, edge + 0.6, pos.y));
             // (a little lighter than the lake shore's sand, no more: at 0.56 the beach burnt out
             // in the sun and bloomed into a glowing patch)
-            vec3 sandc = vec3(0.29, 0.245, 0.17) * (0.90 + 0.20 * noise2(pos.xz * 0.35)) * (0.94 + 0.12 * noise2(pos.xz * 3.1)) *
+            vec3 sandc = vec3(0.29, 0.245, 0.17) * (0.90 + 0.20 * tile_noise2(pos.xz, 0.35, vec2(0.0))) * (0.94 + 0.12 * tile_noise2(pos.xz, 3.1, vec2(0.0))) *
                          mix(1.0, 0.72, smoothstep(wl + 0.25, wl - 0.15, pos.y));          // wet at the water's edge
             mate = mix(mate, sandc, sand);
             // Above the beach: grass. Out here there are no blades and no meadow mask, and the
             // soil under them is a grey gravel - from eye height the whole country was that.
             float turf = 0.0;   // (below, with the edge of the home tile's grass)
-            float tn = noise2(pos.xz * 0.031) * 0.6 + noise2(pos.xz * 0.21 + 4.0) * 0.4;
+            float tn = tile_noise2(pos.xz, 0.031, vec2(0.0)) * 0.6 + tile_noise2(pos.xz, 0.21, vec2(4.0)) * 0.4;
             vec3 turfc = mix(vec3(0.150, 0.118, 0.066), vec3(0.070, 0.112, 0.036), smoothstep(0.30, 0.52, tn)) *
-                         (1.0 + 0.40 * (noise2(pos.xz * 1.9) - 0.5) * (1.0 - smoothstep(120.0, 400.0, t))) *
-                         (1.0 + 0.16 * (noise2(pos.xz * 11.0) - 0.5) * (1.0 - smoothstep(18.0, 60.0, t)));   // (grain only while a pixel resolves it: finer than a pixel it turned into ruled lines)
+                         (1.0 + 0.40 * (tile_noise2(pos.xz, 1.9, vec2(0.0)) - 0.5) * (1.0 - smoothstep(120.0, 400.0, t))) *
+                         (1.0 + 0.16 * (tile_noise2(pos.xz, 11.0, vec2(0.0)) - 0.5) * (1.0 - smoothstep(18.0, 60.0, t)));   // (grain only while a pixel resolves it: finer than a pixel it turned into ruled lines)
             mate = mix(mate, turfc, turf * 0.85);
         }
     }
@@ -283,13 +283,13 @@
             // The patches of green and brown: value noise read straight has edges along the world's
             // grid (ruled lines across the meadow, seen from a little way up). Read on a bent copy
             // of the ground, in three turned layers, it has none.
-            vec2 tp = pos.xz + (vec2(noise2(pos.xz * 0.0091), noise2(pos.xz * 0.0091 + 23.0)) - 0.5) * 70.0;
+            vec2 tp = pos.xz + (vec2(tile_noise2(pos.xz, 0.0091, vec2(0.0)), tile_noise2(pos.xz, 0.0091, vec2(23.0))) - 0.5) * 70.0;
             float tn = noise2(mat2(0.80, -0.60, 0.60, 0.80) * tp * 0.027) * 0.45 +
                        noise2(mat2(0.28, 0.96, -0.96, 0.28) * tp * 0.071 + 4.0) * 0.33 +
                        noise2(mat2(-0.71, 0.71, -0.71, -0.71) * tp * 0.23 + 9.0) * 0.22;
             vec3 turfc = mix(vec3(0.150, 0.118, 0.066), vec3(0.070, 0.112, 0.036), smoothstep(0.30, 0.52, tn)) *
-                         (1.0 + 0.40 * (noise2(pos.xz * 1.9) - 0.5) * (1.0 - smoothstep(120.0, 400.0, t))) *
-                         (1.0 + 0.16 * (noise2(pos.xz * 11.0) - 0.5) * (1.0 - smoothstep(18.0, 60.0, t)));   // (grain only while a pixel resolves it: finer than a pixel it turned into ruled lines)
+                         (1.0 + 0.40 * (tile_noise2(pos.xz, 1.9, vec2(0.0)) - 0.5) * (1.0 - smoothstep(120.0, 400.0, t))) *
+                         (1.0 + 0.16 * (tile_noise2(pos.xz, 11.0, vec2(0.0)) - 0.5) * (1.0 - smoothstep(18.0, 60.0, t)));   // (grain only while a pixel resolves it: finer than a pixel it turned into ruled lines)
             mate = mix(mate, turfc, turf * 0.85);
         }
     }
@@ -340,9 +340,9 @@
                          sin(dot(pos.xz, vec2(cos(id * 40.0), sin(id * 40.0))) * 260.0 + id * 9.0);
             if (peb0_sz > 3.5) {
                 // Big stones: weathered, moss and lichen on top.
-                float ms = noise2(pos.xz * 11.0 + id * 20.0) * 0.6 + noise2(pos.xz * 37.0) * 0.4;
+                float ms = noise2(pos.xz * 11.0 + id * 20.0) * 0.6 + tile_noise2(pos.xz, 37.0, vec2(0.0)) * 0.4;
                 pc0 = mix(pc0, gl * vec3(0.55, 1.05, 0.40), smoothstep(0.50, 0.72, ms) * smoothstep(0.35, 0.8, k) * step(0.35, fract(id * 2.7)));
-                pc0 = mix(pc0, gl * vec3(1.9, 1.85, 1.5), smoothstep(0.80, 0.86, noise2(pos.xz * 55.0 + 3.0)) * 0.7);   // lichen spots
+                pc0 = mix(pc0, gl * vec3(1.9, 1.85, 1.5), smoothstep(0.80, 0.86, tile_noise2(pos.xz, 55.0, vec2(3.0))) * 0.7);   // lichen spots
             }
             pc0 *= mix(0.85, 1.15, noise2(pos.xz * 140.0 + id * 50.0));                    // speckle
             pc0 *= mix(0.40, 1.0, smoothstep(0.0, 0.22, k));                               // sits in the soil
@@ -360,30 +360,30 @@
         {
             vec3 soil = textureLod(u_albedo[9], pos.xz * 0.55, rm_road_lod).rgb /
                         max(textureLod(u_albedo[9], pos.xz * 0.55, 12.0).rgb, vec3(0.03));
-            float vn = noise2(pos.xz * 0.9) * 0.6 + noise2(pos.xz * 3.7) * 0.4;
+            float vn = tile_noise2(pos.xz, 0.9, vec2(0.0)) * 0.6 + tile_noise2(pos.xz, 3.7, vec2(0.0)) * 0.4;
             vec3 verge = vec3(0.105, 0.078, 0.052) * clamp(soil, vec3(0.45), vec3(1.8)) * mix(0.72, 1.25, vn);
             mate = mix(mate, verge, rm_road.y);
         }
         // Stone-to-stone colour variation: patches of lighter / darker and
         // slightly warmer / cooler stone, plus some sun-bleached wear.
         vec3 cob = textureLod(u_albedo[kRmMatRoad], rm_road_uv, rm_road_lod).rgb * kRmAlbedoScale;
-        float cv1 = noise2(pos.xz * 6.5 + 9.1) * 0.6 + noise2(pos.xz * 2.1 + 1.7) * 0.4, cv2 = noise2(pos.xz * 0.55 + 3.3);
+        float cv1 = tile_noise2(pos.xz, 6.5, vec2(9.1)) * 0.6 + tile_noise2(pos.xz, 2.1, vec2(1.7)) * 0.4, cv2 = tile_noise2(pos.xz, 0.55, vec2(3.3));
         cob *= mix(0.74, 1.22, cv1) * mix(vec3(1.06, 1.0, 0.92), vec3(0.94, 0.98, 1.05), cv2);
         mate = mix(mate, cob, rm_road.x);
         // Sand lying on it: pale and fine-grained, darker and damper where it is thin; a print's
         // floor is packed (darker) and the sun leaves part of it in shade.
         if (sand_cov > 0.001) {
-            float sv = noise2(pos.xz * 3.1 + 40.0) * 0.6 + noise2(pos.xz * 23.0) * 0.4;
+            float sv = tile_noise2(pos.xz, 3.1, vec2(40.0)) * 0.6 + tile_noise2(pos.xz, 23.0, vec2(0.0)) * 0.4;
             vec3 sand = vec3(0.265, 0.215, 0.145) * mix(0.84, 1.12, sv) * mix(0.80, 1.0, sand_cov);
             // The grains themselves: pale quartz and dark mineral specks, coarser and darker in
             // the ripples' troughs (where the heavy grains collect), finer and paler on the crests.
             {
                 float gk1 = 1.0 - smoothstep(1.5, 7.0, t), gk2 = 1.0 - smoothstep(0.6, 3.0, t);
-                float g1 = noise2(pos.xz * 190.0 + 3.0), g2 = noise2(pos.xz * 610.0 + 11.0);
+                float g1 = tile_noise2(pos.xz, 190.0, vec2(3.0)), g2 = tile_noise2(pos.xz, 610.0, vec2(11.0));
                 sand *= 1.0 + (g1 - 0.5) * 0.30 * gk1 + (g2 - 0.5) * 0.34 * gk2;
-                float dark = smoothstep(0.74, 0.80, noise2(pos.xz * 260.0 + 71.0)) * gk1 * mix(1.0, 0.45, sand_rip);
+                float dark = smoothstep(0.74, 0.80, tile_noise2(pos.xz, 260.0, vec2(71.0))) * gk1 * mix(1.0, 0.45, sand_rip);
                 sand = mix(sand, sand * vec3(0.42, 0.40, 0.40), dark * 0.75);
-                float pale = smoothstep(0.80, 0.86, noise2(pos.xz * 330.0 + 19.0)) * gk1;
+                float pale = smoothstep(0.80, 0.86, tile_noise2(pos.xz, 330.0, vec2(19.0))) * gk1;
                 sand = mix(sand, sand * 1.35 + 0.02, pale * 0.6);
                 sand *= mix(0.86, 1.07, sand_rip);
             }
@@ -405,6 +405,20 @@
         }
     }
 
+    // A highway's surface (hw_* from terrain_rm_main_ground.glsl; rm_hw_asphalt).
+    if (hw_pave + hw_verge > 0.001) {
+        vec3 grav = textureLod(u_albedo[kRmMatGravel], pos.xz / TILE_CELL(1.7), hw_lod + 0.6).rgb * 0.50;
+        grav *= mix(0.78, 1.12, tile_noise2(pos.xz, 0.6, vec2(2.0))) * vec3(1.0, 0.97, 0.92);
+        // (the land's own cover comes back through it toward its outer edge)
+        mate = mix(mate, grav, hw_verge * (1.0 - 0.55 * smoothstep(7.0, 8.6, abs(hw_d)) * tile_noise2(pos.xz, 1.9, vec2(0.0))));
+        if (hw_pave > 0.001) {
+            vec3 tex = textureLod(u_albedo[kRmMatAsphalt], hw_uv, hw_lod).rgb * 0.50;
+            float gl = 0.0;
+            vec3 asph = rm_hw_asphalt(pos.xz, hw_d, hw_s, t, tex, hw_hgt, gl);
+            mate = mix(mate, asph, hw_pave);
+            hw_gloss = gl * hw_pave;
+        }
+    }
     // Winter: snow lies on the road in patches (thicker toward the verges),
     // and feet leave prints in the snow - pressed in, with depth: the print
     // is looked up where the line of sight meets its floor (parallax), its

@@ -1,0 +1,4 @@
+# The planet's hand-made places. One line per site (format: src/engine/site_store.h):
+#   <id> <east_km> <south_km> | auto -   <flat_m> <slope_m> <rise_m> <clearing_m>   <name>
+# "auto": the engine picks the first open sea on a fixed walk out from home (sites.cpp).
+seawatch 563.624 -205.739 300 1500 14 330 Seawatch

@@ -28,7 +28,7 @@
     {
         vec3 n_l = calcNormal(pos, t);
         float up_l = n_l.y, wl = scene.water_params.y;
-        float v_l = noise2(pos.xz * 0.06) * 0.6 + noise2(pos.xz * 0.9) * 0.4;
+        float v_l = tile_noise2(pos.xz, 0.06, vec2(0.0)) * 0.6 + tile_noise2(pos.xz, 0.9, vec2(0.0)) * 0.4;
         vec3 grass_l = mix(vec3(0.060, 0.105, 0.030), vec3(0.105, 0.135, 0.045), v_l);
         vec3 rock_l  = vec3(0.165, 0.155, 0.140) * mix(0.8, 1.15, v_l);
         vec3 alb = mix(rock_l, grass_l, smoothstep(0.52, 0.74, up_l));
@@ -37,7 +37,7 @@
         vec2 ruv_l, rdir_l;
         vec2 road_l = g_far_chart ? vec2(0.0) : roadWeights(pos.xz, ruv_l, rdir_l);
         alb = mix(alb, vec3(0.115, 0.095, 0.070), road_l.y);
-        alb = mix(alb, vec3(0.20, 0.20, 0.19) * mix(0.85, 1.1, noise2(pos.xz * 5.0)), road_l.x);
+        alb = mix(alb, vec3(0.20, 0.20, 0.19) * mix(0.85, 1.1, tile_noise2(pos.xz, 5.0, vec2(0.0))), road_l.x);
         float dif_l = max(dot(n_l, scene.sun_direction.xyz), 0.0) * sun_horizon_lit(u_sun_horizon, pos);
         vec3 lin_l = dif_l * scene.sun_color.rgb * scene.sun_color.a + (0.45 + 0.35 * up_l) * scene.sky_color.rgb * 0.75;
         lite_out(pos, alb * lin_l);
@@ -47,7 +47,7 @@
     // Castle road: cobble normal map in road space, before any lighting.
     vec2 rm_road_uv, rm_road_dir;
     vec2 rm_road = roadWeights(pos.xz, rm_road_uv, rm_road_dir);
-    if (rm_road.x + rm_road.y > 0.001 && rd.y < -0.0015) {
+    if (rm_road.x + rm_road.y > 0.001 && rd.y < -0.0015 && !rm_far_chart()) {      // (home only: a site's road lies on formula ground)
         // The march hit the procedural surface, which keeps decimetre FBM
         // lumps on top of the carved road. Slide the hit along the ray onto
         // the smooth baked heightmap so the paving lies flat.
@@ -123,7 +123,9 @@
 #endif
     float peb0_h = g_pebN_h, peb0_id = g_pebN_id, peb0_k = g_pebN_k, peb0_sz = g_pebN_sz;
     g_rm_detail_mul = 1.0;
-    if (rm_road.x > 0.001) {
+    if (rm_road.x > 0.001 && rm_far_chart()) {
+        nor = normalize(mix(nor, vec3(0.0, 1.0, 0.0), rm_road.x));       // (a site's street: on its level ground)
+    } else if (rm_road.x > 0.001) {
         // The paved surface is the smooth carved heightmap; the procedural
         // FBM lumps left over on top of it only read as noise on cobbles.
         const float e = 0.6;
@@ -292,7 +294,7 @@
             // Where it thins out it lies in the joints first and the stones' tops stand clear of
             // it: the edge follows the cobbles, grain by grain, instead of fading over them.
             float cob_h = rm_road.x > 0.001 ? textureLod(u_normal[kRmMatRoad], rm_road_uv, rm_road_lod).a * rm_road.x : 0.0;
-            float edge_n = (noise2(pos.xz * 38.0 + 3.0) - 0.5) * 0.05 * (1.0 - smoothstep(4.0, 14.0, t));
+            float edge_n = (tile_noise2(pos.xz, 38.0, vec2(3.0)) - 0.5) * 0.05 * (1.0 - smoothstep(4.0, 14.0, t));
             sand_cov = smoothstep(0.0, mix(0.05, 0.30, smoothstep(6.0, 25.0, t)), sp - 0.015 - 0.20 * cob_h * (1.0 - smoothstep(10.0, 30.0, t)) + edge_n);
             vec3 n_s = nor;
             if (t < 40.0) {
@@ -306,9 +308,9 @@
                 }
             }
             // the fine wind ripples (their slope from two more samples), where the sand has some depth
-            float rip_f = (1.0 - smoothstep(6.0, 18.0, t)) * smoothstep(0.25, 0.7, sp) * smoothstep(0.30, 0.55, noise2(pos.xz * 0.9 + 31.0));
+            float rip_f = (1.0 - smoothstep(6.0, 18.0, t)) * smoothstep(0.25, 0.7, sp) * smoothstep(0.30, 0.55, tile_noise2(pos.xz, 0.9, vec2(31.0)));
             if (rip_f > 0.01) {
-                float wn = noise2(pos.xz * 0.6 + 3.0);
+                float wn = tile_noise2(pos.xz, 0.6, vec2(3.0));
                 const float re = 0.008;
                 sand_rip = sand_fine_ripple(pos.xz, wn);
                 float rx = sand_fine_ripple(pos.xz + vec2(re, 0.0), wn), rz = sand_fine_ripple(pos.xz + vec2(0.0, re), wn);
@@ -321,6 +323,33 @@
                                 + vec3(noise2(gq * 3.7 + 5.0) - 0.5, 0.0, noise2(gq * 3.7 + 29.0) - 0.5) * 0.22 * (1.0 - smoothstep(1.2, 6.0, t))
                                 + vec3(noise2(gq * 11.0 + 9.0) - 0.5, 0.0, noise2(gq * 11.0 + 41.0) - 0.5) * 0.18 * (1.0 - smoothstep(0.5, 2.5, t)));
             nor = normalize(mix(nor, n_s, sand_cov));
+        }
+    }
+    // A highway (engine/highway.h): asphalt to about 5.5 m from the centre line, gravel under
+    // its edge and out to 8 m. The surface's relief comes from the scans' normal maps.
+    float hw_pave = 0.0, hw_verge = 0.0, hw_d = 0.0, hw_s = 0.0, hw_lod = 0.0, hw_hgt = 0.5, hw_gloss = 0.0;
+    vec2  hw_uv = vec2(0.0);
+    if (rm_hw_in(pos.xz)) {
+        hw_d = rm_hw_dh(pos.xz).x;
+        float ad = abs(hw_d), aa = max(t * 0.002, 0.015);
+        // The asphalt's edge is not a ruled line: it wanders a hand's width and has broken away in places.
+        float edge = 5.5 + (tile_noise2(pos.xz, 0.45, vec2(0.0)) - 0.5) * 0.30 + (tile_noise2(pos.xz, 3.1, vec2(0.0)) - 0.5) * 0.12 * (1.0 - smoothstep(30.0, 80.0, t))
+                         - 0.35 * smoothstep(0.72, 0.9, tile_noise2(pos.xz, 0.17, vec2(5.0)));
+        hw_pave = 1.0 - smoothstep(edge - aa, edge + aa, ad);
+        hw_verge = 1.0 - smoothstep(6.8, 8.6, ad + (tile_noise2(pos.xz, 0.9, vec2(0.0)) - 0.5) * 1.6);
+        if (hw_pave + hw_verge > 0.001) {
+            hw_s = rm_hw_s(pos.xz);
+            float fp = t * 2.0 / max(scene.viewport.y, 1.0);
+            hw_uv = pos.xz / TILE_CELL(2.6);
+            hw_lod = log2(max(fp / TILE_CELL(2.6) * float(textureSize(u_albedo[kRmMatAsphalt], 0).x), 1.0));
+            vec4 na = textureLod(u_normal[kRmMatAsphalt], hw_uv, hw_lod);
+            vec4 ng = textureLod(u_normal[kRmMatGravel], pos.xz / TILE_CELL(1.7), hw_lod + 0.6);
+            vec3 rn = mix(ng.xyz, na.xyz, hw_pave) * 2.0 - 1.0;
+            hw_hgt = mix(ng.a, na.a, hw_pave);
+            // (the ground plan is the texture's plane: x east, y north)
+            float k = mix(1.5, 1.0, hw_pave);
+            vec3 base = normalize(mix(nor, vec3(0.0, 1.0, 0.0), 0.85 * hw_pave));
+            nor = normalize(mix(nor, normalize(base + vec3(rn.x, 0.0, -rn.y) * k), max(hw_pave, hw_verge)));
         }
     }
     float snow_cov = 0.0;

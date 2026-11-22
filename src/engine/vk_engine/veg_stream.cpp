@@ -3,8 +3,10 @@
 // The home tile (2048 m) keeps its own, hand-tuned planting (world_props.cpp
 // place_vegetation, the paint map). Everything beyond it is planted by rule:
 //
-//   * The world is cut into 128 m cells. A cell's plants are a pure function of
-//     its coordinates: a jittered grid of candidate spots, each with a random
+//   * The world is cut into 128 m cells - in HOME coordinates (the planet unrolled round
+//     home: globe::home_az), whichever chart the engine is in, so that a cell is a piece of
+//     the planet and its trees stand where they stand from every chart (key_to_chart below).
+//     A cell's plants are a pure function of its coordinates: a jittered grid of candidate spots, each with a random
 //     stream of its own, kept where the world's forest rule (world_forest: the
 //     same function the far landscape is coloured by) says woods grow. Coming
 //     back to a place finds the same trees.
@@ -22,6 +24,7 @@
 // thread per slot per frame in veg_cull.comp (an empty slot returns at once).
 #include "engine/vk_engine/internal.h"
 #include "engine/vk_initializers.h"
+#include "engine/highway.h"
 #include <cstring>
 
 #include <algorithm>
@@ -138,7 +141,40 @@ void VulkanEngine::wv_insert_pool() {
 // nf_setup checks it: scene.globe_info.z).
 bool VulkanEngine::wv_nf_ok() const { return wv_ && wv_->nf_valid && wv_->nf_chart == &globe::current(); }
 
+// The engine has changed chart (globe_enter): the same trees stand in the same places of the
+// planet, at other coordinates. The cells that are loaded are carried over - each as a
+// parallelogram, like generate_cell lays it out - and everything live is put back from them
+// (wv_reset); what the generators had under way is dropped (it was made half in each chart).
+void VulkanEngine::wv_rechart(const globe::Chart& from, const globe::Chart& to) {
+    if (!wv_) return;
+    WvState& S = *wv_;
+    {
+        std::lock_guard<std::mutex> lk(S.mu);
+        S.jobs.clear();
+        S.done.clear();
+    }
+    auto conv = [&](const glm::dvec2& p) { return globe::to_chart(to, globe::to_planet(from, p.x, p.y)); };
+    for (auto& kv : S.cells) {
+        WvState::Cell& c = kv.second;
+        c.requested = false;
+        if (!c.data || c.data->items.empty()) continue;
+        CellData& D = *c.data;
+        const glm::dvec2 o(double(D.items[0].pos_scale.x), double(D.items[0].pos_scale.z));
+        const glm::dvec2 P0 = conv(o), ax = (conv(o + glm::dvec2(64.0, 0.0)) - P0) / 64.0, az = (conv(o + glm::dvec2(0.0, 64.0)) - P0) / 64.0;
+        for (size_t i = 0; i < D.items.size(); ++i) {
+            VegInstance& vi = D.items[i];
+            const glm::dvec2 dl(double(vi.pos_scale.x) - o.x, double(vi.pos_scale.z) - o.y);
+            const glm::dvec2 q = P0 + ax * dl.x + az * dl.y;
+            const glm::vec3 shift(float(q.x) - vi.pos_scale.x, 0.0f, float(q.y) - vi.pos_scale.z);
+            vi.pos_scale.x = float(q.x); vi.pos_scale.z = float(q.y);
+            if (i < D.cols.size()) { D.cols[i].min += shift; D.cols[i].max += shift; }
+        }
+    }
+    wv_reset();
+}
+
 void VulkanEngine::wv_reset() {
+
     if (!wv_) return;
     WvState& S = *wv_;
     for (auto& kv : S.cells) { kv.second.slots.clear(); kv.second.level = kLevels; kv.second.cols_live = false; }
@@ -151,6 +187,7 @@ void VulkanEngine::wv_reset() {
 }
 
 void VulkanEngine::wv_shutdown() {
+    hw_shutdown();
     if (!wv_) return;
     {
         std::lock_guard<std::mutex> lk(wv_->mu);
@@ -168,9 +205,34 @@ void VulkanEngine::wv_shutdown() {
 namespace {
 
 // One cell's plants. Pure: depends on the cell and the world formula only.
+// A point given in home coordinates, in chart C's.
+glm::dvec2 key_to_chart(const globe::Chart& C, const glm::dvec2& k) {
+    if (C.home) return k;
+    static const globe::Chart home;
+    return globe::to_chart(C, globe::to_planet(home, k.x, k.y));
+}
+glm::dvec2 chart_to_key(const globe::Chart& C, const glm::dvec2& p) {
+    return C.home ? p : globe::home_az(globe::to_planet(C, p.x, p.y));
+}
+
 std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState& S) {
     auto out = std::make_shared<CellData>();
+    // (x0, z0, and lx / lz below: home coordinates - what the cell is cut out of)
     const float x0 = float(key.x) * kCell, z0 = float(key.z) * kCell;
+    // Where the cell lies in the chart the engine is in: its corner and its two edges (the cell
+    // is 128 m: taking it as a parallelogram is exact to a millimetre). At home: itself.
+    const uint32_t serial = globe::chart_serial();
+    const globe::Chart C = globe::current();
+    const glm::dvec2 k0(double(key.x) * double(kCell), double(key.z) * double(kCell));
+    const glm::dvec2 c0d = key_to_chart(C, k0);
+    const glm::dvec2 exd = C.home ? glm::dvec2(1.0, 0.0) : (key_to_chart(C, k0 + glm::dvec2(double(kCell), 0.0)) - c0d) / double(kCell);
+    const glm::dvec2 ezd = C.home ? glm::dvec2(0.0, 1.0) : (key_to_chart(C, k0 + glm::dvec2(0.0, double(kCell))) - c0d) / double(kCell);
+    const glm::vec2 c0(c0d), ex(exd), ez(ezd);
+    auto cx_of = [&](float lx, float lz) { return c0.x + ex.x * lx + ez.x * lz; };
+    auto cz_of = [&](float lx, float lz) { return c0.y + ex.y * lx + ez.y * lz; };
+    // Far round the planet the home coordinates stretch (a cell covers less ground than
+    // 128 x 128 m): fewer of its candidates are kept, by the same measure.
+    const float area = std::clamp(std::abs(ex.x * ez.y - ex.y * ez.x), 0.05f, 1.0f);
     // Wholly inside the home tile's own planting: nothing.
     if (x0 >= -kHomeHalf && x0 + kCell <= kHomeHalf && z0 >= -kHomeHalf && z0 + kCell <= kHomeHalf) return out;
     const float wl = S.water_level;
@@ -182,7 +244,7 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
     float hmin = 1e9f, hmax = -1e9f;
     for (int j = 0; j < G; ++j)
         for (int i = 0; i < G; ++i) {
-            const float h = world_ground_height(x0 + float(i) * gs, z0 + float(j) * gs, wl, S.octaves);
+            const float h = world_ground_height(cx_of(float(i) * gs, float(j) * gs), cz_of(float(i) * gs, float(j) * gs), wl, S.octaves);
             hg[j * G + i] = h;
             hmin = std::min(hmin, h); hmax = std::max(hmax, h);
         }
@@ -215,20 +277,21 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
             auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
             // (jitter kept off the cell's edges: neighbours never stand in each other's trunk)
             const float lx = (float(i) + 0.14f + 0.72f * u()) * ts, lz = (float(j) + 0.14f + 0.72f * u()) * ts;
-            const float x = x0 + lx, z = z0 + lz;
+            const float x = cx_of(lx, lz), z = cz_of(lx, lz);          // (in the chart)
             const float pick = u(), kind = u(), size = u(), oldp = u(), rot = u(), phase = u(), which = u(), rank = u();
-            if (in_home(x, z)) continue;
+            if (in_home(x0 + lx, z0 + lz)) continue;
+            if (world_highway_distance(x, z) < 12.0f) continue;              // (nor a lone tree in the road)
             const float hc = h_at(lx, lz);
             if (hc < wl + 2.0f) continue;
             const float f = world_forest(x, z, hc, ny_at(lx, lz), wl);
             // Closed forest keeps nearly every spot; thin woods few; a rare lone tree in open country.
             const float dens = f * f * 0.96f + ((hc < wl + 46.0f && ny_at(lx, lz) > 0.8f) ? 0.004f : 0.0f);
-            if (pick > dens * S.tree_density) continue;
+            if (pick > dens * S.tree_density * area) continue;
             const float h = world_ground_height(x, z, wl, S.octaves);
             if (h < wl + 2.0f) continue;
             const bool pine = kind < std::clamp((h - 28.0f) / 30.0f, 0.15f, 0.95f);
             // Old-growth stands: patches a few hundred metres across where the veterans stand.
-            const float og = world_forest(x * 0.37f + 5100.0f, z * 0.37f - 3300.0f, wl + 20.0f, 1.0f, wl);
+            const float og = world_forest_flat((x0 + lx) * 0.37f + 5100.0f, (z0 + lz) * 0.37f - 3300.0f, wl + 20.0f, 1.0f, wl);
             const auto& oldp_pool = pine ? S.old_pines : S.old_broads;
             const bool old_tree = og > 0.75f && f > 0.6f && !oldp_pool.empty() && oldp < 0.55f;
             const auto& pool = old_tree ? oldp_pool : (pine ? S.pines : S.broads);
@@ -258,16 +321,17 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
                 uint32_t rs = hash3(uint32_t(key.x) + 0x51EDu, uint32_t(key.z), uint32_t(j * kBushGrid + i));
                 auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
                 const float lx = (float(i) + u()) * bs, lz = (float(j) + u()) * bs;
-                const float x = x0 + lx, z = z0 + lz;
+                const float x = cx_of(lx, lz), z = cz_of(lx, lz);
                 const float pick = u(), size = u(), rot = u(), phase = u(), which = u();
-                if (in_home(x, z)) continue;
+                if (in_home(x0 + lx, z0 + lz)) continue;
+                if (world_highway_distance(x, z) < 11.0f) continue;          // (nothing grows on a highway or its verge)
                 const float hc = h_at(lx, lz);
                 if (hc < wl + 1.2f) continue;
                 const float ny = ny_at(lx, lz);
                 if (ny < 0.75f) continue;
                 const float f = world_forest(x, z, hc, ny, wl);
                 const float dens = std::clamp(f * 0.45f + (1.0f - std::abs(f - 0.4f) * 3.0f) * 0.5f, 0.0f, 1.0f) * 0.42f * (f > 0.02f ? 1.0f : 0.0f);
-                if (pick > dens * S.bush_density) continue;
+                if (pick > dens * S.bush_density * area) continue;
                 const float h = world_ground_height(x, z, wl, S.octaves);
                 if (h < wl + 1.0f) continue;
                 const int ai = S.bushes[size_t(which * float(S.bushes.size())) % S.bushes.size()];
@@ -286,9 +350,10 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
                 uint32_t rs = hash3(uint32_t(key.x) + 0xB1FEu, uint32_t(key.z), uint32_t(j * kRiverGrid + i));
                 auto u = [&rs]() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return float(rs >> 8) / 16777216.0f; };
                 const float lx = (float(i) + u()) * rs_cell, lz = (float(j) + u()) * rs_cell;
-                const float x = x0 + lx, z = z0 + lz;
+                const float x = cx_of(lx, lz), z = cz_of(lx, lz);
                 const float pick = u(), size = u(), rot = u(), phase = u(), which = u();
-                if (in_home(x, z)) continue;
+                if (in_home(x0 + lx, z0 + lz)) continue;
+                if (world_highway_distance(x, z) < 11.0f) continue;          // (nothing grows on a highway or its verge)
                 if (world_river_distance(x, z) > 40.0f) continue;
                 const float h = world_ground_height(x, z, wl, S.octaves);
                 if (pick > river_shrub_density(x, z, h, ny_at(lx, lz), wl) * S.bush_density * 0.55f) continue;
@@ -336,6 +401,8 @@ void VulkanEngine::record_nf_upload(VkCommandBuffer cmd, uint32_t slot) {
     vkCmdCopyBufferToImage(cmd, S.nf_stage[slot], S.nf_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &reg);
     vkinit::transition_image(cmd, S.nf_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
+
+void VulkanEngine::wv_nf_invalidate() { if (wv_) wv_->nf_valid = false; }
 
 void VulkanEngine::wv_nf_poll() {
     if (!wv_ || !scene_desc_set_) return;
@@ -390,7 +457,24 @@ void VulkanEngine::wv_nf_poll() {
     S.nf_job_chart = &globe::current();
     S.nf_active = true;
     const float wl = S.water_level;
-    S.nf_job = std::async(std::launch::async, [c, wl]() {
+    // At a site (sites.cpp): no grass on its street nor inside what stands there - the bake's
+    // alpha carries that (grass_raymarch.frag nf_grass; 255 = grass may grow).
+    std::vector<glm::vec4> cut_boxes;          // min x, min z, max x, max z
+    Road cut_road;
+    if (site_here() && glm::distance(c, glm::vec2(site_center_.x, site_center_.z)) < 900.0f) {
+        cut_road = site_road_;
+        for (const auto& a : site_cols_) {
+            if (a.max.x - a.min.x < 0.9f && a.max.z - a.min.z < 0.9f) continue;       // (posts, gravestones: grass stands round them)
+            cut_boxes.push_back(glm::vec4(a.min.x - 0.35f, a.min.z - 0.35f, a.max.x + 0.35f, a.max.z + 0.35f));
+        }
+    }
+    // At home: what was built beyond the home tile (the pavilion by the launch pad).
+    if (globe::current().home)
+        for (const glm::vec4& b : home_grass_cuts_)
+            if (b.z > c.x - 300.0f && b.x < c.x + 300.0f && b.w > c.y - 300.0f && b.y < c.y + 300.0f) cut_boxes.push_back(b);
+    const globe::Ring hw_rg = globe::ring_now();
+    const bool hw_cut = (globe::current().home || hw_rg.on) && highway::ready();
+    S.nf_job = std::async(std::launch::async, [c, wl, cut_boxes, cut_road, hw_cut, hw_rg]() {
         std::vector<unsigned char> px(size_t(N) * N * 4, 255);
         const float ox = c.x - 256.0f, oz = c.y - 256.0f;
         const unsigned nt = std::clamp(std::thread::hardware_concurrency() / 3u, 1u, 6u);
@@ -404,6 +488,23 @@ void VulkanEngine::wv_nf_poll() {
                         const uint32_t v = uint32_t(std::clamp(h + 64.0f, 0.0f, 255.99f) * 65536.0f);
                         unsigned char* p = &px[(size_t(j) * N + size_t(i)) * 4];
                         p[0] = (unsigned char)(v >> 16); p[1] = (unsigned char)(v >> 8); p[2] = (unsigned char)v;
+                        float hwd = 1e9f;
+                        if (hw_cut) {
+                            const glm::dvec2 hh = hw_rg.on ? hw_rg.to_home(glm::dvec2(double(ox + float(i)), double(oz + float(j)))) : glm::dvec2(double(ox + float(i)), double(oz + float(j)));
+                            hwd = highway::distance(float(hh.x), float(hh.y));
+                        }
+                        if (!cut_road.empty() || !cut_boxes.empty() || hwd < 12.0f) {
+                            const float x = ox + float(i), z = oz + float(j);
+                            float keep = glm::clamp((hwd - highway::kVerge + 0.6f) / 1.4f, 0.0f, 1.0f);       // (a highway: none on it or its verge)
+                            for (const glm::vec4& b : cut_boxes)
+                                if (x >= b.x && x <= b.z && z >= b.y && z <= b.w) { keep = 0.0f; break; }
+                            if (keep > 0.0f && !cut_road.empty() && x > cut_road.bb_min.x && x < cut_road.bb_max.x &&
+                                z > cut_road.bb_min.y && z < cut_road.bb_max.y) {
+                                const float d = cut_road.distance(x, z);
+                                keep = glm::clamp((d - cut_road.half_width - 0.2f) / 1.4f, 0.0f, 1.0f);
+                            }
+                            p[3] = (unsigned char)(keep * 255.0f + 0.5f);
+                        }
                     }
             });
         for (auto& x : th) x.join();
@@ -447,7 +548,9 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
                         k = W.jobs.back();
                         W.jobs.pop_back();
                     }
+                    const uint32_t serial0 = globe::chart_serial();
                     auto d = generate_cell(k, W);
+                    if (serial0 != globe::chart_serial()) continue;        // (made while the engine changed chart: half in each - not used)
                     std::lock_guard<std::mutex> lk(W.mu);
                     W.done.emplace_back(k, std::move(d));
                 }
@@ -549,8 +652,21 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
         }
     };
 
-    const int ccx = int(std::floor(eye.x / kCell)), ccz = int(std::floor(eye.z / kCell));
-    const int rc = int(std::ceil(far_m / kCell)) + 1;
+    // The cells are cut out of home coordinates: the eye there, and how a step in those
+    // coordinates measures on the ground here (at home: one for one).
+    const globe::Chart& GC = globe::current();
+    const glm::dvec2 eye_k = chart_to_key(GC, glm::dvec2(eye.x, eye.z));
+    glm::vec2 kx(1.0f, 0.0f), kz(0.0f, 1.0f);
+    if (!GC.home) {
+        const glm::dvec2 e0 = key_to_chart(GC, eye_k);
+        kx = glm::vec2((key_to_chart(GC, eye_k + glm::dvec2(64.0, 0.0)) - e0) / 64.0);
+        kz = glm::vec2((key_to_chart(GC, eye_k + glm::dvec2(0.0, 64.0)) - e0) / 64.0);
+    }
+    auto ground_dist = [&](double dkx, double dkz) { return glm::length(kx * float(dkx) + kz * float(dkz)); };
+    const float k_stretch = 1.0f / std::max(0.25f, std::min(glm::length(kx), glm::length(kz)));
+    const int ccx = int(std::floor(eye_k.x / double(kCell))), ccz = int(std::floor(eye_k.y / double(kCell)));
+    const int rc = int(std::ceil(far_m * k_stretch / kCell)) + 1;
+
     std::vector<std::pair<float, CellKey>> want_jobs;
     bool cols_changed = false, any_change = false;
     // Camera height: from the air the forest thins out as a whole (no bushes under an aeroplane).
@@ -563,8 +679,7 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
     for (int dz = -rc; dz <= rc; ++dz)
         for (int dx = -rc; dx <= rc; ++dx) {
             const CellKey k{ ccx + dx, ccz + dz };
-            const float cx = (float(k.x) + 0.5f) * kCell - eye.x, cz = (float(k.z) + 0.5f) * kCell - eye.z;
-            const float d_h = std::sqrt(cx * cx + cz * cz);
+            const float d_h = ground_dist((double(k.x) + 0.5) * double(kCell) - eye_k.x, (double(k.z) + 0.5) * double(kCell) - eye_k.y);
             if (d_h > far_m) continue;
             // Wholly inside the home tile's planting: never anything there.
             {
@@ -601,8 +716,7 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
         }
     // Out of range: give the slots back; forget cells well outside (their data is regenerated on return).
     for (auto it = S.cells.begin(); it != S.cells.end();) {
-        const float cx = (float(it->first.x) + 0.5f) * kCell - eye.x, cz = (float(it->first.z) + 0.5f) * kCell - eye.z;
-        const float d = std::sqrt(cx * cx + cz * cz);
+        const float d = ground_dist((double(it->first.x) + 0.5) * double(kCell) - eye_k.x, (double(it->first.z) + 0.5) * double(kCell) - eye_k.y);
         if (d > far_m && it->second.level != kLevels && it->second.data) {
             set_live(it->second, 0);
             it->second.level = kLevels;

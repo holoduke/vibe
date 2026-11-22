@@ -57,6 +57,7 @@ struct LevelMesh {
     int      card_cell = 0;
     glm::vec3 emissive{0.0f};      // self-lit meshes (lantern glass)
     bool  full_emissive = false;
+    bool  lit_by_day = false;      // a full-emissive part that glows as much by day (screens, room lights); lantern glass does not
     bool  triplanar = false;
     bool  sway      = false;
     float uv_scale  = 1.0f;
