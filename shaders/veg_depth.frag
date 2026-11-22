@@ -12,6 +12,7 @@ layout(location = 10) flat in vec4 vVegInfo;
 #include "scene_ubo.glsl"
 #include "veg_leaf.glsl"
 layout(set = 0, binding = 3) uniform sampler2D u_albedo[19];
+layout(set = 0, binding = 4) uniform sampler2D u_normal[19];      // 15 / 18: the baked tree impostors (colour + coverage, normal + leaf mark)
 void main() {
     if (vVegInfo.x > 0.0) {
         float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * float(uint(scene.rt_flags.w) & 7u),
@@ -21,19 +22,12 @@ void main() {
     // (Rocks are plain meshes: they take part in the depth pre-pass.)
     if (vVegInfo.z < -0.5) return;
     if (vVegInfo.z > 0.5) {
-        float u = vUv.x, v = vUv.y;
-        float jag = (fract(sin(dot(floor(vec2(u * 9.0, v * 14.0)), vec2(12.9, 78.2))) * 43758.5) - 0.5);
-        bool inside;
-        if (vVegInfo.z < 1.5) {
-            float tier = fract(v * 6.0);
-            float w = (1.0 - v) * (0.75 + 0.25 * tier) + jag * 0.06;
-            inside = (v > 0.12 && abs(u) < w) || (v <= 0.14 && abs(u) < 0.06);
-        } else {
-            vec2 q = vec2(u, (v - 0.62) * 1.5);
-            float rr = 0.78 + 0.12 * sin(atan(q.y, q.x) * 5.0 + vVegInfo.w) + jag * 0.08;
-            inside = length(q) < rr || (v < 0.4 && abs(u) < 0.07);
-        }
-        if (!inside) discard;
+        // The baked card (veg_impostor.cpp): the same cut as cube.frag, to the bit.
+        float rows = float(textureSize(u_normal[15], 0).y) / kImpTile;
+        vec2 iuv = veg_imp_uv(vUv, vObjectNormal, veg_imp_noise(gl_FragCoord.xy, uint(scene.rt_flags.w)), rows);
+        float ilod = veg_imp_lod(vUv);
+        if (textureLod(u_normal[15], iuv, ilod).a < 0.26) discard;
+        if (veg_imp_bare(iuv, textureLod(u_normal[18], iuv, ilod).a, vVegInfo.z, scene.season.w)) discard;
     } else {
         int vm = int(vUv.y + 0.5);
         if ((vm == 2 || vm == 3) && veg_leaf_cut(vObjectPos, vWorldPos, vNormal, scene.camera_pos.xyz)) discard;

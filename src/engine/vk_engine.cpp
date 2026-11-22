@@ -501,11 +501,13 @@ void VulkanEngine::run(const RunOptions& opts) {
                    ? 1.0f / frame_dt
                    : (ema_fps_ * 0.9f + (1.0f / frame_dt) * 0.1f);
 
-        InputFrame in = window_->consume_input();
+        InputFrame in = window_->consume_input(input_);
         {   // zoomed in (aiming), the same hand movement turns the view less: the picture moves as much as ever
             const double zoom_k = double(std::tan(glm::radians(view_fov_deg_) * 0.5f) / std::tan(glm::radians(glm::clamp(rt_.fov_deg, 55.0f, 100.0f)) * 0.5f));
             in.mouse_dx *= zoom_k;
             in.mouse_dy *= zoom_k;
+            in.look_x *= float(zoom_k);
+            in.look_y *= float(zoom_k);
         }
         // Typing into a text field (a preset name in the edit panel): the
         // keys belong to the text, not to movement / E / Q / R.
@@ -514,6 +516,15 @@ void VulkanEngine::run(const RunOptions& opts) {
             in = InputFrame{};
             in.mouse_dx = mdx; in.mouse_dy = mdy;
         }
+        // The menu is waiting for a key to bind (ui_menu.cpp): nothing reaches the game, and
+        // the Esc that cancels it does not also close the menu.
+        if (rebind_action_ >= 0) {
+            in = InputFrame{};
+            prev_menu_key_ = true;
+        }
+        in_flashlight_ = in.flashlight;
+        in_using_pad_ = window_->using_gamepad();
+        in_pad_connected_ = in.pad_connected;
         // F12 in-game capture: queue a numbered PPM in the working dir.
         // The render frame below picks it up and writes to disk.
         if (in.screenshot && pending_screenshot_path_.empty()) {
@@ -834,6 +845,14 @@ void VulkanEngine::run(const RunOptions& opts) {
             if (player_.pitch >  kPitchCap) player_.pitch =  kPitchCap;
             if (player_.pitch < -kPitchCap) player_.pitch = -kPitchCap;
         }
+        // The controller's look stick: an angular speed, so by time (the mouse is a distance).
+        if (state_ == State::Playing && window_->has_focus() && (in.look_x != 0.0f || in.look_y != 0.0f)) {
+            const float sp = glm::radians(input_.pad_look_speed) * frame_dt;
+            player_.yaw   += in.look_x * sp;
+            player_.pitch -= in.look_y * sp * input_.pad_look_ratio_y * (input_.pad_invert_y ? -1.0f : 1.0f);
+            constexpr float kPitchCap = kHalfPi - 0.01f;
+            player_.pitch = glm::clamp(player_.pitch, -kPitchCap, kPitchCap);
+        }
 
         // Auto-fire: hold LMB, fires at game_.fire_rate_rps. The cooldown
         // accumulates frame_dt so the rate is independent of frame rate.
@@ -963,6 +982,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                 game::PlayerInput pin{};
                 pin.fwd = in.fwd; pin.back = in.back;
                 pin.left = in.left; pin.right = in.right;
+                pin.ax = in.move_x; pin.ay = in.move_y;     // (the stick: how far, not only which way)
                 pin.jump = in.jump;
                 pin.sprint = in.sprint;
                 pin.crawl = in.crawl;
@@ -1435,6 +1455,12 @@ void VulkanEngine::run(const RunOptions& opts) {
         // ImGui frame begins regardless; we just don't fill it when playing.
         if (imgui_initialized_) {
             CPU_SCOPE("imgui");
+            // The menu by controller (D-pad / stick to move, A to press, B back): only while
+            // the menu is open - in play the HUD's windows must never take the buttons.
+            if (state_ != State::Playing && in_pad_connected_ && rebind_action_ < 0)
+                ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+            else
+                ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();

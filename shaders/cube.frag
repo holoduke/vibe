@@ -413,21 +413,17 @@ void main() {
         return;
     }
     bool veg_imp = vVegInfo.z > 0.5;
+    vec4 imp_col = vec4(0.0), imp_nrm = vec4(0.0);
     if (veg_imp) {
-        // Billboard silhouette from uv (u -1..1 across, v 0..1 up).
-        float u = vUv.x, v = vUv.y;
-        float jag = (fract(sin(dot(floor(vec2(u * 9.0, v * 14.0)), vec2(12.9, 78.2))) * 43758.5) - 0.5);
-        bool inside;
-        if (vVegInfo.z < 1.5) {          // pine: tiered cone + trunk
-            float tier = fract(v * 6.0);
-            float w = (1.0 - v) * (0.75 + 0.25 * tier) + jag * 0.06;
-            inside = (v > 0.12 && abs(u) < w) || (v <= 0.14 && abs(u) < 0.06);
-        } else {                          // broadleaf: lumpy crown + trunk
-            vec2 q = vec2(u, (v - 0.62) * 1.5);
-            float rr = 0.78 + 0.12 * sin(atan(q.y, q.x) * 5.0 + vVegInfo.w) + jag * 0.08;
-            inside = length(q) < rr || (v < 0.4 && abs(u) < 0.07);
-        }
-        if (!inside) discard;
+        // The baked card of this tree (veg_impostor.cpp): its silhouette, colour and normal
+        // from the nearest baked view. (The same cut as the depth pre-pass, veg_depth.frag.)
+        float rows = float(textureSize(u_normal[15], 0).y) / kImpTile;
+        vec2 iuv = veg_imp_uv(vUv, vObjectNormal, veg_imp_noise(gl_FragCoord.xy, uint(scene.rt_flags.w)), rows);
+        float ilod = veg_imp_lod(vUv);
+        imp_col = textureLod(u_normal[15], iuv, ilod);
+        if (imp_col.a < 0.26) discard;
+        imp_nrm = textureLod(u_normal[18], iuv, ilod);
+        if (veg_imp_bare(iuv, imp_nrm.a, vVegInfo.z, scene.season.w)) discard;
     } else if (pc.grass_params.w < -0.5 && pc.grass_params.x > 0.5) {
         // GPU vegetation canopy / bush: leafy cut-out silhouette (veg_leaf.glsl).
         int vm = int(vUv.y + 0.5);
@@ -444,7 +440,12 @@ void main() {
         vec3 Vc = normalize(scene.camera_pos.xyz - vWorldPos);
         vec3 Rc = cross(vec3(0.0, 1.0, 0.0), Vc);   // zero when viewed from straight above
         vec3 Rt = dot(Rc, Rc) > 1e-8 ? normalize(Rc) : vec3(1.0, 0.0, 0.0);
-        N = normalize(Vc * 0.6 + Rt * vUv.x * 0.7 + vec3(0.0, 1.0, 0.0) * (vUv.y - 0.35) * 0.9);
+        vec3 Nf = normalize(Vc * 0.6 + Rt * vUv.x * 0.7 + vec3(0.0, 1.0, 0.0) * (vUv.y - 0.35) * 0.9);
+        // The baked normal, from the tree's space into the world's (its rotation: .z), eased
+        // a little toward the rounded card so the two baked views either side agree.
+        vec3  nb = imp_nrm.xyz * 2.0 - 1.0;
+        float irc = cos(vObjectNormal.z), irs = sin(vObjectNormal.z);
+        N = normalize(mix(Nf, vec3(irc * nb.x - irs * nb.z, nb.y, irs * nb.x + irc * nb.z), 0.75));
     }
 
     if (vEmissive.a > 0.5) {
@@ -767,7 +768,13 @@ void main() {
     // - large-scale hue drift between plants + fine clumpy light/dark
     // breakup, and a darker interior (approximated by the normal facing
     // down / sideways) so canopies don't read as flat-coloured blobs.
-    if (is_mesh_draw && pc.grass_params.z > 0.5 && !use_albedo) {
+    // The far card: its baked colour (already with the crown's shading in it), this tree's
+    // hue, the season.
+    if (veg_imp) {
+        albedo = imp_col.rgb * vColor;
+        if (imp_nrm.a > 0.5 && vEmissive.a > 0.01 && vEmissive.a < 0.5) albedo = season_leaf(albedo, (vEmissive.a - 0.05) / 0.40);
+    }
+    if (is_mesh_draw && pc.grass_params.z > 0.5 && !use_albedo && !veg_imp) {
         float big  = tnoise(vWorldPos.xz * 0.07 + vec2(3.1, 7.7));
         float fine = tnoise(vWorldPos.xz * 2.6 + vWorldPos.y * 1.9) * 0.6 +
                      tnoise(vWorldPos.xz * 7.3 - vWorldPos.y * 5.1) * 0.4;

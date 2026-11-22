@@ -461,8 +461,19 @@ bool VulkanEngine::mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
 }
 
 void VulkanEngine::mp_hud() {
-    if (!net_) return;
+    // The hit marker: four ticks round the crosshair for a quarter of a second after a shot
+    // of yours landed - on another player, an aircraft or a vehicle (also without a network).
+    if (mp_hitmark_ > 0.0f && imgui_initialized_) {
+        const ImVec2 dsz = ImGui::GetIO().DisplaySize;
+        const ImVec2 c(dsz.x * 0.5f, dsz.y * 0.5f);
+        const float k = dsz.y / 1080.0f, a = glm::clamp(mp_hitmark_ / 0.12f, 0.0f, 1.0f);
+        const ImU32 col = IM_COL32(255, 80, 60, int(255.0f * a));
+        for (float sx : { -1.0f, 1.0f }) for (float sy : { -1.0f, 1.0f })
+            ImGui::GetForegroundDrawList()->AddLine(ImVec2(c.x + sx * 6.0f * k, c.y + sy * 6.0f * k),
+                                                    ImVec2(c.x + sx * 13.0f * k, c.y + sy * 13.0f * k), col, 2.0f * k);
+    }
     mp_hitmark_ = std::max(0.0f, mp_hitmark_ - ImGui::GetIO().DeltaTime);
+    if (!net_) return;
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImVec2 disp = ImGui::GetIO().DisplaySize;
     const int others = int(net_->players().size());
@@ -488,12 +499,6 @@ void VulkanEngine::mp_hud() {
     if (others > 0) {
         if (mp_hurt_ > 0.0f)
             dl->AddRect(ImVec2(0, 0), disp, IM_COL32(255, 30, 20, int(170.0f * mp_hurt_)), 0.0f, 0, 28.0f);
-        if (mp_hitmark_ > 0.0f) {
-            const ImVec2 c(disp.x * 0.5f, disp.y * 0.5f);
-            const ImU32 col = IM_COL32(255, 80, 60, 255);
-            for (float sx : { -1.0f, 1.0f }) for (float sy : { -1.0f, 1.0f })
-                dl->AddLine(ImVec2(c.x + sx * 6.0f, c.y + sy * 6.0f), ImVec2(c.x + sx * 13.0f, c.y + sy * 13.0f), col, 2.0f);
-        }
         // Name tags over the other players.
         const glm::mat4 vpm = current_frame_view_.vp;
         for (const auto& a : mp_avatars_) {

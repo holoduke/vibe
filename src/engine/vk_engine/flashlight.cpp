@@ -301,7 +301,7 @@ void VulkanEngine::draw_flashlight_model(VkCommandBuffer cmd, const glm::mat4& v
 
 void VulkanEngine::tick_flashlight(float dt) {
     // F toggles (edge), not while typing in a text field or in the menu.
-    const bool down = glfwGetKey(window_->handle(), GLFW_KEY_F) == GLFW_PRESS;
+    const bool down = in_flashlight_;      // (F, or the controller's button: menu, Controls)
     const bool typing = imgui_initialized_ && ImGui::GetIO().WantTextInput;
     static const bool kTestOn = std::getenv("QLIKE_TEST_FLASHLIGHT") != nullptr;
     if (kTestOn && frame_number_ == 5) flashlight_on_ = true;

@@ -741,10 +741,13 @@ void VulkanEngine::draw_rocket_hud() {
         const char* t = "LAUNCH";
         const float px = 30.0f * s;
         const ImVec2 sz = fs->CalcTextSizeA(px, 1e9f, 0.0f, t);
-        const float kw = 40.0f * s, x0 = W * 0.5f - (kw + 14.0f * s + sz.x) * 0.5f;
-        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + kw, y + kw), kPanel, 6.0f * s);
-        dl->AddRect(ImVec2(x0, y), ImVec2(x0 + kw, y + kw), kAccent, 6.0f * s, 0, 2.0f * s);
-        centred(fs, px, x0 + kw * 0.5f, y + 4.0f * s, kWhite, "E");
+        // (the key or the controller's button it is bound to: menu, Controls)
+        const std::string key = bind_label(Action::Use);
+        const float kw = std::max(40.0f * s, fs->CalcTextSizeA(px, 1e9f, 0.0f, key.c_str()).x + 18.0f * s);
+        const float kh = 40.0f * s, x0 = W * 0.5f - (kw + 14.0f * s + sz.x) * 0.5f;
+        dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + kw, y + kh), kPanel, 6.0f * s);
+        dl->AddRect(ImVec2(x0, y), ImVec2(x0 + kw, y + kh), kAccent, 6.0f * s, 0, 2.0f * s);
+        centred(fs, px, x0 + kw * 0.5f, y + 4.0f * s, kWhite, key.c_str());
         text(fs, px, ImVec2(x0 + kw + 14.0f * s, y + 4.0f * s), kWhite, t);
     }
     // The count.

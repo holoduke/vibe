@@ -7,6 +7,7 @@
 #include "engine/globe.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -522,8 +523,32 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_rm_shade_lo", s.rt_.terrain_rm_shade_lo);
     f("terrain_vrs", s.rt_.terrain_vrs);
     f("foliage_ray_mode", s.rt_.foliage_ray_mode);
+    f("tree_impostor_px", s.rt_.tree_impostor_px);
     f("fov_deg", s.rt_.fov_deg);
     f("mouse_sens", s.rt_.mouse_sens);
+    f("invert_mouse_y", s.input_.invert_mouse_y);
+    f("pad_enabled", s.input_.pad_enabled);
+    f("pad_look_speed", s.input_.pad_look_speed);
+    f("pad_look_ratio_y", s.input_.pad_look_ratio_y);
+    f("pad_invert_y", s.input_.pad_invert_y);
+    f("pad_deadzone", s.input_.pad_deadzone);
+    f("pad_curve", s.input_.pad_curve);
+    f("pad_sprint_toggle", s.input_.pad_sprint_toggle);
+    f("pad_swap_sticks", s.input_.pad_swap_sticks);
+    {   // The bindings: bind_key_<action> / bind_pad_<action> (codes: see InputBindings).
+        static const auto names = [] {
+            std::array<std::array<std::string, 2>, kActionCount> n;
+            for (int i = 0; i < kActionCount; ++i) {
+                n[i][0] = std::string("bind_key_") + action_id(static_cast<Action>(i));
+                n[i][1] = std::string("bind_pad_") + action_id(static_cast<Action>(i));
+            }
+            return n;
+        }();
+        for (int i = 0; i < kActionCount; ++i) {
+            f(names[i][0].c_str(), s.input_.key[i]);
+            f(names[i][1].c_str(), s.input_.pad[i]);
+        }
+    }
     f("render_scale", s.rt_.render_scale);
     f("fsr_min_render_scale", s.rt_.fsr_min_render_scale);
     f("quality_preset", s.rt_.quality_preset);
@@ -726,8 +751,17 @@ void VulkanEngine::load_settings() {
     clampf(rt_.terrain_rm_normal_px, 0.0f, 4.0f);
     clampi(rt_.foliage_ray_mode, 0, 2);
     clampi(rt_.water_style, 0, 2);
+    clampf(rt_.tree_impostor_px, 7.0f, 40.0f);
     clampf(rt_.fov_deg, 55.0f, 100.0f);
     clampf(rt_.mouse_sens, 0.2f, 4.0f);
+    clampf(input_.pad_look_speed, 40.0f, 500.0f);
+    clampf(input_.pad_look_ratio_y, 0.3f, 1.2f);
+    clampf(input_.pad_deadzone, 0.02f, 0.5f);
+    clampf(input_.pad_curve, 1.0f, 3.5f);
+    for (int i = 0; i < kActionCount; ++i) {
+        clampi(input_.key[i], -1, InputBindings::kMouseBase + 7);
+        clampi(input_.pad[i], -1, InputBindings::kPadRT);
+    }
     clampf(rt_.render_scale,     0.4f,    2.5f);
     clampf(rt_.fsr_min_render_scale, 0.5f, 1.0f);
     clampi(rt_.quality_preset,  -1,         3);  // -1 = custom

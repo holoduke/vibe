@@ -50,6 +50,7 @@ Everything is in `namespace qlike`. Runtime files live in the project root:
 | Sun shadows | `sun_shadow.cpp`, `sun_horizon.cpp`, `clutter_shadow.cpp`, `terrain_shadow_bake.cpp` |
 | Terrain | `terrain_textures.cpp` (GPU textures, CLOD), `terrain_edit.cpp` (sculpt, grass mask), `craters.cpp` |
 | Trees and bushes (GPU culled) | `vegetation.cpp` |
+| Far trees as baked cards (8 views per tree type, baked at start-up) | `veg_impostor.cpp` (bake), `veg_leaf.glsl` `veg_imp_uv` (lookup), setting `tree_impostor_px` |
 | World editor (item bar, painting, replant) | `veg_zones.cpp` |
 | Castle meshes, props, doors, lanterns, flags | `castle_mesh.cpp`, `props.cpp`, `world.cpp`, `world_textures.cpp` |
 | Launch site, rocket, its flight (orbit and back), launch button | `rocket.cpp`, `engine/rocket_sim.cpp` (the flight, no engine dependencies), models: `tools/rocket/make_rocket.py` |
@@ -113,7 +114,7 @@ its local variables and are not self-contained.
 | Player speed, jump, crouch | `src/game/player.cpp` |
 | Anti-aircraft vehicles | `aa.cpp` |
 | Loading screen | `loader_screen.cpp`, art in `assets/loader/loading_bg.jpg` |
-| Key bindings | `src/engine/window.cpp` (reads keys), `vk_engine.cpp` `run()` (acts on them) |
+| Key bindings and the controller | `src/engine/window.cpp` (`Action`, `InputBindings`: reads keys, mouse and gamepad into one `InputFrame`), `vk_engine.cpp` `run()` (acts on it), `ui_menu.cpp` Controls tab (rebinding; saved as `bind_key_*` / `bind_pad_*`) |
 
 ## Working on it
 

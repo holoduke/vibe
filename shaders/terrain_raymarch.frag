@@ -1108,7 +1108,7 @@ void main() {
         // river style (advected FBM + flow-driven foam). Packed in
         // water_foam_params.y as an int.
         int water_style = int(scene.water_foam_params.y + 0.5);
-        if (water_style >= 1) {   // (so the lake style, 2, takes this branch too and never its own below: left as it is - the look in use was tuned with it)
+        if (water_style == 1) {   // (2, the lake style, has its own branch below)
             // Full P_Malin GetFlowRate — flow vector + foam amount in
             // one pass over the local depth field.
             vec3 flow_and_foam = pm_get_flow_rate(wpos.xz,
@@ -1601,7 +1601,7 @@ void main() {
         // look (red attenuates fastest, then green, blue lasts). Mixed
         // against the user's deep tint at 60% so the slider still has
         // colour authority.
-        if (water_style >= 1) {   // (so the lake style, 2, takes this branch too and never its own below: left as it is - the look in use was tuned with it)
+        if (water_style == 1) {   // (2, the lake style, has its own branch below)
             // User-tunable extinction colour + density (defaults to
             // P_Malin's (0.5, 0.4, 0.1) × 3.0).
             vec3  ext_col = scene.water_river_extinct.rgb;

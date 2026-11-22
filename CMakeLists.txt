@@ -353,6 +353,7 @@ add_library(qlike_engine STATIC
     src/engine/vk_engine/castle_mesh.cpp
     src/engine/vk_engine/fx.cpp
     src/engine/vk_engine/vegetation.cpp
+    src/engine/vk_engine/veg_impostor.cpp
     src/engine/vk_engine/clutter_shadow.cpp
     src/engine/vk_engine/aa.cpp
     src/engine/vk_engine/rocket.cpp

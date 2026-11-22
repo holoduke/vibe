@@ -117,3 +117,32 @@ vec2 veg_card_uv(vec2 uv, float kind, float m) {
                 (cell >= 2.0 ? 0.5 : 0.0) + (1.0 - clamp(uv.y, m, 1.0 - m)) * 0.5);
 }
 vec2 veg_card_uv(vec2 uv, float kind) { return veg_card_uv(uv, kind, 0.006); }
+
+// ---- Baked tree impostors (src/engine/vk_engine/veg_impostor.cpp) ----
+// The atlas: 8 views across (one 128 px tile each), one row per tree archetype. `info` from
+// veg.vert: x = row, y = the view (0..8, fractional: between two of them), z = the tree's
+// rotation. `card_uv`: u -1..1 across the card, v 0..1 up. `noise` (0..1, per pixel) picks
+// one of the two nearest views, so turning round a tree blends them instead of jumping.
+const float kImpViews = 8.0;
+const float kImpTile = 128.0;
+const float kImpMargin = 3.0 / 128.0;
+float veg_imp_noise(vec2 fc, uint frame) {
+    return fract(52.9829189 * fract(dot(fc + 9.31 * float(frame & 7u), vec2(0.06711056, 0.00583715)) + 0.37));
+}
+vec2 veg_imp_uv(vec2 card_uv, vec3 info, float noise, float rows) {
+    float view = mod(floor(info.y + noise), kImpViews);
+    vec2 t = vec2(kImpMargin + (clamp(card_uv.x, -1.0, 1.0) * 0.5 + 0.5) * (1.0 - 2.0 * kImpMargin),
+                  kImpMargin + (1.0 - clamp(card_uv.y, 0.0, 1.0)) * (1.0 - 2.0 * kImpMargin));
+    return vec2((view + t.x) / kImpViews, (floor(info.x + 0.5) + t.y) / rows);
+}
+// (the mip by hand: the uv jumps between views, which would fool the automatic one. Never
+// past 2: beyond that neighbouring tiles would bleed into each other.)
+float veg_imp_lod(vec2 card_uv) {
+    return clamp(log2(max(fwidth(card_uv.x) * 0.5, fwidth(card_uv.y)) * kImpTile + 1e-6), 0.0, 2.0);
+}
+// Winter: the leaf trees' cards lose their leaf texels as the mesh loses its leaves.
+bool veg_imp_bare(vec2 atlas_uv, float leafy, float kind, float winter) {
+    if (leafy < 0.5 || kind < 1.5 || winter <= 0.0) return false;
+    float tone = fract(sin(dot(floor(atlas_uv * vec2(kImpViews * kImpTile, kImpTile) * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
+    return smoothstep(tone * 0.6, tone * 0.6 + 0.4, winter) > 0.5;      // (veg.vert: when this leaf has let go)
+}

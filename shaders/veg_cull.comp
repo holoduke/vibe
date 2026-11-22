@@ -28,7 +28,7 @@ layout(push_constant) uniform PC {
     vec4 cam;        // .xyz eye, .w pixels-per-radian
     vec4 params;     // .x count, .y max dist, .z LOD bias, .w hiz on (0/1)
     mat4 prev_vp;    // previous frame view-proj (Hi-Z reprojection)
-    vec4 hiz;        // .xy hiz level-0 size, .z mip count
+    vec4 hiz;        // .xy hiz level-0 size, .z mip count, .w the bounding radius (px) below which a tree is its baked card (0: 7)
 } pc;
 
 const int kLods = 5;
@@ -107,7 +107,9 @@ void main() {
         float detail = clamp(pow(px / (ai.w > 1.5 ? 25.0 : 60.0), 0.8), 0.03, 1.0);
         uint lod = detail > 0.5 ? 0u : (detail > 0.22 ? 1u : (detail > 0.09 ? 2u : 3u));
         // Far away the mesh hands over to the billboard with a dithered blend.
-        const float kImp = 7.0;
+        // (was a fixed 7 px: the card was a painted outline then. Baked from the tree itself -
+        // veg_impostor.cpp - it can take over much sooner: settings, tree_impostor_px.)
+        float kImp = pc.hiz.w > 0.5 ? pc.hiz.w : 7.0;
         if (has_imp && px < kImp) {
             float f = clamp((px - kImp * 0.7) / (kImp * 0.3), 0.0, 1.0);
             emit(a, 4u, i, pack_fd(detail, f));                       // draws where noise >= f

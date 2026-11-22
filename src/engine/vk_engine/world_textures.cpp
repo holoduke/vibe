@@ -13,6 +13,7 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -697,12 +698,14 @@ void VulkanEngine::load_foliage_textures() {
             if (e.first == path && e.second.valid()) { Pre r = e.second.get(); *w = r.w; *h = r.h; *c = r.c; return r.px; }
         return ::stbi_load(path, w, h, c, req);
     };
+    std::vector<unsigned char> leaf_copy; int leaf_w = 0, leaf_h = 0;
     int loaded = 0;
     if (std::string p = resolve("leaf_atlas.png"); !p.empty()) {
 
         int w = 0, h = 0, c = 0;
         if (unsigned char* px = stbi_load(p.c_str(), &w, &h, &c, 4)) {
             put(albedo_textures_[kTexLeaf], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "foliage/leaf_atlas");
+            leaf_copy.assign(px, px + size_t(w) * h * 4); leaf_w = w; leaf_h = h;     // (for the tree impostors below)
             stbi_image_free(px);
             ++loaded;
         }
@@ -798,6 +801,22 @@ void VulkanEngine::load_foliage_textures() {
     if (!veg_inst_cpu_.empty()) {
         const std::vector<unsigned char> px = bake_veg_shade_pixels();
         put(albedo_textures_[kTexVegShade], px.data(), 2048, 2048, VK_FORMAT_R8G8B8A8_UNORM, "veg_shade");
+    }
+    // The far trees' cards (veg_impostor.cpp): each tree archetype baked from 8 sides. The two
+    // atlases take the normal-map slots of the leaf and the small-plant atlas, which nothing
+    // else reads (cube.frag / veg_depth.frag: IMP_COLOR, IMP_NORMAL).
+    if (!veg_arch_.empty()) {
+        const auto t0 = std::chrono::steady_clock::now();
+        const VegImpostorAtlas ia = bake_veg_impostors(veg_arch_, leaf_copy.empty() ? nullptr : leaf_copy.data(), leaf_w, leaf_h);
+        if (ia.rows > 0) {
+            put(normal_textures_[kTexLeaf], ia.color.data(), ia.w, ia.h, VK_FORMAT_R8G8B8A8_SRGB, "tree impostors (colour)");
+            put(normal_textures_[kTexPlant], ia.normal.data(), ia.w, ia.h, VK_FORMAT_R8G8B8A8_UNORM, "tree impostors (normal)");
+            log::infof("[veg] tree impostors: %d archetypes x 8 views baked in %.0f ms (%d x %d)", ia.rows,
+                       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), ia.w, ia.h);
+            if (const char* dump = std::getenv("QLIKE_DUMP_IMPOSTORS")) {       // (test hook: the colour atlas as a raw RGBA file)
+                if (FILE* fp = std::fopen(dump, "wb")) { std::fwrite(ia.color.data(), 1, ia.color.size(), fp); std::fclose(fp); }
+            }
+        }
     }
     if (!retired.empty()) texture_upload_batch_sync(device_, allocator_, graphics_queue_);
     for (TextureSlot& s : retired) {

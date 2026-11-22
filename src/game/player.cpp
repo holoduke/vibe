@@ -65,10 +65,8 @@ void update_player(Player& p, const PlayerInput& in,
         const glm::vec3 f3 = p.forward();
         const glm::vec3 r3(std::cos(p.yaw), 0.0f, std::sin(p.yaw));
         glm::vec3 wish3(0.0f);
-        if (in.fwd)   wish3 += f3;
-        if (in.back)  wish3 -= f3;
-        if (in.right) wish3 += r3;
-        if (in.left)  wish3 -= r3;
+        const glm::vec2 axis3 = in.move_axis();
+        wish3 += f3 * axis3.y + r3 * axis3.x;
         if (in.jump)  wish3.y += 1.0f;
         if (in.crawl) wish3.y -= 1.0f;
         const float wl2 = glm::dot(wish3, wish3);
@@ -125,11 +123,9 @@ void update_player(Player& p, const PlayerInput& in,
     glm::vec3 fwd_h(std::sin(p.yaw), 0.0f, -std::cos(p.yaw));
     glm::vec3 right_h(std::cos(p.yaw), 0.0f, std::sin(p.yaw));
 
-    glm::vec3 wish(0.0f);
-    if (in.fwd)   wish += fwd_h;
-    if (in.back)  wish -= fwd_h;
-    if (in.right) wish += right_h;
-    if (in.left)  wish -= right_h;
+    // (keys: -1 / 0 / 1 each way; a stick: any amount - pushed half way is walking slowly)
+    const glm::vec2 axis = in.move_axis();
+    glm::vec3 wish = fwd_h * axis.y + right_h * axis.x;
 
     float wish_len_sq = glm::dot(wish, wish);
     glm::vec3 wishdir(0.0f);
@@ -137,6 +133,7 @@ void update_player(Player& p, const PlayerInput& in,
     if (wish_len_sq > 1e-6f) {
         float len = std::sqrt(wish_len_sq);
         wishdir = wish / len;
+        const float amount = std::min(len, 1.0f);
         // Sprint wins over crawl if both keys are held. Air movement keeps
         // the base air_wish_cap regardless — sprint/crawl are ground-only.
         float speed_mult = 1.0f;
@@ -144,7 +141,7 @@ void update_player(Player& p, const PlayerInput& in,
         else if (in.crawl)  speed_mult = 0.4f;
         // Wading: water around the legs / waist slows the walk.
         speed_mult *= 1.0f - 0.55f * std::clamp(in.wade, 0.0f, 1.0f);
-        wishspeed = kPlayerMove.max_walk_speed * speed_mult;
+        wishspeed = kPlayerMove.max_walk_speed * speed_mult * amount;
     }
 
     // Apply ground friction or air drag style behavior, then accelerate.

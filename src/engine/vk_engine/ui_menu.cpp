@@ -16,10 +16,19 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cfloat>
 #include <cstdio>
+#include <string>
 
 namespace qlike {
 
+
+// What an action is bound to on the device in the hands of the player: for prompts on screen.
+std::string VulkanEngine::bind_label(Action a) const {
+    const int i = static_cast<int>(a);
+    if (in_using_pad_ && input_.pad[i] >= 0) return pad_binding_name(input_.pad[i]);
+    return key_binding_name(input_.key[i]);
+}
 
 void VulkanEngine::build_menu_ui() {
     if (state_ != State::Paused) return;
@@ -107,6 +116,92 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SliderFloat("spark scale",     &game_.spark_scale,   0.05f, 3.0f,
                            "%.2f");
         ImGui::EndTabItem();
+    }
+
+    // ----- Controls tab: view, mouse, controller, keys and buttons -----------
+    // Test hook: QLIKE_TEST_MENU=controls opens the pause menu on this tab (captures).
+    static int test_controls_tab = [] { const char* e = std::getenv("QLIKE_TEST_MENU"); return (e && e[0] == 'c') ? 3 : 0; }();
+    const ImGuiTabItemFlags controls_flags = test_controls_tab > 0 ? ImGuiTabItemFlags_SetSelected : 0;
+    if (test_controls_tab > 0) --test_controls_tab;
+    if (ImGui::BeginTabItem("Controls", nullptr, controls_flags)) {
+        ImGui::SeparatorText("View and mouse");
+        ImGui::SliderFloat("Field of view", &rt_.fov_deg, 55.0f, 100.0f, "%.0f");
+        ImGui::SliderFloat("Mouse sensitivity", &rt_.mouse_sens, 0.2f, 4.0f, "%.2f");
+        ImGui::Checkbox("Invert mouse up / down", &input_.invert_mouse_y);
+
+        ImGui::SeparatorText("Controller");
+        {
+            const char* pn = window_->gamepad_name();
+            if (!input_.pad_enabled) ImGui::TextDisabled("Switched off.");
+            else if (*pn) ImGui::Text("Connected: %s%s", pn, in_using_pad_ ? "  (in use)" : "  (keyboard and mouse in use)");
+            else ImGui::TextDisabled("None connected. Plug one in or switch it on: it is picked up by itself.");
+        }
+        ImGui::Checkbox("Use a controller when there is one", &input_.pad_enabled);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keyboard and mouse always keep working next to it.\nThe prompts on screen follow whichever you touched last.");
+        ImGui::SliderFloat("Look speed (deg / s)", &input_.pad_look_speed, 40.0f, 500.0f, "%.0f");
+        ImGui::SliderFloat("Up / down share", &input_.pad_look_ratio_y, 0.3f, 1.2f, "%.2f");
+        ImGui::Checkbox("Invert look up / down", &input_.pad_invert_y);
+        ImGui::SliderFloat("Dead zone", &input_.pad_deadzone, 0.02f, 0.5f, "%.2f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far a stick must move before it counts. Raise it if the view drifts by itself.");
+        ImGui::SliderFloat("Look curve (1 = straight)", &input_.pad_curve, 1.0f, 3.5f, "%.1f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Higher: finer aiming near the centre of the stick, the full speed only at its edge.");
+        ImGui::Checkbox("Sprint with one press (until you stand still)", &input_.pad_sprint_toggle);
+        ImGui::Checkbox("Swap the sticks (look left, move right)", &input_.pad_swap_sticks);
+        ImGui::TextDisabled("Left stick: move.  Right stick: look.  Start: this menu.\nIn this menu: D-pad or left stick to move, A to press, B to go back.");
+
+        ImGui::SeparatorText("Keys and buttons");
+        // Waiting for a key: the first one pressed after everything was let go is taken.
+        if (rebind_action_ >= 0) {
+            if (ImGui::IsKeyDown(ImGuiKey_Escape)) {
+                rebind_action_ = -1;
+            } else {
+                const int code = rebind_pad_ ? window_->any_pad_down() : window_->any_key_down();
+                if (!rebind_armed_) {
+                    if (code < 0) rebind_armed_ = true;
+                } else if (code >= 0) {
+                    int* col = rebind_pad_ ? input_.pad : input_.key;
+                    // (one key, one action: whatever had it before loses it)
+                    for (int i = 0; i < kActionCount; ++i) if (col[i] == code) col[i] = -1;
+                    col[rebind_action_] = code;
+                    rebind_action_ = -1;
+                }
+            }
+        }
+        ImGui::TextDisabled("Click one, then press the new key or button. Esc: leave as it is. Right click: none.");
+        if (ImGui::BeginTable("##binds", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch, 1.4f);
+            ImGui::TableSetupColumn("Keyboard / mouse", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn("Controller", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableHeadersRow();
+            for (int i = 0; i < kActionCount; ++i) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(action_label(static_cast<Action>(i)));
+                for (int c = 0; c < 2; ++c) {
+                    ImGui::TableNextColumn();
+                    const bool pad = c == 1;
+                    int* col = pad ? input_.pad : input_.key;
+                    const bool waiting = rebind_action_ == i && rebind_pad_ == pad;
+                    std::string label;
+                    if (waiting) label = pad ? "press a button..." : "press a key...";
+                    else if (pad) label = (col[i] < 0 && i < 4) ? "Left stick" : pad_binding_name(col[i]);
+                    else label = key_binding_name(col[i]);
+                    label += "##b" + std::to_string(i * 2 + c);
+                    if (waiting) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.25f, 0.65f, 1.0f));
+                    if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f))) {
+                        rebind_action_ = i; rebind_pad_ = pad; rebind_armed_ = false;
+                    }
+                    if (waiting) ImGui::PopStyleColor();
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) { col[i] = -1; if (waiting) rebind_action_ = -1; }
+                }
+            }
+            ImGui::EndTable();
+        }
+        if (ImGui::Button("Reset keys and buttons")) { input_.reset(); rebind_action_ = -1; }
+        ImGui::EndTabItem();
+    } else if (rebind_action_ >= 0) {
+        rebind_action_ = -1;       // (left the tab while it was waiting)
     }
 
     // ----- Weather tab: time, weather, moon, sun, sky, clouds, fog ---------
@@ -567,8 +662,8 @@ void VulkanEngine::build_menu_ui() {
         {
             static const char* kVendor[] = { "unknown", "NVIDIA", "AMD", "Intel", "other" };
             ImGui::Text("GPU: %s (%s)", gpu_name_.c_str(), kVendor[int(gpu_vendor_)]);
-            ImGui::SliderFloat("Field of view (vertical, degrees)", &rt_.fov_deg, 55.0f, 100.0f, "%.0f");
-            ImGui::SliderFloat("Mouse sensitivity", &rt_.mouse_sens, 0.2f, 4.0f, "%.2f");
+            ImGui::SliderFloat("Trees: card below this size (px)", &rt_.tree_impostor_px, 7.0f, 40.0f, "%.0f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Far trees are drawn as one baked picture of themselves instead of their mesh.\nHigher: more trees are cards (faster). 7: only the very far ones, as before.");
             ImGui::Checkbox("Auto-pick upscaler for this GPU (at start-up)", &rt_.upscaler_auto);
             {
                 const char* fr_labels[] = { "Exact (slow in forests)", "Exact sun shadows nearby (default)", "Solid leaf cards for all rays (fastest)" };

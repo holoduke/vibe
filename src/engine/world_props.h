@@ -49,6 +49,18 @@ struct WorldPropParams {
     int   max_river_shrubs = 6000;
 };
 
+// Baked tree impostors (vk_engine/veg_impostor.cpp): every tree archetype seen from 8
+// directions, as two RGBA8 atlases of w x h (colour + coverage: sRGB; normal + leaf mark).
+// row[a] = the archetype's row of tiles, -1 for what has no impostor (bushes, rocks).
+struct VegArchetype;
+struct VegImpostorAtlas {
+    int w = 0, h = 0, rows = 0;
+    std::vector<unsigned char> color, normal;
+    std::vector<int> row;
+};
+VegImpostorAtlas bake_veg_impostors(const std::vector<VegArchetype>& archs,
+                                    const unsigned char* leaf_px, int leaf_w, int leaf_h);
+
 struct WorldPropStats { int formations = 0, boulders = 0, pines = 0, broadleaf = 0, bushes = 0, old = 0, river_shrubs = 0; };
 
 // Vegetation archetype: one species variant with a 4-level LOD chain in

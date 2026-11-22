@@ -552,7 +552,7 @@ void VulkanEngine::update_scene_ubo() {
         gi_samples_eff = std::max(1, gi_samples_eff / 4);
     }
     if (rr_low) gi_samples_eff = std::min(gi_samples_eff, 2);
-    if (fsr_low) gi_samples_eff = std::min(gi_samples_eff, 3);
+    if (fsr_low) gi_samples_eff = std::min(gi_samples_eff, 2);   // (was 3: the third ray, with its second bounce, cost as much as the first two together - 4.7 ms of 20 in a forest on an RX 9070 XT; the accumulation over 28 frames hides the difference)
     data.rt_flags2 = glm::ivec4(gi_samples_eff,
                                 rt_.reflections_enabled ? 1 : 0,
                                 rt_.gi_bounces,

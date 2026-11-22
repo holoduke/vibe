@@ -14,6 +14,13 @@ namespace qlike::game {
 
 struct PlayerInput {
     bool fwd = false, back = false, left = false, right = false;
+    // The same as an amount, from a controller's stick (x right, y forward, length 0..1).
+    // Zero when the keys are used: then the four above count.
+    float ax = 0.0f, ay = 0.0f;
+    glm::vec2 move_axis() const {
+        if (ax != 0.0f || ay != 0.0f) return glm::vec2(ax, ay);
+        return glm::vec2(float(right) - float(left), float(fwd) - float(back));
+    }
     bool jump = false;
     bool sprint = false;    // Shift held — wishspeed × 1.5 on the ground
     bool crawl  = false;    // Ctrl held — wishspeed × 0.4 on the ground

@@ -768,6 +768,9 @@ struct RtSettings {
         float compose_sharpen_strength = 0.55f;
         // The view: vertical field of view (degrees; 80 = the value it always had, about 112
         // across on a 16:9 screen) and the mouse's speed as a multiple of the built-in one.
+        // Trees: below this size on screen (bounding radius, pixels) a tree is drawn as its
+        // baked card instead of its mesh (veg_impostor.cpp). 7 = the old hand-over point.
+        float tree_impostor_px = 20.0f;
         float fov_deg    = 80.0f;
         float mouse_sens = 1.0f;
         // FSR path only (AMD / no DLSS): the least the scene is rendered at, as a share of the

@@ -108,14 +108,19 @@ void main() {
     // Impostor card (LOD 4, material 5): cylindrical billboard facing the
     // camera. inPosition = (u * half_width, v * height, kind).
     vec2 imp_uv = vec2(0.0);
+    vec3 imp_info = vec3(0.0);
     if (mat0 == 5) {
         vec3 base = I.pos_scale.xyz;
         vec3 toc = scene.camera_pos.xyz - base; toc.y = 0.0;
         toc = length(toc) > 1e-3 ? normalize(toc) : vec3(0.0, 0.0, 1.0);
         vec3 rt = vec3(toc.z, 0.0, -toc.x);
-        wp = base + rt * (inPosition.x * s) + vec3(0.0, inPosition.y * s, 0.0);
+        wp = base + rt * (inPosition.x * s) + vec3(0.0, inPosition.y * s * ysq, 0.0);
         N = toc;
         imp_uv = vec2(inNormal.x, inNormal.y);      // (u, v) packed in the normal
+        // Which of the baked views (veg_impostor.cpp): the direction to the camera in the
+        // tree's own space, as a number 0..8; and the tree's row in the atlas.
+        vec2 od = vec2(c * toc.x + sn * toc.z, -sn * toc.x + c * toc.z);
+        imp_info = vec3(arch[uint(I.rot_arch_phase.y + 0.5)].z - 1.0, fract(atan(od.x, od.y) / 6.2831853) * 8.0, I.rot_arch_phase.x);
     }
 
     const vec3 rest_wp = wp;   // pre-sway position: anchors the leaf cut-out pattern
@@ -212,13 +217,15 @@ void main() {
     // tree's own number in .a (0.05 .. 0.45; 0 = no seasonal colour: conifers, bark, rocks).
     {
         float species = arch[uint(I.rot_arch_phase.y + 0.5)].w;
-        if (species > 0.5 && species < 2.5 && (matRaw == 2 || matRaw == 3 || matRaw == 7 || matRaw >= 9))
+        if (species > 0.5 && species < 2.5 && (matRaw == 2 || matRaw == 3 || matRaw == 5 || matRaw == 7 || matRaw >= 9))
             vEmissive.a = 0.05 + 0.40 * fract(sin(dot(I.pos_scale.xz, vec2(12.9898, 78.233))) * 43758.5453);
     }
     vUv         = vec2(windW, float(mat0));
     if (matRaw == 4) vUv = inUv;                  // rocks: (atlas u, 4 + 0.45 * atlas v) - baked rocks only, else (0, 4)
     vTexParams  = tp;
-    if (mat0 == 5) { vUv = imp_uv; vColor = inNormal.z < 1.5 ? vec3(0.075, 0.16, 0.08) : vec3(0.16, 0.28, 0.07); }
+    // The far card: the colour comes from its baked atlas (cube.frag); here only this tree's
+    // own hue, the same one its mesh has.
+    if (mat0 == 5) { vUv = imp_uv; vColor = mix(vec3(0.85, 1.05, 0.8), vec3(1.15, 0.95, 1.1), hj); vObjectNormal = imp_info; }
     vVegInfo = vec4(fd, (ve & 0x80000000u) != 0u ? 1.0 : 0.0,
                     mat0 == 5 ? inNormal.z : rock_tag, I.rot_arch_phase.z);
     if (rock_tag < -0.5) {      // object-space surface point + the instance transform (per-pixel detail)

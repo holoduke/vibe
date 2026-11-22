@@ -284,6 +284,7 @@ void VulkanEngine::update_projectiles(float dt) {
                         // Register hit on this plane, terminate bullet.
                         f.hp           -= 1;
                         f.hit_flash_t   = 0.20f;
+                        mp_hitmark_     = 0.25f;      // (the hit marker: multiplayer.cpp, mp_hud)
                         drop            = true;
                         was_impact      = true;
                         hit_pos         = bp;

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "engine/frustum.h"
+#include "engine/window.h"
 #include "engine/mesh.h"
 #include "engine/physics_world.h"
 #include "engine/skybox.h"
@@ -1185,6 +1186,17 @@ private:
     // traced spot light (flashlight.cpp).
     bool  flashlight_on_ = false;
     bool  flash_key_prev_ = false;
+    // Controls: what is bound to what and the controller's tuning (menu: Controls; saved
+    // with the settings), and this frame's state of it for the code outside the main loop.
+    InputBindings input_{};
+    bool  in_flashlight_ = false;      // the flashlight key / button is down
+    bool  in_using_pad_ = false;       // the controller was the last thing touched
+    bool  in_pad_connected_ = false;
+    int   rebind_action_ = -1;         // menu: the action waiting for a key (-1: none)
+    bool  rebind_pad_ = false;         //   ... for a controller button, not a key
+    bool  rebind_armed_ = false;       //   ... everything was let go since it was clicked
+    // The name of what an action is bound to on the device in use ("E", "Y"): for prompts.
+    std::string bind_label(Action a) const;
     bool  flash_init_ = false;
     float flash_yaw_ = 0.0f, flash_pitch_ = 0.0f;   // eased aim
     float flash_phase_ = 0.0f;                       // step cycle

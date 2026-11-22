@@ -88,7 +88,7 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
         // the normal slot carries (u, v, kind) and uv.y = 5 (material).
         game::LevelMesh imp;
         const int sp = veg_arch_[a].species;
-        if (sp <= 1) {
+        if (sp <= 1 && !veg_arch_[a].lods[0].verts.empty()) {
             float rmax = 0.0f, ymax = 0.0f;
             for (const auto& v : veg_arch_[a].lods[0].verts) {
                 rmax = std::max(rmax, std::max(std::abs(v.p.x), std::abs(v.p.z)));
@@ -195,13 +195,14 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
                                false, veg_ind_alloc_, nullptr);
     std::vector<glm::vec4> ainfo;
     int rock_variant = 0;
+    int imp_row = 0;       // (the row of tiles in the impostor atlas: in the order of bake_veg_impostors)
     for (size_t a = 0; a < veg_arch_.size(); ++a) {
         const bool rock = veg_arch_[a].species == 3;
         // Rocks: .z = -(variant + 1) (cube.frag derives the shape parameters
         // of the per-pixel detail from it).
         ainfo.push_back(glm::vec4(veg_arch_[a].radius, veg_arch_[a].height * 0.5f,
                                   // (+100 = sculpted and baked in Blender: detail comes from its texture)
-                                  rock ? -float(++rock_variant + (veg_arch_[a].baked >= 0 ? 100 : 0)) : float(veg_has_imp_[a]),
+                                  rock ? -float(++rock_variant + (veg_arch_[a].baked >= 0 ? 100 : 0)) : (veg_has_imp_[a] ? float(++imp_row) : 0.0f),
                                   float(veg_arch_[a].species)));
     }
     veg_arch_buf_ = make_buffer(allocator_, sizeof(glm::vec4) * ainfo.size(), ssbo, true, veg_arch_alloc_, &mp);
@@ -367,7 +368,7 @@ void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
         veg_prev_fwd_ = fwd;
     }
     pc.prev_vp = veg_prev_vp_;
-    pc.hiz = glm::vec4(float(veg_hiz_w_), float(veg_hiz_h_), float(veg_hiz_mips_), 0.0f);
+    pc.hiz = glm::vec4(float(veg_hiz_w_), float(veg_hiz_h_), float(veg_hiz_mips_), glm::clamp(rt_.tree_impostor_px, 7.0f, 40.0f));   // .w: the size at which a tree becomes its card
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, veg_cull_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, veg_cull_layout_, 1, 1, &veg_set_, 0, nullptr);
     vkCmdPushConstants(cmd, veg_cull_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
