@@ -319,9 +319,9 @@
             }
             // grains: three sizes, each gone before it is finer than a pixel
             vec2 gq = pos.xz * 70.0;
-            n_s = normalize(n_s + vec3(noise2(gq) - 0.5, 0.0, noise2(gq + 17.0) - 0.5) * 0.20 * (1.0 - smoothstep(3.0, 14.0, t))
-                                + vec3(noise2(gq * 3.7 + 5.0) - 0.5, 0.0, noise2(gq * 3.7 + 29.0) - 0.5) * 0.22 * (1.0 - smoothstep(1.2, 6.0, t))
-                                + vec3(noise2(gq * 11.0 + 9.0) - 0.5, 0.0, noise2(gq * 11.0 + 41.0) - 0.5) * 0.18 * (1.0 - smoothstep(0.5, 2.5, t)));
+            n_s = normalize(n_s + vec3(tile_noise2(pos.xz, 70.0, vec2(0.0)) - 0.5, 0.0, tile_noise2(pos.xz, 70.0, vec2(17.0)) - 0.5) * 0.20 * (1.0 - smoothstep(3.0, 14.0, t))
+                                + vec3(tile_noise2(pos.xz, 70.0 * 3.7, vec2(5.0)) - 0.5, 0.0, tile_noise2(pos.xz, 70.0 * 3.7, vec2(29.0)) - 0.5) * 0.22 * (1.0 - smoothstep(1.2, 6.0, t))
+                                + vec3(tile_noise2(pos.xz, 70.0 * 11.0, vec2(9.0)) - 0.5, 0.0, tile_noise2(pos.xz, 70.0 * 11.0, vec2(41.0)) - 0.5) * 0.18 * (1.0 - smoothstep(0.5, 2.5, t)));
             nor = normalize(mix(nor, n_s, sand_cov));
         }
     }
@@ -373,7 +373,7 @@
                 snow_cov *= smoothstep(0.35, 0.7, n_s.y);
                 // Fine grain of the snow surface (it is never a mirror-smooth sheet).
                 vec2 gq = pos.xz * 38.0;
-                n_s = normalize(n_s + vec3(noise2(gq) - 0.5, 0.0, noise2(gq + 17.0) - 0.5) * 0.10 * (1.0 - smoothstep(4.0, 22.0, t)));
+                n_s = normalize(n_s + vec3(tile_noise2(pos.xz, 38.0, vec2(0.0)) - 0.5, 0.0, tile_noise2(pos.xz, 38.0, vec2(17.0)) - 0.5) * 0.10 * (1.0 - smoothstep(4.0, 22.0, t)));
                 nor = normalize(mix(nor, n_s, snow_cov));
             }
         }

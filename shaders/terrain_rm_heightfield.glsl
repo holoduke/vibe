@@ -65,9 +65,11 @@ float rm_ground_detail_raw(vec2 wp, float t, float h) {
     // (only where there is road: this runs for every near step of the march, and the sand's
     // noise was being worked out - and thrown away - over all the open ground)
     float rsand = road_keep < 0.999 ? sand_road_h(wp) * (1.0 - road_keep) : 0.0;       // (the sand thins out over the verge)
-    float wn = noise2(wp * 0.21);                      // one noise warps both axes
-    vec2  q  = wp * 0.55 + vec2(wn, 1.0 - wn) * 1.7;
-    float g1 = 1.0 - smoothstep(0.0, 0.22, abs(noise2(q) * 2.0 - 1.0));              // main rills
+    // (the same in every tile - scene_ubo.glsl tile_noise2 - so the rills stay where they are when
+    // the engine re-centres; twins: grass_raymarch.frag grass_ground_relief, terrain.cpp raymarch_ground_relief)
+    float wn = tile_noise2(wp, 0.21, vec2(0.0));       // one noise warps both axes
+    vec2  qo = vec2(wn, 1.0 - wn) * 1.7;
+    float g1 = 1.0 - smoothstep(0.0, 0.22, abs(tile_noise2(wp, 0.55, qo) * 2.0 - 1.0));              // main rills
     // While MARCHING (g_rm_ray_y set by raymarch()): the main rills only,
     // side cracks / soil displacement at their means - two noise taps
     // instead of three plus a texture fetch on every near-ground step. The
@@ -80,11 +82,11 @@ float rm_ground_detail_raw(vec2 wp, float t, float h) {
                                               (RMDBG(32768) ? 0.0 : rm_pebbles_march(wp, t))) * road_keep + rsand, wp, h, road_keep) * w;
     if (g_rm_relief_lite) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045) * road_keep + rsand, wp, h, road_keep) * w;
     float lod = log2(max(t * 2.0 * scene.viewport.w * 0.45 * 2048.0, 1.0));
-    float disp = textureLod(u_normal[9], wp * 0.45, lod).a;
-    float g2 = 1.0 - smoothstep(0.0, 0.25, abs(noise2(q * 2.7 + 3.1) * 2.0 - 1.0));  // side cracks
+    float disp = textureLod(u_normal[9], wp * TILE_FREQ(0.45), lod).a;
+    float g2 = 1.0 - smoothstep(0.0, 0.25, abs(tile_noise2(wp, 1.485, qo * 2.7 + 3.1) * 2.0 - 1.0));  // side cracks
     float d = 0.11 * (1.0 - g1) + 0.045 * (1.0 - g2) + 0.09 * disp;
     float sand = 1.0 - smoothstep(scene.water_params.y + 0.4, scene.water_params.y + 2.5, h);
-    d += sand * 0.03 * (0.5 + 0.5 * sin(dot(wp, vec2(9.0, 3.5)) + 6.0 * wn));
+    d += sand * 0.03 * (0.5 + 0.5 * sin(wp.x * TILE_W(9.0) + wp.y * TILE_W(3.5) + 6.0 * wn));
     // (No stones here: this full variant is also what every terrain-shadow
     // and reflection step evaluates. The normal adds them itself, the march
     // has its own cut-down version above.)

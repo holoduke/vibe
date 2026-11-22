@@ -437,7 +437,7 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
     if (red_amt > 1e-3) {
         float rs = 1.0 / max(scene.rm_red_sand.w, 0.2);
         vec2  rq = pos.xz * rs;
-        float rn = noise2(rq * 0.018 + 41.0) * 0.6 + noise2(rq * 0.071 + 7.0) * 0.28 + noise2(rq * 0.31) * 0.12;
+        float rn = tile_noise2(pos.xz, 0.018 * rs, vec2(41.0)) * 0.6 + tile_noise2(pos.xz, 0.071 * rs, vec2(7.0)) * 0.28 + tile_noise2(pos.xz, 0.31 * rs, vec2(0.0)) * 0.12;
         float patchm = smoothstep(0.66 - 0.16 * red_amt, 0.80 - 0.14 * red_amt, rn);
         float flat_w = smoothstep(0.55, 0.85, slope);
         float alt_w  = 1.0 - smoothstep(55.0, 80.0, h);
@@ -471,8 +471,8 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
     if (grass_amt > 0.2 && cam_d < 45.0) {
         float fw = smoothstep(0.2, 0.65, grass_amt) * (1.0 - smoothstep(14.0, 45.0, cam_d)) * 0.85;
         // Two sets of fine streaks: leaves lying this way and that.
-        float s1 = noise2(vec2(dot(pos.xz, vec2( 0.80, 0.60)) * 70.0, dot(pos.xz, vec2(-0.60, 0.80)) * 7.0));
-        float s2 = noise2(vec2(dot(pos.xz, vec2(-0.45, 0.89)) * 70.0, dot(pos.xz, vec2( 0.89, 0.45)) * 7.0) + 31.0);
+        float s1 = tile_noise2_rot(pos.xz, vec3(4.0, 3.0, 5.0), vec2(70.0, 7.0), vec2(0.0));
+        float s2 = tile_noise2_rot(pos.xz, vec3(-7.0, 24.0, 25.0), vec2(70.0, 7.0), vec2(31.0));
         float th = mix(0.5, max(s1, s2), 1.0 - smoothstep(6.0, 20.0, cam_d));   // (finer than a pixel further out)
         vec3 lo = scene.grass_color_bottom.rgb * 0.55;
         vec3 hi = mix(scene.grass_color_bottom.rgb, scene.grass_color_top.rgb, 0.6);

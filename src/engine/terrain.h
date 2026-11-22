@@ -100,6 +100,8 @@ float world_forest(float x, float z, float h, float ny, float water_level);
 float world_forest_flat(float hx, float hz, float h, float ny, float water_level);
 // Metres from a place in the current chart to the nearest highway's centre line (1e9: none near).
 float world_highway_distance(float x, float z);
+// Whether a place in the current chart lies on a site's own ground (nothing is planted there by rule).
+bool world_site_clearing(float x, float z);
 // The launch site: the centre and level of its terrace (shaders/world_map.glsl wm_pad_c / wm_pad_h).
 constexpr float kLaunchSiteX = 1600.0f, kLaunchSiteZ = 830.0f, kLaunchSiteH = 36.0f;
 

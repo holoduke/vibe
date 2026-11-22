@@ -236,13 +236,13 @@ float sampleHeight(vec2 wp_xz) { return (pc.emissive.x > 0.5 || VIBE_GRASS_BAKED
 float grass_ground_relief(vec2 wp, float t, float h) {
     float w = 1.0 - smoothstep(10.0, 26.0, t);
     if (w <= 0.0 || pc.emissive.x > 0.5) return 0.0;   // mesh terrain: no relief
-    float wn = noised(wp * 0.21).x;
-    vec2  q  = wp * 0.55 + vec2(wn, 1.0 - wn) * 1.7;
-    float g1 = 1.0 - smoothstep(0.0, 0.22, abs(noised(q).x * 2.0 - 1.0));
-    float g2 = 1.0 - smoothstep(0.0, 0.25, abs(noised(q * 2.7 + 3.1).x * 2.0 - 1.0));
+    float wn = tile_noise2(wp, 0.21, vec2(0.0));       // (as terrain_rm_heightfield.glsl rm_ground_detail: keep in step)
+    vec2  qo = vec2(wn, 1.0 - wn) * 1.7;
+    float g1 = 1.0 - smoothstep(0.0, 0.22, abs(tile_noise2(wp, 0.55, qo) * 2.0 - 1.0));
+    float g2 = 1.0 - smoothstep(0.0, 0.25, abs(tile_noise2(wp, 1.485, qo * 2.7 + 3.1) * 2.0 - 1.0));
     float d = 0.11 * (1.0 - g1) + 0.045 * (1.0 - g2) + 0.045;
     float sand = 1.0 - smoothstep(scene.water_params.y + 0.4, scene.water_params.y + 2.5, h);
-    d += sand * 0.03 * (0.5 + 0.5 * sin(dot(wp, vec2(9.0, 3.5)) + 6.0 * wn));
+    d += sand * 0.03 * (0.5 + 0.5 * sin(wp.x * TILE_W(9.0) + wp.y * TILE_W(3.5) + 6.0 * wn));
     return d * w;
 }
 float sampleHeight_lod(vec2 wp_xz, float ray_t) {

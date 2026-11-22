@@ -182,6 +182,21 @@ float tile_noise2(vec2 wp, float k, vec2 off) {
     float a = tile_h21(i0), b = tile_h21(vec2(i1.x, i0.y)), c = tile_h21(vec2(i0.x, i1.y)), d = tile_h21(i1);
     return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
 }
+// Value noise on a lattice TURNED against the world's axes, still the same in every tile.
+// abc: a right triangle with whole sides (3,4,5 / 7,24,25 / 5,12,13 ...; a or b may be
+// negative) - the lattice is turned by its angle, and only such an angle lets a tile's shift
+// land on whole cells. k: cells per metre along the lattice's two axes (they may differ: a
+// grain). off: an offset in cells.
+float tile_noise2_rot(vec2 wp, vec3 abc, vec2 k, vec2 off) {
+    vec2 n = max(round(kTile * k / abc.z), vec2(1.0));
+    vec2 p = vec2(abc.x * wp.x + abc.y * wp.y, -abc.y * wp.x + abc.x * wp.y) * (n / kTile) + off;
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    vec2 i0 = i - n * floor(i / n + 0.5), i1 = (i + 1.0) - n * floor((i + 1.0) / n + 0.5);
+    float a = tile_h21(i0), b = tile_h21(vec2(i1.x, i0.y)), c = tile_h21(vec2(i0.x, i1.y)), d = tile_h21(i1);
+    return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
+}
+
 
 // Leaves through the year. `h`: a number 0..1 of the tree (each tree turns
 // its own colour and at its own pace in autumn). Returns the leaf colour to use.

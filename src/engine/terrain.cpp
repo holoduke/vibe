@@ -400,6 +400,11 @@ float world_forest(float x, float z, float h, float ny, float water_level) {
 
 float world_forest_flat(float hx, float hz, float h, float ny, float water_level) { return wm::forest(glm::vec2(hx, hz), h, ny, water_level); }
 
+bool world_site_clearing(float x, float z) {
+    const globe::Chart& C = globe::current();
+    return !C.home && site_clearing(globe::to_planet(C, x, z));
+}
+
 float world_highway_distance(float x, float z) {
     glm::dvec2 hp;
     return (highway::ready() && home_coords(x, z, hp)) ? highway::distance(float(hp.x), float(hp.y)) : 1e9f;
@@ -912,16 +917,30 @@ float raymarch_ground_relief(float x, float z, float h, float water_level) {
         if (hw_keep <= 0.0f) return 0.0f;
     }
     // Mirror of terrain_raymarch.frag rm_ground_detail() (keep in sync).
-    auto noise2 = [](glm::vec2 p) { glm::vec2 d; return rm_noised(p, d); };
+    // (scene_ubo.glsl tile_noise2: value noise that repeats once a tile - the same wherever the
+    // engine has re-centred)
+    constexpr float kTile = 6400.0f;
+    auto tile_noise2 = [](glm::vec2 wp_, float k, glm::vec2 off) {
+        const float n = std::max(std::round(kTile * k), 1.0f);
+        const glm::vec2 p = wp_ * (n / kTile) + off;
+        const glm::vec2 i = glm::floor(p), f = p - i;
+        const glm::vec2 u = f * f * (3.0f - 2.0f * f);
+        auto wrap = [n](glm::vec2 id) { return id - n * glm::floor(id / n + 0.5f); };
+        const glm::vec2 i0 = wrap(i), i1 = wrap(i + 1.0f);
+        const float a = rm_hash21(i0), b = rm_hash21(glm::vec2(i1.x, i0.y)), c = rm_hash21(glm::vec2(i0.x, i1.y)), d = rm_hash21(i1);
+        return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
+    };
+    auto tile_w = [](float w) { return std::max(std::round(kTile * w / 6.28318530718f), 1.0f) * 6.28318530718f / kTile; };
     auto sstep = [](float a, float b, float v) { float t = std::clamp((v - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
     const glm::vec2 wp(x, z);
-    const float wn = noise2(wp * 0.21f);
-    const glm::vec2 q = wp * 0.55f + glm::vec2(wn, 1.0f - wn) * 1.7f;
-    const float g1 = 1.0f - sstep(0.0f, 0.22f, std::abs(noise2(q) * 2.0f - 1.0f));
-    const float g2 = 1.0f - sstep(0.0f, 0.25f, std::abs(noise2(q * 2.7f + glm::vec2(3.1f)) * 2.0f - 1.0f));
+    const float wn = tile_noise2(wp, 0.21f, glm::vec2(0.0f));
+    const glm::vec2 qo = glm::vec2(wn, 1.0f - wn) * 1.7f;
+    const float g1 = 1.0f - sstep(0.0f, 0.22f, std::abs(tile_noise2(wp, 0.55f, qo) * 2.0f - 1.0f));
+    const float g2 = 1.0f - sstep(0.0f, 0.25f, std::abs(tile_noise2(wp, 1.485f, qo * 2.7f + glm::vec2(3.1f)) * 2.0f - 1.0f));
+
     float d = 0.11f * (1.0f - g1) + 0.045f * (1.0f - g2) + 0.09f * 0.5f;
     const float sand = 1.0f - sstep(water_level + 0.4f, water_level + 2.5f, h);
-    d += sand * 0.03f * (0.5f + 0.5f * std::sin(glm::dot(wp, glm::vec2(9.0f, 3.5f)) + 6.0f * wn));
+    d += sand * 0.03f * (0.5f + 0.5f * std::sin(wp.x * tile_w(9.0f) + wp.y * tile_w(3.5f) + 6.0f * wn));
     return d * hw_keep;
 }
 }  // namespace vibe

@@ -17,7 +17,10 @@ float g_peb_id = 0.0;    // random 0..1 of the stone at the last query
 float g_peb_k  = 0.0;    // 0 at its rim .. 1 at its centre (0 = bare soil)
 float g_peb_sz = 0.0;    // its layer: 1 pebble, 2 gravel, 3 grit, 4 big cobble
 float peb_layer(vec2 p, float cell, float dens, float layer_id, float hf, inout float best) {
-    vec2 q  = p / cell;
+    // (a whole number of cells to the tile, and a cell's number wrapped there: the same stones
+    // in every tile, so they lie where they lay when the engine re-centres - scene_ubo.glsl)
+    float pn = max(round(kTile / cell), 1.0);
+    vec2 q  = p * (pn / kTile);
     vec2 ip = floor(q), fq = fract(q);
     float h = 0.0;
     // A stone reaches at most 0.9 cell from its cell centre, so only the
@@ -26,7 +29,7 @@ float peb_layer(vec2 p, float cell, float dens, float layer_id, float hf, inout 
     for (int j = 0; j <= 1; ++j)
     for (int i = 0; i <= 1; ++i) {
         vec2 g = gb + vec2(float(i), float(j));
-        vec3 r3 = peb_h3(ip + g + layer_id * 71.3);
+        vec3 r3 = peb_h3(tile_wrap(ip + g, pn) + layer_id * 71.3);
         if (r3.z > dens) continue;
         vec2  o  = g + 0.5 + (r3.xy - 0.5) * 0.55 - fq;
         float rr = mix(0.27, 0.50, fract(r3.z * 17.3));
@@ -77,11 +80,15 @@ float bed_h(vec2 wp, float wA, float wB, out float id, out float k) {
 }
 // One smooth random value per ~1/f metres (4 hashes; noise2 also computes
 // derivatives nobody needs here).
-float peb_vnoise(vec2 p) {
+// (of the position wp at about k cells a metre + off; the same in every tile)
+float peb_vnoise(vec2 wp, float k, vec2 off) {
+    float n = max(round(kTile * k), 1.0);
+    vec2 p = wp * (n / kTile) + off;
     vec2 i = floor(p), f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
-    float a = peb_h3(i).x, b = peb_h3(i + vec2(1.0, 0.0)).x;
-    float c = peb_h3(i + vec2(0.0, 1.0)).x, d = peb_h3(i + vec2(1.0, 1.0)).x;
+    vec2 i0 = tile_wrap(i, n), i1 = tile_wrap(i + 1.0, n);
+    float a = peb_h3(i0).x, b = peb_h3(vec2(i1.x, i0.y)).x;
+    float c = peb_h3(vec2(i0.x, i1.y)).x, d = peb_h3(i1).x;
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 // 0 = everything (shading), 1 = while marching (only what moves the
@@ -109,7 +116,7 @@ float rm_pebbles(vec2 wp, float t) {
     float best = 0.0, h = 0.0;
     if (wA + wB + wC > 0.0) {
         // Stones lie in drifts: dense patches, thin scatter, bare soil.
-        float dens = smoothstep(0.30, 0.75, peb_vnoise(wp * 0.45 + 7.1));
+        float dens = smoothstep(0.30, 0.75, peb_vnoise(wp, 0.45, vec2(7.1)));
         if (wA > 0.0) h = max(h, wA * peb_layer(wp, 0.110, 0.10 + 0.55 * dens, 1.0, 1.0, best));
         if (wB > 0.0) h = max(h, wB * peb_layer(wp + 3.7, 0.034, 0.15 + 0.60 * dens, 2.0, 1.0, best));
         if (wC > 0.0) h = max(h, wC * peb_layer(wp + 9.1, 0.010, 0.45 + 0.40 * dens, 3.0, 1.0, best));
@@ -118,7 +125,7 @@ float rm_pebbles(vec2 wp, float t) {
     // than the pebble drifts (their own patch pattern) - singles and
     // small groups half sunk in the soil.
     if (wD > 0.0) {
-        float d2 = 0.03 + 0.30 * smoothstep(0.45, 0.80, peb_vnoise(wp * 0.30 + 31.7));
+        float d2 = 0.03 + 0.30 * smoothstep(0.45, 0.80, peb_vnoise(wp, 0.30, vec2(31.7)));
         float sid = g_peb_id, sk = g_peb_k, ssz = g_peb_sz, bb = 0.0;
         float hb = wD * peb_layer(wp + 17.3, 0.420, d2, 4.0, 0.5, bb);
         if (hb > h) h = hb;

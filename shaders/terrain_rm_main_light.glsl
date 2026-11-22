@@ -284,9 +284,10 @@
             // grid (ruled lines across the meadow, seen from a little way up). Read on a bent copy
             // of the ground, in three turned layers, it has none.
             vec2 tp = pos.xz + (vec2(tile_noise2(pos.xz, 0.0091, vec2(0.0)), tile_noise2(pos.xz, 0.0091, vec2(23.0))) - 0.5) * 70.0;
-            float tn = noise2(mat2(0.80, -0.60, 0.60, 0.80) * tp * 0.027) * 0.45 +
-                       noise2(mat2(0.28, 0.96, -0.96, 0.28) * tp * 0.071 + 4.0) * 0.33 +
-                       noise2(mat2(-0.71, 0.71, -0.71, -0.71) * tp * 0.23 + 9.0) * 0.22;
+            // (turned by the angles of whole-sided triangles: the same patches in every tile - scene_ubo.glsl)
+            float tn = tile_noise2_rot(tp, vec3(4.0, 3.0, 5.0), vec2(0.027), vec2(0.0)) * 0.45 +
+                       tile_noise2_rot(tp, vec3(7.0, -24.0, 25.0), vec2(0.071), vec2(4.0)) * 0.33 +
+                       tile_noise2_rot(tp, vec3(-5.0, 12.0, 13.0), vec2(0.23), vec2(9.0)) * 0.22;
             vec3 turfc = mix(vec3(0.150, 0.118, 0.066), vec3(0.070, 0.112, 0.036), smoothstep(0.30, 0.52, tn)) *
                          (1.0 + 0.40 * (tile_noise2(pos.xz, 1.9, vec2(0.0)) - 0.5) * (1.0 - smoothstep(120.0, 400.0, t))) *
                          (1.0 + 0.16 * (tile_noise2(pos.xz, 11.0, vec2(0.0)) - 0.5) * (1.0 - smoothstep(18.0, 60.0, t)));   // (grain only while a pixel resolves it: finer than a pixel it turned into ruled lines)
@@ -340,11 +341,11 @@
                          sin(dot(pos.xz, vec2(cos(id * 40.0), sin(id * 40.0))) * 260.0 + id * 9.0);
             if (peb0_sz > 3.5) {
                 // Big stones: weathered, moss and lichen on top.
-                float ms = noise2(pos.xz * 11.0 + id * 20.0) * 0.6 + tile_noise2(pos.xz, 37.0, vec2(0.0)) * 0.4;
+                float ms = tile_noise2(pos.xz, 11.0, vec2(id * 20.0)) * 0.6 + tile_noise2(pos.xz, 37.0, vec2(0.0)) * 0.4;
                 pc0 = mix(pc0, gl * vec3(0.55, 1.05, 0.40), smoothstep(0.50, 0.72, ms) * smoothstep(0.35, 0.8, k) * step(0.35, fract(id * 2.7)));
                 pc0 = mix(pc0, gl * vec3(1.9, 1.85, 1.5), smoothstep(0.80, 0.86, tile_noise2(pos.xz, 55.0, vec2(3.0))) * 0.7);   // lichen spots
             }
-            pc0 *= mix(0.85, 1.15, noise2(pos.xz * 140.0 + id * 50.0));                    // speckle
+            pc0 *= mix(0.85, 1.15, tile_noise2(pos.xz, 140.0, vec2(id * 50.0)));                    // speckle
             pc0 *= mix(0.40, 1.0, smoothstep(0.0, 0.22, k));                               // sits in the soil
             peb_cover = smoothstep(0.0, 0.12, k) * pw;
             mate = mix(mate, pc0, peb_cover);

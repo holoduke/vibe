@@ -280,7 +280,7 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
             const float x = cx_of(lx, lz), z = cz_of(lx, lz);          // (in the chart)
             const float pick = u(), kind = u(), size = u(), oldp = u(), rot = u(), phase = u(), which = u(), rank = u();
             if (in_home(x0 + lx, z0 + lz)) continue;
-            if (world_highway_distance(x, z) < 12.0f) continue;              // (nor a lone tree in the road)
+            if (world_highway_distance(x, z) < 12.0f || world_site_clearing(x, z)) continue;              // (nor a lone tree in the road)
             const float hc = h_at(lx, lz);
             if (hc < wl + 2.0f) continue;
             const float f = world_forest(x, z, hc, ny_at(lx, lz), wl);
@@ -324,7 +324,7 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
                 const float x = cx_of(lx, lz), z = cz_of(lx, lz);
                 const float pick = u(), size = u(), rot = u(), phase = u(), which = u();
                 if (in_home(x0 + lx, z0 + lz)) continue;
-                if (world_highway_distance(x, z) < 11.0f) continue;          // (nothing grows on a highway or its verge)
+                if (world_highway_distance(x, z) < 11.0f || world_site_clearing(x, z)) continue;          // (nothing grows on a highway or its verge)
                 const float hc = h_at(lx, lz);
                 if (hc < wl + 1.2f) continue;
                 const float ny = ny_at(lx, lz);
@@ -353,7 +353,7 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
                 const float x = cx_of(lx, lz), z = cz_of(lx, lz);
                 const float pick = u(), size = u(), rot = u(), phase = u(), which = u();
                 if (in_home(x0 + lx, z0 + lz)) continue;
-                if (world_highway_distance(x, z) < 11.0f) continue;          // (nothing grows on a highway or its verge)
+                if (world_highway_distance(x, z) < 11.0f || world_site_clearing(x, z)) continue;          // (nothing grows on a highway or its verge)
                 if (world_river_distance(x, z) > 40.0f) continue;
                 const float h = world_ground_height(x, z, wl, S.octaves);
                 if (pick > river_shrub_density(x, z, h, ny_at(lx, lz), wl) * S.bush_density * 0.55f) continue;
