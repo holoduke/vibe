@@ -80,3 +80,5 @@ vibe_settings.cfg.tmp
 screenshots/
 
 cache/
+vibe_pipeline.cache.stamp
+vibe_pipeline.cache.tmp

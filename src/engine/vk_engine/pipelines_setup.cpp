@@ -18,11 +18,14 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <future>
 #include <thread>
 #include <stdexcept>
 #include <string>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 namespace vibe {
@@ -1677,20 +1680,69 @@ void VulkanEngine::init_shadow_lr_pipeline() {
     log::info("shadow_lr pipeline built (half-rate sun shadow producer)");
 }
 
+// ---------------------------------------------------------------------
+// The pipeline cache on disk (vibe_pipeline.cache)
+// ---------------------------------------------------------------------
+// The driver's compiled pipelines, kept between runs: without it every start compiles all
+// shaders again (the terrain shader alone takes a minute or more).
+//
+// The cache only ever grows: Vulkan has no way to say which entries a run used, so every
+// version of every shader that was ever compiled stays in it. On a machine where shaders
+// are rebuilt often (development) the file reached 1.4 GB - read at every start, held in
+// memory by the driver for the whole run, written back at every exit. So:
+//   * it is started afresh when the shaders have changed since it was saved AND it has
+//     grown past kPipelineCacheCap (one slow start, then a file of only what is in use);
+//   * it is written back only when this run added something to it.
+// A machine whose shaders never change (a release) keeps one small cache for ever.
+
+namespace {
+constexpr const char* kCachePath = "vibe_pipeline.cache";
+constexpr const char* kCacheStampPath = "vibe_pipeline.cache.stamp";
+constexpr uintmax_t   kPipelineCacheCap = 400ull * 1024 * 1024;
+size_t   g_cache_loaded_size = 0;     // what the driver reported right after loading
+uint64_t g_cache_shader_stamp = 0;    // this build's shaders (see shader_set_stamp)
+
+// A number that changes when any compiled shader does: names, sizes and write times of
+// the .spv files (not their contents - this runs at every start).
+uint64_t shader_set_stamp() {
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&](uint64_t v) { for (int i = 0; i < 8; ++i) { h ^= (v >> (i * 8)) & 0xFFu; h *= 1099511628211ull; } };
+    std::error_code ec;
+    std::vector<std::pair<std::string, std::pair<uint64_t, uint64_t>>> files;
+    for (const auto& e : std::filesystem::directory_iterator(VIBE_SHADER_DIR, ec)) {
+        if (!e.is_regular_file(ec) || e.path().extension() != ".spv") continue;
+        const uint64_t sz = static_cast<uint64_t>(e.file_size(ec));
+        const uint64_t wt = static_cast<uint64_t>(e.last_write_time(ec).time_since_epoch().count());
+        files.push_back({ e.path().filename().string(), { sz, wt } });
+    }
+    std::sort(files.begin(), files.end());       // (the directory's order is not fixed)
+    for (const auto& f : files) {
+        for (char c : f.first) mix(static_cast<unsigned char>(c));
+        mix(f.second.first); mix(f.second.second);
+    }
+    return h;
+}
+} // namespace
+
 void VulkanEngine::init_pipeline_cache() {
-    // Load any existing cache blob from disk so subsequent runs reuse the
-    // GPU's pre-compiled pipelines. First run on a clean machine is a few
-    // hundred ms slower; every run after is near-instant.
-    constexpr const char* kCachePath = "vibe_pipeline.cache";
+    g_cache_shader_stamp = shader_set_stamp();
+    // (the stamp file: the shaders the cache was saved for, and the size it had then - a
+    // cache of another size was written by something else, an older build for one)
+    uint64_t saved_stamp = 0, saved_size = 0;
+    if (std::ifstream sf(kCacheStampPath); sf) sf >> saved_stamp >> saved_size;
+
+    std::error_code ec;
+    const uintmax_t on_disk = std::filesystem::file_size(kCachePath, ec);
     std::vector<char> initial;
-    if (std::ifstream f(kCachePath, std::ios::binary | std::ios::ate); f) {
-        std::streamsize sz = f.tellg();
-        if (sz > 0) {
-            initial.resize(static_cast<size_t>(sz));
-            f.seekg(0);
-            f.read(initial.data(), sz);
-            log::infof("pipeline cache loaded: %s (%lld bytes)", kCachePath,
-                       static_cast<long long>(sz));
+    if (!ec && on_disk > 0) {
+        if (on_disk > kPipelineCacheCap && (saved_stamp != g_cache_shader_stamp || saved_size != on_disk)) {
+            log::infof("pipeline cache: %s is %.0f MB and it is not the one saved for these shaders - starting a "
+                       "new one (this start compiles every shader again)", kCachePath, double(on_disk) / 1048576.0);
+            std::filesystem::remove(kCachePath, ec);
+        } else if (std::ifstream f(kCachePath, std::ios::binary); f) {
+            initial.resize(static_cast<size_t>(on_disk));
+            f.read(initial.data(), static_cast<std::streamsize>(on_disk));
+            log::infof("pipeline cache loaded: %s (%.1f MB)", kCachePath, double(on_disk) / 1048576.0);
         }
     }
     VkPipelineCacheCreateInfo ci{};
@@ -1699,6 +1751,8 @@ void VulkanEngine::init_pipeline_cache() {
     ci.pInitialData = initial.empty() ? nullptr : initial.data();
     if (vkCreatePipelineCache(device_, &ci, nullptr, &pipeline_cache_) == VK_SUCCESS) {
         vkpipe::set_pipeline_cache(pipeline_cache_);
+        g_cache_loaded_size = 0;
+        vkGetPipelineCacheData(device_, pipeline_cache_, &g_cache_loaded_size, nullptr);
     } else {
         log::warnf("pipeline cache create failed; pipelines won't be cached");
         pipeline_cache_ = VK_NULL_HANDLE;
@@ -1707,19 +1761,37 @@ void VulkanEngine::init_pipeline_cache() {
 
 void VulkanEngine::destroy_pipeline_cache() {
     if (!pipeline_cache_) return;
-    constexpr const char* kCachePath = "vibe_pipeline.cache";
     size_t sz = 0;
     vkGetPipelineCacheData(device_, pipeline_cache_, &sz, nullptr);
-    if (sz > 0) {
+    if (sz > 0 && sz == g_cache_loaded_size) {
+        log::infof("pipeline cache unchanged (%.1f MB): not written", double(sz) / 1048576.0);
+    } else if (sz > 0) {
         std::vector<char> blob(sz);
-        if (vkGetPipelineCacheData(device_, pipeline_cache_, &sz, blob.data())
-            == VK_SUCCESS) {
-            std::ofstream f(kCachePath, std::ios::binary);
-            if (f) {
+        if (vkGetPipelineCacheData(device_, pipeline_cache_, &sz, blob.data()) == VK_SUCCESS) {
+            // To a temporary file first: a crash or a kill in the middle of a large write
+            // must not leave half a cache behind.
+            const std::string tmp = std::string(kCachePath) + ".tmp";
+            bool ok = false;
+            if (std::ofstream f(tmp, std::ios::binary); f) {
                 f.write(blob.data(), static_cast<std::streamsize>(sz));
-                log::infof("pipeline cache saved: %s (%zu bytes)", kCachePath, sz);
+                ok = f.good();
+            }
+            std::error_code ec;
+            if (ok) std::filesystem::rename(tmp, kCachePath, ec);
+            if (ok && !ec) {
+                log::infof("pipeline cache saved: %s (%.1f MB)", kCachePath, double(sz) / 1048576.0);
+            } else {
+                log::warnf("pipeline cache: could not write %s", kCachePath);
+                std::filesystem::remove(tmp, ec);
             }
         }
+    }
+    // The shaders this cache is good for (also when nothing was written: after a rebuild
+    // that changed no pipeline the stamp still moves on).
+    {
+        std::error_code ec;
+        const uintmax_t now_size = std::filesystem::file_size(kCachePath, ec);
+        if (std::ofstream sf(kCacheStampPath); sf) sf << g_cache_shader_stamp << " " << (ec ? 0 : now_size) << "\n";
     }
     vkpipe::set_pipeline_cache(VK_NULL_HANDLE);
     vkDestroyPipelineCache(device_, pipeline_cache_, nullptr);
