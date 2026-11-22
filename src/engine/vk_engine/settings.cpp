@@ -606,6 +606,13 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("render_scale", s.rt_.render_scale);
     f("fsr_min_render_scale", s.rt_.fsr_min_render_scale);
     f("quality_preset", s.rt_.quality_preset);
+    f("gfx_all", s.rt_.gfx_all);
+    f("terrain_rm_skip", s.rt_.terrain_rm_skip);
+    {
+        // (one key per row: "gfx_" + the row's own key; the strings live as long as the program)
+        static const std::vector<std::string> keys = [] { std::vector<std::string> k; for (const auto& r : gfx_rows()) k.push_back(std::string("gfx_") + r.key); return k; }();
+        for (size_t i = 0; i < keys.size() && i < 32; ++i) f(keys[i].c_str(), s.rt_.gfx[i]);
+    }
     f("foliage_quality", s.rt_.foliage_quality);
     f("shadow_quality", s.rt_.shadow_quality);
     f("ao_mode", s.rt_.ao_mode);
@@ -810,6 +817,7 @@ void VulkanEngine::load_settings() {
     // (VIBE_TEST_FOLIAGE=<0..4>, VIBE_TEST_SHADOWS=<0..2>: a level, whatever the file says - measurements)
     if (const char* e = std::getenv("VIBE_TEST_FOLIAGE")) apply_foliage_quality(std::atoi(e));
     if (const char* e = std::getenv("VIBE_TEST_SHADOWS")) apply_shadow_quality(std::atoi(e));
+    gfx_test_hook();                    // (VIBE_TEST_GFX: gfx_quality.cpp)
     clampf(rt_.tree_impostor_px, 7.0f, 40.0f);
     clampf(rt_.tree_draw_distance, 200.0f, 3800.0f);
     clampf(rt_.fov_deg, 55.0f, 100.0f);

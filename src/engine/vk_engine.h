@@ -124,6 +124,16 @@ private:
     // Called from the UI when the user picks a preset. Marks rt_ dirty so
     // the autosave debounce re-saves to disk.
     void apply_quality_preset(int level);
+    // Graphics quality rows (gfx_quality.cpp).
+    struct GfxRow { const char* key; const char* label; const char* tip; void (*apply)(VulkanEngine&, int); };
+    static const std::vector<GfxRow>& gfx_rows();
+    void apply_gfx_row(int row, int level);
+    void apply_gfx_all(int level);
+    void gfx_test_hook();
+    void gfx_quality_ui();
+    void prof_sweep_tick();                     // VIBE_PROF_SWEEP: a list of experiments in one run
+    int  prof_rm_skip_ = 0;                     // the terrain shader's sections to leave out (the sweep)
+    bool gfx_scale_changed_ = false, gfx_terrain_scale_changed_ = false;
     void apply_foliage_quality(int level);      // how much grows and how far it is drawn
     void apply_shadow_quality(int level);       // how many rays a shadow costs
 

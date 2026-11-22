@@ -531,3 +531,45 @@ What makes the cars drive like cars (`physics_world.cpp vehicle_create`, `jeep.c
 - **Steering from a key** is limited to the lock the tyres can use at that speed: atan(wheelbase x grip acceleration / speed squared) + the slip angle of best grip. More scrubs the front tyres or trips a tall car over.
 - **Traction control**: the throttle is eased while a driven wheel spins (not from a standstill, not with the handbrake).
 - Measured after: sports car about 1.1 g at 60-75 km/h on full lock, jeep about 0.9 g, neither rolls; the course at 108 km/h on autopilot.
+
+## Where the frame goes on the RTX 4080 (2026-11-23)
+
+Measured with the sweep (`VIBE_PROF_SWEEP=150`, `gfx_quality.cpp prof_sweep_tick`: one run, the camera held, ~60 experiments that each switch one thing off or down, the GPU time of every pass logged for each). 3440x1440, DLSS Ray Reconstruction, render scale 0.5, the settings as played. Full tables: `docs/perf/sweep_2026-11-23_*.txt`. Run-to-run noise is about +-0.5 ms.
+
+| view | frame | terrain pass | its first pass | vegetation | grass | lighting | upscale |
+|---|---|---|---|---|---|---|---|
+| forest by the course (outside the home tile) | 28.1 | 11.8 | 1.3 | 9.0 | 1.0 | 0.3 | 2.6 |
+| river valley by the bridge (outside) | 23.6 | 15.4 | 0.8 | 0.4 | 1.8 | 0.4 | 2.9 |
+| close ground at home | 32.1 | 16.1 | 0.5 | 4.5 | 4.3 | 0.8 | 2.7 |
+
+What moves it (ms saved, forest / river / close):
+- **Shading the terrain, not finding it**: the march alone is 4.3 / 3.7 / 6.1 of the pass; shading is the other 7.5 / 11.6 / 10.0.
+- **Close relief** (stones, sand ripples, small bumps: in the march, the normal and the shadows): 4.8 / 4.2 / 5.0.
+- **Coarser shading toward the screen's edges** (`terrain_vrs` 1): 3.7 / 3.5 / 5.2. Level 2 adds little.
+- **Terrain at lower resolution** (`terrain_raymarch_scale`): 75 % 3.4 / 4.2 / 5.9; 50 % 7.8 / 9.9 / 11.3.
+- **Tree detail distance** (`veg_lod_bias` 1.25 -> 0.6): 8.0 in the forest (vegetation 9.0 -> 0.5), nothing elsewhere.
+- **Render scale** costs by the pixel, nearly all of the frame: 0.59 +5.9 / +5.7 / +7.1; 0.67 +11.9 / +11.0 / +15.1. Below 0.5 nothing changes (the upscaler's floor).
+- The terrain's shadows together 1.8 / 2.3 / 4.8; its bounce light 0.8 / 1.1 / 2.4; grass 1.0 / 1.7 / about 4.
+- Under 1 ms each, in every view: sun shadow rays, ambient occlusion, reflections, clouds, fog, bloom, water, step counts, octaves, plant and grass distances and densities. The first pass pays for itself (off: +1.8 / +2.9).
+
+From reading the shader (not yet measured one by one): outside the home tile every height evaluation adds the continent's 21-29 noises to its own 32 hashes and has no baked height to skip along; the eye-in-ground test, the footprint bounds and the mean colours are the same for every pixel of a frame but worked out per pixel; the three normal taps recompute hashes, river and continent that they share; ground under dense grass is fully lit and then covered by the grass.
+
+## Graphics quality rows (2026-11-23)
+
+`gfx_quality.cpp`: 25 rows, each low / medium / high / ultra / insane, and "Everything" that sets them all; first in the settings window's Game tab; saved as `gfx_<key>` and `gfx_all`. `VIBE_TEST_GFX="all=2,forest=4"` sets levels by key at start-up.
+
+Measured on the RTX 4080 at 3440x1440 with Ray Reconstruction (GPU ms a frame, before frame generation), everything at one level:
+
+| view | low | medium | high | ultra | insane |
+|---|---|---|---|---|---|
+| open ground by the course | 9.2 | 11.6 | 20.4 | 33.5 | 46.9 |
+| river valley | 9.9 | 11.1 | 19.4 | 28.5 | 41.7 |
+| close ground at home | 11.2 | 15.0 | 22.7 | 40.9 | 61.2 |
+
+What the levels are made of follows the sweep above: the terrain's resolution (half size at low and medium, three quarters at high), coarser shading toward the screen's edges, the relief kept out of the march at low and medium, the trees' detail distance, and the render scale above the upscaler's floor for ultra and insane. The other rows are worth under a millisecond each and are there for the picture.
+
+Rules learnt making them:
+- **Never make `terrain_raymarch_octaves` a quality choice.** It is the ground's shape; with fewer octaves the sand path showed its gravel bed, because the ground no longer lay where everything else (physics, roads, sand) has it. Shading detail is `terrain_raymarch_normal_octaves`.
+- **Relief off entirely (`RMDBG` 1024) is not a level**: it changes materials. Low and medium use 128 (relief in the shading, not in the march).
+- The render scale cannot go below 0.5 with DLSS: low, medium and high share it.
+- Changing the terrain target's size before the targets exist (settings being loaded) crashes: `apply_gfx_row` only resizes once they do.

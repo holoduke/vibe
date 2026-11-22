@@ -28,7 +28,7 @@ void VulkanEngine::place_bridges() {
         m.emissive = glm::vec3(emissive); m.full_emissive = emissive.a > 0.5f;
         return m;
     };
-    game::LevelMesh asphalt = start(kTexAsphalt, glm::vec3(0.92f));
+    game::LevelMesh asphalt = start(kTexAsphalt, glm::vec3(0.60f, 0.62f, 0.66f));      // (the tone the road in the ground has)
     game::LevelMesh concrete = start(24, glm::vec3(1.04f, 1.03f, 1.0f));
     game::LevelMesh paint = start(-1, glm::vec3(0.80f, 0.80f, 0.77f));
     game::LevelMesh steel = start(-5, glm::vec3(0.34f, 0.35f, 0.37f));
@@ -63,9 +63,14 @@ void VulkanEngine::place_bridges() {
         float s0 = 0.0f, s1 = 0.0f;
         highway::bridge(b, s0, s1);
         std::vector<St> st;
-        for (float s = s0; s <= s1 + 0.01f; s += 2.0f) {
+        // (The deck runs 6 m onto the land at either end, a hair above the road there: the
+        //  road in the ground fades out over the last metres before the span, and the
+        //  two never met - a gap of grass and a dark line across the lanes.)
+        const float kOn = 6.0f;
+        for (float s = s0 - kOn; s <= s1 + kOn + 0.01f; s += 2.0f) {
             glm::vec3 p; glm::vec2 d;
             if (!highway::point_along(s, p, d)) continue;
+            p.y += 0.03f * glm::clamp(std::min(s - (s0 - kOn), (s1 + kOn) - s) / 2.0f, 0.35f, 1.0f);
             st.push_back({ p, glm::vec3(d.x, 0.0f, d.y), glm::vec3(-d.y, 0.0f, d.x), s });
         }
         if (st.size() < 3) continue;
@@ -110,7 +115,7 @@ void VulkanEngine::place_bridges() {
             }
         }
         // -- the ends of the girder, the abutments, the piers --
-        for (const St* e : { &st.front(), &st.back() }) {
+        for (const St* e : { &st[std::min<size_t>(3, st.size() - 1)], &st[st.size() - 1 - std::min<size_t>(3, st.size() - 1)] }) {
             const float gn = world_ground_height(e->p.x, e->p.z, rt_.water_level, 9);
             const float top = e->p.y - 0.62f, bot = std::min(gn, rt_.water_level) - 2.5f;
             obox(concrete, e->p + up * (0.5f * (top + bot) - e->p.y), e->r * (kHalf + 0.5f), up * (0.5f * (top - bot)), e->t * 0.9f, 4.0f);

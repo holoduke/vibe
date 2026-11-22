@@ -1,0 +1,60 @@
+ 28.07  +0.00 | terr 11.75 lo 1.30 veg  8.95 grass 1.04 light 0.31 upsc 2.59 | base
+ 20.54  -7.53 | terr  4.28 lo 1.30 veg  8.98 grass 1.04 light 0.31 upsc 2.53 | terrain: march only (no shading)
+ 23.69  -4.38 | terr  7.88 lo 1.30 veg  8.67 grass 1.05 light 0.31 upsc 2.63 | terrain: no relief in the march
+ 23.23  -4.84 | terr  7.39 lo 1.32 veg  8.55 grass 1.04 light 0.32 upsc 2.63 | terrain: no relief at all
+ 26.43  -1.64 | terr 10.60 lo 1.31 veg  8.51 grass 1.04 light 0.30 upsc 2.72 | terrain: no stones in the march
+ 27.30  -0.77 | terr 11.54 lo 1.30 veg  8.54 grass 1.04 light 0.31 upsc 2.58 | terrain: section 1 off
+ 26.30  -1.77 | terr 10.47 lo 1.29 veg  8.55 grass 1.04 light 0.31 upsc 2.72 | terrain: close-up detail off (2)
+ 27.45  -0.62 | terr 11.16 lo 1.29 veg  8.84 grass 1.04 light 0.31 upsc 2.63 | terrain: own sun shadow off (4)
+ 28.14  +0.07 | terr 11.76 lo 1.31 veg  8.97 grass 1.04 light 0.31 upsc 2.56 | terrain: grass blade shadows off (8)
+ 27.51  -0.56 | terr 11.64 lo 1.32 veg  8.55 grass 1.05 light 0.31 upsc 2.60 | terrain: plant shadow map off (16)
+ 26.96  -1.11 | terr 11.16 lo 1.30 veg  8.54 grass 1.04 light 0.31 upsc 2.55 | terrain: ray-traced object shadows off (32)
+ 23.09  -4.98 | terr  7.34 lo 1.29 veg  8.54 grass 1.04 light 0.31 upsc 2.55 | terrain: far section off (512)
+ 26.31  -1.76 | terr 10.47 lo 1.30 veg  8.54 grass 1.04 light 0.31 upsc 2.58 | terrain: all shadows off (4+8+16+32)
+ 29.88  +1.81 | terr 15.18 lo 0.24 veg  8.51 grass 1.13 light 0.31 upsc 2.58 | terrain: no first pass
+ 27.65  -0.42 | terr 11.75 lo 1.30 veg  8.53 grass 1.04 light 0.31 upsc 2.56 | terrain: first pass 1/3
+ 27.61  -0.46 | terr 11.77 lo 1.30 veg  8.55 grass 1.04 light 0.31 upsc 2.58 | terrain: first pass 1/4
+ 24.34  -3.73 | terr  8.46 lo 1.29 veg  8.64 grass 1.04 light 0.31 upsc 2.60 | terrain: edges coarser (vrs 1)
+ 24.19  -3.88 | terr  8.44 lo 1.30 veg  8.51 grass 1.04 light 0.30 upsc 2.68 | terrain: edges coarsest (vrs 2)
+ 27.31  -0.76 | terr 11.58 lo 1.22 veg  8.46 grass 1.04 light 0.31 upsc 2.70 | terrain: max steps 110
+ 26.97  -1.10 | terr 11.46 lo 1.01 veg  8.53 grass 1.04 light 0.31 upsc 2.57 | terrain: step factor 0.8
+ 27.14  -0.93 | terr 11.41 lo 1.26 veg  8.55 grass 1.03 light 0.31 upsc 2.57 | terrain: octaves 6
+ 27.58  -0.49 | terr 11.77 lo 1.31 veg  8.55 grass 1.04 light 0.31 upsc 2.58 | terrain: normal octaves 8
+ 27.39  -0.68 | terr 11.69 lo 1.31 veg  8.49 grass 1.04 light 0.31 upsc 2.63 | terrain: detail distance short
+ 27.59  -0.48 | terr 11.75 lo 1.30 veg  8.54 grass 1.04 light 0.31 upsc 2.59 | terrain: normal 3 px
+ 27.63  -0.44 | terr 11.75 lo 1.28 veg  8.62 grass 1.04 light 0.31 upsc 2.56 | terrain: relief full (lite off)
+ 27.23  -0.84 | terr 11.41 lo 1.30 veg  8.53 grass 1.05 light 0.31 upsc 2.57 | terrain: bounce light 0
+ 27.56  -0.51 | terr 11.77 lo 1.29 veg  8.53 grass 1.04 light 0.31 upsc 2.59 | terrain: soft shadow rays 1
+ 27.50  -0.57 | terr 11.76 lo 1.29 veg  8.53 grass 1.04 light 0.31 upsc 2.55 | terrain: shadow steps 8
+ 24.67  -3.40 | terr  0.00 lo 0.24 veg  8.49 grass 1.13 light 0.31 upsc 2.64 | terrain: resolution 75%
+ 20.31  -7.76 | terr  0.00 lo 0.00 veg  8.50 grass 1.13 light 0.31 upsc 2.68 | terrain: resolution 50%
+ 20.45  -7.62 | terr  0.00 lo 0.00 veg  8.51 grass 1.13 light 0.32 upsc 2.72 | terrain: resolution 50% + temporal
+ 28.00  -0.07 | terr 11.73 lo 1.32 veg  8.98 grass 1.04 light 0.31 upsc 2.56 | terrain: pom off
+ 27.99  -0.08 | terr 11.73 lo 1.30 veg  8.96 grass 1.04 light 0.31 upsc 2.59 | terrain: fog off
+ 27.99  -0.08 | terr 11.75 lo 1.30 veg  8.98 grass 1.04 light 0.31 upsc 2.56 | render scale 0.42
+ 33.96  +5.89 | terr 15.13 lo 1.67 veg  9.75 grass 1.42 light 0.39 upsc 3.17 | render scale 0.59
+ 39.93 +11.86 | terr 18.72 lo 2.14 veg 10.40 grass 1.81 light 0.48 upsc 3.73 | render scale 0.67
+ 20.11  -7.96 | terr 11.72 lo 1.27 veg  0.54 grass 1.03 light 0.31 upsc 2.92 | trees: detail near only (lod 0.6)
+ 28.60  +0.53 | terr 11.77 lo 1.28 veg  9.40 grass 1.04 light 0.31 upsc 2.53 | trees: detail far (lod 3)
+ 28.51  +0.44 | terr 11.76 lo 1.28 veg  9.30 grass 1.04 light 0.31 upsc 2.58 | trees: impostors late (10 px)
+ 28.25  +0.18 | terr 11.75 lo 1.30 veg  8.92 grass 1.04 light 0.31 upsc 2.69 | trees: draw distance 900
+ 28.20  +0.13 | terr 11.75 lo 1.31 veg  8.98 grass 1.04 light 0.31 upsc 2.56 | plants: draw distance 20
+ 27.04  -1.03 | terr 11.69 lo 1.30 veg  8.99 grass 0.00 light 0.31 upsc 2.54 | grass: off
+ 28.17  +0.10 | terr 11.77 lo 1.30 veg  8.98 grass 1.01 light 0.31 upsc 2.57 | grass: distance 60
+ 28.19  +0.12 | terr 11.76 lo 1.30 veg  9.00 grass 1.04 light 0.31 upsc 2.55 | grass: distance 350
+ 28.13  +0.06 | terr 11.77 lo 1.30 veg  8.98 grass 1.04 light 0.31 upsc 2.53 | grass: density 0.6
+ 28.07  +0.00 | terr 11.70 lo 1.29 veg  8.95 grass 1.04 light 0.31 upsc 2.60 | grass: shadows off
+ 27.86  -0.21 | terr 11.55 lo 1.30 veg  8.98 grass 1.04 light 0.25 upsc 2.53 | light: sun shadows off
+ 28.16  +0.09 | terr 11.79 lo 1.29 veg  9.01 grass 1.04 light 0.31 upsc 2.53 | light: sun shadow rays 2
+ 27.70  -0.37 | terr 11.45 lo 1.29 veg  8.98 grass 1.04 light 0.21 upsc 2.54 | light: bounce light off
+ 28.05  -0.02 | terr 11.65 lo 1.30 veg  8.95 grass 1.04 light 0.30 upsc 2.64 | light: ambient occlusion off
+ 28.19  +0.12 | terr 11.73 lo 1.29 veg  8.93 grass 1.04 light 0.32 upsc 2.62 | light: ambient occlusion ray traced
+ 27.53  -0.54 | terr 11.77 lo 1.29 veg  8.53 grass 1.04 light 0.31 upsc 2.57 | light: leaf cards solid (mode 2)
+ 27.68  -0.39 | terr 11.77 lo 1.28 veg  8.52 grass 1.05 light 0.40 upsc 2.63 | light: every leaf tested (mode 0)
+ 27.50  -0.57 | terr 11.71 lo 1.32 veg  8.56 grass 1.04 light 0.31 upsc 2.56 | light: reflections off
+ 27.60  -0.47 | terr 11.76 lo 1.31 veg  8.54 grass 1.04 light 0.33 upsc 2.59 | light: radiance cache off
+ 27.26  -0.81 | terr 11.71 lo 1.28 veg  8.56 grass 1.04 light 0.31 upsc 2.60 | sky: clouds off
+ 27.56  -0.51 | terr 11.79 lo 1.31 veg  8.55 grass 1.04 light 0.31 upsc 2.57 | air: volumetric fog off
+ 27.52  -0.55 | terr 11.70 lo 1.29 veg  8.53 grass 1.04 light 0.31 upsc 2.55 | lens: bloom and flares off
+ 27.30  -0.77 | terr 11.40 lo 1.29 veg  8.65 grass 1.04 light 0.30 upsc 2.56 | water: off
+ 27.60  -0.47 | terr 11.76 lo 1.28 veg  8.56 grass 1.04 light 0.31 upsc 2.66 | base again

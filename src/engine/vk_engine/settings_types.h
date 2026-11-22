@@ -833,6 +833,14 @@ struct RtSettings {
         // have to tune individually. See apply_quality_preset().
         // The two choices that cost or save the most frame time, as levels (settings.cpp
         // apply_foliage_quality / apply_shadow_quality; -1 = set by hand):
+        // Graphics quality (gfx_quality.cpp): the level each row was last set to (-1: never),
+        // and the level of "everything" (-1: rows differ).
+        int gfx[32] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+        int gfx_all = -1;
+        // Sections of the terrain shader left out for speed (the RMDBG bits of
+        // terrain_rm_noise_road.glsl): 128 = no close relief in the march, 1024 = none at all,
+        // 32768 = no stones in the march. Set by the "Surface relief" row.
+        int terrain_rm_skip = 0;
         int foliage_quality = -1;   // 0 low, 1 medium, 2 high, 3 ultra, 4 insane
         int shadow_quality = -1;    // 0 low, 1 medium, 2 high
         int quality_preset = 2;  // High — matches existing defaults

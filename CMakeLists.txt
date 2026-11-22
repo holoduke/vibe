@@ -353,6 +353,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/highway_field.cpp
     src/engine/vk_engine/highway_furniture.cpp
     src/engine/vk_engine/jeep.cpp
+    src/engine/vk_engine/gfx_quality.cpp
     src/engine/vk_engine/bridges.cpp
     src/engine/vk_engine/mem_log.cpp
     src/engine/vk_engine/frame.cpp

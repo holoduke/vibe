@@ -934,7 +934,7 @@ void VulkanEngine::update_scene_ubo() {
         data.globe_frame = glm::mat4(glm::mat3(gc.F));
         data.globe_info = glm::vec4(gc.home ? 0.0f : 1.0f, float(gc.ox()), wv_nf_ok() ? 1.0f : 0.0f,
                                     // VIBE_RM_SKIP=<bits>: leave sections of the terrain shader out, to measure them (terrain_raymarch.frag RMDBG)
-                                    []{ static const char* e = std::getenv("VIBE_RM_SKIP"); return e ? float(std::atoi(e)) : 0.0f; }());
+                                    float((prof_rm_skip_ | (rt_.terrain_rm_skip & (128 | 1024 | 32768))) | []{ static const char* e = std::getenv("VIBE_RM_SKIP"); return e ? std::atoi(e) : 0; }()));
         int32_t cells[globe::kOctaves][4]; float fracs[globe::kOctaves][4];
         globe::lattice(gc.F[1] * globe::kR, cells, fracs);
         for (int i = 0; i < 12; ++i) {

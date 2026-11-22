@@ -734,6 +734,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                     }
                 }
             }
+            prof_sweep_tick();
             // VIBE_LOG_MEM=1: every 600 frames, what the game holds - to see whether moving
             // about the world leaves anything behind (it must come back to where it was).
             if (static const bool lm = std::getenv("VIBE_LOG_MEM") != nullptr; lm && frame_number_ % 600 == 0) {
