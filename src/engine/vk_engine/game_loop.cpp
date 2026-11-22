@@ -248,7 +248,7 @@ void VulkanEngine::loop_handle_keys(InputFrame& in, float frame_dt) {
     // Digit 9 -> toggle terrain wireframe. Same edge-detect pattern
     // as the E key above. Only fires while playing so a 9 in the
     // pause menu / chat input wouldn't flip it.
-    if (state_ != State::Playing) fly_mode_ = false;
+    // (fly mode stays as it was through the pause menu)
     // Weapon select: 1 = laser gun, 2 = airstrike tablet.
     if (state_ == State::Playing && !terrain_edit_mode_) {      // (edit mode: the number keys pick what to draw)
         if (in.weapon1 && !prev_weapon_key_[0]) { weapon_ = 0; flashlight_on_ = false; }

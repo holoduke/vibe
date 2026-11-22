@@ -785,6 +785,56 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
     writes[1].pImageInfo = &dii_m;
     writes[2].pImageInfo = &dii_d;
     vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
+
+    // The "temporal" strategy: a second colour and depth target, drawn into in turn with the
+    // first (frame.cpp). Bindings 36, 37 - without it they name the first picture again.
+    tr_->lr_hist_ok = false;
+    tr_->lr_cur_b = false;
+    tr_->lr_frame = ~uint64_t(0);
+    tr_->lr_jit = tr_->lr_jit_prev = glm::vec2(0.0f);
+    if (tr_use_lowres() && rt_.terrain_rm_temporal) {
+        make_color(scene_color_format_, tr_->lrb_color_image, tr_->lrb_color_alloc, tr_->lrb_color_view, "tr_lrb_color");
+        VkImageCreateInfo ici{};
+        ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = depth_format_;
+        ici.extent = { lw, lh, 1 };
+        ici.mipLevels = 1; ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        vk_check(vmaCreateImage(allocator_, &ici, &aci, &tr_->lrb_depth_image, &tr_->lrb_depth_alloc, nullptr), "tr_lrb_depth image");
+        VkImageViewCreateInfo vci{};
+        vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image = tr_->lrb_depth_image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = depth_format_;
+        vci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &tr_->lrb_depth_view), "tr_lrb_depth view");
+        // (readable from the start: the compose pass's bindings must be valid before the
+        // first frame has drawn into them - they are not used until then)
+        vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
+            vkinit::transition_image(cb, tr_->lrb_color_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            vkinit::transition_image_aspect(cb, tr_->lrb_depth_image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+            vkinit::transition_image(cb, tr_->lr_color_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            vkinit::transition_image_aspect(cb, tr_->lr_depth_image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+        });
+    }
+    {
+        VkDescriptorImageInfo bc = dii_c, bd = dii_d;
+        if (tr_->lrb_color_view) bc.imageView = tr_->lrb_color_view;
+        if (tr_->lrb_depth_view) bd.imageView = tr_->lrb_depth_view;
+        VkWriteDescriptorSet bw[2] = { writes[0], writes[2] };
+        bw[0].dstBinding = 36; bw[0].pImageInfo = &bc;
+        bw[1].dstBinding = 37; bw[1].pImageInfo = &bd;
+        vkUpdateDescriptorSets(device_, 2, bw, 0, nullptr);
+    }
     log::infof("terrain raymarch low-res targets: %ux%u (%.0f%%)",
                lw, lh, s * 100.0f);
 }
@@ -955,6 +1005,10 @@ void VulkanEngine::destroy_terrain_raymarch_lowres() {
         tr_->march_image = VK_NULL_HANDLE;
         tr_->march_alloc = nullptr;
     }
+    if (tr_->lrb_color_view) { vkDestroyImageView(device_, tr_->lrb_color_view, nullptr); tr_->lrb_color_view = VK_NULL_HANDLE; }
+    if (tr_->lrb_color_image) { vmaDestroyImage(allocator_, tr_->lrb_color_image, tr_->lrb_color_alloc); tr_->lrb_color_image = VK_NULL_HANDLE; tr_->lrb_color_alloc = nullptr; }
+    if (tr_->lrb_depth_view) { vkDestroyImageView(device_, tr_->lrb_depth_view, nullptr); tr_->lrb_depth_view = VK_NULL_HANDLE; }
+    if (tr_->lrb_depth_image) { vmaDestroyImage(allocator_, tr_->lrb_depth_image, tr_->lrb_depth_alloc); tr_->lrb_depth_image = VK_NULL_HANDLE; tr_->lrb_depth_alloc = nullptr; }
     if (tr_->lr_color_view) {
         vkDestroyImageView(device_, tr_->lr_color_view, nullptr);
         tr_->lr_color_view = VK_NULL_HANDLE;

@@ -25,6 +25,20 @@ struct VulkanEngine::TerrainRaymarchState {
     VkImage         lr_depth_image  = VK_NULL_HANDLE;
     VmaAllocation   lr_depth_alloc  = nullptr;
     VkImageView     lr_depth_view   = VK_NULL_HANDLE;
+    // The "temporal" strategy (rt_.terrain_rm_temporal, with the scale below 1): a second colour
+    // and depth target of the same size (bindings 36, 37). The terrain is drawn into the two in
+    // turn, each frame's picture offset by a quarter of its pixel the other way, and the compose
+    // pass puts this frame's together with last frame's.
+    VkImage         lrb_color_image = VK_NULL_HANDLE;
+    VmaAllocation   lrb_color_alloc = nullptr;
+    VkImageView     lrb_color_view  = VK_NULL_HANDLE;
+    VkImage         lrb_depth_image = VK_NULL_HANDLE;
+    VmaAllocation   lrb_depth_alloc = nullptr;
+    VkImageView     lrb_depth_view  = VK_NULL_HANDLE;
+    bool            lr_cur_b        = false;        // this frame's picture is the second one
+    bool            lr_hist_ok      = false;        // last frame's picture is there to be used
+    uint64_t        lr_frame        = ~uint64_t(0); // the frame the low-resolution terrain was last drawn in
+    glm::vec2       lr_jit{0.0f}, lr_jit_prev{0.0f};   // the offsets (in uv) of this frame's picture and last frame's
     VkSampler       lr_sampler      = VK_NULL_HANDLE;
     // NEAREST sampler dedicated to u_lr_depth (binding 11). Bilinear on
     // depth values bleeds terrain↔sky across silhouettes — at low

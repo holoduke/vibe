@@ -152,6 +152,10 @@ void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
     PushConstants pc{};
     pc.mvp      = vp;
     pc.model    = fv.inv_vp;
+    // (the "temporal" strategy: the whole picture a quarter of its pixel aside - the pixel at
+    // uv then shows the scene at uv + lr_jit)
+    if (tr_->lr_jit != glm::vec2(0.0f))
+        pc.model = fv.inv_vp * glm::translate(glm::mat4(1.0f), glm::vec3(2.0f * tr_->lr_jit.x, 2.0f * tr_->lr_jit.y, 0.0f));
     pc.prev_mvp = prev_view_proj_valid_ ? prev_view_proj_ : vp;
     // Plateau half-extent must mirror the full-res raymarch path
     // (line ~2800) — otherwise the LR pass paints a much wider
@@ -255,6 +259,11 @@ void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd) {
                          static_cast<float>(tr_->lr_extent.width),
                          static_cast<float>(tr_->lr_extent.height),
                          0.0f);
+    // The "temporal" strategy: where this frame's picture and last frame's are offset to (uv),
+    // which of the two targets is this frame's, and whether last frame's can be used.
+    pc.emissive = glm::vec4(tr_->lr_jit, tr_->lr_jit_prev);
+    pc.tex_params = glm::vec4(tr_->lrb_color_view ? 1.0f : 0.0f, tr_->lr_cur_b ? 1.0f : 0.0f,
+                              (tr_->lr_hist_ok && prev_view_proj_valid_) ? 1.0f : 0.0f, 0.0f);
     vkCmdPushConstants(cmd, pipeline_layout_,
                        kPushConstantStages,
                        0, sizeof(PushConstants), &pc);

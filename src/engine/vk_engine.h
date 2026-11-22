@@ -1227,6 +1227,8 @@ private:
         int           palette_prev = -1;               // last frame's (the motion of the limbs); -1 = none
         std::vector<glm::vec4> pose_rows;              // the last pose (re-sent on a frame that is not posed)
         glm::mat4     model{1.0f}, prev_model{1.0f}, view_inv{1.0f};
+        mutable glm::mat4 held{1.0f}, held_prev{1.0f}; // what they carry: its place in the world this frame and last (motion vectors)
+        mutable uint64_t held_frame = ~uint64_t(0);    // the frame `held` is of
         glm::vec3     eye{0.0f};
         glm::mat4     weapon_offset{1.0f};             // from their animator (recoil, reload, equip)
         glm::mat4     fire_offset{1.0f};               // ... and where a shot of theirs leaves from

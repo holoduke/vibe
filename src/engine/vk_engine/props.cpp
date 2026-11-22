@@ -1020,6 +1020,11 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
     const glm::mat4 vp = rel ? glm::mat4(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view)))
                              : vp_world;
     const glm::mat4 to_world = glm::translate(glm::mat4(1.0f), cam);
+    // Another player's weapon stands in the world: its motion on screen is the camera's and its
+    // own, like any other thing (held_motion: this frame's world place -> last frame's). Only
+    // the player's own rides on the camera and has none.
+    bool      held_moves = false;
+    glm::mat4 held_motion(1.0f);
     auto draw_part = [&](const Mesh& m, const glm::mat4& model,
                          const glm::vec4& color, const glm::vec3& emissive,
                          bool full_emissive) {
@@ -1045,6 +1050,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
             J[3][1] = dj.y;
             pc.prev_mvp = J * pc.mvp;
         }
+        if (held_moves) pc.prev_mvp = prev_view_proj_ * (held_motion * pc.model);
         pc.color = color;
         pc.emissive = glm::vec4(emissive, full_emissive ? 1.0f : 0.0f);
         // No texture: albedo/normal index -1 (was left at 0, so the gun
@@ -1066,6 +1072,20 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
     if (mp_->draw) { if (mp_->draw->animator) recoil_offset = mp_->draw->weapon_offset; }
     else if (body_animator_ && game_.player_body) recoil_offset = body_weapon_offset_;
     glm::mat4 view_inv_recoil = view_inv * recoil_offset;
+    if (mp_->draw && rel) {
+        const MpAvatar& av = *mp_->draw;                               // (its held_* are mutable: a drawing record)
+        const glm::mat4 held = view_inv_world * recoil_offset;
+        const uint64_t f = uint64_t(frame_number_);
+        if (av.held_frame != f) {
+            av.held_prev = (av.held_frame + 1 == f) ? av.held : held;     // (not drawn last frame: no motion of its own)
+            av.held = held;
+            av.held_frame = f;
+        }
+        if (prev_view_proj_valid_) {
+            held_moves = true;
+            held_motion = av.held_prev * glm::inverse(av.held);
+        }
+    }
     draw_player_body(cmd, vp, cam);        // (vp is camera-relative here: the body's world matrix has to be too)
     if (mp_->draw) {
         // The head is part of the skinned soldier (draw_player_body). Without its file: a box.

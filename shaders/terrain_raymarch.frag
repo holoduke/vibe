@@ -573,10 +573,9 @@ float cellMaxHeight(vec2 wp) {
 // (only reached from the air, looking down through thinner air) it grows slowly.
 // And only the part of the ray inside the hazy air near the ground (2.5 km) counts:
 // from high up most of the way down is through clear air.
-float rm_haze_dist(float t) {
-    float tl = t * min(1.0, 2500.0 / max(scene.camera_pos.y, 1.0));
-    return (tl > 1500.0) ? 1500.0 + (tl - 1500.0) * 0.004 : tl;
-}
+// (ground_haze.glsl: shared with the lit geometry in deferred_lighting.frag)
+#include "ground_haze.glsl"
+float rm_haze_dist(float t) { return ground_haze_dist(t); }
 // 0: the look of the land on the ground (occlusion terms, contrast curve). 1: its look from the air.
 // By distance beyond the range of those terms - and by the camera's height, so that from the air
 // the land right below is not a brighter, harder patch in the middle of the rest: the whole view
@@ -720,8 +719,12 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
         // dyn-props. cube.frag PCSS still uses the full slider.
         float near_mult = max(1.0, scene.terrain_extra.y);
         int N_s_cap = max(2, int(scene.terrain_rt_extra.x));
+        // Under DLSS Ray Reconstruction (rt_flags.x bit 1) the seed changes every frame and the
+        // denoiser averages over time: one shadow ray a frame is enough (as deferred_lighting.frag).
+        bool rr_denoise = (scene.rt_flags.x & 2) != 0;
         int N_s = clamp(int(ceil(float(scene.rt_flags.y) * near_mult)),
-                        2, N_s_cap);
+                        rr_denoise ? 1 : 2, N_s_cap);
+        if (rr_denoise) N_s = max(1, N_s / 2);     // (half the budget a frame, the other half next frame: deferred_lighting.frag does the same)
 
         vec3 ref_l = abs(sunDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0)
                                             : vec3(1.0, 0.0, 0.0);
@@ -754,7 +757,9 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
 #endif /* VIBE_WATER */
 
         // 1. Blocker search (4 rays, 4× softness cone).
-        const int kBlocker = 4;
+        // (Ray Reconstruction: 2 blocker rays a frame estimate the same mean distance as 4 - and a
+        // single one when the softness is so low that the rays are all but parallel anyway)
+        int kBlocker = rr_denoise ? (base_softness < 0.004 ? 1 : 2) : 4;
         float sum_t = 0.0;
         int   hits  = 0;
         for (int i = 0; i < kBlocker; ++i) {
@@ -964,13 +969,15 @@ void main() {
         // full pass does not shade the ground there either. The depth pre-pass tells, before
         // any marching is done.)
         bool  hidden = t_obj_far < r;
-        if ((int(scene.rm_perf.x) & 4) != 0 && r > 0.0 && r < 1e8 && !hidden) {
+        // (rm_perf.x bit 8, "start from the low-resolution hit": the hit alone is kept, w = 0.25)
+        if ((int(scene.rm_perf.x) & 12) != 0 && r > 0.0 && r < 1e8 && !hidden) {
             g_rm_no_relief = true;
             float th = raymarch(ro, rd, min(t_lim > 0.0 ? t_lim : 1400.0, 1400.0), r);
             g_rm_no_relief = false;
             if (th > 0.0 && th < 1400.0 && (t_water_plane < 0.0 || th < t_water_plane)) {
                 vec3 sun = scene.sun_direction.xyz;
-                if (!hidden) {
+                outShadeLo = vec4(0.0, 0.0, th, 0.25);
+                if ((int(scene.rm_perf.x) & 4) != 0) {
                     // (the baked landscape's normal: enough to tell which way the ground faces
                     // and to lift the shadow rays off it; the point itself a little above the
                     // relief-free hit, where the drawn ground is)
@@ -1045,6 +1052,25 @@ void main() {
     if ((int(scene.rm_perf.x) & 1) != 0 && pc.emissive.x < 0.0 && !water_only && !air) {
         vec4 g4 = textureGather(u_march_lo, gl_FragCoord.xy / (scene.rm_perf.y * vec2(textureSize(u_march_lo, 0))), 0);
         t_start = min(min(g4.x, g4.y), min(g4.z, g4.w));
+        // "Start from the low-resolution hit" (rm_perf.x bit 8): that march went on to the
+        // ground itself (without the close relief). Where the four blocks round this pixel
+        // agree on how far it is - one unbroken slope, no edge between them - this pixel
+        // starts a little short of the nearest of them and has only the last steps to do.
+        // Checked: the starting point has to be clear of the ground, relief included.
+        if ((int(scene.rm_perf.x) & 8) != 0 && t_start > 0.0 && t_start < 1e8) {
+            vec2 suv = gl_FragCoord.xy / (scene.rm_perf.y * vec2(textureSize(u_shade_lo, 0)));
+            vec4 h4 = textureGather(u_shade_lo, suv, 2), v4 = textureGather(u_shade_lo, suv, 3);
+            if (min(min(v4.x, v4.y), min(v4.z, v4.w)) > 0.1) {
+                float h_lo = min(min(h4.x, h4.y), min(h4.z, h4.w)), h_hi = max(max(h4.x, h4.y), max(h4.z, h4.w));
+                if (h_hi - h_lo < 0.02 * h_lo + 0.5) {
+                    float tc = h_lo - (0.6 / clamp(-rd.y, 0.1, 1.0) + 0.006 * h_lo);
+                    if (tc > t_start) {
+                        vec3 pc0 = ro + rd * tc;
+                        if (pc0.y - terrainM_lod(pc0.xz, tc) > 0.34) t_start = tc;
+                    }
+                }
+            }
+        }
     }
     float t = water_only ? raymarchMesh(ro, rd, t_water_plane)
                          : ((air || t_start > 1e8) ? -1.0 : raymarch(ro, rd, t_stop, t_start));

@@ -579,13 +579,29 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     // pass below upscales it into scene_color/depth with depth-aware
     // composite so cube/castle/dyn-props (drawn afterwards) layer on top.
     if (tr_use_lowres() && (terrain_raymarch_pipeline_ || terrain_raymarch_lite_lr_pipeline_)) {
-        vkinit::transition_image(frame.command_buffer, tr_->lr_color_image,
+        // The "temporal" strategy: this frame's picture goes into the first or the second
+        // target in turn, offset by a quarter of its pixel one way or the other (so the two
+        // together sample twice as many places: a checkerboard); the compose pass puts this
+        // one together with last frame's, which is still in the other target.
+        const bool tb = tr_->lrb_color_view != VK_NULL_HANDLE && tr_->lrb_depth_view != VK_NULL_HANDLE;
+        const uint64_t fn = uint64_t(frame_number_);
+        tr_->lr_hist_ok = tb && tr_->lr_frame + 1 == fn;
+        tr_->lr_frame = fn;
+        tr_->lr_cur_b = tb && (fn & 1) != 0;
+        tr_->lr_jit_prev = tr_->lr_jit;
+        tr_->lr_jit = tb ? glm::vec2(0.25f / float(tr_->lr_extent.width), 0.25f / float(tr_->lr_extent.height)) * (tr_->lr_cur_b ? 1.0f : -1.0f)
+                         : glm::vec2(0.0f);
+        const VkImage     lr_ci = tr_->lr_cur_b ? tr_->lrb_color_image : tr_->lr_color_image;
+        const VkImageView lr_cv = tr_->lr_cur_b ? tr_->lrb_color_view  : tr_->lr_color_view;
+        const VkImage     lr_di = tr_->lr_cur_b ? tr_->lrb_depth_image : tr_->lr_depth_image;
+        const VkImageView lr_dv = tr_->lr_cur_b ? tr_->lrb_depth_view  : tr_->lr_depth_view;
+        vkinit::transition_image(frame.command_buffer, lr_ci,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         vkinit::transition_image(frame.command_buffer, tr_->lr_motion_image,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        vkinit::transition_image_aspect(frame.command_buffer, tr_->lr_depth_image,
+        vkinit::transition_image_aspect(frame.command_buffer, lr_di,
                                         VK_IMAGE_LAYOUT_UNDEFINED,
                                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                         VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -598,7 +614,7 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         lr_clear_d.depthStencil.depth = 1.0f;
 
         VkRenderingAttachmentInfo lr_color_att =
-            vkinit::color_attachment_info(tr_->lr_color_view, &lr_clear_c,
+            vkinit::color_attachment_info(lr_cv, &lr_clear_c,
                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingAttachmentInfo lr_motion_att =
             vkinit::color_attachment_info(tr_->lr_motion_view, &lr_clear_m,
@@ -607,7 +623,7 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         VkRenderingAttachmentInfo lr_depth_att{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .pNext = nullptr,
-            .imageView = tr_->lr_depth_view,
+            .imageView = lr_dv,
             .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .resolveMode = VK_RESOLVE_MODE_NONE,
             .resolveImageView = VK_NULL_HANDLE,
@@ -653,13 +669,13 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         vkCmdEndRendering(frame.command_buffer);
 
         // Transition all three to SHADER_READ_ONLY for the compose pass.
-        vkinit::transition_image(frame.command_buffer, tr_->lr_color_image,
+        vkinit::transition_image(frame.command_buffer, lr_ci,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         vkinit::transition_image(frame.command_buffer, tr_->lr_motion_image,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        vkinit::transition_image_aspect(frame.command_buffer, tr_->lr_depth_image,
+        vkinit::transition_image_aspect(frame.command_buffer, lr_di,
                                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                         VK_IMAGE_ASPECT_DEPTH_BIT);

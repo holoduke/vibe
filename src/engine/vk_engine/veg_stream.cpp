@@ -467,7 +467,7 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
         S.done.clear();
     }
 
-    const float far_m = object_far_ + 0.75f * kCell;
+    const float far_m = std::min(object_far_, rt_.tree_draw_distance) + 0.75f * kCell;
     // Camera speed. Above the height from which no tree can be seen, and while travelling faster
     // than cells could ever be generated for (space flight covers kilometres a frame), there is
     // nothing to do: everything is given back once and the generators' queue is emptied. This

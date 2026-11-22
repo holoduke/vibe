@@ -74,7 +74,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 20 + kSpomMaterialCount },      // + the terrain's low-resolution march (34)
+            kTextureCount * 2 + 22 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -94,7 +94,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[36]{};
+    VkDescriptorSetLayoutBinding bindings[38]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -348,11 +348,18 @@ void VulkanEngine::init_descriptors() {
     // Binding 35: the sun-shadow terms at that march's hits (RGBA16F, the same size).
     bindings[35] = bindings[31];
     bindings[35].binding = 35;
+    // Bindings 36, 37: the low-resolution terrain's second picture, colour and depth (the
+    // "temporal" strategy draws into the two in turn; terrain_raymarch_compose.frag reads
+    // both). Without it: the first picture again (init_terrain_raymarch_lowres).
+    bindings[36] = bindings[31];
+    bindings[36].binding = 36;
+    bindings[37] = bindings[31];
+    bindings[37].binding = 37;
 
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 36, .pBindings = bindings,
+        .bindingCount = 38, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -942,7 +949,8 @@ void VulkanEngine::update_scene_ubo() {
     }
     // Raymarched terrain, speed settings (terrain_raymarch.frag; scene_ubo.glsl rm_perf).
     data.rm_perf = glm::vec4((tr_march_prepass_on() ? 1.0f : 0.0f) + (rt_.terrain_rm_relief_lite ? 2.0f : 0.0f) +
-                                 ((tr_march_prepass_on() && rt_.terrain_rm_shade_lo) ? 4.0f : 0.0f),
+                                 ((tr_march_prepass_on() && rt_.terrain_rm_shade_lo) ? 4.0f : 0.0f) +
+                                 ((tr_march_prepass_on() && rt_.terrain_rm_start_at_hit) ? 8.0f : 0.0f),
                              float(tr_->march_div),
                              rt_.terrain_rm_converge,
                              rt_.terrain_rm_normal_px);

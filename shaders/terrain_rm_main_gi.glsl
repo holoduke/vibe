@@ -420,14 +420,6 @@
     // Wavelength-dependent atmospheric extinction (blue attenuates
     // ~4× faster than red), with a sun-tinted fog colour near the sun
     // direction so the horizon glows warm where the sun touches it.
-    vec3 extinction = exp(-rm_haze_dist(t) * 0.00025 * vec3(1.0, 1.3, 2.0));
-    float sundot = clamp(dot(rd, sunDir), 0.0, 1.0);
-    // pow(x, 8) → 3 squarings.
-    float sn2 = sundot * sundot;
-    float sn4 = sn2 * sn2;
-    float sn8 = sn4 * sn4;
-    vec3 fogCol = scene.crater_info.w * mix(vec3(0.55, 0.55, 0.58),
-                      vec3(1.0, 0.7, 0.3),
-                      0.3 * sn8);
-    col = col * extinction + fogCol * (1.0 - extinction);
+    // (ground_haze.glsl: the same call the trees and buildings get in deferred_lighting.frag)
+    col = ground_haze(col, t, rd, sunDir);
 

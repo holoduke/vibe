@@ -655,6 +655,9 @@ struct RtSettings {
         float terrain_rm_converge        = 0.8f;  // fast final approach to the ground (0 = off, the old small steps)
         float terrain_rm_normal_px       = 1.5f;  // normal: drop detail finer than this many pixels (0 = keep all)
         bool  terrain_rm_relief_lite     = true;  // under dense grass the normal reads the main rills only
+        // Strategies to try (Graphics > terrain):
+        bool  terrain_rm_start_at_hit    = false; // the low-resolution march goes on to the ground itself; each pixel starts just short of that hit (needs the march first)
+        bool  terrain_rm_temporal        = false; // with "Raymarch scale" below 100 %: the low-resolution picture is offset by half its pixel from frame to frame and this frame's is put together with last frame's (checkerboard)
         bool  terrain_rm_shade_lo        = false; // the sun's shadows on the ground once per block of the low-resolution march, not per pixel. Off: measured, it costs as much in that pass as it saves in the main one (a loss on a Radeon)
         // Shading rate of the raymarched ground toward the edges of the screen (VRS; needs a GPU
         // that keeps it with shader depth writes): 0 = every pixel everywhere, 1 = one shade
@@ -771,6 +774,8 @@ struct RtSettings {
         // Trees: below this size on screen (bounding radius, pixels) a tree is drawn as its
         // baked card instead of its mesh (veg_impostor.cpp). 7 = the old hand-over point.
         float tree_impostor_px = 20.0f;
+        // How far trees and bushes are drawn (m). The view distance still caps it; 3800 = as far as that goes.
+        float tree_draw_distance = 3800.0f;
         float fov_deg    = 80.0f;
         float mouse_sens = 1.0f;
         // FSR path only (AMD / no DLSS): the least the scene is rendered at, as a share of the

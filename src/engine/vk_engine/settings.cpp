@@ -524,9 +524,12 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_rm_normal_px", s.rt_.terrain_rm_normal_px);
     f("terrain_rm_relief_lite", s.rt_.terrain_rm_relief_lite);
     f("terrain_rm_shade_lo", s.rt_.terrain_rm_shade_lo);
+    f("terrain_rm_start_at_hit", s.rt_.terrain_rm_start_at_hit);
+    f("terrain_rm_temporal", s.rt_.terrain_rm_temporal);
     f("terrain_vrs", s.rt_.terrain_vrs);
     f("foliage_ray_mode", s.rt_.foliage_ray_mode);
     f("tree_impostor_px", s.rt_.tree_impostor_px);
+    f("tree_draw_distance", s.rt_.tree_draw_distance);
     f("fov_deg", s.rt_.fov_deg);
     f("mouse_sens", s.rt_.mouse_sens);
     f("invert_mouse_y", s.input_.invert_mouse_y);
@@ -755,6 +758,7 @@ void VulkanEngine::load_settings() {
     clampi(rt_.foliage_ray_mode, 0, 2);
     clampi(rt_.water_style, 0, 2);
     clampf(rt_.tree_impostor_px, 7.0f, 40.0f);
+    clampf(rt_.tree_draw_distance, 200.0f, 3800.0f);
     clampf(rt_.fov_deg, 55.0f, 100.0f);
     clampf(rt_.mouse_sens, 0.2f, 4.0f);
     clampf(input_.pad_look_speed, 40.0f, 500.0f);

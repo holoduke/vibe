@@ -27,6 +27,7 @@ layout(set = 0, binding = 23) uniform sampler2D u_cloud_shadow;   // sunlight th
 #define CLOUD_SHADOW_MAP u_cloud_shadow
 #include "scene_ubo.glsl"
 #include "sun_horizon.glsl"
+#include "ground_haze.glsl"
 layout(set = 0, binding = 20) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
 layout(set = 0, binding = 21) uniform sampler2D u_lawn_height;   // baked terrain height (blade roots)
 layout(set = 0, binding = 22) uniform sampler2D u_grass_mask;    // where the lawn grows
@@ -1725,6 +1726,11 @@ void main() {
             }
         }
     }
+
+    // The haze of distance, as on the raymarched ground (ground_haze.glsl): a far tree or
+    // building fades into the same air as the hill it stands on. It had none of its own -
+    // far forests stood out dark and saturated against hazed slopes.
+    lit = ground_haze(lit, cam_dist, normalize(world_pos - cam_pos), normalize(scene.sun_direction.xyz));
 
     {
         vec4 dfog_col = scene.distance_fog_color;

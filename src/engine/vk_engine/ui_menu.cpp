@@ -36,6 +36,30 @@ std::string VulkanEngine::bind_label(Action a) const {
 void VulkanEngine::build_menu_ui() {
     if (state_ != State::Paused) return;
     ImGuiViewport* vp = ImGui::GetMainViewport();
+    // The frame rate, top left where the game shows it (its HUD is hidden behind the menu), so
+    // what a setting costs is seen while it is changed.
+    {
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        ImFont* fb = font_hud_big_ ? font_hud_big_ : ImGui::GetFont();
+        ImFont* fs = font_hud_ ? font_hud_ : ImGui::GetFont();
+        const float s = std::max(vp->Size.y / 1080.0f, 0.6f);
+        const ImVec2 p0(vp->Pos.x + 34.0f * s, vp->Pos.y + 26.0f * s);
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%.0f", ema_fps_);
+        const ImU32 fc = ema_fps_ >= 55.0f ? IM_COL32(170, 235, 90, 255) : (ema_fps_ >= 30.0f ? IM_COL32(255, 200, 70, 255) : IM_COL32(255, 80, 60, 255));
+        const float nw = fb->CalcTextSizeA(40.0f * s, 1e9f, 0.0f, buf).x;
+        dl->AddRectFilled(ImVec2(p0.x - 10.0f * s, p0.y - 6.0f * s), ImVec2(p0.x + nw + 110.0f * s, p0.y + (dlss_fg_active() ? 74.0f : 50.0f) * s),
+                          IM_COL32(8, 10, 16, 170), 6.0f * s);
+        dl->AddText(fb, 40.0f * s, p0, fc, buf);
+        dl->AddText(fs, 17.0f * s, ImVec2(p0.x + nw + 8.0f * s, p0.y + 4.0f * s), IM_COL32(150, 156, 166, 230), "FPS");
+        std::snprintf(buf, sizeof(buf), "%.1f MS", last_frame_dt_ * 1000.0f);
+        dl->AddText(fs, 17.0f * s, ImVec2(p0.x + nw + 8.0f * s, p0.y + 23.0f * s), IM_COL32(150, 156, 166, 230), buf);
+        if (dlss_fg_active()) {
+            const float ratio = dlssg_present_ratio_ > 0.5f ? dlssg_present_ratio_ : float(dlssg_frames_sent_ + 1);
+            std::snprintf(buf, sizeof(buf), "%.0f SHOWN (FRAME GEN %.1fX)", ema_fps_ * ratio, ratio);
+            dl->AddText(fs, 15.0f * s, ImVec2(p0.x, p0.y + 50.0f * s), IM_COL32(120, 200, 255, 230), buf);
+        }
+    }
     // Cond_FirstUseEver: centred on first launch, then ImGui restores
     // whatever position / size the user left in vibe_imgui.ini.
     float max_h = vp->WorkSize.y * 0.90f;
@@ -665,6 +689,8 @@ void VulkanEngine::build_menu_ui() {
         {
             static const char* kVendor[] = { "unknown", "NVIDIA", "AMD", "Intel", "other" };
             ImGui::Text("GPU: %s (%s)", gpu_name_.c_str(), kVendor[int(gpu_vendor_)]);
+            ImGui::SliderFloat("Trees: draw distance (m)", &rt_.tree_draw_distance, 200.0f, 3800.0f, "%.0f");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Trees and bushes beyond this are not drawn. 3800: as far as the view distance allows.");
             ImGui::SliderFloat("Trees: card below this size (px)", &rt_.tree_impostor_px, 7.0f, 40.0f, "%.0f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Far trees are drawn as one baked picture of themselves instead of their mesh.\nHigher: more trees are cards (faster). 7: only the very far ones, as before.");
             ImGui::Checkbox("Auto-pick upscaler for this GPU (at start-up)", &rt_.upscaler_auto);
@@ -889,6 +915,13 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SliderFloat("Normal detail limit (pixels)", &rt_.terrain_rm_normal_px, 0.0f, 4.0f, "%.1f");
         ImGui::Checkbox("Simpler relief under dense grass", &rt_.terrain_rm_relief_lite);
         ImGui::Checkbox("Sun shadows at low resolution (needs the march first)", &rt_.terrain_rm_shade_lo);
+        ImGui::SeparatorText("Strategies to try");
+        ImGui::Checkbox("Start each pixel at the low-resolution hit (needs the march first)", &rt_.terrain_rm_start_at_hit);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The low-resolution march goes on to the ground itself; where its blocks agree,\na pixel starts just short of that and has only the last steps to do.\nSame picture; the low-resolution pass costs more, the main pass less.");
+        if (ImGui::Checkbox("Temporal reconstruction (with Raymarch scale below 100 %)", &rt_.terrain_rm_temporal))
+            recreate_terrain_raymarch_lowres();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The low-resolution terrain is offset by half a pixel from frame to frame\nand each frame is put together with the one before (checkerboard):\ntwice the detail of the scale alone when the view is still or moves slowly.");
+        ImGui::TextDisabled("Full resolution: scale 100 %%.  Low resolution, sharpened: scale below 100 %%.");
         {
             const char* vrs_labels[] = { "Every pixel", "2x2 toward the screen edges", "2x2 edges, 4x4 corners" };
             if (ImGui::Combo("Ground shading rate", &rt_.terrain_vrs, vrs_labels, 3)) recreate_vrs_attachment();
