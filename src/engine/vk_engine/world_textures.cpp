@@ -744,10 +744,10 @@ void VulkanEngine::load_foliage_textures() {
     {
         struct OT { const char* file; float strength; };
         // (and the jeep's: its paint and its seat canvas - assets/jeep/tex/)
-        const OT ot[7] = { { "corten", 2.6f }, { "oak", 1.6f }, { "floor", 0.7f }, { "board", 3.2f }, { "fabric", 3.0f },
-                           { "../../jeep/tex/paint", 1.1f }, { "../../jeep/tex/canvas", 2.6f } };
-        for (int k = 0; k < 7; ++k) {
-            const int slot = k < 5 ? kTexOffice + k : kTexJeep + (k - 5);
+        const OT ot[8] = { { "corten", 2.6f }, { "oak", 1.6f }, { "floor", 0.7f }, { "board", 3.2f }, { "fabric", 3.0f },
+                           { "../../jeep/tex/paint", 1.1f }, { "../../jeep/tex/canvas", 2.6f }, { "screens", 0.0f } };
+        for (int k = 0; k < 8; ++k) {
+            const int slot = k < 5 ? kTexOffice + k : k < 7 ? kTexJeep + (k - 5) : kTexScreens;
             const std::string p = resolve(std::string("../office/tex/") + ot[k].file + ".png");
             if (p.empty()) continue;
             int w = 0, h = 0, c = 0;

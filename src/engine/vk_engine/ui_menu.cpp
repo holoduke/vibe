@@ -115,6 +115,25 @@ void VulkanEngine::build_menu_ui() {
 
     // ----- Game tab --------------------------------------------------------
     if (ImGui::BeginTabItem("Game")) {
+        // First of all: the two choices that decide the frame rate most.
+        ImGui::SeparatorText("Speed and quality");
+        {
+            static const char* kFol[] = { "Low", "Medium", "High", "Ultra", "Insane" };
+            ImGui::TextUnformatted("Foliage ");
+            for (int i = 0; i < 5; ++i) {
+                ImGui::SameLine();
+                if (ImGui::RadioButton((std::string(kFol[i]) + "##fol").c_str(), rt_.foliage_quality == i)) apply_foliage_quality(i);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("How many trees, bushes and plants there are and how far they are drawn.\nLower is much faster in the woods. The forest is planted again when this changes (about a second).");
+            static const char* kSh[] = { "Low", "Medium", "High" };
+            ImGui::TextUnformatted("Shadows ");
+            for (int i = 0; i < 3; ++i) {
+                ImGui::SameLine();
+                if (ImGui::RadioButton((std::string(kSh[i]) + "##sh").c_str(), rt_.shadow_quality == i)) apply_shadow_quality(i);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("How finely soft shadows are computed. Lower is faster and a little grainier.");
+            if (rt_.foliage_quality < 0 || rt_.shadow_quality < 0) ImGui::TextDisabled("(none chosen: the values set by hand under Graphics are in use)");
+        }
         ImGui::SeparatorText("Action");
         ImGui::Checkbox("Aircraft", &game_.aircraft_enabled);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Enemy jets fly sorties over the map. Off: the sky is empty. Your own airstrike aircraft still comes when called.");

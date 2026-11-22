@@ -480,6 +480,7 @@ vec2 surface_rough_metal(int tex_idx, bool foliage, bool mesh_draw) {
     if (tex_idx == -2) return vec2(0.30, 1.0);               // brushed steel
     if (tex_idx == -3) return vec2(0.46, 1.0);               // anodised aluminium
     if (tex_idx == -4) return vec2(0.10, 1.0);               // chrome
+    if (tex_idx == -6) return vec2(0.22, 0.0);               // a car's paint under its clear coat: glossy, not a metal
     if (tex_idx == -5) return vec2(0.66, 1.0);               // galvanised steel (the road's guard rail): dull, no mirror of the sun
     if (mesh_draw && tex_idx < 0) return vec2(0.62, 0.0);    // painted vehicles / jets
     switch (tex_idx) {

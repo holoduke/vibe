@@ -985,7 +985,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     static RibbonBuilder spray, mist; spray.v.clear(); mist.v.clear(); spray.eye = mist.eye = eye;
     // Tyre marks and tyre smoke (jeep.cpp).
     static RibbonBuilder marks; marks.v.clear();
-    jeep_fx(marks.v, mist.v, cam_right, cam_up);
+    jeep_fx(marks.v, mist.v, flash.v, eye, cam_right, cam_up);
     for (const auto& d : water_drops_) {
         if (d.t < 0.0f) continue;
         const float sp = glm::length(d.vel);

@@ -72,6 +72,13 @@ float ground(float h, float x, float z);
 float cross_fall(float ad);
 // The length of the first line (the course), metres.
 float course_length();
+// Bridges: the stretches of the course over ground that is under water. No shelf is made
+// there (ground(), the baked field): the land and the water stay as they are, and a bridge
+// carries the road (vk_engine/bridges.cpp). `bridge`: its ends, in point_along's metres.
+int   bridge_count();
+void  bridge(int i, float& s0, float& s1);
+// On a bridge's deck: its surface height at (x, z).
+bool  deck(float x, float z, float& h);
 
 // The field around `center` (rounded by the caller): two RGBA8 images, kFieldN a side.
 //   a: R,G = signed distance (16 bit over +-64 m), B,A = surface height (16 bit over 512 m)

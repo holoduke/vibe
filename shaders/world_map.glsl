@@ -145,8 +145,8 @@ const float wm_pad_h = 36.0;
 float wm_pad(float h, vec2 wp) {
     vec2 d = wp - wm_pad_c;
     float r2 = dot(d, d);
-    if (r2 > 220.0 * 220.0) return h;
-    return mix(wm_pad_h, h, smoothstep(100.0, 220.0, sqrt(r2)));
+    if (r2 > 270.0 * 270.0) return h;
+    return mix(wm_pad_h, h, smoothstep(150.0, 270.0, sqrt(r2)));
 }
 float wm_height(float a, vec2 wp, float wl) { return wm_river(wm_pad(wm_height_land(a, wp, wl), wp), wp, wl); }
 

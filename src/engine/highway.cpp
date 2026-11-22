@@ -28,6 +28,8 @@ constexpr float kCell = 64.0f, kGridReach = 66.0f;
 std::unordered_map<uint64_t, std::vector<uint32_t>> g_grid;
 std::atomic<bool> g_ready{false};
 std::mutex g_build_mutex;
+std::vector<glm::vec2> g_spans;   // bridges: along the course from .x to .y (Line::s of line 0)
+bool in_span(float s) { for (const glm::vec2& b : g_spans) if (s >= b.x && s <= b.y) return true; return false; }
 int   g_junction = -1;             // index into g_lines[0] where the spur leaves
 glm::vec4 g_tightest(0.0f);        // the tightest bend of the coast road: where (xyz), its radius (w)
 
@@ -375,6 +377,29 @@ void build(float water_level) {
         g_junction = int(jn);
     }
     for (uint32_t li = 0; li < g_lines.size(); ++li) index_line(li);
+    // Bridges: where the line runs well above the natural ground AND that ground is under
+    // water somewhere in the run - a river's mouth, a cove. (A dry dip stays an embankment.)
+    g_spans.clear();
+    if (!g_lines.empty() && !std::getenv("VIBE_NO_BRIDGES")) {
+        const Line& H = g_lines[0];
+        const size_t n = H.p.size();
+        std::vector<uint8_t> low(n), wet(n);
+        for (size_t i = 0; i < n; ++i) {
+            const float hn = world_ground_height_natural(H.p[i].x, H.p[i].z, water_level, 9);
+            low[i] = hn < H.p[i].y - 1.3f; wet[i] = hn < water_level + 0.15f;
+        }
+        for (size_t i = 0; i < n;) {
+            if (!low[i]) { ++i; continue; }
+            size_t j = i; bool w = false;
+            while (j < n && low[j]) { w = w || wet[j]; ++j; }
+            if (w && j < n && i > 0) {
+                // (its ends on the banks: half a point's spacing into the dry ground)
+                const float a = 0.5f * (H.s[i - 1] + H.s[i]), b = 0.5f * (H.s[j - 1] + H.s[j]);
+                g_spans.push_back(glm::vec2(a, b));
+            }
+            i = j;
+        }
+    }
     g_ready.store(true, std::memory_order_release);
 }
 
@@ -402,6 +427,7 @@ float cross_fall(float ad) { return 0.02f * std::min(ad, kPaved) + 0.05f * std::
 float ground(float h_nat, float x, float z) {
     float d, h, s;
     if (!nearest(x, z, kBlend, d, h, s)) return h_nat;
+    if (in_span(s)) return h_nat;                    // (a bridge: the land under it is as it was)
     return glm::mix(h_nat, h - cross_fall(std::abs(d)), 1.0f - sstep(kVerge, kBlend, std::abs(d)));
 }
 
@@ -468,6 +494,7 @@ bool bake(glm::vec2 center, std::vector<uint8_t>& A, std::vector<uint8_t>& B, gl
                 hit.t = std::clamp(glm::dot(q - a, ab) / std::max(glm::dot(ab, ab), 1e-6f), 0.0f, 1.0f);
                 resolve(lines, q, hit, d, h, s);
                 d = std::clamp(d, -kFieldMaxD, kFieldMaxD);
+                if (hit.li == 0 && in_span(s)) d = kFieldMaxD;          // (a bridge: no road in the ground here)
             }
             const uint32_t dv = uint32_t(std::clamp((d + kFieldMaxD) / (2.0f * kFieldMaxD), 0.0f, 1.0f) * 65535.0f + 0.5f);
             const uint32_t hv = uint32_t(std::clamp((h - kFieldHLo) / kFieldHSpan, 0.0f, 1.0f) * 65535.0f + 0.5f);
@@ -486,7 +513,23 @@ bool bake(glm::vec2 center, std::vector<uint8_t>& A, std::vector<uint8_t>& B, gl
     return true;
 }
 
-float course_length() { return (ready() && !g_lines.empty()) ? g_lines[0].s.back() : 0.0f; }
+int bridge_count() { return ready() ? int(g_spans.size()) : 0; }
+void bridge(int i, float& s0, float& s1) {
+    const float j = g_lines[0].s[size_t(std::max(g_junction, 0))];
+    s0 = g_spans[size_t(i)].x - j; s1 = g_spans[size_t(i)].y - j;
+}
+bool deck(float x, float z, float& h) {
+    if (g_spans.empty()) return false;
+    float d, h0, s;
+    if (!nearest(x, z, 7.0f, d, h0, s) || !in_span(s)) return false;
+    const float ad = std::abs(d);
+    if (ad > 6.6f) return false;
+    h = h0 - cross_fall(std::min(ad, kPaved)) + (ad > kPaved ? 0.15f : 0.0f);
+    return true;
+}
+
+float course_length() {
+ return (ready() && !g_lines.empty()) ? g_lines[0].s.back() : 0.0f; }
 int line_count() { return ready() ? int(g_lines.size()) : 0; }
 const std::vector<glm::vec3>& line_points(int line) { return g_lines[size_t(line)].p; }
 

@@ -583,15 +583,17 @@ def make_concrete():
     pores = np.clip(fbm(n, 512, 1, rng) - 0.80, 0, 1) * 5.0                                  # air holes
     broom = np.repeat(fbm(n, 1024, 1, rng)[:, :1], n, axis=1)                                # the float's strokes, across the slab
     joint = np.clip(line(u, 0.0, 0.006) + line(v, 0.0, 0.006), 0, 1)
-    base = 0.47 + 0.09 * (mid - 0.5) + 0.06 * (fine - 0.5) + 0.06 * (big - 0.5) + 0.05 * (grit - 0.5) + 0.03 * (broom - 0.5)
+    # (Nothing in it that the eye finds again in the next slab: no cracks, no stains, no
+    #  large light and dark. Those are made in the shader from the place in the world -
+    #  cube.frag concrete_wear - and never repeat.)
+    base = 0.47 + 0.02 * (mid - 0.5) + 0.06 * (fine - 0.5) + 0.05 * (grit - 0.5) + 0.03 * (broom - 0.5)
     base *= 1.0 - 0.35 * pores
     crack = np.clip(1.0 - np.abs(fbm(n, 3, 6, rng) - 0.5) * 140.0, 0, 1) * (fbm(n, 2, 2, rng) > 0.58)
     stain = np.clip(fbm(n, 4, 4, rng) - 0.58, 0, 1) * 2.2
     col = np.stack([base * 1.0, base * 0.985, base * 0.95], axis=2)
-    col *= (1.0 - 0.30 * stain)[:, :, None]
-    col *= (1.0 - 0.55 * joint - 0.40 * crack)[:, :, None]
+    col *= (1.0 - 0.55 * joint)[:, :, None]
     save_png('concrete', col)
-    h = 0.6 + 0.18 * (fine - 0.5) + 0.10 * (mid - 0.5) + 0.14 * (grit - 0.5) + 0.06 * (broom - 0.5) - 0.25 * pores - 0.5 * joint - 0.3 * crack
+    h = 0.6 + 0.18 * (fine - 0.5) + 0.10 * (mid - 0.5) + 0.14 * (grit - 0.5) + 0.06 * (broom - 0.5) - 0.25 * pores - 0.5 * joint
     save_png('concrete_h', h)
 
 

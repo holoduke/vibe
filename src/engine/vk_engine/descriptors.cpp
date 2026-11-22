@@ -1018,6 +1018,9 @@ void VulkanEngine::update_scene_ubo() {
         data.flash_col = glm::vec4(glm::vec3(1.0f, 0.95f, 0.84f) * kPower[lv], std::cos(glm::radians(9.0f)));
     } else {
         data.flash_pos = data.flash_dir = data.flash_col = glm::vec4(0.0f);
+        // A car's head lights (jeep.cpp) are the same kind of light: a cone that lights what
+        // it falls on and shows in the air. They take it while the hand torch is off.
+        if (jeep_headlights(data.flash_pos, data.flash_dir, data.flash_col)) data.flash_vp = glm::mat4(0.0f);
     }
     // Glow lights: anti-aircraft muzzle flashes and the tracer rounds
     // themselves light what they pass. Up to 8, the ones that matter most

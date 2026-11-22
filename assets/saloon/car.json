@@ -1,0 +1,193 @@
+{
+  "comment": "engine frame: +y up, front = -z, +x = right; metres. body.mesh origin = on the ground under the middle of the wheelbase",
+  "wheel_radius": 0.34,
+  "wheel_width": 0.24,
+  "wheelbase": 2.9,
+  "track": 1.6,
+  "wheel_mesh_axle_axis": [
+    1,
+    0,
+    0
+  ],
+  "wheel_mesh_outer_side": "+x (draw as is on the right, rotated 180 deg about y on the left)",
+  "wheels": {
+    "front_left": [
+      -0.8,
+      0.34,
+      -1.45
+    ],
+    "front_right": [
+      0.8,
+      0.34,
+      -1.45
+    ],
+    "rear_left": [
+      -0.8,
+      0.34,
+      1.45
+    ],
+    "rear_right": [
+      0.8,
+      0.34,
+      1.45
+    ]
+  },
+  "seat_driver": [
+    -0.37,
+    1.0,
+    0.03
+  ],
+  "seat_passenger": [
+    0.37,
+    1.0,
+    0.03
+  ],
+  "hip_driver": [
+    -0.37,
+    0.48,
+    0.03
+  ],
+  "legs": 0.7,
+  "steering_hub": [
+    -0.37,
+    0.85,
+    -0.4
+  ],
+  "steering_axis": [
+    0.0,
+    0.40674,
+    0.91355
+  ],
+  "steering_tilt_deg": 24.0,
+  "steering_mesh_axis": [
+    0,
+    0,
+    1
+  ],
+  "steering_placement": "spin about mesh +z, then rotate about +x by -steering_tilt_deg, then translate to steering_hub",
+  "headlights": [
+    [
+      -0.5779,
+      0.6273,
+      -2.2638
+    ],
+    [
+      0.5779,
+      0.6273,
+      -2.2638
+    ]
+  ],
+  "tail_lights": [
+    [
+      -0.7208,
+      0.8877,
+      2.4713
+    ],
+    [
+      0.7208,
+      0.8877,
+      2.4713
+    ]
+  ],
+  "exit_left": [
+    -1.93,
+    0.0,
+    0.15
+  ],
+  "exit_right": [
+    1.93,
+    0.0,
+    0.15
+  ],
+  "bounds_min": [
+    -1.0971,
+    0.15,
+    -2.35
+  ],
+  "bounds_max": [
+    1.0971,
+    1.45,
+    2.5092
+  ],
+  "bounds_note": "bounds are of the whole body.mesh, door mirrors included; the hull alone is 1.860 wide",
+  "collision_boxes": [
+    {
+      "name": "nose",
+      "center": [
+        0.0,
+        0.4995,
+        -2.135
+      ],
+      "half_extents": [
+        0.86,
+        0.2595,
+        0.185
+      ]
+    },
+    {
+      "name": "bonnet",
+      "center": [
+        0.0,
+        0.58,
+        -1.4
+      ],
+      "half_extents": [
+        0.93,
+        0.34,
+        0.55
+      ]
+    },
+    {
+      "name": "cabin",
+      "center": [
+        0.0,
+        0.5915,
+        0.5
+      ],
+      "half_extents": [
+        0.93,
+        0.3515,
+        1.35
+      ]
+    },
+    {
+      "name": "roof",
+      "center": [
+        0.0,
+        1.1915,
+        0.5
+      ],
+      "half_extents": [
+        0.7,
+        0.2485,
+        0.75
+      ]
+    },
+    {
+      "name": "rear_screen",
+      "center": [
+        0.0,
+        1.085,
+        1.525
+      ],
+      "half_extents": [
+        0.7,
+        0.142,
+        0.275
+      ]
+    },
+    {
+      "name": "boot",
+      "center": [
+        0.0,
+        0.6765,
+        2.16
+      ],
+      "half_extents": [
+        0.91,
+        0.3765,
+        0.31
+      ]
+    }
+  ]
+}

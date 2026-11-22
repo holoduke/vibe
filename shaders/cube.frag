@@ -148,7 +148,7 @@ layout(set = 0, binding = 25, std430) readonly buffer VoxShapeDir {
 const uint kVoxEmpty = 0xFFFFFFFFu;
 
 // Bound texture arrays (must match kTextureCount on the C++ side).
-const int kTextureCount = 36;     // +1 for kTexProcGrass (slot 12)
+const int kTextureCount = 37;     // +1 for kTexProcGrass (slot 12)
 // Procedurally-baked terrain material slots (see bake_terrain_materials
 // in world.cpp). Must match kTexRock/.. in vk_engine.h.
 const int kMatRock  = 7;
@@ -454,6 +454,17 @@ void main() {
         // Self-lit textured mesh (stained glass): the texture is the light.
         if (pc.grass_params.w < -0.5 && vTexParams.x > -0.5 && vTexParams.x < float(kTextureCount) - 0.5)
             e = texture(u_albedo[int(vTexParams.x + 0.5)], vUv * vTexParams.z).rgb * vColor + vEmissive.rgb;
+        // A display (slot 36: 8 pictures in a 4 x 2 atlas; uv = its number + 0..1 across, 0..1
+        // down): each shows one of them and changes to another every quarter of a minute -
+        // not all at the same moment.
+        if (pc.grass_params.w < -0.5 && int(vTexParams.x + 0.5) == 36) {
+            float id = floor(vUv.x - 1e-4);
+            vec2  f  = clamp(vec2(vUv.x - id, vUv.y), 0.004, 0.996);
+            float turn = floor((scene.water_params.w + id * 3.7) / 16.0);
+            float cell = mod(id * 3.0 + floor(cs_hash(vec2(id, turn)) * 8.0), 8.0);
+            vec2  cuv = (vec2(mod(cell, 4.0), floor(cell / 4.0)) + f) / vec2(4.0, 2.0);
+            e = textureGrad(u_albedo[36], cuv, dFdx(vUv) / vec2(4.0, 2.0), dFdy(vUv) / vec2(4.0, 2.0)).rgb * vColor;
+        }
         outColor = vec4(e, 1.0);
         // Also fill gbuffer with the lit emissive value tagged mat 5 so the
         // deferred shader's mat≥5 pass-through reads scene_color (which
@@ -990,6 +1001,26 @@ void main() {
 #endif
         // Rain on the courtyard paving: the stone darkens as it gets wet and
         // pools of water gather in patches - flat, dark mirrors.
+        // Concrete (the launch pad's apron, slot 24): what makes one slab differ from the
+        // next - its own tone, stains, dark patches, a crack here and there - from the place
+        // in the world, so nothing repeats across the apron (the texture carries only the
+        // fine grain and the joints).
+        if (is_mesh_draw && albedo_idx_raw == 24) {
+            vec2 wp2 = vWorldPos.xz;
+            vec2 slab = floor((wp2 - vec2(0.0, 2.0)) / 4.0);
+            float tone = cs_hash(slab + 3.7);
+            float big = cs_noise(wp2 * 0.045) * 0.6 + cs_noise(wp2 * 0.17 + 9.1) * 0.4;
+            float blot = cs_noise(wp2 * 0.55 + 21.0) * 0.6 + cs_noise(wp2 * 1.7) * 0.4;
+            float m = 1.0 + (tone - 0.5) * 0.13;
+            m *= mix(0.80, 1.10, smoothstep(0.22, 0.78, big));
+            m *= 1.0 - 0.16 * smoothstep(0.60, 0.86, blot);
+            // cracks: the zero line of a slow noise, only where another says the slab is tired
+            float cn = cs_noise(wp2 * 0.31 + 13.7) * 0.7 + cs_noise(wp2 * 1.3 + 2.0) * 0.3;
+            float tired = smoothstep(0.66, 0.80, cs_noise(wp2 * 0.06 + 40.0));
+            float crack = (1.0 - smoothstep(0.0, 0.0035, abs(cn - 0.5))) * tired;
+            m *= 1.0 - 0.4 * crack;
+            albedo *= m * mix(vec3(1.0, 0.99, 0.96), vec3(1.0), big);
+        }
         float rain_pool = 0.0, rain_wet = 0.0;
         if (!is_terrain_pre && !is_mesh_draw && albedo_idx_raw == 5 && N.y > 0.85 && scene_wet() > 0.02) {
             rain_wet = scene_wet();

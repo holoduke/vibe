@@ -124,6 +124,8 @@ private:
     // Called from the UI when the user picks a preset. Marks rt_ dirty so
     // the autosave debounce re-saves to disk.
     void apply_quality_preset(int level);
+    void apply_foliage_quality(int level);      // how much grows and how far it is drawn
+    void apply_shadow_quality(int level);       // how many rays a shadow costs
 
     // Recompute render_extent_ from swapchain_extent_ × rt_.render_scale and
     // re-create scene_color / history / motion_vec / bloom / depth so the
@@ -650,7 +652,8 @@ private:
     // atlas, 16 bark, 17 lamp timber, 18 the small-plant atlas.
     static constexpr int kFileTextureCount   = 7;
     static constexpr int kTexJeep            = 34;    // the jeep's paint, 35 its seat canvas (assets/jeep/tex)
-    static constexpr int kTerrainMatCount    = 29;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
+    static constexpr int kTexScreens         = 36;    // what the pavilion's displays show: 8 pictures, 4 x 2 (assets/office/tex/screens.png)
+    static constexpr int kTerrainMatCount    = 30;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
     static constexpr int kTextureCount       = kFileTextureCount +
                                                kTerrainMatCount;   // 20
     // Albedo/normal-array indices of the baked terrain materials.
@@ -1756,6 +1759,14 @@ private:
     void      shelters_near(glm::vec3 eye, float reach, std::vector<Shelter>& out, size_t max_n) const;
     glm::vec3 office_pos_{0.0f};
     std::vector<glm::vec3> office_lights_;       // its room lights (also in lamp_lights_): on by day too
+    // Level, paved places a vehicle drives on that are not the terrain: a rectangle with its
+    // height at x0 and at x1 (a ramp when they differ). The vehicle's ground is the higher of
+    // the terrain and these (jeep.cpp); round each the ground comes up to it over a metre.
+    struct DrivePad { float x0, z0, x1, z1, h0, h1; };
+    std::vector<DrivePad> drive_pads_;
+    std::vector<glm::vec4> parking_bays_;        // the car park's bays: x, y, z of the middle, w = yaw
+    void      place_parking();
+    void      place_bridges();                   // (bridges.cpp)
     std::vector<glm::vec4> home_grass_cuts_;     // home's chart: where no grass may grow beyond the home tile (min x, min z, max x, max z)
     void      travel_to_site(int k);
     std::vector<int> sites_by_distance(int max_n) const;
@@ -1984,12 +1995,13 @@ private:
     bool      body_seated_ = false;              // the player's body is in a car's seat this frame
     JeepState* jeep_ = nullptr;                  // the car that is simulated (the one last got into)
     std::vector<JeepState*> jeep_all_;           // all of them; the others stand where they were left
-    JeepState* jeep_load(const std::string& dir, const std::string& json);
+    JeepState* jeep_load(const std::string& dir, const std::string& json, const glm::vec3* paint = nullptr);
     void      jeep_park(JeepState& J, glm::vec3 pos, float yaw);
     void      jeep_marks(JeepState& J, float dt);
     bool      jeep_driver(glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;     // the driver's seat and the wheel's rim, world (player_body.cpp)
     void      jeep_place(JeepState& J, const PhysicsWorld::VehicleState& prev, float dt);
-    void      jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puffs, glm::vec3 cam_right, glm::vec3 cam_up);   // tyre marks and smoke (fx.cpp)
+    void      jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puffs, std::vector<Vertex>& glow, glm::vec3 eye, glm::vec3 cam_right, glm::vec3 cam_up);
+    bool      jeep_headlights(glm::vec4& pos, glm::vec4& dir, glm::vec4& col) const;     // a car's beam, as the torch's uniforms (descriptors.cpp)   // tyre marks and smoke (fx.cpp)
     std::vector<CastleMeshGpu> jeep_owned_;      // its meshes (body, one wheel, steering wheel)
     std::vector<CastleMeshGpu> jeep_draw_;       // what is drawn: the same, the wheel four times, each with its place
     void      init_jeep();

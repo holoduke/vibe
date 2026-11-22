@@ -75,7 +75,53 @@ void VulkanEngine::reset_player() {
 //
 // Numbers are tuned for an RTX 4080 at 1280×720 — Low ≈ 4–5× the FPS of
 // Ultra in this scene's overdraw profile.
+// Foliage: how many trees, bushes and plants stand, how far out they are drawn in full, how
+// far the grass reaches. The forest is the costliest thing on screen where it is dense
+// (measured in the woods at 1080p: 27 ms a frame against 9 in the open), so this is the first
+// thing to turn down for speed. High is the game's own default; Ultra about what a strong
+// card runs well; Insane is for looking, not for playing.
+void VulkanEngine::apply_foliage_quality(int level) {
+    struct L { float forest, bush, flower, ground, lod, flower_m, ground_m, reed_m, grass_m, grass, near_boost; };
+    static const L kL[5] = {
+        { 0.40f, 0.30f, 0.30f, 0.30f, 0.60f,  25.0f,  22.0f,  60.0f,  70.0f, 0.75f, 0.3f },
+        { 0.70f, 0.60f, 0.60f, 0.60f, 0.85f,  34.0f,  32.0f, 100.0f, 110.0f, 0.90f, 0.5f },
+        { 1.00f, 1.00f, 1.00f, 1.00f, 1.00f,  44.0f,  42.0f, 150.0f, 150.0f, 1.00f, 0.8f },
+        { 1.40f, 1.30f, 1.35f, 1.30f, 1.50f,  70.0f,  60.0f, 200.0f, 220.0f, 1.15f, 1.0f },
+        { 1.90f, 1.80f, 2.00f, 2.20f, 2.60f, 140.0f, 120.0f, 300.0f, 350.0f, 1.50f, 1.5f },
+    };
+    level = std::clamp(level, 0, 4);
+    const L& l = kL[level];
+    const bool replant = rt_.forest_density != l.forest || rt_.bush_density != l.bush;
+    rt_.foliage_quality = level;
+    rt_.forest_density = l.forest; rt_.bush_density = l.bush;
+    rt_.flower_density = l.flower; rt_.ground_density = l.ground;
+    rt_.veg_lod_bias = l.lod;
+    rt_.flower_draw_distance = l.flower_m; rt_.ground_draw_distance = l.ground_m; rt_.reed_draw_distance = l.reed_m;
+    rt_.grass_raymarch_distance = l.grass_m; rt_.grass_density = l.grass; rt_.grass_near_boost = l.near_boost;
+    if (replant) veg_replant_request_ = true;          // (the forest is planted again: about a second)
+    log::infof("[settings] foliage quality %d", level);
+}
+
+// Shadows: what the light's rays cost. With an upscaler on, the sun's rays per pixel are
+// already held to a few (descriptors.cpp shadow_samples_eff), so the levels also set what
+// else those rays do: whether a ray through a tree tests every leaf or takes the leaf card as
+// solid (foliage_ray_mode), ray-traced or screen-space ambient occlusion, the terrain's own
+// shadow march, the grass's shadow rays.
+void VulkanEngine::apply_shadow_quality(int level) {
+    struct L { int samples, leaf_mode, terrain_steps, grass, ao; };
+    static const L kL[3] = { { 2, 2, 12, 0, 1 }, { 4, 1, 20, 2, 1 }, { 16, 1, 40, 4, -1 } };       // (ao -1: left as it is set)
+    level = std::clamp(level, 0, 2);
+    rt_.shadow_quality = level;
+    rt_.shadow_samples = kL[level].samples;
+    rt_.foliage_ray_mode = kL[level].leaf_mode;
+    rt_.terrain_raymarch_shadow_steps = kL[level].terrain_steps;
+    rt_.grass_shadow_samples = kL[level].grass;
+    if (kL[level].ao >= 0) rt_.ao_mode = kL[level].ao;
+    log::infof("[settings] shadow quality %d", level);
+}
+
 void VulkanEngine::apply_quality_preset(int level) {
+
     rt_.quality_preset = level;
     const float prev_tr_scale = rt_.terrain_raymarch_scale;
     switch (level) {
@@ -560,6 +606,8 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("render_scale", s.rt_.render_scale);
     f("fsr_min_render_scale", s.rt_.fsr_min_render_scale);
     f("quality_preset", s.rt_.quality_preset);
+    f("foliage_quality", s.rt_.foliage_quality);
+    f("shadow_quality", s.rt_.shadow_quality);
     f("ao_mode", s.rt_.ao_mode);
     f("gravity", s.game_.gravity);
     f("cubes_per_minute", s.game_.cubes_per_minute);
@@ -759,6 +807,9 @@ void VulkanEngine::load_settings() {
     clampf(rt_.terrain_rm_normal_px, 0.0f, 4.0f);
     clampi(rt_.foliage_ray_mode, 0, 2);
     clampi(rt_.water_style, 0, 2);
+    // (VIBE_TEST_FOLIAGE=<0..4>, VIBE_TEST_SHADOWS=<0..2>: a level, whatever the file says - measurements)
+    if (const char* e = std::getenv("VIBE_TEST_FOLIAGE")) apply_foliage_quality(std::atoi(e));
+    if (const char* e = std::getenv("VIBE_TEST_SHADOWS")) apply_shadow_quality(std::atoi(e));
     clampf(rt_.tree_impostor_px, 7.0f, 40.0f);
     clampf(rt_.tree_draw_distance, 200.0f, 3800.0f);
     clampf(rt_.fov_deg, 55.0f, 100.0f);

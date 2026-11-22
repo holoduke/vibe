@@ -25,6 +25,7 @@
 #include "engine/audio.h"
 #include "engine/log.h"
 #include "engine/terrain.h"
+#include "engine/highway.h"
 #include "engine/globe.h"
 #include "game/level.h"
 
@@ -108,7 +109,7 @@ const Mat kMats[] = {
     { "o_plant",     -1, { 0.075f, 0.23f, 0.060f }, 1.0f, {}, false },
     { "o_plant_d",   -1, { 0.040f, 0.135f, 0.045f }, 1.0f, {}, false },
     { "o_light",     -1, { 1.0f, 0.95f, 0.84f }, 1.0f, { 2.8f, 2.55f, 2.1f }, true },
-    { "o_screen",    -1, { 0.30f, 0.62f, 0.85f }, 1.0f, { 0.22f, 0.62f, 0.95f }, true },
+    { "o_screen",    36, { 1.25f, 1.25f, 1.25f }, 1.0f, { 0.0f, 0.0f, 0.0f }, true },        // (pictures: slot 36, an atlas - cube.frag)
     { "o_screen_b",  -1, { 1.0f, 0.62f, 0.20f }, 1.0f, { 0.95f, 0.50f, 0.10f }, true },
 };
 const Mat* find_mat(const std::string& n) {
@@ -214,6 +215,8 @@ void VulkanEngine::place_launch_site() {
     place_house(world_, hp);
 
     place_office();
+    place_parking();
+    place_bridges();
 
     launch_pad_ = pad;
     launch_house_ = hp;
@@ -244,7 +247,119 @@ void VulkanEngine::shelters_near(glm::vec3 eye, float reach, std::vector<Shelter
     for (size_t i = 0; i < order.size() && i < max_n; ++i) out.push_back(*order[i].second);
 }
 
+// The car park east of the pavilion, between it and the highway: an asphalt slab level with
+// the pad's apron (which it joins), marked bays, a kerb, lamp posts, and a ramp down to the road.
+void VulkanEngine::place_parking() {
+    const float T = kLaunchSiteH + 0.35f;                     // (the apron's top)
+    const float X0 = kLaunchSiteX + 26.0f, X1 = kLaunchSiteX + 70.0f, Z0 = kLaunchSiteZ - 106.0f, Z1 = kLaunchSiteZ - 70.0f;
+    struct B { game::LevelMesh m; };
+    auto start = [](int tex, glm::vec3 tint, glm::vec4 emissive = glm::vec4(0.0f)) {
+        game::LevelMesh m;
+        m.tex_albedo = m.tex_normal = tex;
+        m.tint = tint; m.fallback = tex >= 0 ? tint * 0.25f : tint;
+        m.relief = 0.0f;
+        m.emissive = glm::vec3(emissive); m.full_emissive = emissive.a > 0.5f;
+        return m;
+    };
+    auto quad = [](game::LevelMesh& m, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, float tile) {
+        const glm::vec3 n = glm::normalize(glm::cross(b - a, d - a));
+        const uint32_t i0 = uint32_t(m.verts.size());
+        for (const glm::vec3& p : { a, b, c, d }) {
+            // (texture by the metre: across the larger two of the normal's planes)
+            const glm::vec2 uv = std::abs(n.y) > 0.6f ? glm::vec2(p.x, p.z) : std::abs(n.x) > 0.6f ? glm::vec2(p.z, p.y) : glm::vec2(p.x, p.y);
+            m.verts.push_back({ p, n, uv.x / tile, uv.y / tile });
+        }
+        m.idx.insert(m.idx.end(), { i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3 });
+    };
+    auto box = [&](game::LevelMesh& m, glm::vec3 lo, glm::vec3 hi, float tile, bool bottom = false) {
+        quad(m, { lo.x, hi.y, lo.z }, { lo.x, hi.y, hi.z }, { hi.x, hi.y, hi.z }, { hi.x, hi.y, lo.z }, tile);       // top
+        quad(m, { lo.x, lo.y, hi.z }, { hi.x, lo.y, hi.z }, { hi.x, hi.y, hi.z }, { lo.x, hi.y, hi.z }, tile);       // +z
+        quad(m, { hi.x, lo.y, lo.z }, { lo.x, lo.y, lo.z }, { lo.x, hi.y, lo.z }, { hi.x, hi.y, lo.z }, tile);       // -z
+        quad(m, { hi.x, lo.y, hi.z }, { hi.x, lo.y, lo.z }, { hi.x, hi.y, lo.z }, { hi.x, hi.y, hi.z }, tile);       // +x
+        quad(m, { lo.x, lo.y, lo.z }, { lo.x, lo.y, hi.z }, { lo.x, hi.y, hi.z }, { lo.x, hi.y, lo.z }, tile);       // -x
+        if (bottom) quad(m, { lo.x, lo.y, lo.z }, { hi.x, lo.y, lo.z }, { hi.x, lo.y, hi.z }, { lo.x, lo.y, hi.z }, tile);
+    };
+    auto finish = [&](game::LevelMesh& m) {
+        if (m.idx.empty()) return;
+        m.bmin = glm::vec3(1e9f); m.bmax = glm::vec3(-1e9f);
+        for (const auto& v : m.verts) { m.bmin = glm::min(m.bmin, v.p); m.bmax = glm::max(m.bmax, v.p); }
+        world_.meshes.push_back(std::move(m));
+    };
+    game::LevelMesh asphalt = start(kTexAsphalt, glm::vec3(0.92f));
+    game::LevelMesh paint = start(-1, glm::vec3(0.80f, 0.80f, 0.77f));
+    game::LevelMesh kerb = start(24, glm::vec3(1.0f));
+    game::LevelMesh steel = start(-5, glm::vec3(0.30f, 0.31f, 0.33f));
+    game::LevelMesh lamp = start(-1, glm::vec3(1.0f, 0.96f, 0.86f), glm::vec4(2.6f, 2.4f, 2.0f, 1.0f));
+
+    // -- the slab --
+    box(asphalt, { X0, T - 2.8f, Z0 }, { X1, T, Z1 }, 3.0f);
+    world_.aabbs.push_back({ glm::vec3(X0, T - 2.8f, Z0), glm::vec3(X1, T, Z1) });
+    home_grass_cuts_.push_back(glm::vec4(X0 - 0.6f, Z0 - 0.6f, X1 + 0.6f, Z1 + 0.6f));
+    drive_pads_.push_back({ X0, Z0, X1, Z1, T, T });
+    // (the apron itself, and no grass on any of it - its corners stood outside the round cut)
+    drive_pads_.push_back({ kLaunchSiteX - 70.0f, kLaunchSiteZ - 70.0f, kLaunchSiteX + 70.0f, kLaunchSiteZ + 70.0f, T, T });
+    home_grass_cuts_.push_back(glm::vec4(kLaunchSiteX - 70.8f, kLaunchSiteZ - 70.8f, kLaunchSiteX + 70.8f, kLaunchSiteZ + 70.8f));
+
+    // -- the way to the road: from the east aisle, down to the highway's edge --
+    const float az0 = Z0 + 6.4f, az1 = Z0 + 13.6f;               // the north aisle
+    {
+        float d = 0.0f, h = kLaunchSiteH, s = 0.0f;
+        float road_x = X1 + 14.0f;
+        // (the road's nearer edge at the aisle's latitude: walk east until the centre line is 5.4 m off)
+        for (float x = X1; x < X1 + 60.0f; x += 0.5f)
+            if (highway::nearest(x, 0.5f * (az0 + az1), 40.0f, d, h, s) && d < 5.4f) { road_x = x; break; }
+        const float rh = highway::ground(world_ground_height(road_x, 0.5f * (az0 + az1), rt_.water_level, 9), road_x, 0.5f * (az0 + az1)) + 0.03f;
+        quad(asphalt, { X1, T, az0 }, { X1, T, az1 }, { road_x, rh, az1 }, { road_x, rh, az0 }, 3.0f);
+        quad(asphalt, { X1, T - 2.8f, az1 }, { road_x, rh - 2.8f, az1 }, { road_x, rh, az1 }, { X1, T, az1 }, 3.0f);
+        quad(asphalt, { road_x, rh - 2.8f, az0 }, { X1, T - 2.8f, az0 }, { X1, T, az0 }, { road_x, rh, az0 }, 3.0f);
+        drive_pads_.push_back({ X1, az0, road_x, az1, T, rh });
+        home_grass_cuts_.push_back(glm::vec4(X1 - 0.5f, az0 - 0.6f, road_x + 0.5f, az1 + 0.6f));
+        // (a walker's floor on the ramp: steps of half a metre)
+        for (float x = X1; x < road_x; x += 0.5f) {
+            const float t = (x + 0.25f - X1) / std::max(road_x - X1, 0.5f);
+            world_.aabbs.push_back({ glm::vec3(x, T - 2.8f, az0), glm::vec3(std::min(x + 0.5f, road_x), glm::mix(T, rh, t), az1) });
+        }
+        log::infof("[parking] the car park at (%.0f..%.0f, %.0f..%.0f), its ramp meets the road at x %.1f (%.2f m)", X0, X1, Z0, Z1, road_x, rh);
+    }
+
+    // -- bays: a row along the north edge, a double row in the middle; aisles between --
+    const float bay_w = 2.7f, bay_d = 5.3f, ln = 0.12f, py = T + 0.012f;
+    const int   n_bays = int((X1 - X0 - 5.0f) / bay_w);
+    const float bx0 = 0.5f * (X0 + X1) - 0.5f * float(n_bays) * bay_w;
+    struct Row { float z0; float yaw; };
+    const Row rows[3] = { { Z0 + 0.9f, 0.0f }, { Z0 + 13.6f, 3.14159265f }, { Z0 + 13.6f + bay_d, 0.0f } };
+    for (int r = 0; r < 3; ++r) {
+        const float z0 = rows[r].z0, z1 = z0 + bay_d;
+        for (int k = 0; k <= n_bays; ++k) {
+            const float x = bx0 + float(k) * bay_w;
+            box(paint, { x - 0.5f * ln, T, z0 }, { x + 0.5f * ln, py, z1 }, 1.0f);
+        }
+        for (int k = 0; k < n_bays; ++k)
+            parking_bays_.push_back(glm::vec4(bx0 + (float(k) + 0.5f) * bay_w, T, 0.5f * (z0 + z1), rows[r].yaw));
+    }
+    box(paint, { bx0, T, rows[1].z0 + bay_d - 0.5f * ln }, { bx0 + float(n_bays) * bay_w, py, rows[1].z0 + bay_d + 0.5f * ln }, 1.0f);       // between the two middle rows
+    box(paint, { bx0, T, rows[0].z0 - 0.5f * ln }, { bx0 + float(n_bays) * bay_w, py, rows[0].z0 + 0.5f * ln }, 1.0f);                         // the north row's head
+    // -- the kerb: north and west whole, east but for the way out --
+    const float kw = 0.22f, kh = 0.13f;
+    box(kerb, { X0, T, Z0 }, { X1, T + kh, Z0 + kw }, 4.0f);
+    box(kerb, { X0, T, Z0 }, { X0 + kw, T + kh, Z1 }, 4.0f);
+    box(kerb, { X1 - kw, T, Z0 }, { X1, T + kh, az0 }, 4.0f);
+    box(kerb, { X1 - kw, T, az1 }, { X1, T + kh, Z1 - 6.0f }, 4.0f);
+    // -- lamp posts on the middle rows' line and the north edge --
+    for (const glm::vec2& lp : { glm::vec2(X0 + 9.0f, rows[1].z0 + bay_d), glm::vec2(X1 - 9.0f, rows[1].z0 + bay_d), glm::vec2(0.5f * (X0 + X1), Z0 + 0.5f) }) {
+        box(steel, { lp.x - 0.07f, T, lp.y - 0.07f }, { lp.x + 0.07f, T + 6.6f, lp.y + 0.07f }, 1.0f);
+        box(steel, { lp.x - 0.9f, T + 6.5f, lp.y - 0.10f }, { lp.x + 0.9f, T + 6.62f, lp.y + 0.10f }, 1.0f, true);
+        for (float sx : { -0.62f, 0.62f }) {
+            box(lamp, { lp.x + sx - 0.24f, T + 6.44f, lp.y - 0.09f }, { lp.x + sx + 0.24f, T + 6.5f, lp.y + 0.09f }, 1.0f, true);
+        }
+        lamp_lights_.push_back(glm::vec3(lp.x, T + 6.2f, lp.y));
+        world_.aabbs.push_back({ glm::vec3(lp.x - 0.1f, T, lp.y - 0.1f), glm::vec3(lp.x + 0.1f, T + 6.6f, lp.y + 0.1f) });
+    }
+    finish(asphalt); finish(paint); finish(kerb); finish(steel); finish(lamp);
+}
+
 void VulkanEngine::place_office() {
+
     auto groups = game::load_mesh_groups("assets/office/office.mesh");
     if (groups.empty()) { log::warnf("[office] assets/office/office.mesh missing - no office (blender -b --python tools/office/make_office.py)"); return; }
     // On the launch terrace (level within 100 m of the pad): 86 m north of the pad's centre,

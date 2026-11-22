@@ -831,6 +831,10 @@ struct RtSettings {
         // preset writes a bundle of values onto the other RtSettings fields
         // (shadow_samples, gi_samples, render_scale, ...) so users don't
         // have to tune individually. See apply_quality_preset().
+        // The two choices that cost or save the most frame time, as levels (settings.cpp
+        // apply_foliage_quality / apply_shadow_quality; -1 = set by hand):
+        int foliage_quality = -1;   // 0 low, 1 medium, 2 high, 3 ultra, 4 insane
+        int shadow_quality = -1;    // 0 low, 1 medium, 2 high
         int quality_preset = 2;  // High — matches existing defaults
 
         // AO mode. 0 = off, 1 = GTAO (screen-space, fast), 2 = RTAO (true

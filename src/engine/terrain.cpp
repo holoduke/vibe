@@ -226,8 +226,8 @@ inline float height_globe(float a, glm::vec2 hp, const glm::dvec3& G, float wl) 
 inline float pad(float h, glm::vec2 wp) {
     const glm::vec2 d = wp - glm::vec2(kLaunchSiteX, kLaunchSiteZ);
     const float r2 = glm::dot(d, d);
-    if (r2 > 220.0f * 220.0f) return h;
-    return glm::mix(kLaunchSiteH, h, sstep(100.0f, 220.0f, std::sqrt(r2)));
+    if (r2 > 270.0f * 270.0f) return h;
+    return glm::mix(kLaunchSiteH, h, sstep(150.0f, 270.0f, std::sqrt(r2)));
 }
 inline float height(float a, glm::vec2 wp, float wl) { return river(pad(height_land(a, wp, wl), wp), wp, wl); }
 // (shaders/world_map.glsl wm_forest: keep in step)

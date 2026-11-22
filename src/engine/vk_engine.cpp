@@ -88,6 +88,7 @@ extern "C" __declspec(dllimport) void* __stdcall GetCurrentProcess();
 extern "C" __declspec(dllimport) int __stdcall TerminateProcess(void*, unsigned int);
 
 namespace vibe {
+void process_memory_mb(double& working, double& committed);      // (mem_log.cpp)
 
 // PushConstants, SceneUBO, debug_callback, spark_blackbody, align_local_y_to,
 // recoil_kick, xorshift32 / frand / frand_range, buffer_device_address,
@@ -733,8 +734,29 @@ void VulkanEngine::run(const RunOptions& opts) {
                     }
                 }
             }
+            // VIBE_LOG_MEM=1: every 600 frames, what the game holds - to see whether moving
+            // about the world leaves anything behind (it must come back to where it was).
+            if (static const bool lm = std::getenv("VIBE_LOG_MEM") != nullptr; lm && frame_number_ % 600 == 0) {
+                VmaBudget bud[VK_MAX_MEMORY_HEAPS]{};
+                vmaGetHeapBudgets(allocator_, bud);
+                VkPhysicalDeviceMemoryProperties mp{};
+                vkGetPhysicalDeviceMemoryProperties(physical_device_, &mp);
+                double used = 0.0, ours = 0.0; uint64_t allocs = 0, blocks = 0;
+                for (uint32_t h = 0; h < mp.memoryHeapCount; ++h) {
+                    if (!(mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) continue;
+                    used += double(bud[h].usage); ours += double(bud[h].statistics.allocationBytes);
+                    allocs += bud[h].statistics.allocationCount; blocks += bud[h].statistics.blockCount;
+                }
+                double ws = 0.0, pv = 0.0;
+                process_memory_mb(ws, pv);
+                log::infof("[mem] frame %llu at (%.0f, %.0f): vram %.0f MB (engine %.0f MB, %llu allocations in %llu blocks), ram %.0f MB in use, %.0f MB committed | road stretches %zu, mesh parts %zu, boxes %zu, frame %.2f ms",
+                           static_cast<unsigned long long>(frame_number_), double(player_.position.x), double(player_.position.z),
+                           used / 1048576.0, ours / 1048576.0, static_cast<unsigned long long>(allocs), static_cast<unsigned long long>(blocks),
+                           ws, pv, hw_chunks_.size(), mesh_parts_now().size(), world_.aabbs.size() + wv_cols_.size(), double(frame_dt) * 1000.0);
+            }
             if (opts_.max_frames >= 0 &&
                 static_cast<int>(frame_number_) >= opts_.max_frames) {
+
                 log::infof("max_frames reached (%d), exiting loop",
                            opts_.max_frames);
                 break;

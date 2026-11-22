@@ -55,7 +55,22 @@ def quad(g, a, b, c, d):
     tri(g, a, b, c); tri(g, a, c, d)
 
 
-def quad2(g, a, b, c, d):                  # seen from both sides (glass, thin sheets)
+SCREEN_N = [0]
+
+
+def screen(a, b, c, d):
+    """A display. Its corners as the viewer sees them: bottom left, bottom right, top right,
+    top left. uv = (its number + 0..1 across, 0 at the top .. 1 at the bottom): the game shows
+    one picture of an atlas on each, by its number (cube.frag, texture slot 36)."""
+    i = SCREEN_N[0]; SCREEN_N[0] += 1
+    a, b, c, d = Vector(a), Vector(b), Vector(c), Vector(d)
+    n = (b - a).cross(d - a).normalized()
+    uv = [(i + 0.0, 1.0), (i + 1.0, 1.0), (i + 1.0, 0.0), (i + 0.0, 0.0)]
+    G.setdefault('o_screen', []).extend([(a, n, uv[0]), (b, n, uv[1]), (c, n, uv[2]), (a, n, uv[0]), (c, n, uv[2]), (d, n, uv[3])])
+
+
+def quad2(g, a, b, c, d):
+                  # seen from both sides (glass, thin sheets)
     quad(g, a, b, c, d); quad(g, d, c, b, a)
 
 
@@ -190,7 +205,7 @@ def monitor(x, y, face, zf=None, extras=True):
     obox('o_black', x, y, face, (-0.022, -0.05, z + 0.012), (0.022, -0.02, z + 0.30))      # neck
     obox('o_black', x, y, face, (-0.31, -0.02, z + 0.13), (0.31, 0.004, z + 0.50))         # the panel
     a, b, c, d = opt(x, y, face, -0.298, 0.016, z + 0.142), opt(x, y, face, 0.298, 0.016, z + 0.142), opt(x, y, face, 0.298, 0.016, z + 0.488), opt(x, y, face, -0.298, 0.016, z + 0.488)
-    quad('o_screen', b, a, d, c)
+    screen(b, a, d, c)
     if extras:
         obox('o_black', x, y, face, (-0.21, 0.24, z), (0.21, 0.37, z + 0.014))             # keyboard
         obox('o_white', x, y, face, (0.27, 0.26, z), (0.33, 0.36, z + 0.022))              # mouse
@@ -206,7 +221,7 @@ def laptop(x, y, face, z):
     a, b, c, d = opt(x, y, face, -0.16, -0.11, z + 0.012), opt(x, y, face, 0.16, -0.11, z + 0.012), opt(x, y, face, 0.16, -0.17, z + 0.22), opt(x, y, face, -0.16, -0.17, z + 0.22)
     quad2('o_metal', a, b, c, d)
     e, f2, g2, h = opt(x, y, face, -0.15, -0.108, z + 0.022), opt(x, y, face, 0.15, -0.108, z + 0.022), opt(x, y, face, 0.15, -0.163, z + 0.212), opt(x, y, face, -0.15, -0.163, z + 0.212)
-    quad('o_screen', e, f2, g2, h)
+    screen(e, f2, g2, h)
 
 
 def bench_desk(xa, xb, y, seats):
@@ -472,7 +487,7 @@ def build():
     laptop(11.0, 3.75, 0.1, F + 0.76); laptop(12.7, 4.3, math.pi - 0.15, F + 0.76); mug(11.5, 3.6, F + 0.76); mug(12.2, 4.45, F + 0.76, 'o_orange')
     cyl('o_black', (11.8, 4.0, F + 0.76), (11.8, 4.0, F + 0.79), 0.09, 14)                           # the conference speaker
     box('o_black', (CORE_X - 0.06, 2.6, F + 1.1), (CORE_X - 0.01, 5.4, F + 2.55))                    # the wall screen
-    quad('o_screen', (CORE_X - 0.078, 5.35, F + 1.15), (CORE_X - 0.078, 2.65, F + 1.15), (CORE_X - 0.078, 2.65, F + 2.5), (CORE_X - 0.078, 5.35, F + 2.5))
+    screen((CORE_X - 0.078, 5.35, F + 1.15), (CORE_X - 0.078, 2.65, F + 1.15), (CORE_X - 0.078, 2.65, F + 2.5), (CORE_X - 0.078, 5.35, F + 2.5))
     box('o_rug', (9.6, 2.4, F + 0.012), (14.0, 5.6, F + 0.022))
     pendant_bar(10.4, 13.2, 4.0, F + 2.2, MEZ - 0.22)
     # the kitchen: a run of units along the back wall up to the frame's column (x = 6), the
@@ -524,7 +539,7 @@ def build():
             for j in range(2):
                 xa = ga + 0.05 + wcell * i + 0.035; za = F + 1.6 + 1.5 * j
                 amber = (i + j + (1 if ga > -15.0 else 0)) % 4 == 0
-                quad('o_screen_b' if amber else 'o_screen', (xa, YN - 0.218, za), (xa + wcell - 0.07, YN - 0.218, za), (xa + wcell - 0.07, YN - 0.218, za + 1.42), (xa, YN - 0.218, za + 1.42))
+                screen((xa, YN - 0.218, za), (xa + wcell - 0.07, YN - 0.218, za), (xa + wcell - 0.07, YN - 0.218, za + 1.42), (xa, YN - 0.218, za + 1.42))
         box(WOOD, (ga, YN - 0.55, F + 0.08), (gb, YN - 0.12, F + 0.5)); box('o_black', (ga + 0.04, YN - 0.5, F), (gb - 0.04, YN - 0.14, F + 0.08))    # a credenza under each
         for k in range(1, 4):
             xk = ga + (gb - ga) * k / 4.0
