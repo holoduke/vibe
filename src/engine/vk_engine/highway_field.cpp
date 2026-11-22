@@ -85,6 +85,20 @@ void VulkanEngine::hw_poll() {
     hw_bbox_ = bbox;
 }
 
+// The engine's coordinates have shifted by whole tiles. What the field holds - distances,
+// heights, metres along the road - does not depend on coordinates; only where its window lies
+// does. So the window is moved and the field stays as it is.
+void VulkanEngine::hw_shift(glm::dvec2 s) {
+    HwField& F = g_hw;
+    if (!F.valid) return;
+    F.center -= glm::vec2(s);
+    F.serial = globe::chart_serial();
+    if (hw_info_.z > 0.5f) {
+        hw_info_.x -= float(s.x); hw_info_.y -= float(s.y);
+        hw_bbox_ -= glm::vec4(float(s.x), float(s.y), float(s.x), float(s.y));
+    }
+}
+
 void VulkanEngine::record_hw_upload(VkCommandBuffer cmd, uint32_t slot) {
     HwField& F = g_hw;
     if (!F.upload_pending || !F.made) return;

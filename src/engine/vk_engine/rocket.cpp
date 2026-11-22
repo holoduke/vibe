@@ -19,6 +19,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include <glm/gtc/matrix_transform.hpp>
 #include "engine/audio.h"
 #include "engine/log.h"
 #include "engine/terrain.h"
@@ -344,8 +345,24 @@ glm::dvec3 VulkanEngine::globe_planet_pos(glm::vec3 p) const {
     return globe::to_planet(globe::current(), double(p.x), double(p.z)) * (globe::kR + double(p.y));
 }
 
+// A re-centre by whole tiles is not a movement: the last frame's view (what motion vectors and
+// every history are reprojected with), the Hi-Z view the vegetation is culled against, the
+// footprints and the ripples are carried into the new coordinates. s: old = new + s.
+void VulkanEngine::globe_shift_history(glm::dvec2 s) {
+    const glm::mat4 T = glm::translate(glm::mat4(1.0f), glm::vec3(float(s.x), 0.0f, float(s.y)));
+    prev_view_proj_ = prev_view_proj_ * T;
+    last_view_proj_ = last_view_proj_ * T;
+    veg_prev_vp_ = veg_prev_vp_ * T;
+    veg_cull_prev_vp_ = veg_cull_prev_vp_ * T;
+    for (glm::vec4& f : footprints_) { f.x -= float(s.x); f.y -= float(s.y); }
+    for (auto& r : water_ripples_) { r.xz.x -= float(s.x); r.xz.y -= float(s.y); }
+    hw_shift(s);
+    hw_objects_shift(s);
+}
+
 void VulkanEngine::globe_enter(const GlobeChartRef& ref) {
     const globe::Chart old = globe::current();
+    const globe::Chart* old_ptr = &globe::current();
     const globe::Chart& nw = ref.c;
     const glm::dvec3 G = globe::to_planet(old, double(player_.position.x), double(player_.position.z));
     const glm::dmat3 fo = globe::frame_at(old, double(player_.position.x), double(player_.position.z));
@@ -360,12 +377,19 @@ void VulkanEngine::globe_enter(const GlobeChartRef& ref) {
     prev_player_position_ = player_.position;
     globe::set_current(nw);
     globe_moved_player_ = true;
-    wv_rechart(old, nw);                                 // the streamed woods: the same trees, in the new chart's coordinates
+    wv_rechart(old, nw, old_ptr);                        // the streamed woods: the same trees, in the new chart's coordinates
+    {
+        auto tiled = [](const globe::Chart& c) { return c.home || (!c.high && c.site <= 0); };
+        if (tiled(old) && tiled(nw)) globe_shift_history(glm::dvec2(nw.tile - old.tile) * globe::kTile);
+        else prev_view_proj_valid_ = false;              // (another place in other coordinates: no history)
+    }
+
     near_static_src_[0] = SIZE_MAX;                      // the player's colliders: taken again (a site's exist only in its chart)
     rocket_.cam_yaw = player_.yaw;
     const glm::dvec2 hz = globe::home_az(G);
-    if (nw.home != old.home) log::infof("[globe] %s chart, %.0f km from home (%.0f km east, %.0f km south)", nw.home ? "home" : "far",
-               glm::length(hz) * 0.001, hz.x * 0.001, hz.y * 0.001);
+    if (nw.home != old.home) log::infof("[globe] %s chart, %.0f km from home (%.0f km east, %.0f km south), frame %llu", nw.home ? "home" : "far",
+               glm::length(hz) * 0.001, hz.x * 0.001, hz.y * 0.001, static_cast<unsigned long long>(frame_number_));
+    else if (std::getenv("VIBE_LOG_HIGHWAY")) log::infof("[globe] re-centred: tile (%d, %d), frame %llu", nw.tile.x, nw.tile.y, static_cast<unsigned long long>(frame_number_));
 }
 
 void VulkanEngine::globe_go_home() {

@@ -294,14 +294,14 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
         if (clustered) { const SclPart& P = scl_->parts[size_t(g.cl_part)]; ib = (P.state == 2 && P.ib_full) ? P.ib_full : P.ib_coarse; }
         vkCmdBindIndexBuffer(cmd, ib, 0, VK_INDEX_TYPE_UINT32);
         if (shadow_layout) {
-            glm::mat4 mvp = vp;   // model = identity (world-space verts)
+            glm::mat4 mvp = vp * g.xf;        // (the part's own shift: CastleMeshGpu::xf)
             vkCmdPushConstants(cmd, shadow_layout, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(glm::mat4), &mvp);
         } else {
             PushConstants pc{};
-            pc.mvp = vp;
-            pc.model = glm::mat4(1.0f);
-            pc.prev_mvp = prev_vp;
+            pc.mvp = vp * g.xf;
+            pc.model = g.xf;
+            pc.prev_mvp = prev_vp * g.xf;
             // Static-mesh mode flag (see file header).
             // .y = wind sway (uv = weight, phase), .z = world triplanar.
             // .x <= 0: relief reduction (0 = full depth, -1 = flat).

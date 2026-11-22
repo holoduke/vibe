@@ -1778,6 +1778,12 @@ private:
         VmaAllocation blas_alloc = nullptr;
         VkDeviceAddress blas_addr = 0;
         int      cl_part = -1;                 // static cluster LOD (cluster_draw.cpp): part number, -1 = drawn whole
+        // Where the part is: its vertices are in the coordinates it was made in, and this
+        // carries them to the engine's coordinates now. Identity for what is made where it
+        // stands; a shift by whole tiles for what was made before the engine re-centred
+        // (highway_furniture.cpp) - so a re-centre moves a part instead of making it again.
+        // bmin / bmax are in the engine's coordinates now (shifted with it).
+        glm::mat4 xf{1.0f};
         uint32_t cl_count = 0, cl_cmd_base = 0;
     };
     std::vector<CastleMeshGpu> castle_meshes_;
@@ -1790,7 +1796,11 @@ private:
     CastleMeshGpu make_mesh_part(const game::LevelMesh& lm);
     void destroy_mesh_parts(std::vector<CastleMeshGpu>& parts);
     void wv_nf_invalidate();                     // (veg_stream.cpp) the near ground is baked again
-    void wv_rechart(const globe::Chart& from, const globe::Chart& to);       // (veg_stream.cpp) the streamed woods carried into another chart
+    void wv_rechart(const globe::Chart& from, const globe::Chart& to, const globe::Chart* from_ptr);       // (veg_stream.cpp) the streamed woods carried into another chart
+    // The engine's coordinates have just shifted by whole tiles (old = new + s): what the
+    // renderer remembers of the last frame in coordinates is shifted with them, so that
+    // nothing reads the shift as motion (rocket.cpp globe_shift_history).
+    void globe_shift_history(glm::dvec2 s);
     // The launch site and its rocket (vk_engine/rocket.cpp).
     struct RocketTrailPt { glm::vec3 p; float t; float alt; glm::vec3 v; };
     struct Rocket {
@@ -1954,10 +1964,12 @@ private:
     void      hw_poll();
     void      record_hw_upload(VkCommandBuffer cmd, uint32_t slot);
     void      hw_shutdown();
+    void      hw_shift(glm::dvec2 s);            // the field's window after a shift by whole tiles (old = new + s): moved, not baked again
     // What stands beside a highway (highway_furniture.cpp): streamed - a stretch's objects are
     // made when the camera comes near and freed when it has left.
     void      hw_objects_poll();
     void      hw_objects_destroy();
+    void      hw_objects_shift(glm::dvec2 s);    // after a shift by whole tiles (old = new + s): the parts are moved, in the same step
     std::vector<std::pair<int, std::vector<CastleMeshGpu>>> hw_chunks_;      // stretch index, its parts
     std::vector<std::pair<int, std::vector<CastleMeshGpu>>> hw_retired_;     // frames left, parts waiting to be destroyed
     uint32_t  hw_gen_ = 0;                       // counts the changes (the ray-tracing structure is rebuilt on one)

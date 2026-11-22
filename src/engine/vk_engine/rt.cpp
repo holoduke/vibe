@@ -1263,13 +1263,12 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
         // through: the sun shines in through the chapel windows.
         if (g.tex_albedo == -3) continue;                 // glass: the sun and the bounce light go through it
         if (g.emissive.a > 0.5f) continue;
-        const glm::mat4 I(1.0f);
         glm::vec4 tex = tex_on
             ? glm::vec4(static_cast<float>(g.tex_albedo),
                         static_cast<float>(g.tex_normal),
                         g.triplanar ? g.uv_scale : (g.tex_albedo == 1 ? 0.12f : 0.55f), 0.0f)
             : kNoTex;
-        write_instance(I, I, glm::vec4(tex_on ? g.tint : g.fallback, 1.0f),
+        write_instance(g.xf, g.xf, glm::vec4(tex_on ? g.tint : g.fallback, 1.0f),
                        glm::vec3(0.0f), false, g.blas_addr, tex, 0xFFu);
     }
 

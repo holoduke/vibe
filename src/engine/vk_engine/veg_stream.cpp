@@ -143,11 +143,32 @@ bool VulkanEngine::wv_nf_ok() const { return wv_ && wv_->nf_valid && wv_->nf_cha
 
 // The engine has changed chart (globe_enter): the same trees stand in the same places of the
 // planet, at other coordinates. The cells that are loaded are carried over - each as a
-// parallelogram, like generate_cell lays it out - and everything live is put back from them
-// (wv_reset); what the generators had under way is dropped (it was made half in each chart).
-void VulkanEngine::wv_rechart(const globe::Chart& from, const globe::Chart& to) {
+// parallelogram, like generate_cell lays it out - and every live tree's slot on the GPU is
+// rewritten where it is, in the same frame: nothing disappears and comes back. What the
+// generators had under way is dropped (it was made half in each chart).
+void VulkanEngine::wv_rechart(const globe::Chart& from, const globe::Chart& to, const globe::Chart* from_ptr) {
     if (!wv_) return;
     WvState& S = *wv_;
+    // (the camera's coordinates jump with the chart: not a speed - or the woods would be given up as outrun)
+    S.last_eye = glm::vec3(1e9f);
+    // The near-field ground bake: after a shift by whole tiles it is the same ground at shifted
+    // coordinates - its origin (kept in its first texels) is moved and it stays in use, instead
+    // of the grass standing on nothing until a new bake is done.
+    {
+        auto tiled = [](const globe::Chart& c) { return c.home || (!c.high && c.site <= 0); };
+        constexpr size_t N = 512;
+        if (tiled(from) && tiled(to) && S.nf_valid && S.nf_image && S.nf_chart == from_ptr && S.nf_pending.size() == N * N * 4) {
+            const glm::dvec2 sh = glm::dvec2(to.tile - from.tile) * globe::kTile;        // old = new + sh
+            S.nf_center -= glm::vec2(sh);
+            const float ox = S.nf_center.x - 256.0f, oz = S.nf_center.y - 256.0f;
+            const uint32_t ix = uint32_t(int(std::lround(ox / 64.0f)) + 8388608), iz = uint32_t(int(std::lround(oz / 64.0f)) + 8388608);
+            std::vector<unsigned char>& px = S.nf_pending;
+            px[0] = (unsigned char)(ix >> 16); px[1] = (unsigned char)(ix >> 8); px[2] = (unsigned char)ix;
+            px[4] = (unsigned char)(iz >> 16); px[5] = (unsigned char)(iz >> 8); px[6] = (unsigned char)iz;
+            S.nf_upload_pending = true;
+            S.nf_chart = &globe::current();
+        }
+    }
     {
         std::lock_guard<std::mutex> lk(S.mu);
         S.jobs.clear();
@@ -170,7 +191,26 @@ void VulkanEngine::wv_rechart(const globe::Chart& from, const globe::Chart& to) 
             if (i < D.cols.size()) { D.cols[i].min += shift; D.cols[i].max += shift; }
         }
     }
-    wv_reset();
+    // The live ones: the same slots, the new places.
+    if (veg_world_first_ == UINT32_MAX || !veg_inst_mapped_) { wv_reset(); return; }
+    VegInstance* gpu = static_cast<VegInstance*>(veg_inst_mapped_);
+    wv_cols_.clear();
+    for (auto& kv : S.cells) {
+        const WvState::Cell& c = kv.second;
+        if (!c.data) continue;
+        const CellData& D = *c.data;
+        for (size_t i = 0; i < c.slots.size() && i < D.items.size(); ++i) {
+            const uint32_t s = c.slots[i];
+            if (s == UINT32_MAX) continue;
+            gpu[veg_world_first_ + s].pos_scale = D.items[i].pos_scale;
+            veg_inst_cpu_[veg_world_first_ + s] = D.items[i];
+            if (c.cols_live && i < D.trees && i < D.cols.size()) wv_cols_.push_back(D.cols[i]);
+        }
+    }
+    vmaFlushAllocation(allocator_, veg_inst_alloc_, sizeof(VegInstance) * veg_world_first_, sizeof(VegInstance) * kWvPool);
+    veg_rt_valid_ = false;                  // the ray-traced tree set is re-picked
+    S.scan_eye = glm::vec3(1e9f);           // (the next scan looks at everything from the new place)
+    S.dirty = true;
 }
 
 void VulkanEngine::wv_reset() {
@@ -443,6 +483,7 @@ void VulkanEngine::wv_nf_poll() {
             S.nf_center = S.nf_job_center;
             S.nf_chart = S.nf_job_chart;
             S.nf_valid = true;
+            S.nf_pending = px;                 // (kept: a shift by whole tiles uploads it again with a new origin)
         }
     }
     const bool want = std::max(std::abs(eye.x), std::abs(eye.z)) > 1024.0f - 260.0f && eye.y - rt_.water_level < 450.0f;

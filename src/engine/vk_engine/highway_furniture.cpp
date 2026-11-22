@@ -4,7 +4,9 @@
 // The road is cut into 300 m stretches. A stretch's objects are made from the line of the road
 // when the camera comes within kLoad of it (meshes, their ray-tracing structures), at most one
 // stretch a frame, and freed when the camera is kFree away - so what exists at any time is the
-// kilometre or two around the player, however long the roads are. Like a site's content
+// kilometre or two around the player, however long the roads are. When the engine re-centres
+// by whole tiles (engine/globe.h near_chart) the stretches are not made again: each part's
+// transform takes the shift (CastleMeshGpu::xf). Like a site's content
 // (sites.cpp) the freed parts wait a dozen frames before they are destroyed (frames in flight
 // may still draw them) and nothing new is made while any wait. Home's chart only.
 //
@@ -18,6 +20,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace vibe {
 
@@ -172,6 +176,23 @@ void build_stretch(size_t c, std::vector<game::LevelMesh>& out, const globe::Rin
 
 }  // namespace
 
+namespace { uint32_t g_serial = 0; }       // the chart the stretches are laid out in (globe::chart_serial)
+
+// The engine's coordinates have just shifted by whole tiles (old = new + s): every part's
+// transform takes the shift, now - a frame later the rail would be drawn 6 km off for a frame.
+void VulkanEngine::hw_objects_shift(glm::dvec2 s) {
+    const glm::vec3 sh(-float(s.x), 0.0f, -float(s.y));
+    if (s != glm::dvec2(0.0)) {
+        for (auto& ch : hw_chunks_)
+            for (CastleMeshGpu& g : ch.second) {
+                g.xf = glm::translate(glm::mat4(1.0f), sh) * g.xf;
+                g.bmin += sh; g.bmax += sh;
+            }
+        ++hw_gen_;                             // (the ray-tracing structure takes the new places)
+    }
+    g_serial = globe::chart_serial();
+}
+
 // Once a frame (game_loop.cpp): frees the stretches left behind, makes the nearest one that is
 // wanted and missing.
 void VulkanEngine::hw_objects_poll() {
@@ -204,10 +225,11 @@ void VulkanEngine::hw_objects_poll() {
     const bool here = (globe::current().home || rg.on) && !g_st.empty();
     glm::vec3 eye = player_.eye_position();
     if (rg.on) { const glm::dvec2 h = rg.to_home(glm::dvec2(eye.x, eye.z)); eye.x = float(h.x); eye.z = float(h.y); }      // (the stations are in home coordinates)
-    // Another chart: other coordinates - what was made is freed and made again.
-    static uint32_t serial = 0;
-    const bool rechart = serial != globe::chart_serial();
-    serial = globe::chart_serial();
+    // Another chart: other coordinates. A shift by whole tiles has been dealt with already, in
+    // the step it happened in (hw_objects_shift, from globe_enter): the parts were moved. Any
+    // other change (a site's chart, a high one): what was made is freed and made again.
+    const bool rechart = g_serial != globe::chart_serial();
+    g_serial = globe::chart_serial();
     // Free: everything when home is left, otherwise what is beyond kFree.
     for (size_t k = 0; k < hw_chunks_.size();) {
         const glm::vec3 m = stretch_middle(size_t(hw_chunks_[k].first));
@@ -232,8 +254,20 @@ void VulkanEngine::hw_objects_poll() {
     if (want < 0) return;
     std::vector<game::LevelMesh> lms;
     build_stretch(size_t(want), lms, rg);
+    // A stretch's vertices are kept relative to a point of its own (small numbers: exact to a
+    // hundredth of a millimetre) and placed by the part's transform - always, so that a part
+    // is drawn and traced the same way whether or not the engine has re-centred since.
+    glm::vec3 org(0.0f);
+    if (!lms.empty() && !lms[0].verts.empty()) org = glm::round(lms[0].verts[0].p);
     std::vector<CastleMeshGpu> parts;
-    for (const game::LevelMesh& lm : lms) parts.push_back(make_mesh_part(lm));
+    for (game::LevelMesh& lm : lms) {
+        for (auto& v : lm.verts) v.p -= org;
+        lm.bmin -= org; lm.bmax -= org;
+        CastleMeshGpu g = make_mesh_part(lm);
+        g.xf = glm::translate(glm::mat4(1.0f), org);
+        g.bmin += org; g.bmax += org;
+        parts.push_back(std::move(g));
+    }
     build_mesh_part_blas(parts);
     hw_chunks_.emplace_back(want, std::move(parts));
     ++hw_gen_;

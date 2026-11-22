@@ -438,3 +438,15 @@ A float resolves 4 - 8 mm at 64 km and 1 mm at 12 km. Grass blades need the mill
 Stray trees: the woods keep a few lone trees in open country whatever the forest rule says; nothing is planted on a highway or on a site's own ground any more (`world_highway_distance`, `world_site_clearing`).
 
 Cost of all of it: the three benchmark views 25.1 / 20.9 / 27.6 ms (24.6 / 20.8 / 27.4 before the tile work).
+
+**A re-centre is not an event any more (2026-11-22, night).** When the engine shifts its coordinates by whole tiles (`globe_enter` between home's chart and near charts), nothing is torn down and rebuilt; everything is moved in the same step:
+- *The renderer's memory of the last frame* - the last view-projection (motion vectors, every temporal history), the vegetation's Hi-Z view, footprints, ripples: `globe_shift_history` (`rocket.cpp`). Before this the frame of the shift came out dark and smeared: every history was reprojected 6 km off.
+- *The streamed woods*: `wv_rechart` rewrites every live tree's GPU slot in place (it used to empty the pool and refill it over the next frames), and forgets the camera's last position (the jump read as a speed of hundreds of km/s, and the woods were given up as "outrun").
+- *The near-field ground bake* the grass stands on: its origin texels are rewritten and it stays in use (`wv_rechart`).
+- *The highway's field*: its window is moved (`hw_shift`) - what it holds does not depend on coordinates.
+- *The roadside stretches*: `hw_objects_shift` adds the shift to each part's transform. A mesh part has a transform now (`CastleMeshGpu::xf`: drawn with it, in the TLAS with it; identity for everything else), and a stretch's vertices are kept relative to a point of its own, placed by `xf` - the same path whether or not the engine has re-centred.
+Checked on the test PC by capturing the frames either side of both kinds of shift (`RideTest4.cmd`: home's chart to a near chart at frame 951, near chart to near chart at 1778): road, rail, trees and grass carry through; `VIBE_LOG_HIGHWAY=1` logs each shift with its frame number. A change to or from a site's chart or a high one is still a rebuild (those are not shifts).
+
+**Known, not from this work:** the guard rail's steel flips between bright and dark from place to place. It is seen nearly edge-on along the road, and the lighting pass's ray origins - rebuilt from depth and pushed toward the camera (`wp_safe`) - do not clear a surface seen at that angle, so its own beam shadows it or not by rounding. Needs an offset along the surface normal for thin parts.
+
+Cost after all of it: the three benchmark views 25.1 / 21.0 / 27.8 ms.
