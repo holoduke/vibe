@@ -14,6 +14,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/cluster_draw.h"
 #include "engine/log.h"
 #include "engine/veg_paint.h"
 #include "engine/window.h"
@@ -261,7 +262,7 @@ void VulkanEngine::finish_veg_replant(VegJobResult&& r) {
     // GPU side: the visible lists are laid out per archetype x LOD.
     veg_inst_cpu_ = std::move(inst);
     // Clustered rocks go to the end of the list, as at start-up (init_vegetation_data).
-    if (cl_pipeline_) {
+    if (cl_->pipeline) {
         const auto mid = std::stable_partition(veg_inst_cpu_.begin(), veg_inst_cpu_.end(), [&](const VegInstance& vi) {
             const size_t a = size_t(vi.rot_arch_phase.y + 0.5f);
             return !(a < veg_cluster_meshes_.size() && !veg_cluster_meshes_[a].clusters.empty());
@@ -280,7 +281,7 @@ void VulkanEngine::finish_veg_replant(VegJobResult&& r) {
             veg_cmd_template_[ci].firstInstance = vis_base;
             vis_base += per_arch[a];
         }
-    if (cl_pipeline_) { cl_vis_base_ = vis_base; vis_base += veg_cluster_count_; }
+    if (cl_->pipeline) { cl_->vis_base = vis_base; vis_base += veg_cluster_count_; }
     veg_count_ = uint32_t(veg_inst_cpu_.size());
     veg_vis_capacity_ = std::max(vis_base, 1u);
 

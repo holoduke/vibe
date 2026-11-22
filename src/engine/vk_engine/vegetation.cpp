@@ -17,6 +17,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/cluster_draw.h"
 #include <meshoptimizer.h>
 #include "engine/log.h"
 #include "engine/vk_initializers.h"
@@ -172,7 +173,7 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
         veg_cluster_first_ = uint32_t(mid - veg_inst_cpu_.begin());
         veg_cluster_count_ = uint32_t(veg_inst_cpu_.end() - mid);
         wv_insert_pool();
-        cl_vis_base_ = vis_base;
+        cl_->vis_base = vis_base;
         vis_base += veg_cluster_count_;
     }
     veg_count_ = uint32_t(veg_inst_cpu_.size());

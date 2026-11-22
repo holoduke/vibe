@@ -93,8 +93,8 @@ namespace vibe {
 
 // Frustum + extract_frustum + aabb_visible live in engine/frustum.h.
 
-VulkanEngine::VulkanEngine() = default;
-VulkanEngine::~VulkanEngine() { shutdown(); }
+VulkanEngine::VulkanEngine() { alloc_private_state(); }
+VulkanEngine::~VulkanEngine() { shutdown(); free_private_state(); }
 
 void VulkanEngine::init() {
     log::info("VulkanEngine::init()");

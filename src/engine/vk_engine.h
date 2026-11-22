@@ -1213,6 +1213,10 @@ private:
     float flash_move_ = 0.0f;                        // eased 0..1 walking amount
     glm::vec3 flash_pos_{0.0f}, flash_fwd_{0.0f, 0.0f, -1.0f}, flash_right_{1.0f, 0.0f, 0.0f}, flash_up_{0.0f, 1.0f, 0.0f};
     void tick_flashlight(float dt);
+    // The private state structs (vk_engine/state/*.h): made in the constructor, freed in the
+    // destructor (vk_engine/private_state.cpp).
+    void alloc_private_state();
+    void free_private_state();
     // One turn of the main loop, in the order run() calls them (vk_engine/game_loop.cpp).
     void loop_test_input(InputFrame& in, float frame_dt, bool autodemo, bool headless,
                          std::chrono::steady_clock::time_point now,
@@ -2004,19 +2008,9 @@ private:
     struct AaRound { glm::vec3 pos{0.0f}, prev{0.0f}, vel{0.0f}; float t = 0.0f; bool dead = false; };
     // Screen-space displacement mapping (vk_engine/ssdm.cpp).
     struct SsdmImage { VkImage image = VK_NULL_HANDLE; VmaAllocation alloc = nullptr; VkImageView view = VK_NULL_HANDLE; };
-    SsdmImage ssdm_disp_, ssdm_ray_, ssdm_hitz_, ssdm_shell_z_, ssdm_color_, ssdm_resolve_, ssdm_scene_z_, ssdm_mv_, ssdm_g0_, ssdm_g1_;
-    VkPipeline ssdm_gbuffer_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule ssdm_gbuffer_frag_ = VK_NULL_HANDLE;
-    VkExtent2D ssdm_extent_{ 0, 0 };
-    VkPipeline ssdm_mesh_pipeline_ = VK_NULL_HANDLE, ssdm_color_pipeline_ = VK_NULL_HANDLE,
-               ssdm_depth_pipeline_ = VK_NULL_HANDLE, ssdm_velocity_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule ssdm_mesh_vert_ = VK_NULL_HANDLE, ssdm_mesh_frag_ = VK_NULL_HANDLE, ssdm_color_frag_ = VK_NULL_HANDLE,
-                   ssdm_depth_frag_ = VK_NULL_HANDLE, ssdm_velocity_frag_ = VK_NULL_HANDLE;
-    VkPipelineLayout ssdm_fs_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout ssdm_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool ssdm_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet  ssdm_set_ = VK_NULL_HANDLE;
-    VkSampler ssdm_nearest_ = VK_NULL_HANDLE;
+    // (the state of this is private to its own files: vk_engine/state/ssdm.h)
+    struct SsdmState;
+    SsdmState* ssdm_ = nullptr;
     bool ssdm_ready_ = false, ssdm_failed_ = false, ssdm_first_use_ = true;
     bool init_ssdm();
     void destroy_ssdm();
@@ -2075,44 +2069,25 @@ private:
     // Cluster drawing (vk_engine/cluster_draw.cpp). The clustered instances
     // are the last veg_cluster_count_ of the instance buffer.
     uint32_t      veg_cluster_first_ = 0, veg_cluster_count_ = 0;
-    uint32_t      cl_vis_base_ = 0, cl_cmd_cap_ = 0;
+    // (the state of this is private to its own files: vk_engine/state/cluster_draw.h)
+    struct ClusterDrawState;
+    ClusterDrawState* cl_ = nullptr;
     glm::mat4     veg_cull_prev_vp_{1.0f};     // the view the Hi-Z pyramid was made for, as used by this frame's cull
     bool          veg_cull_hiz_on_ = false;    // this frame's cull used the occlusion test
     void          write_cluster_hiz_binding();
-    Mesh          cl_mesh_{};
-    VkBuffer      cl_cluster_buf_ = VK_NULL_HANDLE, cl_table_buf_ = VK_NULL_HANDLE, cl_cmd_buf_ = VK_NULL_HANDLE;
-    VmaAllocation cl_cluster_alloc_ = nullptr, cl_table_alloc_ = nullptr, cl_cmd_alloc_ = nullptr;
-    VkDescriptorSetLayout cl_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool      cl_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet       cl_set_ = VK_NULL_HANDLE;
-    VkPipelineLayout      cl_layout_ = VK_NULL_HANDLE;
-    VkPipeline            cl_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule        cl_module_ = VK_NULL_HANDLE;
     // Small plants on the GPU path (vk_engine/plant_gpu.cpp, plant_cull.comp).
-    uint32_t      pg_total_ = 0, pg_packed_cap_ = 0;
-    bool          pg_hiz_bound_ = false, pg_drawn_ = false;
-    VkBuffer      pg_packed_buf_ = VK_NULL_HANDLE, pg_cmd_buf_ = VK_NULL_HANDLE, pg_tmpl_buf_ = VK_NULL_HANDLE, pg_spec_buf_ = VK_NULL_HANDLE;
-    VmaAllocation pg_packed_alloc_ = nullptr, pg_cmd_alloc_ = nullptr, pg_tmpl_alloc_ = nullptr, pg_spec_alloc_ = nullptr;
-    void*         pg_spec_mapped_ = nullptr;
-    // The culling shader's own copy of the plants, in GPU memory (the engine's instance buffer is
-    // in host memory, for the CPU to rewrite: read from a shader it costs a trip per plant).
-    VkBuffer      pg_inst_buf_ = VK_NULL_HANDLE;
-    VmaAllocation pg_inst_alloc_ = nullptr;
-    uint32_t      pg_inst_gen_ = 0;
-    VkDescriptorSetLayout pg_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool      pg_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet       pg_set_ = VK_NULL_HANDLE;
-    VkPipelineLayout      pg_layout_ = VK_NULL_HANDLE;
-    VkPipeline            pg_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule        pg_module_ = VK_NULL_HANDLE;
+    // (the state of this is private to its own files: vk_engine/state/plant_gpu.h)
+    struct PlantGpuState;
+    PlantGpuState* pg_ = nullptr;
     void init_plant_gpu();
     void destroy_plant_gpu();
     void write_plant_hiz_binding();
     void cull_plants(VkCommandBuffer cmd);
     bool draw_plants_gpu(VkCommandBuffer cmd, int species);
     // Cluster LOD of the static world meshes (castle, chapel, gravestones).
-    uint32_t      scl_total_ = 0;
-    bool          scl_hiz_bound_ = false, scl_ready_ = false;
+    // (the state of this is private to its own files: vk_engine/state/static_clusters.h)
+    struct StaticClusterState;
+    StaticClusterState* scl_ = nullptr;
     struct SclPart {                                   // one clustered mesh part
         VkBuffer      ib_coarse = VK_NULL_HANDLE, ib_full = VK_NULL_HANDLE;   // simplified levels (resident) / all levels (streamed in)
         VmaAllocation coarse_alloc = nullptr, full_alloc = nullptr;
@@ -2126,18 +2101,7 @@ private:
         std::shared_ptr<void> job;                     // background read (cluster_draw.cpp)
     };
     struct SclRetired { VkBuffer buf; VmaAllocation alloc; int frames; };
-    std::vector<SclPart>    scl_parts_;
-    std::vector<SclRetired> scl_retired_;
-    VkBuffer      scl_cluster_buf_ = VK_NULL_HANDLE, scl_meta_buf_ = VK_NULL_HANDLE, scl_cmd_buf_ = VK_NULL_HANDLE, scl_cmd_shadow_buf_ = VK_NULL_HANDLE;
-    VmaAllocation scl_cluster_alloc_ = nullptr, scl_meta_alloc_ = nullptr, scl_cmd_alloc_ = nullptr, scl_cmd_shadow_alloc_ = nullptr;
-    VkDescriptorSet scl_set_shadow_ = VK_NULL_HANDLE;
     void stream_static_clusters(glm::vec3 eye, float ppr);
-    VkDescriptorSetLayout scl_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool      scl_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet       scl_set_ = VK_NULL_HANDLE;
-    VkPipelineLayout      scl_layout_ = VK_NULL_HANDLE;
-    VkPipeline            scl_pipeline_ = VK_NULL_HANDLE;
-    VkShaderModule        scl_module_ = VK_NULL_HANDLE;
     void init_static_clusters();
     void destroy_static_clusters();
     void cull_static_clusters(VkCommandBuffer cmd);
@@ -2958,17 +2922,9 @@ private:
     // DLSS Ray Reconstruction (dlss.cpp + rr_guides.cpp).
     bool                   dlss_rr_supported_ = false;
     bool                   dlss_rr_was_active_ = false;
-    VkImage                rr_image_[3]{};          // diffuse albedo, specular albedo, normal+roughness
-    VmaAllocation          rr_alloc_[3]{};
-    VkImageView            rr_view_[3]{};
-    VkImageView            rr_src_views_[4]{};      // G-buffer / depth / scene colour views the set was written with
-    VkExtent2D             rr_extent_{0, 0};
-    VkSampler              rr_sampler_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout  rr_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool       rr_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet        rr_set_ = VK_NULL_HANDLE;
-    VkPipelineLayout       rr_pipeline_layout_ = VK_NULL_HANDLE;
-    VkPipeline             rr_pipeline_ = VK_NULL_HANDLE;
+    // (the state of this is private to its own files: vk_engine/state/rr_guides.h)
+    struct RrGuideState;
+    RrGuideState* rr_ = nullptr;
     // Streamline proxies (sl.interposer.dll): vk-bootstrap creates the
     // instance / device / swapchain through sl_gipa_, acquire + present go
     // through the proxies so SL's per-frame bookkeeping (presentCommon) runs.

@@ -22,6 +22,7 @@
 //   4. depth re-projection      ssdm_depth: the displaced surface's depth into the scene depth
 //   (the main pass is taken up again, loading what is there)
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/ssdm.h"
 #include "engine/vk_pipelines.h"
 #include "engine/vk_initializers.h"
 
@@ -41,32 +42,32 @@ constexpr uint32_t kSsdmBindings = 10;
 }  // namespace
 
 void VulkanEngine::destroy_ssdm_targets() {
-    for (SsdmImage* t : { &ssdm_disp_, &ssdm_ray_, &ssdm_hitz_, &ssdm_shell_z_, &ssdm_color_, &ssdm_resolve_,
-                          &ssdm_scene_z_, &ssdm_mv_, &ssdm_g0_, &ssdm_g1_ }) {
+    for (SsdmImage* t : { &ssdm_->disp, &ssdm_->ray, &ssdm_->hitz, &ssdm_->shell_z, &ssdm_->color, &ssdm_->resolve,
+                          &ssdm_->scene_z, &ssdm_->mv, &ssdm_->g0, &ssdm_->g1 }) {
         if (t->view) vkDestroyImageView(device_, t->view, nullptr);
         if (t->image) vmaDestroyImage(allocator_, t->image, t->alloc);
         *t = SsdmImage{};
     }
-    ssdm_extent_ = { 0, 0 };
+    ssdm_->extent = { 0, 0 };
 }
 
 void VulkanEngine::destroy_ssdm() {
     if (!device_) return;
     destroy_ssdm_targets();
-    for (VkPipeline* p : { &ssdm_mesh_pipeline_, &ssdm_color_pipeline_, &ssdm_depth_pipeline_, &ssdm_velocity_pipeline_, &ssdm_gbuffer_pipeline_ }) {
+    for (VkPipeline* p : { &ssdm_->mesh_pipeline, &ssdm_->color_pipeline, &ssdm_->depth_pipeline, &ssdm_->velocity_pipeline, &ssdm_->gbuffer_pipeline }) {
         if (*p) vkDestroyPipeline(device_, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
-    for (VkShaderModule* m : { &ssdm_mesh_vert_, &ssdm_mesh_frag_, &ssdm_color_frag_, &ssdm_depth_frag_, &ssdm_velocity_frag_, &ssdm_gbuffer_frag_ }) {
+    for (VkShaderModule* m : { &ssdm_->mesh_vert, &ssdm_->mesh_frag, &ssdm_->color_frag, &ssdm_->depth_frag, &ssdm_->velocity_frag, &ssdm_->gbuffer_frag }) {
         if (*m) vkDestroyShaderModule(device_, *m, nullptr);
         *m = VK_NULL_HANDLE;
     }
-    if (ssdm_fs_layout_) vkDestroyPipelineLayout(device_, ssdm_fs_layout_, nullptr);
-    if (ssdm_set_layout_) vkDestroyDescriptorSetLayout(device_, ssdm_set_layout_, nullptr);
-    if (ssdm_pool_) vkDestroyDescriptorPool(device_, ssdm_pool_, nullptr);
-    if (ssdm_nearest_) vkDestroySampler(device_, ssdm_nearest_, nullptr);
-    ssdm_fs_layout_ = VK_NULL_HANDLE; ssdm_set_layout_ = VK_NULL_HANDLE; ssdm_pool_ = VK_NULL_HANDLE;
-    ssdm_nearest_ = VK_NULL_HANDLE; ssdm_set_ = VK_NULL_HANDLE;
+    if (ssdm_->fs_layout) vkDestroyPipelineLayout(device_, ssdm_->fs_layout, nullptr);
+    if (ssdm_->set_layout) vkDestroyDescriptorSetLayout(device_, ssdm_->set_layout, nullptr);
+    if (ssdm_->pool) vkDestroyDescriptorPool(device_, ssdm_->pool, nullptr);
+    if (ssdm_->nearest) vkDestroySampler(device_, ssdm_->nearest, nullptr);
+    ssdm_->fs_layout = VK_NULL_HANDLE; ssdm_->set_layout = VK_NULL_HANDLE; ssdm_->pool = VK_NULL_HANDLE;
+    ssdm_->nearest = VK_NULL_HANDLE; ssdm_->set = VK_NULL_HANDLE;
     ssdm_ready_ = false;
 }
 
@@ -74,11 +75,11 @@ bool VulkanEngine::init_ssdm() {
     if (ssdm_ready_) return true;
     if (ssdm_failed_ || !taa_vert_module_ || !pipeline_layout_) return false;
     const std::string sd = VIBE_SHADER_DIR;
-    ssdm_mesh_vert_    = vkpipe::load_shader_module(device_, sd + "/ssdm_mesh.vert.spv");
-    ssdm_mesh_frag_    = vkpipe::load_shader_module(device_, sd + "/ssdm_mesh.frag.spv");
-    ssdm_gbuffer_frag_ = vkpipe::load_shader_module(device_, sd + "/ssdm_gbuffer.frag.spv");
-    ssdm_depth_frag_   = vkpipe::load_shader_module(device_, sd + "/ssdm_depth.frag.spv");
-    if (!ssdm_mesh_vert_ || !ssdm_mesh_frag_ || !ssdm_gbuffer_frag_ || !ssdm_depth_frag_) {
+    ssdm_->mesh_vert    = vkpipe::load_shader_module(device_, sd + "/ssdm_mesh.vert.spv");
+    ssdm_->mesh_frag    = vkpipe::load_shader_module(device_, sd + "/ssdm_mesh.frag.spv");
+    ssdm_->gbuffer_frag = vkpipe::load_shader_module(device_, sd + "/ssdm_gbuffer.frag.spv");
+    ssdm_->depth_frag   = vkpipe::load_shader_module(device_, sd + "/ssdm_depth.frag.spv");
+    if (!ssdm_->mesh_vert || !ssdm_->mesh_frag || !ssdm_->gbuffer_frag || !ssdm_->depth_frag) {
         log::warnf("[ssdm] shaders missing - screen-space displacement off");
         ssdm_failed_ = true;
         return false;
@@ -91,7 +92,7 @@ bool VulkanEngine::init_ssdm() {
         sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         sci.maxLod = 0.0f;
-        vk_check(vkCreateSampler(device_, &sci, nullptr, &ssdm_nearest_), "ssdm sampler");
+        vk_check(vkCreateSampler(device_, &sci, nullptr, &ssdm_->nearest), "ssdm sampler");
     }
     // The full-screen passes' set: ten sampled images.
     {
@@ -105,27 +106,27 @@ bool VulkanEngine::init_ssdm() {
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         lci.bindingCount = kSsdmBindings; lci.pBindings = b.data();
-        vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &ssdm_set_layout_), "ssdm set layout");
+        vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &ssdm_->set_layout), "ssdm set layout");
         VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSsdmBindings };
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci.maxSets = 1; pci.poolSizeCount = 1; pci.pPoolSizes = &ps;
-        vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &ssdm_pool_), "ssdm pool");
+        vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &ssdm_->pool), "ssdm pool");
         VkDescriptorSetAllocateInfo dai{};
         dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dai.descriptorPool = ssdm_pool_; dai.descriptorSetCount = 1; dai.pSetLayouts = &ssdm_set_layout_;
-        vk_check(vkAllocateDescriptorSets(device_, &dai, &ssdm_set_), "ssdm set");
+        dai.descriptorPool = ssdm_->pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &ssdm_->set_layout;
+        vk_check(vkAllocateDescriptorSets(device_, &dai, &ssdm_->set), "ssdm set");
         VkPushConstantRange pcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SsdmPC) };
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        plci.setLayoutCount = 1; plci.pSetLayouts = &ssdm_set_layout_;
+        plci.setLayoutCount = 1; plci.pSetLayouts = &ssdm_->set_layout;
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
-        vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &ssdm_fs_layout_), "ssdm layout");
+        vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &ssdm_->fs_layout), "ssdm layout");
     }
     // Displacement mesh pass: the world's vertex layout, push constants and scene set.
     {
         vkpipe::GraphicsPipelineConfig cfg{};
-        cfg.vert = ssdm_mesh_vert_; cfg.frag = ssdm_mesh_frag_;
+        cfg.vert = ssdm_->mesh_vert; cfg.frag = ssdm_->mesh_frag;
         cfg.layout = pipeline_layout_;
         cfg.color_formats = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32G32_SFLOAT };
         cfg.depth_format = depth_format_;
@@ -139,27 +140,27 @@ bool VulkanEngine::init_ssdm() {
         cfg.vattrs = { a0, a1, a2 };
         cfg.cull = VK_CULL_MODE_NONE;           // (the depth test keeps the nearest shell face)
         cfg.depth_test = true; cfg.depth_write = true;
-        ssdm_mesh_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+        ssdm_->mesh_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     }
     // The full-screen passes.
     {
         vkpipe::GraphicsPipelineConfig cfg{};
         cfg.vert = taa_vert_module_;
-        cfg.layout = ssdm_fs_layout_;
+        cfg.layout = ssdm_->fs_layout;
         cfg.cull = VK_CULL_MODE_NONE;
         cfg.depth_test = false; cfg.depth_write = false;
-        cfg.frag = ssdm_gbuffer_frag_;
+        cfg.frag = ssdm_->gbuffer_frag;
         cfg.color_formats = { scene_color_format_, motion_vec_format_, gbuffer0_format_, gbuffer1_format_, VK_FORMAT_R16G16B16A16_SFLOAT };
-        ssdm_gbuffer_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
-        cfg.frag = ssdm_depth_frag_;
+        ssdm_->gbuffer_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
+        cfg.frag = ssdm_->depth_frag;
         cfg.color_formats.clear();
         cfg.color_attachment_count = 0;
         cfg.depth_format = depth_format_;
         cfg.depth_test = true; cfg.depth_write = true;
         cfg.depth_compare = VK_COMPARE_OP_ALWAYS;       // (the shader decides: it discards where the scene is nearer)
-        ssdm_depth_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
+        ssdm_->depth_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     }
-    if (!ssdm_mesh_pipeline_ || !ssdm_gbuffer_pipeline_ || !ssdm_depth_pipeline_) {
+    if (!ssdm_->mesh_pipeline || !ssdm_->gbuffer_pipeline || !ssdm_->depth_pipeline) {
         log::warnf("[ssdm] pipeline creation failed - screen-space displacement off");
         ssdm_failed_ = true;
         return false;
@@ -192,30 +193,30 @@ void VulkanEngine::create_ssdm_targets() {
     const VkImageUsageFlags rt = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     const VkImageUsageFlags rts = rt | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     const VkImageAspectFlags C = VK_IMAGE_ASPECT_COLOR_BIT, D = VK_IMAGE_ASPECT_DEPTH_BIT;
-    make(VK_FORMAT_R16G16B16A16_SFLOAT, rt, C, ssdm_disp_);
-    make(VK_FORMAT_R16G16B16A16_SFLOAT, rt, C, ssdm_ray_);
-    make(VK_FORMAT_R32G32_SFLOAT, rt, C, ssdm_hitz_);
-    make(depth_format_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, D, ssdm_shell_z_);
-    make(scene_color_format_, rts, C, ssdm_color_);
-    make(motion_vec_format_, rts, C, ssdm_mv_);
-    make(gbuffer0_format_, rts, C, ssdm_g0_);
-    make(gbuffer1_format_, rts, C, ssdm_g1_);
-    make(VK_FORMAT_R16G16B16A16_SFLOAT, rt, C, ssdm_resolve_);
-    make(depth_format_, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, D, ssdm_scene_z_);
-    ssdm_extent_ = render_extent_;
+    make(VK_FORMAT_R16G16B16A16_SFLOAT, rt, C, ssdm_->disp);
+    make(VK_FORMAT_R16G16B16A16_SFLOAT, rt, C, ssdm_->ray);
+    make(VK_FORMAT_R32G32_SFLOAT, rt, C, ssdm_->hitz);
+    make(depth_format_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, D, ssdm_->shell_z);
+    make(scene_color_format_, rts, C, ssdm_->color);
+    make(motion_vec_format_, rts, C, ssdm_->mv);
+    make(gbuffer0_format_, rts, C, ssdm_->g0);
+    make(gbuffer1_format_, rts, C, ssdm_->g1);
+    make(VK_FORMAT_R16G16B16A16_SFLOAT, rt, C, ssdm_->resolve);
+    make(depth_format_, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, D, ssdm_->scene_z);
+    ssdm_->extent = render_extent_;
     ssdm_first_use_ = true;
 
     const VkImageLayout RO = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     const VkDescriptorImageInfo ii[kSsdmBindings] = {
-        { ssdm_nearest_, scene_color_view_, RO },   { ssdm_nearest_, ssdm_disp_.view, RO },
-        { ssdm_nearest_, ssdm_ray_.view, RO },      { ssdm_nearest_, ssdm_hitz_.view, RO },
-        { ssdm_nearest_, ssdm_shell_z_.view, RO },  { ssdm_nearest_, ssdm_scene_z_.view, RO },
-        { ssdm_nearest_, ssdm_resolve_.view, RO },  { ssdm_nearest_, motion_vec_view_, RO },
-        { ssdm_nearest_, gbuffer0_view_, RO },      { ssdm_nearest_, gbuffer1_view_, RO } };
+        { ssdm_->nearest, scene_color_view_, RO },   { ssdm_->nearest, ssdm_->disp.view, RO },
+        { ssdm_->nearest, ssdm_->ray.view, RO },      { ssdm_->nearest, ssdm_->hitz.view, RO },
+        { ssdm_->nearest, ssdm_->shell_z.view, RO },  { ssdm_->nearest, ssdm_->scene_z.view, RO },
+        { ssdm_->nearest, ssdm_->resolve.view, RO },  { ssdm_->nearest, motion_vec_view_, RO },
+        { ssdm_->nearest, gbuffer0_view_, RO },      { ssdm_->nearest, gbuffer1_view_, RO } };
     VkWriteDescriptorSet w[kSsdmBindings]{};
     for (uint32_t i = 0; i < kSsdmBindings; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[i].dstSet = ssdm_set_; w[i].dstBinding = i; w[i].descriptorCount = 1;
+        w[i].dstSet = ssdm_->set; w[i].dstBinding = i; w[i].descriptorCount = 1;
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[i].pImageInfo = &ii[i];
     }
@@ -237,7 +238,7 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
     if (!init_ssdm()) return false;
     // (destroy_taa() drops these targets with the ones they are sized like, so a missing image
     // here means: first use, or the render size changed and nothing in flight refers to them)
-    if (!ssdm_disp_.image || ssdm_extent_.width != render_extent_.width || ssdm_extent_.height != render_extent_.height)
+    if (!ssdm_->disp.image || ssdm_->extent.width != render_extent_.width || ssdm_->extent.height != render_extent_.height)
         create_ssdm_targets();
     const VkImageLayout RO = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, CA = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     const VkImageLayout UD = VK_IMAGE_LAYOUT_UNDEFINED, DA = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -275,28 +276,28 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
 
     // ---- The scene's depth as it is now (the passes compare against it; step 4 writes the live one) ----
     {
-        vkinit::transition_image_aspect(cmd, ssdm_scene_z_.image, from_c, TD, DEPTH);
+        vkinit::transition_image_aspect(cmd, ssdm_->scene_z.image, from_c, TD, DEPTH);
         VkImageCopy r{};
         r.srcSubresource = { DEPTH, 0, 0, 1 };
         r.dstSubresource = { DEPTH, 0, 0, 1 };
         r.extent = { render_extent_.width, render_extent_.height, 1 };
-        vkCmdCopyImage(cmd, depth_image_, TS, ssdm_scene_z_.image, TD, 1, &r);
-        vkinit::transition_image_aspect(cmd, ssdm_scene_z_.image, TD, RO, DEPTH);
+        vkCmdCopyImage(cmd, depth_image_, TS, ssdm_->scene_z.image, TD, 1, &r);
+        vkinit::transition_image_aspect(cmd, ssdm_->scene_z.image, TD, RO, DEPTH);
     }
 
     // ---- 1. The displacement mesh pass ----
-    vkinit::transition_image(cmd, ssdm_disp_.image, from_c, CA);
-    vkinit::transition_image(cmd, ssdm_ray_.image, from_c, CA);
-    vkinit::transition_image(cmd, ssdm_hitz_.image, from_c, CA);
-    vkinit::transition_image_aspect(cmd, ssdm_shell_z_.image, from_c, DA, DEPTH);
+    vkinit::transition_image(cmd, ssdm_->disp.image, from_c, CA);
+    vkinit::transition_image(cmd, ssdm_->ray.image, from_c, CA);
+    vkinit::transition_image(cmd, ssdm_->hitz.image, from_c, CA);
+    vkinit::transition_image_aspect(cmd, ssdm_->shell_z.image, from_c, DA, DEPTH);
     {
         VkClearValue zero{}; VkClearValue far2{}; far2.color = { { 1.0f, 1.0f, 0.0f, 0.0f } };
         VkClearValue dz{}; dz.depthStencil = { 1.0f, 0 };
-        const VkRenderingAttachmentInfo cols[3] = { att(ssdm_disp_.view, CA, true, zero), att(ssdm_ray_.view, CA, true, zero),
-                                                    att(ssdm_hitz_.view, CA, true, far2) };
-        const VkRenderingAttachmentInfo dep = att(ssdm_shell_z_.view, DA, true, dz);
+        const VkRenderingAttachmentInfo cols[3] = { att(ssdm_->disp.view, CA, true, zero), att(ssdm_->ray.view, CA, true, zero),
+                                                    att(ssdm_->hitz.view, CA, true, far2) };
+        const VkRenderingAttachmentInfo dep = att(ssdm_->shell_z.view, DA, true, dz);
         begin(cols, 3, &dep);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_mesh_pipeline_);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->mesh_pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &scene_desc_set_, 0, nullptr);
         const glm::vec3 fwd = -glm::vec3(fv.inv_view[2]);
         VkDeviceSize off0 = 0;
@@ -319,10 +320,10 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
         }
         vkCmdEndRendering(cmd);
     }
-    vkinit::transition_image(cmd, ssdm_disp_.image, CA, RO);
-    vkinit::transition_image(cmd, ssdm_ray_.image, CA, RO);
-    vkinit::transition_image(cmd, ssdm_hitz_.image, CA, RO);
-    vkinit::transition_image_aspect(cmd, ssdm_shell_z_.image, DA, RO, DEPTH);
+    vkinit::transition_image(cmd, ssdm_->disp.image, CA, RO);
+    vkinit::transition_image(cmd, ssdm_->ray.image, CA, RO);
+    vkinit::transition_image(cmd, ssdm_->hitz.image, CA, RO);
+    vkinit::transition_image_aspect(cmd, ssdm_->shell_z.image, DA, RO, DEPTH);
 
     // VIBE_SSDM_MODE=1: the plain ray march instead of the default bent (NCS) one.
     static const int ssdm_mode = (std::getenv("VIBE_SSDM_MODE") && std::atoi(std::getenv("VIBE_SSDM_MODE")) == 1) ? 1 : 2;
@@ -351,26 +352,26 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
     }
     auto fullscreen = [&](VkPipeline p) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_fs_layout_, 0, 1, &ssdm_set_, 0, nullptr);
-        vkCmdPushConstants(cmd, ssdm_fs_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->fs_layout, 0, 1, &ssdm_->set, 0, nullptr);
+        vkCmdPushConstants(cmd, ssdm_->fs_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRendering(cmd);
     };
 
     // ---- 2. Resolve: the displaced G-buffer + the resolve map ----
-    SsdmImage* outs[5] = { &ssdm_color_, &ssdm_mv_, &ssdm_g0_, &ssdm_g1_, &ssdm_resolve_ };
+    SsdmImage* outs[5] = { &ssdm_->color, &ssdm_->mv, &ssdm_->g0, &ssdm_->g1, &ssdm_->resolve };
     for (SsdmImage* t : outs) vkinit::transition_image(cmd, t->image, from_c, CA);
     {
-        const VkRenderingAttachmentInfo cols[5] = { att(ssdm_color_.view, CA, false, none), att(ssdm_mv_.view, CA, false, none),
-                                                    att(ssdm_g0_.view, CA, false, none), att(ssdm_g1_.view, CA, false, none),
-                                                    att(ssdm_resolve_.view, CA, false, none) };
+        const VkRenderingAttachmentInfo cols[5] = { att(ssdm_->color.view, CA, false, none), att(ssdm_->mv.view, CA, false, none),
+                                                    att(ssdm_->g0.view, CA, false, none), att(ssdm_->g1.view, CA, false, none),
+                                                    att(ssdm_->resolve.view, CA, false, none) };
         begin(cols, 5, nullptr);
-        fullscreen(ssdm_gbuffer_pipeline_);
+        fullscreen(ssdm_->gbuffer_pipeline);
     }
     // ---- 3. Back into the main pass's attachments ----
     {
-        vkinit::transition_image(cmd, ssdm_resolve_.image, CA, RO);
-        VkImage src[4] = { ssdm_color_.image, ssdm_mv_.image, ssdm_g0_.image, ssdm_g1_.image };
+        vkinit::transition_image(cmd, ssdm_->resolve.image, CA, RO);
+        VkImage src[4] = { ssdm_->color.image, ssdm_->mv.image, ssdm_->g0.image, ssdm_->g1.image };
         VkImageCopy r{};
         r.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
         r.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
@@ -388,7 +389,7 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
     {
         const VkRenderingAttachmentInfo dep = att(depth_view_, DA, false, none);
         begin(nullptr, 0, &dep);
-        fullscreen(ssdm_depth_pipeline_);
+        fullscreen(ssdm_->depth_pipeline);
     }
     ssdm_first_use_ = false;
 

@@ -11,6 +11,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/static_clusters.h"
 #include <unordered_map>
 #include <cmath>
 #include "engine/log.h"
@@ -259,10 +260,10 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
         if (depth_only && !shadow_layout && rt_.spom_strength > 0.01f &&
             (g.tex_albedo == 1 || g.tex_albedo == 4)) continue;
         // The clusters picked for this frame (cull_static_clusters): one selection for the camera, one for the sun.
-        const bool clustered = scl_ready_ && g.cl_part >= 0 && size_t(g.cl_part) < scl_parts_.size();
+        const bool clustered = scl_->ready && g.cl_part >= 0 && size_t(g.cl_part) < scl_->parts.size();
         vkCmdBindVertexBuffers(cmd, 0, 1, &g.mesh.vertex_buffer, &off);
         VkBuffer ib = g.mesh.index_buffer;
-        if (clustered) { const SclPart& P = scl_parts_[size_t(g.cl_part)]; ib = (P.state == 2 && P.ib_full) ? P.ib_full : P.ib_coarse; }
+        if (clustered) { const SclPart& P = scl_->parts[size_t(g.cl_part)]; ib = (P.state == 2 && P.ib_full) ? P.ib_full : P.ib_coarse; }
         vkCmdBindIndexBuffer(cmd, ib, 0, VK_INDEX_TYPE_UINT32);
         if (shadow_layout) {
             glm::mat4 mvp = vp;   // model = identity (world-space verts)
@@ -296,7 +297,7 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
                                0, sizeof(PushConstants), &pc);
         }
         if (clustered) {
-            VkBuffer cb = shadow_layout ? scl_cmd_shadow_buf_ : scl_cmd_buf_;       // the sun's selection / the camera's
+            VkBuffer cb = shadow_layout ? scl_->cmd_shadow_buf : scl_->cmd_buf;       // the sun's selection / the camera's
             vkCmdDrawIndexedIndirectCount(cmd, cb, 256 + VkDeviceSize(g.cl_cmd_base) * sizeof(VkDrawIndexedIndirectCommand),
                                           cb, VkDeviceSize(g.cl_part) * 4, g.cl_count, sizeof(VkDrawIndexedIndirectCommand));
         }

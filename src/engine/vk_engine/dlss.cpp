@@ -10,6 +10,7 @@
 // source routing are shared with the FSR paths.
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/rr_guides.h"
 #include "engine/vk_initializers.h"
 #include "engine/log.h"
 
@@ -293,10 +294,10 @@ void VulkanEngine::ensure_dlss_bindings() {
         log::infof("compose source switched to %s", compose_uses_dlss_ ? "DLSS" : "TAA/FSR");
     }
     if (dlss_rr_active()) {
-        const bool stale = !rr_pipeline_ || rr_extent_.width != render_extent_.width ||
-                           rr_extent_.height != render_extent_.height ||
-                           rr_src_views_[0] != gbuffer0_view_ || rr_src_views_[1] != gbuffer1_view_ ||
-                           rr_src_views_[2] != depth_view_ || rr_src_views_[3] != scene_color_view_;
+        const bool stale = !rr_->pipeline || rr_->extent.width != render_extent_.width ||
+                           rr_->extent.height != render_extent_.height ||
+                           rr_->src_views[0] != gbuffer0_view_ || rr_->src_views[1] != gbuffer1_view_ ||
+                           rr_->src_views[2] != depth_view_ || rr_->src_views[3] != scene_color_view_;
         if (stale) {
             vkDeviceWaitIdle(device_);
             ensure_rr_guides();
@@ -320,7 +321,7 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
         if (slGetNewFrameToken(token, &frame_idx) != sl::Result::eOk || !token) return;
     }
     const sl::ViewportHandle viewport{ 0 };
-    const bool use_rr = dlss_rr_active() && rr_image_[0] != VK_NULL_HANDLE;
+    const bool use_rr = dlss_rr_active() && rr_->image[0] != VK_NULL_HANDLE;
     if (use_rr) dispatch_rr_guides(cmd);
 
     // Constants: unjittered matrices, jitter in pixels, motion vectors.
@@ -422,11 +423,11 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
     dlssg_tagged_this_frame_ = true;
     if (use_rr) {
         const VkImageUsageFlags gu = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        sl::Resource alb = vk_res(rr_image_[0], rr_view_[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        sl::Resource alb = vk_res(rr_->image[0], rr_->view[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                   rw, rh, rr_guide_format(0), gu);
-        sl::Resource spc = vk_res(rr_image_[1], rr_view_[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        sl::Resource spc = vk_res(rr_->image[1], rr_->view[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                   rw, rh, rr_guide_format(1), gu);
-        sl::Resource nrm = vk_res(rr_image_[2], rr_view_[2], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        sl::Resource nrm = vk_res(rr_->image[2], rr_->view[2], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                   rw, rh, rr_guide_format(2), gu);
         sl::ResourceTag gtags[3] = {
             sl::ResourceTag{ &alb, sl::kBufferTypeAlbedo, sl::ResourceLifecycle::eValidUntilPresent, &in_ext },

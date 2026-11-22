@@ -341,6 +341,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_initializers.cpp
     src/engine/vk_engine.cpp
     src/engine/vk_engine/game_loop.cpp
+    src/engine/vk_engine/private_state.cpp
     src/engine/vk_engine/frame.cpp
     src/engine/vk_engine/frame_upload.cpp
     src/engine/frame_pacer.cpp

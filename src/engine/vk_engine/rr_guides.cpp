@@ -8,6 +8,7 @@
 // the DLSS dispatch (dlss.cpp tags them).
 
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/rr_guides.h"
 #include "engine/vk_initializers.h"
 #include "engine/vk_pipelines.h"
 #include "engine/log.h"
@@ -32,36 +33,36 @@ VkFormat VulkanEngine::rr_guide_format(int i) const { return kRrFormats[i]; }
 
 void VulkanEngine::destroy_rr_guide_images() {
     for (int i = 0; i < 3; ++i) {
-        if (rr_view_[i]) vkDestroyImageView(device_, rr_view_[i], nullptr);
-        if (rr_image_[i]) vmaDestroyImage(allocator_, rr_image_[i], rr_alloc_[i]);
-        rr_view_[i] = VK_NULL_HANDLE; rr_image_[i] = VK_NULL_HANDLE; rr_alloc_[i] = nullptr;
+        if (rr_->view[i]) vkDestroyImageView(device_, rr_->view[i], nullptr);
+        if (rr_->image[i]) vmaDestroyImage(allocator_, rr_->image[i], rr_->alloc[i]);
+        rr_->view[i] = VK_NULL_HANDLE; rr_->image[i] = VK_NULL_HANDLE; rr_->alloc[i] = nullptr;
     }
-    rr_extent_ = { 0, 0 };
+    rr_->extent = { 0, 0 };
 }
 
 void VulkanEngine::destroy_rr_guides() {
     destroy_rr_guide_images();
-    if (rr_pipeline_) vkDestroyPipeline(device_, rr_pipeline_, nullptr);
-    if (rr_pipeline_layout_) vkDestroyPipelineLayout(device_, rr_pipeline_layout_, nullptr);
-    if (rr_pool_) vkDestroyDescriptorPool(device_, rr_pool_, nullptr);
-    if (rr_set_layout_) vkDestroyDescriptorSetLayout(device_, rr_set_layout_, nullptr);
-    if (rr_sampler_) vkDestroySampler(device_, rr_sampler_, nullptr);
-    rr_pipeline_ = VK_NULL_HANDLE; rr_pipeline_layout_ = VK_NULL_HANDLE;
-    rr_pool_ = VK_NULL_HANDLE; rr_set_layout_ = VK_NULL_HANDLE; rr_set_ = VK_NULL_HANDLE;
-    rr_sampler_ = VK_NULL_HANDLE;
+    if (rr_->pipeline) vkDestroyPipeline(device_, rr_->pipeline, nullptr);
+    if (rr_->pipeline_layout) vkDestroyPipelineLayout(device_, rr_->pipeline_layout, nullptr);
+    if (rr_->pool) vkDestroyDescriptorPool(device_, rr_->pool, nullptr);
+    if (rr_->set_layout) vkDestroyDescriptorSetLayout(device_, rr_->set_layout, nullptr);
+    if (rr_->sampler) vkDestroySampler(device_, rr_->sampler, nullptr);
+    rr_->pipeline = VK_NULL_HANDLE; rr_->pipeline_layout = VK_NULL_HANDLE;
+    rr_->pool = VK_NULL_HANDLE; rr_->set_layout = VK_NULL_HANDLE; rr_->set = VK_NULL_HANDLE;
+    rr_->sampler = VK_NULL_HANDLE;
 }
 
 // Called before command recording (ensure_dlss_bindings), with the GPU idle:
 // (re)creates the pipeline once and the images whenever the render extent
 // or the G-buffer views changed.
 void VulkanEngine::ensure_rr_guides() {
-    if (!rr_pipeline_) {
+    if (!rr_->pipeline) {
         VkSamplerCreateInfo sci{};
         sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         sci.magFilter = VK_FILTER_NEAREST; sci.minFilter = VK_FILTER_NEAREST;
         sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        vk_check(vkCreateSampler(device_, &sci, nullptr, &rr_sampler_), "rr sampler");
+        vk_check(vkCreateSampler(device_, &sci, nullptr, &rr_->sampler), "rr sampler");
 
         VkDescriptorSetLayoutBinding b[7]{};
         for (int i = 0; i < 7; ++i) {
@@ -74,24 +75,24 @@ void VulkanEngine::ensure_rr_guides() {
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         lci.bindingCount = 7; lci.pBindings = b;
-        vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &rr_set_layout_), "rr set layout");
+        vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &rr_->set_layout), "rr set layout");
         VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 },
                                        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3 } };
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci.maxSets = 1; pci.poolSizeCount = 2; pci.pPoolSizes = ps;
-        vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &rr_pool_), "rr pool");
+        vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &rr_->pool), "rr pool");
         VkDescriptorSetAllocateInfo dai{};
         dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dai.descriptorPool = rr_pool_; dai.descriptorSetCount = 1; dai.pSetLayouts = &rr_set_layout_;
-        vk_check(vkAllocateDescriptorSets(device_, &dai, &rr_set_), "rr set");
+        dai.descriptorPool = rr_->pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &rr_->set_layout;
+        vk_check(vkAllocateDescriptorSets(device_, &dai, &rr_->set), "rr set");
 
         VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(RrGuidesPC) };
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        plci.setLayoutCount = 1; plci.pSetLayouts = &rr_set_layout_;
+        plci.setLayoutCount = 1; plci.pSetLayouts = &rr_->set_layout;
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
-        vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &rr_pipeline_layout_), "rr layout");
+        vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &rr_->pipeline_layout), "rr layout");
         VkShaderModule m = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/rr_guides.comp.spv");
         VkComputePipelineCreateInfo cci{};
         cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -99,16 +100,16 @@ void VulkanEngine::ensure_rr_guides() {
         cci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
         cci.stage.module = m;
         cci.stage.pName = "main";
-        cci.layout = rr_pipeline_layout_;
-        vk_check(vkCreateComputePipelines(device_, pipeline_cache_, 1, &cci, nullptr, &rr_pipeline_),
+        cci.layout = rr_->pipeline_layout;
+        vk_check(vkCreateComputePipelines(device_, pipeline_cache_, 1, &cci, nullptr, &rr_->pipeline),
                  "rr guides pipeline");
         vkDestroyShaderModule(device_, m, nullptr);
     }
 
-    const bool stale = rr_extent_.width != render_extent_.width ||
-                       rr_extent_.height != render_extent_.height ||
-                       rr_src_views_[0] != gbuffer0_view_ || rr_src_views_[1] != gbuffer1_view_ ||
-                       rr_src_views_[2] != depth_view_ || rr_src_views_[3] != scene_color_view_;
+    const bool stale = rr_->extent.width != render_extent_.width ||
+                       rr_->extent.height != render_extent_.height ||
+                       rr_->src_views[0] != gbuffer0_view_ || rr_->src_views[1] != gbuffer1_view_ ||
+                       rr_->src_views[2] != depth_view_ || rr_->src_views[3] != scene_color_view_;
     if (!stale) return;
 
     destroy_rr_guide_images();
@@ -124,62 +125,62 @@ void VulkanEngine::ensure_rr_guides() {
         ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        vk_check(vmaCreateImage(allocator_, &ici, &aci, &rr_image_[i], &rr_alloc_[i], nullptr), "rr guide");
+        vk_check(vmaCreateImage(allocator_, &ici, &aci, &rr_->image[i], &rr_->alloc[i], nullptr), "rr guide");
         VkImageViewCreateInfo vci{};
         vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vci.image = rr_image_[i];
+        vci.image = rr_->image[i];
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = kRrFormats[i];
         vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-        vk_check(vkCreateImageView(device_, &vci, nullptr, &rr_view_[i]), "rr guide view");
+        vk_check(vkCreateImageView(device_, &vci, nullptr, &rr_->view[i]), "rr guide view");
     }
     vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
         for (int i = 0; i < 3; ++i)
-            vkinit::transition_image(cb, rr_image_[i], VK_IMAGE_LAYOUT_UNDEFINED,
+            vkinit::transition_image(cb, rr_->image[i], VK_IMAGE_LAYOUT_UNDEFINED,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     });
-    rr_extent_ = render_extent_;
-    rr_src_views_[0] = gbuffer0_view_; rr_src_views_[1] = gbuffer1_view_; rr_src_views_[2] = depth_view_;
-    rr_src_views_[3] = scene_color_view_;
+    rr_->extent = render_extent_;
+    rr_->src_views[0] = gbuffer0_view_; rr_->src_views[1] = gbuffer1_view_; rr_->src_views[2] = depth_view_;
+    rr_->src_views[3] = scene_color_view_;
 
     VkDescriptorImageInfo ii[7] = {
-        { rr_sampler_, gbuffer0_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-        { rr_sampler_, gbuffer1_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-        { rr_sampler_, depth_view_,    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-        { VK_NULL_HANDLE, rr_view_[0], VK_IMAGE_LAYOUT_GENERAL },
-        { VK_NULL_HANDLE, rr_view_[1], VK_IMAGE_LAYOUT_GENERAL },
-        { VK_NULL_HANDLE, rr_view_[2], VK_IMAGE_LAYOUT_GENERAL },
-        { rr_sampler_, scene_color_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { rr_->sampler, gbuffer0_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { rr_->sampler, gbuffer1_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { rr_->sampler, depth_view_,    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { VK_NULL_HANDLE, rr_->view[0], VK_IMAGE_LAYOUT_GENERAL },
+        { VK_NULL_HANDLE, rr_->view[1], VK_IMAGE_LAYOUT_GENERAL },
+        { VK_NULL_HANDLE, rr_->view[2], VK_IMAGE_LAYOUT_GENERAL },
+        { rr_->sampler, scene_color_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
     };
     VkWriteDescriptorSet w[7]{};
     for (int i = 0; i < 7; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[i].dstSet = rr_set_; w[i].dstBinding = uint32_t(i);
+        w[i].dstSet = rr_->set; w[i].dstBinding = uint32_t(i);
         w[i].descriptorCount = 1;
         w[i].descriptorType = (i < 3 || i == 6) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
                                     : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         w[i].pImageInfo = &ii[i];
     }
     vkUpdateDescriptorSets(device_, 7, w, 0, nullptr);
-    log::infof("[dlss-rr] guide buffers %ux%u", rr_extent_.width, rr_extent_.height);
+    log::infof("[dlss-rr] guide buffers %ux%u", rr_->extent.width, rr_->extent.height);
 }
 
 // G-buffer + depth are SHADER_READ_ONLY here (post-world transition). The
 // guides are left SHADER_READ_ONLY for the DLSS-RR evaluate.
 void VulkanEngine::dispatch_rr_guides(VkCommandBuffer cmd) {
-    if (!rr_pipeline_ || !rr_image_[0]) return;
+    if (!rr_->pipeline || !rr_->image[0]) return;
     for (int i = 0; i < 3; ++i)
-        vkinit::transition_image(cmd, rr_image_[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        vkinit::transition_image(cmd, rr_->image[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                  VK_IMAGE_LAYOUT_GENERAL);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rr_pipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rr_pipeline_layout_, 0, 1, &rr_set_, 0, nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rr_->pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rr_->pipeline_layout, 0, 1, &rr_->set, 0, nullptr);
     RrGuidesPC pc{};
     pc.inv_vp = last_inv_view_proj_;
     pc.cam_pos = glm::vec4(current_frame_view_.eye_pos, 0.0f);
-    vkCmdPushConstants(cmd, rr_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (rr_extent_.width + 7) / 8, (rr_extent_.height + 7) / 8, 1);
+    vkCmdPushConstants(cmd, rr_->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd, (rr_->extent.width + 7) / 8, (rr_->extent.height + 7) / 8, 1);
     for (int i = 0; i < 3; ++i)
-        vkinit::transition_image(cmd, rr_image_[i], VK_IMAGE_LAYOUT_GENERAL,
+        vkinit::transition_image(cmd, rr_->image[i], VK_IMAGE_LAYOUT_GENERAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
