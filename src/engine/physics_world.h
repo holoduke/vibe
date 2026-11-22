@@ -199,6 +199,9 @@ public:
         float     engine_torque = 310.0f, engine_max_rpm = 4600.0f, final_drive = 4.4f;
         float     brake_torque = 2400.0f, handbrake_torque = 5200.0f;
         float     grip = 1.0f;
+        // The air: the force pressing the car down and the one holding it back, in newtons per
+        // (m/s) squared. (At 60 m/s a downforce of 1.9 is 6.8 kN: half a sports car's weight.)
+        float     downforce = 0.0f, drag = 0.6f;
     };
     struct VehicleState {
         glm::mat4 body{1.0f};

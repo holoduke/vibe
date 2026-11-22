@@ -52,6 +52,7 @@ struct VulkanEngine::JeepState {
     std::vector<Puff> puffs;
     float puff_acc = 0.0f;
     float test_t = 0.0f;
+    float tc = 1.0f;                   // traction control: the share of the throttle let through
     // Lights: head lights on / off (L), brake lights by the pedal. Where they are (the car's
     // frame), and which drawn parts are lamps (1 head, 2 tail).
     bool      lights_on = false, prev_l = false, prev_mm = false;
@@ -176,7 +177,8 @@ bool VulkanEngine::jeep_driving() const { return jeep_ && jeep_->driving; }
 
 void VulkanEngine::init_jeep() {
     if (JeepState* c = jeep_load("assets/jeep", "jeep.json")) {
-        c->tune.com_height = 0.58f; c->tune.front_weight = 0.52f;
+        c->tune.com_height = 0.54f; c->tune.front_weight = 0.52f;
+        c->tune.grip = 0.90f; c->tune.drag = 0.75f;                 // (all-terrain tyres, a brick in the wind)
         jeep_all_.push_back(c);
     }
     // The others: a kind (its folder and what it drives like) in one or more colours.
@@ -189,7 +191,7 @@ void VulkanEngine::init_jeep() {
     };
     // A mid-engined sports car: low, stiff, rear-wheel drive, a high-revving engine.
     auto sports = [](PhysicsWorld::VehicleDesc& t) {
-        t.mass = 1480.0f; t.com_height = 0.43f; t.front_weight = 0.42f;
+        t.mass = 1480.0f; t.com_height = 0.40f; t.front_weight = 0.42f;
         t.front_drive = 0.0f;
         t.gears = { 3.08f, 2.19f, 1.63f, 1.29f, 1.03f, 0.84f };
         t.engine_torque = 640.0f; t.engine_max_rpm = 8400.0f; t.final_drive = 4.2f;
@@ -197,6 +199,7 @@ void VulkanEngine::init_jeep() {
         t.suspension_hz = 2.3f; t.suspension_damping = 0.62f; t.antiroll = 9000.0f;
         t.max_steer = 0.50f; t.brake_torque = 4200.0f; t.handbrake_torque = 6500.0f;
         t.grip = 1.30f; t.wheel_mass = 20.0f;
+        t.downforce = 1.9f; t.drag = 0.45f;
     };
     // An executive saloon: heavy, quiet, soft; most of its power to the rear.
     auto saloon = [](PhysicsWorld::VehicleDesc& t) {
@@ -207,7 +210,7 @@ void VulkanEngine::init_jeep() {
         t.suspension_rest = 0.24f; t.suspension_travel_up = 0.09f; t.suspension_travel_down = 0.10f;
         t.suspension_hz = 1.5f; t.suspension_damping = 0.58f; t.antiroll = 5500.0f;
         t.max_steer = 0.55f; t.brake_torque = 3400.0f; t.handbrake_torque = 5600.0f;
-        t.grip = 1.12f;
+        t.grip = 1.08f; t.downforce = 0.35f; t.drag = 0.38f;
     };
     // A pickup: tall, heavy at the front, long travel, four-wheel drive, a slow strong engine.
     auto pickup = [](PhysicsWorld::VehicleDesc& t) {
@@ -219,6 +222,7 @@ void VulkanEngine::init_jeep() {
         t.suspension_hz = 1.5f; t.suspension_damping = 0.55f; t.antiroll = 3600.0f;
         t.max_steer = 0.56f; t.brake_torque = 3600.0f; t.handbrake_torque = 6200.0f;
         t.wheel_mass = 28.0f;
+        t.grip = 0.97f; t.drag = 0.80f;
     };
     add("assets/sportscar", { 0.62f, 0.022f, 0.018f }, sports, 1.0f);
     add("assets/saloon",    { 0.20f, 0.21f, 0.23f }, saloon, -1.0f);
@@ -561,16 +565,48 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
         J.test_t += dt;
         if (J.test_t > float(std::atof(sk))) { hand = 1.0f; steer_in = 1.0f; throttle = 0.0f; }
     }
+    // VIBE_TEST_JEEP_TURN=<s>: after <s> seconds at the wheel, full lock, the throttle held (tests: how hard it corners).
+    if (static const char* tn = std::getenv("VIBE_TEST_JEEP_TURN")) {
+        if (!std::getenv("VIBE_TEST_JEEP_SKID")) J.test_t += dt;
+        if (J.test_t > float(std::atof(tn))) {
+            steer_in = 1.0f; throttle = 0.6f;
+            if (frame_number_ % 12 == 0)
+                log::infof("[jeep] turn: %.0f km/h, %.2f g across, steer %.2f", double(glm::length(J.st.velocity) * 3.6f),
+                           double(glm::length(glm::cross(J.st.angular_velocity, J.st.velocity)) / 9.81f), double(J.steer));
+        }
+    }
     const glm::vec3 fwd = -glm::vec3(J.st.body[2]);
     const float v_fwd
+
  = glm::dot(J.st.velocity, fwd), speed = glm::length(J.st.velocity);
     float forward = throttle, brake = 0.0f;
     if (throttle < -0.05f && v_fwd > 1.2f) { brake = -throttle; forward = 0.0f; }             // braking, then reverse
     else if (throttle > 0.05f && v_fwd < -1.2f) { brake = throttle; forward = 0.0f; }
     // Steering: the wheel takes time to turn, and turns less the faster the jeep goes.
-    const float limit = 1.0f / (1.0f + speed / 16.0f);
-    const float want = steer_in * glm::mix(limit, 1.0f, 0.12f);
+    // How far the wheels turn at full lock on the key: as far as the tyres can use at this
+    // speed, no further. The lock for the tightest circle the grip allows (wheelbase x the
+    // sideways acceleration the tyres give / speed squared) plus the slip angle at which a
+    // tyre grips best. More than that only scrubs the front tyres past their peak - the car
+    // turns LESS - or, on a tall car, trips it over. (A stick or a wheel would need none of
+    // this; a key is all or nothing.)
+    const float wheelbase = std::abs(J.tune.wheel_pos[2].z - J.tune.wheel_pos[0].z);
+    const float a_grip = 9.81f * J.tune.grip * 1.05f + J.tune.downforce * speed * speed / std::max(J.tune.mass, 1.0f);
+    const float lock = std::atan(wheelbase * a_grip / std::max(speed * speed, 1.0f)) + 0.085f;
+    const float limit = glm::clamp(lock / std::max(J.tune.max_steer, 0.1f), 0.06f, 1.0f);
+    const float want = steer_in * limit;
     J.steer += glm::clamp(want - J.steer, -dt * 2.6f, dt * 2.6f);
+    // Traction control, as every such car has: when a driven wheel spins (its slip past where
+    // a tyre grips best) the throttle is eased until it bites again. Without it full throttle
+    // in a low gear spun the rear wheels, and a spinning tyre holds nothing sideways: the
+    // car stepped out on a straight road. The handbrake turns it off (a slide is asked for).
+    {
+        float slip = 0.0f;
+        for (int w = 0; w < 4; ++w)
+            if (J.st.wheel_contact[w] && (w >= 2 || J.tune.front_drive > 0.05f)) slip = std::max(slip, J.st.wheel_slip[w]);
+        const float cut = (hand > 0.5f || speed < 4.0f) ? 1.0f : glm::clamp(1.0f - (slip - 0.22f) * 2.2f, 0.40f, 1.0f);      // (from a standstill the wheels may spin: that is how it gets away)
+        J.tc += (cut - J.tc) * std::min(1.0f, dt * (cut < J.tc ? 30.0f : 6.0f));
+        if (forward > 0.0f) forward *= J.tc;
+    }
     physics_->vehicle_input(forward, J.steer, brake, hand);
     J.brake_in = std::max(brake, hand);
     // The driver's hands are full: no walking, shooting or jumping.

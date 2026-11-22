@@ -29,6 +29,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
+#include <Jolt/Physics/PhysicsStepListener.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/CollisionCollector.h>
 #include <Jolt/Physics/Collision/CollidePointResult.h>
@@ -1038,8 +1039,24 @@ void PhysicsWorld::apply_impulse_h(BodyHandle h, glm::vec3 impulse) {
 // grip falls off as they slip. One vehicle at a time.
 // =====================================================================================
 struct PhysicsWorld::VehicleImpl {
+    // The air on the car, every physics step: downforce along the car's own down, drag against its motion.
+    struct Aero : JPH::PhysicsStepListener {
+        JPH::BodyID body; float down = 0.0f, drag = 0.0f;
+        void OnStep(const JPH::PhysicsStepListenerContext& c) override {
+            JPH::BodyInterface& bi = c.mPhysicsSystem->GetBodyInterfaceNoLock();
+            if (body.IsInvalid() || !bi.IsActive(body)) return;
+            const JPH::Vec3 v = bi.GetLinearVelocity(body);
+            const float sp = v.Length();
+            if (sp < 1.0f) return;
+            const JPH::Quat q = bi.GetRotation(body);
+            const float vf = v.Dot(q * JPH::Vec3(0, 0, -1));
+            bi.AddForce(body, -(q * JPH::Vec3(0, 1, 0)) * (down * vf * vf) - v * (drag * sp));
+        }
+    };
+    Aero aero;
     JPH::BodyID body;
     JPH::Ref<JPH::VehicleConstraint> constraint;
+
     JPH::Ref<JPH::VehicleCollisionTester> tester;
     JPH::BodyID patch;                 // the ground under it, outside the home tile's heightfield
     JPH::BodyID obstacles;             // what stands near it (trees, rails, buildings)
@@ -1140,20 +1157,25 @@ uint32_t PhysicsWorld::vehicle_create(const VehicleDesc& d) {
         //  tyre's friction the jeep cornered at 2.5 g and never slid. The friction is scaled so
         //  that the grip is a real tyre's in m/s2.)
         const float gk = d.grip * 9.81f / grav;
+        // The tyre, as measured ones are (the "magic formula" shape): grip rises steeply with
+        // slip, peaks - at about 12 % along, 8 degrees across - and then falls off only
+        // gently: a sliding tyre still holds four fifths of its best. (It fell to half: once
+        // past the peak the car ploughed straight on, whatever the wheel did.)
         w->mLongitudinalFriction.Clear();
-        w->mLongitudinalFriction.AddPoint(0.0f, 0.0f);
-        w->mLongitudinalFriction.AddPoint(0.06f, 1.10f * gk);
-        w->mLongitudinalFriction.AddPoint(0.20f, 0.88f * gk);
-        w->mLongitudinalFriction.AddPoint(1.00f, 0.62f * gk);
+        w->mLongitudinalFriction.AddPoint(0.00f, 0.00f);
+        w->mLongitudinalFriction.AddPoint(0.04f, 0.80f * gk);
+        w->mLongitudinalFriction.AddPoint(0.12f, 1.12f * gk);
+        w->mLongitudinalFriction.AddPoint(0.30f, 1.00f * gk);
+        w->mLongitudinalFriction.AddPoint(1.00f, 0.86f * gk);
         w->mLateralFriction.Clear();
-        w->mLateralFriction.AddPoint(0.0f, 0.0f);
-        // (past about 6 degrees of slip it lets go, and a sliding tyre holds much less: the
-        //  tail comes round under power or the handbrake, and has to be caught)
-        const float lat = (front ? 1.0f : 0.93f) * gk;
-        w->mLateralFriction.AddPoint(4.0f, 1.05f * lat);
-        w->mLateralFriction.AddPoint(9.0f, 0.90f * lat);
-        w->mLateralFriction.AddPoint(25.0f, 0.68f * lat);
-        w->mLateralFriction.AddPoint(90.0f, 0.55f * lat);
+        w->mLateralFriction.AddPoint(0.0f, 0.00f);
+        w->mLateralFriction.AddPoint(2.0f, 0.62f * gk);
+        w->mLateralFriction.AddPoint(5.0f, 1.00f * gk);
+        w->mLateralFriction.AddPoint(8.0f, 1.08f * gk);
+        w->mLateralFriction.AddPoint(14.0f, 1.02f * gk);
+        w->mLateralFriction.AddPoint(30.0f, 0.92f * gk);
+        w->mLateralFriction.AddPoint(90.0f, 0.82f * gk);
+        (void)front;
         vs.mWheels.push_back(w);
     }
     // Anti-roll bars, front and rear.
@@ -1191,7 +1213,24 @@ uint32_t PhysicsWorld::vehicle_create(const VehicleDesc& d) {
     vs.mController = cs2;
 
     vehicle_->constraint = new JPH::VehicleConstraint(*body, vs);
+    // The tyre's curves ARE the grip. Jolt's default takes the mean of the tyre's friction and
+    // that of the body it stands on - made for contacts between solids; on the home tile's
+    // heightfield (friction 0.2 by default) it left a tyre with under half its grip.
+    vehicle_->constraint->SetCombineFriction([](JPH::uint, float&, float&, const JPH::Body&, const JPH::SubShapeID&) {});
+    // One tyre has one grip to spend: what it uses along (spinning under power, locked under
+    // the brake) it has not across. (Jolt limits the two separately: a wheel spinning freely
+    // still held the car sideways at full strength - no power slide, no locked-wheel plough.)
+    static_cast<JPH::WheeledVehicleController*>(vehicle_->constraint->GetController())->SetTireMaxImpulseCallback(
+        [](JPH::uint, float& out_long, float& out_lat, float susp, float f_long, float f_lat, float slip_long, float, float) {
+            out_long = susp * f_long;
+            const float spent = std::clamp((slip_long - 0.10f) / 0.30f, 0.0f, 1.0f);
+            out_lat = susp * f_lat * (1.0f - 0.45f * spent);
+        });
+    vehicle_->aero.body = body->GetID();
+    vehicle_->aero.down = d.downforce; vehicle_->aero.drag = d.drag;
+    impl_->system.AddStepListener(&vehicle_->aero);
     vehicle_->tester = new JPH::VehicleCollisionTesterCastCylinder(Layers::MOVING, 0.08f);
+
     vehicle_->constraint->SetVehicleCollisionTester(vehicle_->tester);
     impl_->system.AddConstraint(vehicle_->constraint);
     impl_->system.AddStepListener(vehicle_->constraint);
@@ -1203,6 +1242,7 @@ void PhysicsWorld::vehicle_remove() {
     JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
     if (vehicle_->constraint) {
         impl_->system.RemoveStepListener(vehicle_->constraint);
+        impl_->system.RemoveStepListener(&vehicle_->aero);
         impl_->system.RemoveConstraint(vehicle_->constraint);
     }
     for (JPH::BodyID id : { vehicle_->body, vehicle_->patch, vehicle_->obstacles })

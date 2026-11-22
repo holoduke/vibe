@@ -519,3 +519,15 @@ Additions to "The jeep" above (`jeep.cpp`; the type is still called `JeepState`,
 - **Displays** (`cube.frag`, slot 36 `kTexScreens`, `assets/office/tex/screens.png`: 8 pictures, 4 x 2): `make_office.py screen()` gives every display uv = its number + 0..1; each shows one picture and changes every 16 s, not all at once (time = `scene.water_params.w`).
 - **Quality levels** (`settings.cpp apply_foliage_quality` / `apply_shadow_quality`; first in the menu's Game tab; saved as `foliage_quality`, `shadow_quality`): foliage low .. insane sets densities, detail distance, plant and grass draw distances (and replants the forest); shadows low .. high sets the sun's rays per pixel, whether rays through trees test every leaf (`foliage_ray_mode`), screen-space instead of ray-traced ambient occlusion on low and medium, the terrain's shadow steps and the grass's shadow rays. Measured in the forest scene at 1440p on the AMD card: shadows 23.6 / 25.7 / 27.9 ms; foliage low .. insane only 28 .. 30 ms - fewer trees uncover more raymarched ground, which costs as much as the trees did. The terrain march is the floor there. `VIBE_TEST_FOLIAGE`, `VIBE_TEST_SHADOWS` force a level.
 - **Memory**: `VIBE_LOG_MEM=1` logs video memory, RAM, allocations and streamed counts every 600 frames (`mem_log.cpp`). Measured over 34,000 frames of riding the course at 110 m/s: flat (3754 MB video, RAM steady, allocations 1601-1614). Never run two test batches on the test PC at once: the second seems to hang.
+
+## Tyres and handling (2026-11-22, late)
+
+What makes the cars drive like cars (`physics_world.cpp vehicle_create`, `jeep.cpp jeep_tick`), each found by measuring (`VIBE_TEST_JEEP_TURN=<s>`: full lock after s seconds, logs speed and sideways g):
+
+- **The tyre's curves are the grip.** Jolt's default combines the tyre's friction with the friction of the body it stands on (made for solids touching); the home tile's heightfield has 0.2, which left under half the grip there. `SetCombineFriction` is a no-op now.
+- **Curve shape**: steep rise, a peak (12 % slip along, 8 degrees across), then a gentle fall to about four fifths - a measured tyre's shape. A curve that falls to half past the peak makes the car plough straight on at full lock.
+- **One grip per tyre** (`SetTireMaxImpulseCallback`): what a spinning or locked wheel spends along it has not across. Jolt limits the two separately.
+- **The air** (`VehicleImpl::Aero`, a step listener): downforce and drag per car (`VehicleDesc::downforce`, `drag`), by speed squared.
+- **Steering from a key** is limited to the lock the tyres can use at that speed: atan(wheelbase x grip acceleration / speed squared) + the slip angle of best grip. More scrubs the front tyres or trips a tall car over.
+- **Traction control**: the throttle is eased while a driven wheel spins (not from a standstill, not with the handbrake).
+- Measured after: sports car about 1.1 g at 60-75 km/h on full lock, jeep about 0.9 g, neither rolls; the course at 108 km/h on autopilot.
