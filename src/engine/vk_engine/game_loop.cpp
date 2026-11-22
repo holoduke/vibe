@@ -179,6 +179,13 @@ void VulkanEngine::loop_test_input(InputFrame& in, float frame_dt, bool autodemo
                 }
             }
             if (globe_moved_player_) { hold_pos = player_.position; globe_moved_player_ = false; }    // (re-anchored on the globe)
+            // VIBE_TEST_DOLLY=<vx>,<vy>,<vz>: the held camera travels at that speed (m/s) - for
+            // capturing what flickers while walking (consecutive frames of a steady move).
+            if (static const char* dolly = std::getenv("VIBE_TEST_DOLLY")) {
+                static glm::vec3 dv = [] { glm::vec3 v(0.0f); std::sscanf(std::getenv("VIBE_TEST_DOLLY"), "%f,%f,%f", &v.x, &v.y, &v.z); return v; }();
+                (void)dolly;
+                hold_pos += dv * frame_dt;
+            }
             player_.position = hold_pos;
             // VIBE_TEST_FLIGHT=<y0>,<y1>,<frames>[,<yaw per frame>]: from frame 60 on the
             // held camera flies from altitude y0 to y1 (evenly in the logarithm, so every

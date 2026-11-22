@@ -152,7 +152,14 @@ bool g_rq_leaf_solid = false;
 // 2 solid cards for every ray. Not in winter: bare trees keep their cards in the BLAS and
 // only the per-leaf test knows they are gone.
 int rq_leaf_mode() { return scene.season.w > 0.02 ? 0 : ((scene.rt_flags.x >> 2) & 3); }
-bool any_hit_m(vec3 origin, vec3 dir, float t_max, uint mask) {
+// Set for a solid receiver (not terrain, not foliage): a ray that leaves it and at once meets
+// a surface FROM BEHIND started inside the receiver's own traced shape - walls with relief are
+// drawn with their depth pushed into the stone (cube.frag), up to some 20 cm behind the traced
+// face, by an amount that follows the texture and changes with the view. Such a ray is
+// carried on from that face. Without this the face counted as an occluder: ambient occlusion
+// and shadow in the pattern of the texture, flickering with every step of the camera.
+bool g_rq_from_solid = false;
+bool any_hit_once(vec3 origin, vec3 dir, float t_max, uint mask, out float t_hit, out bool from_behind) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topLevelAS,
                           gl_RayFlagsTerminateOnFirstHitEXT | (g_rq_leaf_solid ? gl_RayFlagsOpaqueEXT : 0u),
@@ -161,15 +168,27 @@ bool any_hit_m(vec3 origin, vec3 dir, float t_max, uint mask) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
             leaf_card_hit(rq)) rayQueryConfirmIntersectionEXT(rq);
     }
-    return rayQueryGetIntersectionTypeEXT(rq, true) ==
-           gl_RayQueryCommittedIntersectionTriangleEXT;
+    t_hit = 0.0; from_behind = false;
+    if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT) return false;
+    t_hit = rayQueryGetIntersectionTEXT(rq, true);
+    from_behind = !rayQueryGetIntersectionFrontFaceEXT(rq, true);
+    return true;
 }
+bool any_hit_m(vec3 origin, vec3 dir, float t_max, uint mask) {
+    float t; bool behind;
+    if (!any_hit_once(origin, dir, t_max, mask, t, behind)) return false;
+    if (!(g_rq_from_solid && behind && t < 0.30)) return true;
+    // (carried on from the receiver's own face)
+    return any_hit_once(origin + dir * (t + 0.004), dir, max(t_max - t - 0.004, 0.01), mask, t, behind);
+}
+
 bool any_hit(vec3 origin, vec3 dir, float t_max) {
     return any_hit_m(origin, dir, t_max, 0x01u);
 }
 
 // Closest-hit with t-value — used by the PCSS blocker search.
-bool closest_hit_m(vec3 origin, vec3 dir, float t_max, uint mask, out float out_t) {
+bool closest_hit_once(vec3 origin, vec3 dir, float t_max, uint mask, out float out_t, out bool from_behind) {
+    from_behind = false;
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topLevelAS, g_rq_leaf_solid ? gl_RayFlagsOpaqueEXT : gl_RayFlagsNoneEXT,
                           mask, origin, 0.001, dir, t_max);
@@ -180,9 +199,20 @@ bool closest_hit_m(vec3 origin, vec3 dir, float t_max, uint mask, out float out_
     if (rayQueryGetIntersectionTypeEXT(rq, true) ==
         gl_RayQueryCommittedIntersectionTriangleEXT) {
         out_t = rayQueryGetIntersectionTEXT(rq, true);
+        from_behind = !rayQueryGetIntersectionFrontFaceEXT(rq, true);
         return true;
     }
     return false;
+}
+bool closest_hit_m(vec3 origin, vec3 dir, float t_max, uint mask, out float out_t) {
+    bool behind;
+    if (!closest_hit_once(origin, dir, t_max, mask, out_t, behind)) return false;
+    if (!(g_rq_from_solid && behind && out_t < 0.30)) return true;
+    // (started inside the receiver's own traced shape - see g_rq_from_solid: carried on from its face)
+    float t0 = out_t + 0.004, t1;
+    if (!closest_hit_once(origin + dir * t0, dir, max(t_max - t0, 0.01), mask, t1, behind)) return false;
+    out_t = t0 + t1;
+    return true;
 }
 
 // ---------------------------------------------------------------
@@ -460,6 +490,30 @@ void main() {
     // origins back toward the camera by the expected error.
     vec3 wp_safe = world_pos + (view_vec / max(cam_dist, 1e-3)) *
                    min(0.004 + cam_dist * cam_dist * 1.2e-5, 2.5);
+    // The surface's own (geometric) normal, from the depth buffer: the neighbour pixel on the
+    // nearer-in-depth side each way. Rays that ask "what is around this surface" (ambient
+    // occlusion, bounce light, the sun's shadow) leave from it and fan out round it - not
+    // round the normal-mapped N. Round N, on a surface with a strong normal map, part of the
+    // fan dips under the real surface and hits it: occlusion that is not there, different
+    // for every pixel and every step of the camera - walls and the rocket's concrete
+    // flickered in the pattern of their textures while walking, and a thin part seen edge-on
+    // (the road's guard rail) shadowed itself or not by rounding.
+    vec3 Ng = N;
+    g_rq_from_solid = material_id != 3 && !foliage;
+    if (material_id != 3 && !foliage && cam_dist < 90.0) {
+        vec2 px = scene.viewport.zw;
+        float zl = texture(u_depth, uv - vec2(px.x, 0.0)).r, zr = texture(u_depth, uv + vec2(px.x, 0.0)).r;
+        float zd = texture(u_depth, uv - vec2(0.0, px.y)).r, zu = texture(u_depth, uv + vec2(0.0, px.y)).r;
+        bool  rx = abs(zr - z) < abs(zl - z), ry = abs(zu - z) < abs(zd - z);
+        vec2  ux = uv + vec2(rx ? px.x : -px.x, 0.0), uy = uv + vec2(0.0, ry ? px.y : -px.y);
+        vec4  ax = pc.inv_vp * vec4(ux * 2.0 - 1.0, rx ? zr : zl, 1.0), ay = pc.inv_vp * vec4(uy * 2.0 - 1.0, ry ? zu : zd, 1.0);
+        vec3  g = cross(ay.xyz / ay.w - world_pos, ax.xyz / ax.w - world_pos);
+        if (dot(g, g) > 1e-14) {
+            g = normalize(g);
+            if (dot(g, view_vec) < 0.0) g = -g;
+            if (dot(g, N) > 0.2) Ng = g;          // (else an edge: two surfaces in the stencil)
+        }
+    }
 
     // World-anchored noise seed for shadow / AO jitter. A screen-pixel
     // seed printed the SAME noise pattern on screen whatever the camera
@@ -538,7 +592,7 @@ void main() {
         // Foliage: start the shadow ray well outside the swaying canopy,
         // toward the sun, so it can't hit its own (static) RT copy.
         vec3 origin = foliage ? wp_safe + L * (0.75 + cam_dist * 0.006) + N * 0.15
-                              : wp_safe + N * bias;
+                              : wp_safe + Ng * (bias + 0.01);
         // Trunks and rocks are solid and barely sway: start at the surface,
         // so twigs, neighbours and the crown right above shade them. (Only
         // near the camera: further out the drawn LOD and the traced shape
@@ -815,28 +869,31 @@ void main() {
         int n_taps = (ao_mode == 1) ? 2 : 4;
         // Ray Reconstruction: per-frame taps are averaged over time - 2
         // give the same mean as 4.
-        if ((scene.rt_flags.x & 2) != 0) n_taps = min(n_taps, 2);
         float ao_radius = max(0.05, scene.rt_params.y);
         float hits = 0.0;
-        vec3 t_u = abs(N.y) < 0.999 ? normalize(cross(vec3(0,1,0), N))
-                                     : vec3(1,0,0);
-        vec3 t_v = cross(N, t_u);
+        vec3 t_u = abs(Ng.y) < 0.999 ? normalize(cross(vec3(0,1,0), Ng))
+                                      : vec3(1,0,0);
+        vec3 t_v = cross(Ng, t_u);
         // Terrain: lift the origin over the BLAS-vs-raster height gap.
         float lift = (material_id == 3) ? mix(0.02, 0.25, clamp(cam_dist / 45.0, 0.0, 1.0))
                                         : 0.01;
-        vec3 origin = wp_safe + N * (bark && cam_dist < 60.0 ? 0.07 + cam_dist * 0.004 : foliage ? 0.35 : lift);
+        vec3 origin = wp_safe + Ng * (bark && cam_dist < 60.0 ? 0.07 + cam_dist * 0.004 : foliage ? 0.35 : lift);
         // Azimuths stratified around the circle with ONE random rotation
         // per pixel (was independent random phi per tap: 4 taps could all
         // land on one side, the main source of salt-and-pepper AO).
-        float rot = rand(seed_stable + uvec3(7u, 5u, 23u));
+        // FIXED directions, the same for every pixel and every frame (as the terrain's sky probe
+        // has them): the answer is then a function of the place alone. With a random turn per
+        // pixel a surface that is partly occluded - or grazes its own traced copy - changed
+        // its shade with every step of the camera: walls flickered while walking.
+        const float kAoR2[4] = float[4](0.30, 0.62, 0.45, 0.78);
         for (int i = 0; i < n_taps; ++i) {
-            float r1 = (float(i) + rot) / float(n_taps);
-            float r2 = rand(seed_stable + uvec3(uint(i), 7u, 91u));
+            float r1 = (float(i) + 0.37) / float(n_taps);
+            float r2 = kAoR2[i & 3];
             float phi = r1 * 6.28318530718;
             float ct = sqrt(r2);              // cosine-weighted hemisphere
             float st = sqrt(1.0 - r2);
             vec3 dir = normalize(
-                t_u * (cos(phi) * st) + t_v * (sin(phi) * st) + N * ct);
+                t_u * (cos(phi) * st) + t_v * (sin(phi) * st) + Ng * ct);
             g_rq_leaf_solid = rq_leaf_mode() >= 1;
             if (any_hit(origin, dir, ao_radius)) hits += 1.0;
             g_rq_leaf_solid = false;
@@ -931,7 +988,7 @@ void main() {
         vec3 N_up  = abs(N.y) < 0.999 ? vec3(0,1,0) : vec3(1,0,0);
         vec3 N_tan = normalize(cross(N_up, N));
         vec3 N_bit = cross(N, N_tan);
-        vec3 ro    = wp_safe + N * (bark && cam_dist < 60.0 ? 0.08 + cam_dist * 0.005 : foliage ? 0.4 : 0.01);
+        vec3 ro    = wp_safe + Ng * (bark && cam_dist < 60.0 ? 0.08 + cam_dist * 0.005 : foliage ? 0.4 : 0.02);
         float gi_radius = max(8.0, scene.rt_params2.y);
         int sky_hits = 0;
         // Frame-cycled seed offset: the temporal accumulator below needs
@@ -948,6 +1005,7 @@ void main() {
                            sqrt(max(0.0, 1.0 - r1)),
                            r_h * sin(phi));
             vec3 dir = ld.x * N_tan + ld.y * N + ld.z * N_bit;
+            { float dg = dot(dir, Ng); if (dg < 0.0) dir -= 2.0 * dg * Ng; }      // (not under the real surface)
             float t;
             // GI mask 0x04 = STATIC geometry only (brushes + terrain).
             // Dynamic crates (mask bit 2 cleared) are excluded so a moving

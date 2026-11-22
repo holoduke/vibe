@@ -299,16 +299,17 @@ void main() {
     }
 
     // ---- Glass (static mesh parts with material -3: castle_mesh.cpp) ----
-    // Seen through: only a part of its pixels is drawn, in a pattern that changes every frame,
-    // which the temporal pass blends into a tinted pane. More of them toward a grazing view,
+    // Seen through: only a part of its pixels is drawn, in a pattern that is FIXED on the screen.
+    // (It changed every frame, for the temporal pass to blend into a tinted pane: neither
+    // upscaler did - the pane boiled, and everything behind it, the monitors first, flickered.)
+    // Few of them head-on, so the pane is nearly clear; more toward a grazing view,
     // where real glass turns into a mirror. (It is not in the depth pre-pass, casts no shadow
     // and is not ray traced, so the room behind it is simply there.)
     if (pc.grass_params.w < -0.5 && pc.grass_params.x <= 0.5 && vTexParams.x < -2.5) {
         vec3  gv = normalize(scene.camera_pos.xyz - vWorldPos);
         float gf = 1.0 - abs(dot(normalize(vNormal), gv));
-        float cover = mix(0.13, 0.80, gf * gf * gf);
-        float gn = fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * float(uint(scene.rt_flags.w) & 7u),
-                                                 vec2(0.06711056, 0.00583715)) + 0.61));
+        float cover = mix(0.05, 0.75, gf * gf * gf);
+        float gn = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)) + 0.61));
         if (gn > cover) discard;
     }
     // ---- Vegetation: LOD cross-fade dither + procedural impostors ----

@@ -189,7 +189,7 @@ def monitor(x, y, face, zf=None, extras=True):
     cyl('o_black', (x, y, z), (x, y, z + 0.012), 0.105, 14)                               # foot
     obox('o_black', x, y, face, (-0.022, -0.05, z + 0.012), (0.022, -0.02, z + 0.30))      # neck
     obox('o_black', x, y, face, (-0.31, -0.02, z + 0.13), (0.31, 0.004, z + 0.50))         # the panel
-    a, b, c, d = opt(x, y, face, -0.298, 0.0055, z + 0.142), opt(x, y, face, 0.298, 0.0055, z + 0.142), opt(x, y, face, 0.298, 0.0055, z + 0.488), opt(x, y, face, -0.298, 0.0055, z + 0.488)
+    a, b, c, d = opt(x, y, face, -0.298, 0.016, z + 0.142), opt(x, y, face, 0.298, 0.016, z + 0.142), opt(x, y, face, 0.298, 0.016, z + 0.488), opt(x, y, face, -0.298, 0.016, z + 0.488)
     quad('o_screen', b, a, d, c)
     if extras:
         obox('o_black', x, y, face, (-0.21, 0.24, z), (0.21, 0.37, z + 0.014))             # keyboard
@@ -472,7 +472,7 @@ def build():
     laptop(11.0, 3.75, 0.1, F + 0.76); laptop(12.7, 4.3, math.pi - 0.15, F + 0.76); mug(11.5, 3.6, F + 0.76); mug(12.2, 4.45, F + 0.76, 'o_orange')
     cyl('o_black', (11.8, 4.0, F + 0.76), (11.8, 4.0, F + 0.79), 0.09, 14)                           # the conference speaker
     box('o_black', (CORE_X - 0.06, 2.6, F + 1.1), (CORE_X - 0.01, 5.4, F + 2.55))                    # the wall screen
-    quad('o_screen', (CORE_X - 0.065, 5.35, F + 1.15), (CORE_X - 0.065, 2.65, F + 1.15), (CORE_X - 0.065, 2.65, F + 2.5), (CORE_X - 0.065, 5.35, F + 2.5))
+    quad('o_screen', (CORE_X - 0.078, 5.35, F + 1.15), (CORE_X - 0.078, 2.65, F + 1.15), (CORE_X - 0.078, 2.65, F + 2.5), (CORE_X - 0.078, 5.35, F + 2.5))
     box('o_rug', (9.6, 2.4, F + 0.012), (14.0, 5.6, F + 0.022))
     pendant_bar(10.4, 13.2, 4.0, F + 2.2, MEZ - 0.22)
     # the kitchen: a run of units along the back wall up to the frame's column (x = 6), the
@@ -524,7 +524,7 @@ def build():
             for j in range(2):
                 xa = ga + 0.05 + wcell * i + 0.035; za = F + 1.6 + 1.5 * j
                 amber = (i + j + (1 if ga > -15.0 else 0)) % 4 == 0
-                quad('o_screen_b' if amber else 'o_screen', (xa, YN - 0.205, za), (xa + wcell - 0.07, YN - 0.205, za), (xa + wcell - 0.07, YN - 0.205, za + 1.42), (xa, YN - 0.205, za + 1.42))
+                quad('o_screen_b' if amber else 'o_screen', (xa, YN - 0.218, za), (xa + wcell - 0.07, YN - 0.218, za), (xa + wcell - 0.07, YN - 0.218, za + 1.42), (xa, YN - 0.218, za + 1.42))
         box(WOOD, (ga, YN - 0.55, F + 0.08), (gb, YN - 0.12, F + 0.5)); box('o_black', (ga + 0.04, YN - 0.5, F), (gb - 0.04, YN - 0.14, F + 0.08))    # a credenza under each
         for k in range(1, 4):
             xk = ga + (gb - ga) * k / 4.0
