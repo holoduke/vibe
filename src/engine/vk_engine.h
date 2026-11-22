@@ -649,7 +649,8 @@ private:
     // terrain PBR materials (incl. proc grass, roof, road), 15 the leaf
     // atlas, 16 bark, 17 lamp timber, 18 the small-plant atlas.
     static constexpr int kFileTextureCount   = 7;
-    static constexpr int kTerrainMatCount    = 27;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
+    static constexpr int kTexJeep            = 34;    // the jeep's paint, 35 its seat canvas (assets/jeep/tex)
+    static constexpr int kTerrainMatCount    = 29;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
     static constexpr int kTextureCount       = kFileTextureCount +
                                                kTerrainMatCount;   // 20
     // Albedo/normal-array indices of the baked terrain materials.
@@ -962,6 +963,9 @@ private:
     };
     std::vector<ViewmodelMesh> viewmodel_gltf_;
     glm::mat4 viewmodel_root_offset_{ 1.0f };    // local-to-camera placement
+    // The tip of the gun's top barrel in view space (from the model's own vertices: props.cpp).
+    // Where the laser leaves the weapon and where the muzzle flash sits.
+    glm::vec3 viewmodel_muzzle_{ 0.18f, -0.18f, -0.72f };
 
     // Spacejet flyover system — glTF asset loaded once, rendered as
     // an instanced flock that periodically streams across the level.
@@ -1784,6 +1788,7 @@ private:
         // (highway_furniture.cpp) - so a re-centre moves a part instead of making it again.
         // bmin / bmax are in the engine's coordinates now (shifted with it).
         glm::mat4 xf{1.0f};
+        glm::mat4 xf_prev{1.0f};      // where it was a frame ago (motion vectors): = xf for what stands still
         uint32_t cl_count = 0, cl_cmd_base = 0;
     };
     std::vector<CastleMeshGpu> castle_meshes_;
@@ -1964,11 +1969,39 @@ private:
     void      hw_poll();
     void      record_hw_upload(VkCommandBuffer cmd, uint32_t slot);
     void      hw_shutdown();
+    // The launch site's lights (assets/rocket/site.lights, written by tools/rocket/make_rocket.py):
+    // kind 0 = floodlight (dir: where it points), 1 = red obstruction light, 2 = a flashing one.
+    struct PadLight { int kind = 0; glm::vec3 pos{0.0f}, dir{0.0f, -1.0f, 0.0f}; };
+    std::vector<PadLight> pad_lights_;
     void      hw_shift(glm::dvec2 s);            // the field's window after a shift by whole tiles (old = new + s): moved, not baked again
     // What stands beside a highway (highway_furniture.cpp): streamed - a stretch's objects are
     // made when the camera comes near and freed when it has left.
     void      hw_objects_poll();
     void      hw_objects_destroy();
+    void      hw_rail_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const;     // the guard rail near a place, for physics
+    // The jeep (jeep.cpp): a vehicle to drive.
+    struct JeepState;
+    bool      body_seated_ = false;              // the player's body is in a car's seat this frame
+    JeepState* jeep_ = nullptr;                  // the car that is simulated (the one last got into)
+    std::vector<JeepState*> jeep_all_;           // all of them; the others stand where they were left
+    JeepState* jeep_load(const std::string& dir, const std::string& json);
+    void      jeep_park(JeepState& J, glm::vec3 pos, float yaw);
+    void      jeep_marks(JeepState& J, float dt);
+    bool      jeep_driver(glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;     // the driver's seat and the wheel's rim, world (player_body.cpp)
+    void      jeep_place(JeepState& J, const PhysicsWorld::VehicleState& prev, float dt);
+    void      jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puffs, glm::vec3 cam_right, glm::vec3 cam_up);   // tyre marks and smoke (fx.cpp)
+    std::vector<CastleMeshGpu> jeep_owned_;      // its meshes (body, one wheel, steering wheel)
+    std::vector<CastleMeshGpu> jeep_draw_;       // what is drawn: the same, the wheel four times, each with its place
+    void      init_jeep();
+    void      destroy_jeep();
+    void      jeep_spawn();
+    void      jeep_feed_world();
+    bool      jeep_use();
+    bool      jeep_driving() const;
+    void      jeep_tick(InputFrame& in, float dt);
+    void      jeep_after_sim(float dt);
+    void      jeep_hud();
+    uint64_t  jeep_signature() const;
     void      hw_objects_shift(glm::dvec2 s);    // after a shift by whole tiles (old = new + s): the parts are moved, in the same step
     std::vector<std::pair<int, std::vector<CastleMeshGpu>>> hw_chunks_;      // stretch index, its parts
     std::vector<std::pair<int, std::vector<CastleMeshGpu>>> hw_retired_;     // frames left, parts waiting to be destroyed
@@ -2488,6 +2521,12 @@ private:
     // --- TAA: scene color + history ping-pong ---
     VkImage      scene_color_image_ = VK_NULL_HANDLE;
     VmaAllocation scene_color_alloc_ = nullptr;
+    // A copy of the lit frame, made before the glass is drawn: what is seen through a pane
+    // (glass.frag, binding 38).
+    VkImage       scene_copy_image_ = VK_NULL_HANDLE;
+    VmaAllocation scene_copy_alloc_ = nullptr;
+    VkImageView   scene_copy_view_ = VK_NULL_HANDLE;
+    void          write_scene_copy_binding();
     VkImageView  scene_color_view_ = VK_NULL_HANDLE;
     VkFormat     scene_color_format_ = VK_FORMAT_R16G16B16A16_SFLOAT;
 

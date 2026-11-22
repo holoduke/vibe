@@ -420,8 +420,25 @@ void VulkanEngine::update_player_body(float dt) {
         glm::vec3 v = body_animator_->weapon.ads_shift_fp;
         if (std::sscanf(e, "%f,%f,%f", &v.x, &v.y, &v.z) == 3) body_animator_->weapon.ads_shift_fp = v;
     }
+    // At the wheel: the body sits in the car's seat, its hands on the steering wheel (jeep.cpp).
+    body_seated_ = false;
+    if (glm::mat4 hip; jeep_driver(hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs)) {
+        const anim::IAnimationRuntime& art = *anim_set_.runtime;
+        const int hj = art.rig()[anim::Role::Hips];
+        const glm::vec3 rest = hj >= 0 ? art.skeleton().rest_pos[size_t(hj)] : glm::vec3(0.0f, 0.95f, 0.0f);
+        body_model_ = hip * glm::translate(glm::mat4(1.0f), -rest);
+        const glm::mat4 inv = glm::inverse(body_model_);
+        in.seat_hand_l = glm::vec3(inv * glm::vec4(in.seat_hand_l, 1.0f));
+        in.seat_hand_r = glm::vec3(inv * glm::vec4(in.seat_hand_r, 1.0f));
+        in.seated = true;
+        in.first_person = false;
+        in.teleported = false;
+        in.dying = 0.0f;
+        body_seated_ = true;
+    }
     pose_character(*body_animator_, in, &body_palette_);
     body_weapon_offset_ = body_animator_->weapon_offset();
+
     body_fire_offset_ = body_animator_->weapon_fire_offset();
 
     // Test hooks: VIBE_BODY_FRONT=<m> stands the body that far in front of the camera (turned
@@ -605,7 +622,7 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     };
     const SkinMesh* body = level(body_lod_);
     // The head: on everybody but the player himself (who looks out of it).
-    const SkinMesh* head = (mp_->draw || body_front_) ? level(head_lod_) : nullptr;
+    const SkinMesh* head = (mp_->draw || body_front_ || body_seated_) ? level(head_lod_) : nullptr;      // (and on the driver, seen from behind the car)
     if (!body) return;
     auto draw_mesh = [&](const SkinMesh& m) {
         const VkBuffer streams[2] = { m.rest.vertex_buffer, m.skin.vertex_buffer };

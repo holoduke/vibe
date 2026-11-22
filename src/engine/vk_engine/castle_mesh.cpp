@@ -11,6 +11,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/environment.h"
 #include "engine/vk_engine/state/static_clusters.h"
 #include <unordered_map>
 #include <cmath>
@@ -250,13 +251,15 @@ const std::vector<const VulkanEngine::CastleMeshGpu*>& VulkanEngine::mesh_parts_
     // (home's own parts only in home's chart: in any other the same coordinates are another place)
     if (globe::current().home) for (const auto& g : castle_meshes_) mesh_parts_now_.push_back(&g);
     if (site_here()) for (const auto& g : site_meshes_) mesh_parts_now_.push_back(&g);
-    for (const auto& ch : hw_chunks_) for (const auto& g : ch.second) mesh_parts_now_.push_back(&g);       // (a highway's roadside objects: highway_furniture.cpp)
+    for (const auto& ch : hw_chunks_) for (const auto& g : ch.second) mesh_parts_now_.push_back(&g);
+    if (globe::current().home) for (const auto& g : jeep_draw_) mesh_parts_now_.push_back(&g);              // (jeep.cpp)       // (a highway's roadside objects: highway_furniture.cpp)
     return mesh_parts_now_;
 }
 
 void VulkanEngine::destroy_castle_meshes() {
     destroy_sites();
     hw_objects_destroy();
+    destroy_jeep();
     destroy_mesh_parts(castle_meshes_);
 }
 
@@ -281,7 +284,8 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
         if (!aabb_visible(fr, g.bmin, g.bmax)) continue;
         // Glass (material -3): not in the depth pre-pass nor in any shadow pass - it is drawn
         // see-through (cube.frag), and what is behind it must be there to see.
-        if (depth_only && g.tex_albedo == -3) continue;
+        // Nor here at all: the panes are drawn after the lighting (fx.cpp, glass.frag).
+        if (g.tex_albedo == -3) continue;
         // Depth PRE-pass: skip the relief stone parts. cube.frag discards
         // their silhouette pixels (parallax relief clipping on curved
         // towers); the flat pre-pass depth would hide those cut-outs.
@@ -301,7 +305,7 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
             PushConstants pc{};
             pc.mvp = vp * g.xf;
             pc.model = g.xf;
-            pc.prev_mvp = prev_vp * g.xf;
+            pc.prev_mvp = prev_vp * g.xf_prev;
             // Static-mesh mode flag (see file header).
             // .y = wind sway (uv = weight, phase), .z = world triplanar.
             // .x <= 0: relief reduction (0 = full depth, -1 = flat).
@@ -312,7 +316,7 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
                 // Self-lit parts (lantern glass) glow faintly by day, fully at night.
                 pc.emissive = g.emissive;
                 if (g.emissive.a > 0.5f && g.emissive.a < 1.5f && g.emissive.r < 3.5f) {       // (flames burn at full strength by day too)
-                    const float night = 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
+                    const float night = env_->night >= 0.0f ? env_->night : 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
                     pc.emissive = glm::vec4(glm::vec3(g.emissive) * glm::mix(0.12f, 1.0f, night), g.emissive.a);
                     pc.color = glm::vec4(glm::vec3(pc.color) * glm::mix(0.45f, 1.0f, night), 1.0f);
                 }

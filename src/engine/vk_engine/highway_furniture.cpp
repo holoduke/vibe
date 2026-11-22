@@ -168,7 +168,7 @@ void build_stretch(size_t c, std::vector<game::LevelMesh>& out, const globe::Rin
             }
         }
     }
-    if (!steel.idx.empty()) { finish(steel, -2, glm::vec3(0.60f, 0.62f, 0.64f)); out.push_back(std::move(steel)); }
+    if (!steel.idx.empty()) { finish(steel, -5, glm::vec3(0.56f, 0.58f, 0.60f)); out.push_back(std::move(steel)); }
     if (!white.idx.empty()) { finish(white, -1, glm::vec3(0.80f, 0.80f, 0.78f)); out.push_back(std::move(white)); }
     if (!black.idx.empty()) { finish(black, -1, glm::vec3(0.02f, 0.02f, 0.022f)); out.push_back(std::move(black)); }
     if (!amber.idx.empty()) { finish(amber, -1, glm::vec3(0.95f, 0.50f, 0.06f)); out.push_back(std::move(amber)); }
@@ -186,6 +186,7 @@ void VulkanEngine::hw_objects_shift(glm::dvec2 s) {
         for (auto& ch : hw_chunks_)
             for (CastleMeshGpu& g : ch.second) {
                 g.xf = glm::translate(glm::mat4(1.0f), sh) * g.xf;
+                g.xf_prev = g.xf;
                 g.bmin += sh; g.bmax += sh;
             }
         ++hw_gen_;                             // (the ray-tracing structure takes the new places)
@@ -265,6 +266,7 @@ void VulkanEngine::hw_objects_poll() {
         lm.bmin -= org; lm.bmax -= org;
         CastleMeshGpu g = make_mesh_part(lm);
         g.xf = glm::translate(glm::mat4(1.0f), org);
+        g.xf_prev = g.xf;
         g.bmin += org; g.bmax += org;
         parts.push_back(std::move(g));
     }
@@ -275,7 +277,25 @@ void VulkanEngine::hw_objects_poll() {
     if (verbose) log::infof("highway: stretch %d made (%zu loaded, %zu waiting to be freed)", want, hw_chunks_.size(), hw_retired_.size());
 }
 
+// The guard rail within `reach` of a place, as boxes for the physics (home's chart): one per
+// 4 m of rail, turned along the road.
+void VulkanEngine::hw_rail_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const {
+    if (!g_st_made || g_st.size() < 2 || !globe::current().home) return;
+    for (size_t i = 0; i + 1 < g_st.size(); ++i) {
+        const St& s = g_st[i];
+        if (std::abs(s.p.x - at.x) > reach || std::abs(s.p.z - at.z) > reach) continue;
+        const St& e = g_st[i + 1];
+        const glm::vec3 a = s.p + s.sea * 6.35f, b = e.p + e.sea * 6.35f;
+        const glm::vec3 d = b - a;
+        const float len = glm::length(glm::vec2(d.x, d.z));
+        if (len < 0.5f || len > 6.0f) continue;
+        // (a box's own z axis along the rail: turned about the vertical by atan2(dx, dz))
+        out.push_back({ 0.5f * (a + b) + glm::vec3(0.0f, 0.40f, 0.0f), glm::vec3(0.06f, 0.36f, 0.5f * len + 0.05f), std::atan2(d.x, d.z) });
+    }
+}
+
 void VulkanEngine::hw_objects_destroy() {
+
     for (auto& r : hw_retired_) destroy_mesh_parts(r.second);
     hw_retired_.clear();
     for (auto& c : hw_chunks_) destroy_mesh_parts(c.second);

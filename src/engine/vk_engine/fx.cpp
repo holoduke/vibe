@@ -20,6 +20,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
+#include "engine/vk_engine/state/environment.h"
 #include "engine/vk_engine/state/fx.h"
 #include "engine/vk_engine/state/environment.h"
 #include "engine/vk_engine/state/spacejets.h"
@@ -505,6 +506,16 @@ void VulkanEngine::init_fx() {
     // the camera inside the box); the shader bounds the mark itself.
     cfg.frag = fx_->decal_frag_module;
     fx_->decal_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
+    // Glass: the panes of the static meshes, opaque to the blender (the shader itself reads
+    // what is behind), depth-tested against the scene.
+    fx_->glass_vert_module = vkpipe::load_shader_module(device_, sd + "/glass.vert.spv");
+    fx_->glass_frag_module = vkpipe::load_shader_module(device_, sd + "/glass.frag.spv");
+    cfg.vert = fx_->glass_vert_module;
+    cfg.frag = fx_->glass_frag_module;
+    cfg.cull = VK_CULL_MODE_NONE;
+    cfg.depth_test = true;
+    cfg.premultiplied_blend = false;
+    fx_->glass_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
 
     for (int i = 0; i < 2; ++i) {
         VkBufferCreateInfo bci{};
@@ -526,12 +537,12 @@ void VulkanEngine::init_fx() {
 void VulkanEngine::destroy_fx() {
     jobs::wait(flags_jobs_);
     for (VkPipeline* p : { &fx_->ribbon_refl_pipeline, &fx_->ribbon_pipeline, &fx_->volume_pipeline, &fx_->volume_inside_pipeline,
-                           &fx_->decal_pipeline }) {
+                           &fx_->decal_pipeline, &fx_->glass_pipeline }) {
         if (*p) vkDestroyPipeline(device_, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
     for (VkShaderModule* m : { &fx_->vert_module, &fx_->ribbon_frag_module, &fx_->volume_frag_module,
-                               &fx_->decal_frag_module }) {
+                               &fx_->decal_frag_module, &fx_->glass_vert_module, &fx_->glass_frag_module }) {
         if (*m) vkDestroyShaderModule(device_, *m, nullptr);
         *m = VK_NULL_HANDLE;
     }
@@ -598,7 +609,6 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     auto min_w = [&](glm::vec3 p, float w, float px) {
         return std::max(w, glm::distance(p, eye) * px_ang * px);
     };
-    (void)cam_fwd;
 
     // ---- Build ribbons, grouped by kind ----
     // Builders persist across frames (capacity reused, no per-frame heap churn).
@@ -784,7 +794,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             // The streak only becomes visible some way out from the gun (it
             // used to start 1.5 m from the eye and flare over the barrel).
             auto near_k = [&](glm::vec3 p) {
-                return glm::smoothstep(7.0f, 20.0f, glm::distance(p, eye));
+                return glm::smoothstep(1.0f, 3.5f, glm::distance(p, barrel));       // (from a metre out of the barrel)
             };
             // Gradient: bright head, fading to nothing along the tail.
             glow.strip({ tail, mid, head },
@@ -843,10 +853,55 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         smoke.segment(fl.pos - d * (6.0f + 10.0f * fl.t), fl.pos, min_w(fl.pos, 0.5f, 1.0f), 0.3f * k,
                       glm::vec3(0.9f));
     }
+    // The launch site's lights: a flare round every lamp (a soft disc, a bright core and a
+    // streak, larger and brighter the darker it is), a floodlight's beam in the air toward the
+    // pad, and the red obstruction lights - steady on the masts, tanks and apron, flashing on
+    // the tower.
+    if (globe::current().home && !pad_lights_.empty() && glm::distance(eye, launch_pad_) < 9000.0f) {
+        const float night = env_->night >= 0.0f ? env_->night : 1.0f - glm::smoothstep(-2.0f, 14.0f, rt_.sun_pitch_deg);
+        for (const PadLight& L : pad_lights_) {
+            const glm::vec3 to = L.pos - eye;
+            const float d = glm::length(to);
+            if (d < 1.0f || glm::dot(to, cam_fwd) < 0.0f) continue;
+            if (L.kind == 0) {
+                // (a floodlight is seen bright only from where it points)
+                const float facing = glm::clamp(glm::dot(-to / d, L.dir) * 1.4f + 0.35f, 0.0f, 1.0f);
+                const float k = glm::mix(0.10f, 1.0f, night) * (0.25f + 0.75f * facing);
+                const glm::vec3 c(1.0f, 0.93f, 0.78f);
+                const float r = std::max(glm::mix(1.2f, 4.5f, night) * (0.5f + 0.5f * facing), d * px_ang * 3.0f);
+                flash.billboard(L.pos, r, cam_right, cam_up, c * (1.6f * k));
+                flash.billboard(L.pos, r * 0.28f, cam_right, cam_up, c * (5.0f * k));
+                if (night > 0.05f) {
+                    const float sl = r * 3.4f * night * facing;                      // the streak
+                    glow.strip({ L.pos - cam_right * sl, L.pos, L.pos + cam_right * sl },
+                               { r * 0.02f, min_w(L.pos, r * 0.07f, 1.2f), r * 0.02f }, { 0.0f, 0.9f * night * facing, 0.0f }, c);
+                    // The beam: the air it shines through - soft discs along it, wider and
+                    // fainter toward the pad (a strip seen end-on twists into a line).
+                    for (int q = 1; q <= 7; ++q) {
+                        const float u = float(q) / 7.0f;
+                        const glm::vec3 bp = L.pos + L.dir * (4.0f + 46.0f * u * u);
+                        flash.billboard(bp, 1.0f + 8.0f * u, cam_right, cam_up, c * (0.11f * night * (1.0f - u) * (1.0f - u)));
+                    }
+                }
+            } else {
+                float k = glm::mix(0.35f, 1.0f, night);
+                if (L.kind == 2) {                      // one flash a second and a half, the tower's lamps together
+                    const float ph = glm::fract(now / 1.5f);
+                    k *= glm::smoothstep(0.0f, 0.06f, ph) * (1.0f - glm::smoothstep(0.30f, 0.55f, ph)) * 1.6f;
+                }
+                if (k < 0.01f) continue;
+                const glm::vec3 c(1.0f, 0.06f, 0.03f);
+                const float r = std::max(glm::mix(0.35f, 1.3f, night) * (L.kind == 2 ? 1.7f : 1.0f), d * px_ang * 2.2f);
+                flash.billboard(L.pos, r, cam_right, cam_up, c * (2.2f * k));
+                flash.billboard(L.pos, r * 0.3f, cam_right, cam_up, glm::vec3(1.0f, 0.35f, 0.25f) * (4.0f * k));
+            }
+        }
+    }
     for (const auto& t : tracer_segs_) {
         float fade = 1.0f - t.age / kTracerFade;
+
         if (fade <= 0.0f) continue;
-        float tk = glm::smoothstep(1.5f, 7.0f, glm::distance(0.5f * (t.a + t.b), eye));
+        float tk = glm::smoothstep(1.2f, 2.4f, glm::distance(0.5f * (t.a + t.b), eye));
         glow.segment(t.a, t.b, min_w(t.b, 0.03f * fade + 0.01f, 1.0f), 0.8f * fade * fade * tk,
                      glm::vec3(1.0f, 0.25f, 0.75f));
     }
@@ -928,6 +983,9 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // Water splashes: droplets as short motion-blurred streaks (kind 4),
     // mist puffs as soft billboards (kind 5; tint = alpha, brightness, seed).
     static RibbonBuilder spray, mist; spray.v.clear(); mist.v.clear(); spray.eye = mist.eye = eye;
+    // Tyre marks and tyre smoke (jeep.cpp).
+    static RibbonBuilder marks; marks.v.clear();
+    jeep_fx(marks.v, mist.v, cam_right, cam_up);
     for (const auto& d : water_drops_) {
         if (d.t < 0.0f) continue;
         const float sp = glm::length(d.vel);
@@ -1160,9 +1218,28 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     auto r_cloth = put(cloth.v);
     auto r_mist  = put(mist.v);
     auto r_spray = put(spray.v);
+    auto r_marks = put(marks.v);
     vmaFlushAllocation(allocator_, fx_->valloc[slot], 0, total * sizeof(Vertex));
 
     // ---- Pass ----
+    // The glass in view; and for it a copy of the frame as it is now (what is seen through).
+    std::vector<const CastleMeshGpu*> panes;
+    if (fx_->glass_pipeline && scene_copy_image_) {
+        const Frustum gfr = extract_frustum(fv.vp);
+        for (const CastleMeshGpu* gp : mesh_parts_now())
+            if (gp->tex_albedo == -3 && aabb_visible(gfr, gp->bmin, gp->bmax)) panes.push_back(gp);
+    }
+    if (!panes.empty()) {
+        vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        vkinit::transition_image(cmd, scene_copy_image_, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageCopy rg{};
+        rg.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        rg.dstSubresource = rg.srcSubresource;
+        rg.extent = { render_extent_.width, render_extent_.height, 1 };
+        vkCmdCopyImage(cmd, scene_color_image_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, scene_copy_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
+        vkinit::transition_image(cmd, scene_copy_image_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    } else
     vkinit::transition_image(cmd, scene_color_image_,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1200,6 +1277,28 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // Burn decals first: they are part of the surface, so smoke, fire and
     // ribbons composite over them.
     draw_decals(cmd, fv.vp, fv.inv_vp);
+
+    // The glass, before smoke and light: those lie over it. Farthest part first.
+    if (!panes.empty()) {
+        const glm::vec3 ge = fv.eye_pos;
+        std::sort(panes.begin(), panes.end(), [&](const CastleMeshGpu* a, const CastleMeshGpu* b) {
+            const glm::vec3 ca = 0.5f * (a->bmin + a->bmax) - ge, cb = 0.5f * (b->bmin + b->bmax) - ge;
+            return glm::dot(ca, ca) > glm::dot(cb, cb);
+        });
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_->glass_pipeline);
+        VkDeviceSize goff = 0;
+        for (const CastleMeshGpu* gp : panes) {
+            PushConstants pc{};
+            pc.mvp = fv.vp * gp->xf;
+            pc.model = gp->xf;
+            pc.prev_mvp = fv.vp;
+            pc.color = glm::vec4(gp->tint, 1.0f);
+            vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &gp->mesh.vertex_buffer, &goff);
+            vkCmdBindIndexBuffer(cmd, gp->mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, gp->mesh.index_count, 1, 0, 0, 0);
+        }
+    }
 
     // Opaque cloth FIRST: drawn after the volumes it overwrote smoke that
     // is in front of a flag (no depth write in this pass).
@@ -1279,6 +1378,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             draw_refl(r_flash, 2.0f);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_->ribbon_pipeline);
         }
+        draw(r_marks, 6.0f, 1.0f);
         draw(r_smoke, 0.0f, 1.0f);
         draw(r_mist,  5.0f, 1.0f);
         draw(r_spray, 4.0f, 1.0f);

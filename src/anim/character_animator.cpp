@@ -284,6 +284,8 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
         return;
     }
 
+    if (in.seated) seated(in);
+    else {
     float ground_dist = 1e9f;
     if (!in.grounded && in.ground_height) ground_dist = std::max(0.0f, -ground_at(in, glm::vec3(0.0f)));
 
@@ -294,6 +296,7 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
     if (tuning.foot_ik && in.lod <= 1) feet(in, v_local, speed, glm::length(a_local));
     arms(in);
     rt.local_to_model(*ctx_, pose_, model_);
+    }
 
     // A pose that is not finite is never handed on: the last good one stands in, and it is counted.
     if (!pose_is_valid(pose_) || !pose_is_valid(model_)) {
@@ -310,7 +313,61 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
     dbg_.update_ms = float(now_ms() - t0);
 }
 
+// A driver: from the rest pose, the thighs forward and the shins down to the pedals, the back
+// against the seat, the wrists on the wheel (see CharacterAnimationInput::seated).
+void CharacterAnimator::seated(const CharacterAnimationInput& in) {
+    const IAnimationRuntime& rt = *set_.runtime;
+    const Rig& rig = rt.rig();
+    const SkeletonDef& sk = rt.skeleton();
+    rt.rest_pose(pose_);
+    rt.local_to_model(*ctx_, pose_, model_);
+    const glm::vec3 X(1.0f, 0.0f, 0.0f), Y(0.0f, 1.0f, 0.0f);
+    const int hands[2] = { rig[Role::LeftHand], rig[Role::RightHand] };
+    glm::vec3 fingers[2]{};
+    glm::quat rest_rot[2]{};
+    for (int s = 0; s < 2; ++s) {
+        if (hands[s] < 0) continue;
+        const glm::vec3 d = sk.rest_tail[size_t(hands[s])] - sk.rest_pos[size_t(hands[s])];
+        fingers[s] = glm::dot(d, d) > 1e-8f ? glm::normalize(d) : glm::vec3(s == 0 ? -1.0f : 1.0f, 0.0f, 0.0f);
+        rest_rot[s] = model_rotation(hands[s]);
+    }
+    auto turn = [&](Role r, float deg, const glm::vec3& axis) {
+        const int j = rig[r];
+        if (j >= 0) rotate_in_model(j, glm::angleAxis(glm::radians(deg), axis));
+    };
+    // (about +X a bone that hangs down swings forward, one that stands up leans back)
+    const float legs = std::clamp(in.seat_legs, 0.0f, 1.0f);
+    const float thigh = glm::mix(78.0f, 84.0f, legs), shin = glm::mix(-62.0f, -30.0f, legs), back = glm::mix(9.0f, 22.0f, legs);
+    turn(Role::Spine, back, X);
+    turn(Role::LeftUpLeg, thigh, X);  turn(Role::RightUpLeg, thigh, X);
+    turn(Role::LeftUpLeg, 7.0f, Y);   turn(Role::RightUpLeg, -7.0f, Y);        // knees a little apart
+    rt.local_to_model(*ctx_, pose_, model_);
+    turn(Role::LeftLeg, shin, X);     turn(Role::RightLeg, shin, X);
+    turn(Role::Neck, -back * 0.8f, X);                                         // the head stays level
+    rt.local_to_model(*ctx_, pose_, model_);
+    turn(Role::LeftFoot, -(thigh + shin) * 0.6f, X); turn(Role::RightFoot, -(thigh + shin) * 0.6f, X);
+    rt.local_to_model(*ctx_, pose_, model_);
+    // The arms: wrists to the wheel, elbows down and out.
+    const Role arm[2][3] = { { Role::LeftArm, Role::LeftForeArm, Role::LeftHand }, { Role::RightArm, Role::RightForeArm, Role::RightHand } };
+    for (int s = 0; s < 2; ++s) {
+        const int a = rig[arm[s][0]], b = rig[arm[s][1]], c = rig[arm[s][2]];
+        if (a < 0 || b < 0 || c < 0) continue;
+        const glm::vec3 pole(s == 0 ? -0.55f : 0.55f, -1.0f, 0.25f);
+        fit_limb(a, b, c, s == 0 ? in.seat_hand_l : in.seat_hand_r, &pole);
+        rt.local_to_model(*ctx_, pose_, model_);
+        // The hand: its fingers forward over the rim, up and a little inward.
+        const glm::vec3 cur = glm::normalize(model_rotation(c) * glm::inverse(rest_rot[s]) * fingers[s]);
+        const glm::vec3 want = glm::normalize(glm::vec3(s == 0 ? 0.40f : -0.40f, 0.55f, -0.70f));
+        const glm::vec3 ax = glm::cross(cur, want);
+        const float sl = glm::length(ax), cl = glm::dot(cur, want);
+        if (sl > 1e-5f) rotate_in_model(c, glm::angleAxis(std::atan2(sl, cl), ax / sl));
+        rt.local_to_model(*ctx_, pose_, model_);
+    }
+    dbg_.mode = "seated";
+}
+
 void CharacterAnimator::lower_body(const CharacterAnimationInput& in, glm::vec2 v_local, float speed, float yaw_rate, float ground_dist) {
+
     const IAnimationRuntime& rt = *set_.runtime;
     const MotionDatabase& db = set_.db;
     const float dt = std::clamp(in.dt, 0.0f, 0.1f);

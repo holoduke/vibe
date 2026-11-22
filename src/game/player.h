@@ -23,6 +23,7 @@ struct PlayerInput {
     }
     bool jump = false;
     bool sprint = false;    // Shift held — wishspeed × 1.5 on the ground
+    bool aiming = false;    // sights up: a careful walk (x 0.55), no sprint
     bool crawl  = false;    // Ctrl held — wishspeed × 0.4 on the ground
     float mouse_dx = 0.0f;  // pixels of horizontal motion since last update
     float mouse_dy = 0.0f;

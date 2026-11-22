@@ -224,7 +224,7 @@ void VulkanEngine::record_body_rt(VkCommandBuffer cmd) {
         if (d2 > kRange * kRange) return;
         cand[nc++] = { d2, model, prev, palette };
     };
-    if (body_drawn_) add(body_model_, body_model_, body_palette_);
+    if (body_drawn_) add(body_model_, body_model_, body_palette_);      // (at the wheel the player is not where the camera is: no body, no shadow of one)
     if (net_)
         for (const MpAvatar& a : mp_->avatars)
             if (a.id && a.drawn) add(a.model, a.prev_model, a.palette);

@@ -585,7 +585,19 @@ void VulkanEngine::destroy_depth_image() {
     depth_copy_layout_valid_ = false;
 }
 
+void VulkanEngine::write_scene_copy_binding() {
+    if (!scene_desc_set_ || !scene_copy_view_ || !linear_sampler_) return;
+    VkDescriptorImageInfo bi{ linear_sampler_, scene_copy_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = scene_desc_set_; w.dstBinding = 38; w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &bi;
+    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+}
+
 void VulkanEngine::write_depth_copy_binding() {
+    write_scene_copy_binding();
     if (!scene_desc_set_ || !depth_copy_view_ || !depth_copy_sampler_) return;
     VkDescriptorImageInfo bi{ depth_copy_sampler_, depth_copy_view_,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };

@@ -119,8 +119,30 @@ void VulkanEngine::init_viewmodel() {
             rot_yaw *
             glm::translate(glm::mat4(1.0f), -center);
 
+        {   // The muzzle: the model's foremost point (most negative z in view space); where the
+            // gun has more than one barrel, the top one - of what lies within 2 cm of the front,
+            // the upper third.
+            float zmin = 1e9f;
+            for (const auto& prim : gltf.primitives)
+                for (const auto& v : prim.vertices) zmin = std::min(zmin, (viewmodel_root_offset_ * glm::vec4(v.position, 1.0f)).z);
+            float ylo = 1e9f, yhi = -1e9f;
+            for (const auto& prim : gltf.primitives)
+                for (const auto& v : prim.vertices) {
+                    const glm::vec3 p(viewmodel_root_offset_ * glm::vec4(v.position, 1.0f));
+                    if (p.z < zmin + 0.02f) { ylo = std::min(ylo, p.y); yhi = std::max(yhi, p.y); }
+                }
+            glm::vec3 acc(0.0f); float n = 0.0f;
+            for (const auto& prim : gltf.primitives)
+                for (const auto& v : prim.vertices) {
+                    const glm::vec3 p(viewmodel_root_offset_ * glm::vec4(v.position, 1.0f));
+                    if (p.z < zmin + 0.02f && p.y > glm::mix(ylo, yhi, 0.66f)) { acc += p; n += 1.0f; }
+                }
+            if (n > 0.0f) viewmodel_muzzle_ = glm::vec3(acc.x / n, acc.y / n, zmin);
+            log::infof("viewmodel: muzzle at (%.3f, %.3f, %.3f) in view space", viewmodel_muzzle_.x, viewmodel_muzzle_.y, viewmodel_muzzle_.z);
+        }
         for (const auto& prim : gltf.primitives) {
             ViewmodelMesh vm{};
+
             vm.mesh = create_mesh_from_data(device_, allocator_, graphics_queue_,
                                             graphics_queue_family_,
                                             prim.vertices.data(),
@@ -1007,6 +1029,7 @@ void VulkanEngine::tick_jet_audio(float dt) {
 
 void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world,
                                   const glm::mat4& view_inv_world) {
+    const bool at_wheel = !mp_->draw && jeep_driving();      // (the driver: his body in the seat, nothing in his hands)
     // Drawn relative to the camera: the weapon sits 30 cm from an eye that can be
     // hundreds of km from the world's origin, where a float is centimetres coarse -
     // "world position x view-projection" made it flicker and jump from about 50 km
@@ -1087,6 +1110,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
         }
     }
     draw_player_body(cmd, vp, cam);        // (vp is camera-relative here: the body's world matrix has to be too)
+    if (at_wheel) return;
     if (mp_->draw) {
         // The head is part of the skinned soldier (draw_player_body). Without its file: a box.
         if (!head_lod_[0].index_count) {
@@ -1171,14 +1195,14 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
     // barrel tip — without this, the small fade-in/out cube floats
     // forward of the tip because scale shrinks but center stays fixed.
     if (muzzle_flash_timer_ > 0.0f) {
-        const float barrel_tip_z = -0.72f;  // matches barrel_zc - barrel_hl in init
+        const float barrel_tip_z = viewmodel_muzzle_.z;
         float t = std::min(1.0f, muzzle_flash_timer_ / kMuzzleFlashDuration);
         float intensity = t * t;
         float core_size = 0.04f * (0.6f + 0.4f * t);   // full cube size
         // Center the cube so its back face (toward camera) is exactly at
         // the barrel tip independent of size: center_z = tip - half_size.
         float core_z = barrel_tip_z - core_size * 0.5f;
-        glm::vec3 muzzle(0.18f, -0.18f, core_z);
+        glm::vec3 muzzle(viewmodel_muzzle_.x, viewmodel_muzzle_.y, core_z);
         glm::mat4 base = glm::translate(glm::mat4(1.0f), muzzle);
 
         glm::mat4 core = view_inv_recoil * base *

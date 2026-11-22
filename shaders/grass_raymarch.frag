@@ -333,8 +333,11 @@ int   g_blade_kind = 0;          // 0 blade, 1 seed head, 2 flower
 // The march's place relative to the camera, on the ground plan (set before every map()):
 // the blade lattice is worked out from it, not from the world position - see map().
 vec2 g_rel_xz = vec2(0.0);
+// How far the last map() sample stood above the tops of the blades (m); -1 when it was among them.
+float g_above_top = -1.0;
 float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     out_blade_hit = false;
+    g_above_top = -1.0;
     // Open air (raymarched terrain): one fetch of the baked heightmap
     // instead of the 8-octave FBM. The rendered surface is at most ~0.8 m
     // above the bake (finer octaves + close-range relief) and blades < 1 m,
@@ -378,7 +381,7 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     {
         float blade_top = 1.2 * bh0 * kGsMaxH + 0.10;
         float above = p.y - terrainY;
-        if (above > blade_top + 0.3) return 0.5 * (above - blade_top);
+        if (above > blade_top + 0.3) { g_above_top = above - blade_top; return 0.5 * (above - blade_top); }
     }
 
     vec2 cellId;
@@ -496,7 +499,7 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     const vec4  tp     = gs_type(type_n);
     {
         float top = 1.2 * bh0 * tp.x + 0.10;
-        if (lp.y > top + 0.3) return min(distToTerrain, 0.5 * (lp.y - top));
+        if (lp.y > top + 0.3) { g_above_top = lp.y - top; return min(distToTerrain, 0.5 * (lp.y - top)); }
     }
     // Small flowers stand in drifts that follow the type field.
     const bool flower_drift = fract(type_n * 9.0) < 0.35;
@@ -746,14 +749,24 @@ void main() {
     }
     float step_cap_a = kMaxDist * 0.55;
     float step_cap_b = kMaxDist * 0.85;
+    // A ray that skims the meadow travels tens of metres inside the layer of blades, a few
+    // centimetres a step: it ran out of steps before it met a blade, and was thrown away - a
+    // band without grass at middle distance (20 - 100 m), between the near grass (steep rays)
+    // and the far (a coarse hit threshold). Such a ray has certainly met a blade by then: when
+    // the march gives up while it is among the blades, that counts as the hit.
+    bool gave_up_in_grass = false;
+    bool last_blade = false;
     for (int i = 0; i < kMaxSteps; ++i) {
         if (t >= t_limit) break;
-        if (i + i_bias >= 32 && t > step_cap_a) break;
-        if (i + i_bias >= 16 && t > step_cap_b) break;
+        if ((i + i_bias >= 32 && t > step_cap_a) || (i + i_bias >= 16 && t > step_cap_b) || i == kMaxSteps - 1) {
+            gave_up_in_grass = last_blade;
+            break;
+        }
         vec3 p = ro + t * rd;
         bool step_blade;
         g_rel_xz = t * rd.xz;
         float d = map(p, t, ctx, step_blade);
+        last_blade = step_blade && d < 0.12;
         // Hit threshold loosens with distance so the loop terminates on
         // sub-pixel features instead of trying to converge on a blade
         // edge from 50 m away.
@@ -772,13 +785,21 @@ void main() {
         // rays cover 3× the ground per iteration.
         float step_f = mix(0.82, 0.95, smoothstep(15.0, 50.0, t));   // was 0.70: the blade field is close to a true distance
         step_f = mix(step_f, 2.0, smoothstep(50.0, 120.0, t));
-        t += d * step_f;
+        float adv = d * step_f;
+        // Above the blades the bound is the HEIGHT over their tops - for a ray that skims the
+        // meadow, coming down a few centimetres a metre, a step of half that height closed 1 %
+        // of the gap: 96 steps did not reach the grass (the band without blades at middle
+        // distance). Along such a ray the tops are height / fall away - less, as the ground
+        // ahead may rise (taken as up to 1 in 2).
+        if (g_above_top > 0.0) adv = max(adv, min(g_above_top / (max(-rd.y, 0.0) + 0.5), 8.0));
+        t += adv;
     }
 
     // Discard pure terrain-plane hits (no grass blade closer) so the
     // existing terrain renderer's pixel shows through unaltered. Without
     // this, no-grass cells (presence/slope rejected) painted the bare
     // ground green at z-fight depth → flickering green tint.
+    if (gave_up_in_grass && !hit && t > 8.0) { hit = true; blade_hit = true; hit_d = 0.0; hit_thresh = 1.0; }
     if (!hit || !blade_hit) { discard; }
 
     vec3 p = ro + t * rd;

@@ -60,6 +60,10 @@ void VulkanEngine::place_aa_vehicles(const Heightmap& hm) {
             hmin = std::min(hmin, hh); hmax = std::max(hmax, hh);
         }
     };
+    // (not by the chapel: 45 m clear of it and its graveyard)
+    auto by_chapel = [&](float x, float z) {
+        return church_placed_ && glm::distance(glm::vec2(x, z), glm::vec2(church_pos_.x, church_pos_.z)) < 45.0f;
+    };
     // One vehicle parked on the verge of the castle road, just outside the
     // gate, hull along the road: the flattest spot 8-11 m off the centreline
     // within the first stretch of road.
@@ -77,6 +81,7 @@ void VulkanEngine::place_aa_vehicles(const Heightmap& hm) {
                 for (float off : { 8.0f, 9.5f, 11.0f }) {
                     float x = P[i].x + n.x * side * off, z = P[i].z + n.y * side * off;
                     if (std::max(std::abs(x), std::abs(z)) < 22.0f) continue;   // clear of the walls
+                    if (by_chapel(x, z)) continue;
                     float hmin, hmax; footprint(x, z, hmin, hmax);
                     if (hmin < rt_.water_level + 0.8f) continue;
                     float score = (hmax - hmin) + std::abs(hmax - P[i].y) * 0.5f + off * 0.02f;
@@ -97,6 +102,7 @@ void VulkanEngine::place_aa_vehicles(const Heightmap& hm) {
             float x = std::cos(a) * d, z = std::sin(a) * d;
             float h = h_at(x, z);
             if (h < rt_.water_level + 1.2f) continue;
+            if (by_chapel(x, z)) continue;
             if (!castle_road_.empty() && castle_road_.distance(x, z) < 9.0f) continue;
             // Flat enough under the whole hull footprint.
             float hmin = h, hmax = h;
@@ -122,6 +128,7 @@ void VulkanEngine::place_aa_vehicles(const Heightmap& hm) {
             float x = std::cos(a) * d, z = std::sin(a) * d;
             float hmin, hmax; footprint(x, z, hmin, hmax);
             if (hmin < rt_.water_level + 1.2f || hmax - hmin > 0.9f) continue;
+            if (by_chapel(x, z)) continue;
             if (!castle_road_.empty() && castle_road_.distance(x, z) < 9.0f) continue;
             bool clash = false;
             for (const auto& o : aa_) if (glm::distance(glm::vec2(o.pos.x, o.pos.z), glm::vec2(x, z)) < 40.0f) clash = true;

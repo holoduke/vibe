@@ -155,6 +155,12 @@ struct CharacterAnimationInput {
     // sights. Not aiming it is carried at the ready - lower, canted, the muzzle down until a
     // shot is fired from the hip. Default true: the stance everything had before there were two.
     bool      aiming = true;
+    // At the wheel of a vehicle: the pose is a driver's - the model's hips where they are at
+    // rest (the caller puts them on the seat), the legs forward to the pedals (seat_legs: 0 an
+    // upright seat, 1 a low one with the legs stretched out), the hands on the wheel's rim.
+    bool      seated = false;
+    glm::vec3 seat_hand_l{0.0f}, seat_hand_r{0.0f};      // model space: where the wrists go
+    float     seat_legs = 0.0f;
     // Something worth a look (another player), model space; the head turns to it now and then
     // while the character is not aiming. `variation` makes two characters not move in step.
     bool      has_look_at = false;
@@ -227,6 +233,7 @@ private:
     void upper_body(const CharacterAnimationInput& in);
     void feet(const CharacterAnimationInput& in, glm::vec2 v_local, float speed, float accel);
     void arms(const CharacterAnimationInput& in);
+    void seated(const CharacterAnimationInput& in);
     void rotate_in_model(int joint, const glm::quat& q);              // turns a joint about model axes (local pose)
     glm::quat model_rotation(int joint) const;                        // from pose_, by walking the parents
     void fit_limb(int a, int b, int c, glm::vec3 target, const glm::vec3* pole, bool from_rest = false);

@@ -902,6 +902,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     // parts are only freed some frames after the structure was built without them.)
     sig = mix64(sig, uint64_t(site_gen_) * 2u + (site_here() ? 1u : 0u));
     sig = mix64(sig, uint64_t(hw_gen_) + 0x9E37u);
+    sig = mix64(sig, jeep_signature());
     sig = mix64(sig, rt_.textures_enabled ? 1u : 0u);
     sig = mix64(sig, rt_.use_merged_static_blas ? 1u : 0u);
     for (size_t i = 0; i < dyn_render_cache_.size(); ++i) {
@@ -1268,7 +1269,7 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
                         static_cast<float>(g.tex_normal),
                         g.triplanar ? g.uv_scale : (g.tex_albedo == 1 ? 0.12f : 0.55f), 0.0f)
             : kNoTex;
-        write_instance(g.xf, g.xf, glm::vec4(tex_on ? g.tint : g.fallback, 1.0f),
+        write_instance(g.xf, g.xf_prev, glm::vec4(tex_on ? g.tint : g.fallback, 1.0f),
                        glm::vec3(0.0f), false, g.blas_addr, tex, 0xFFu);
     }
 

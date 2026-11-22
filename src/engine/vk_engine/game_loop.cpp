@@ -245,7 +245,7 @@ void VulkanEngine::loop_handle_keys(InputFrame& in, float frame_dt) {
     bool edit_edge = in.edit_key && !prev_edit_key_;
     prev_edit_key_ = in.edit_key;
     // (at the control house's launch button E presses the button instead)
-    if (edit_edge && state_ == State::Playing && !(!terrain_edit_mode_ && rocket_press_button())) {
+    if (edit_edge && state_ == State::Playing && !(!terrain_edit_mode_ && (jeep_use() || rocket_press_button()))) {
         terrain_edit_mode_ = !terrain_edit_mode_;
         log::infof("[terrain] edit mode %s (E)",
                    terrain_edit_mode_ ? "ON" : "OFF");
@@ -520,6 +520,7 @@ void VulkanEngine::loop_simulate(InputFrame& in, float frame_dt) {
             pin.jump = in.jump;
             pin.sprint = in.sprint;
             pin.crawl = in.crawl;
+            pin.aiming = body_aim_;
             pin.gravity = game_.gravity;
             last_pin_ = pin;                 // (what the player wants: the animation's prediction reads it)
             // Water: how much of the 1.8 m body is under the surface.

@@ -12,9 +12,10 @@
 //   * what does not grow there: woods (terrain.cpp world_forest), grass (the near-field bake).
 //
 // Where the lines come from is a separate matter. build() makes the one the game has today:
-// the coast road - it follows the shoreline of the sea east of home (the landscape formula's
-// own land / sea value, traced and smoothed) - and a spur from it to the launch pad. Lines
-// from data (a file, a server) would be added to the same table (add_line).
+// the course - a closed road round home, along the coast past the launch pad, round the
+// castle's country and through the mountains, found by a search over the landscape (see
+// build() in highway.cpp). Lines from data (a file, a server) would be added to the same
+// table (add_line).
 //
 // For the shader the lines near the camera are baked into a field (bake()): for every 4 m of a
 // 4096 m window, the signed distance to the nearest centre line, the road's height there and
@@ -67,6 +68,10 @@ bool nearest(float x, float z, float reach, float& d, float& h, float& s);
 float distance(float x, float z);
 // The ground with the shelf: `h` is the natural height at (x, z).
 float ground(float h, float x, float z);
+// How far the surface lies under the centre line's height, `ad` metres from it (the crown).
+float cross_fall(float ad);
+// The length of the first line (the course), metres.
+float course_length();
 
 // The field around `center` (rounded by the caller): two RGBA8 images, kFieldN a side.
 //   a: R,G = signed distance (16 bit over +-64 m), B,A = surface height (16 bit over 512 m)

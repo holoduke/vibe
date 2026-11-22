@@ -20,6 +20,8 @@
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
 #include <glm/gtc/matrix_transform.hpp>
+#include <fstream>
+#include <string>
 #include "engine/audio.h"
 #include "engine/log.h"
 #include "engine/terrain.h"
@@ -61,8 +63,8 @@ const Mat kMats[] = {
     { "engine",      -2, { 0.30f, 0.26f, 0.23f }, 1.0f, {}, false },
     { "engine_in",   -1, { 0.050f, 0.040f, 0.036f }, 1.0f, {}, false },
     { "text",        -1, { 0.020f, 0.020f, 0.022f }, 1.0f, {}, false },
-    { "concrete",    24, { 1.00f, 1.00f, 1.00f }, 8.0f, {}, false },
-    { "concrete_w",  24, { 0.96f, 0.95f, 0.93f }, 4.0f, {}, false },
+    { "concrete",    24, { 1.00f, 1.00f, 1.00f }, 4.0f, {}, false },
+    { "concrete_w",  24, { 0.96f, 0.95f, 0.93f }, 2.0f, {}, false },
     { "steel_plate", -2, { 0.16f, 0.15f, 0.15f }, 1.0f, {}, false },
     { "steel_grey",  -1, { 0.40f, 0.42f, 0.45f }, 1.0f, {}, false },
     { "steel_dark",  -1, { 0.060f, 0.064f, 0.072f }, 1.0f, {}, false },
@@ -77,7 +79,7 @@ const Mat kMats[] = {
     { "floor",        5, { 0.62f, 0.62f, 0.60f }, 2.0f, { 0.05f, 0.05f, 0.045f }, false },
     { "glass",       -1, { 0.035f, 0.055f, 0.070f }, 1.0f, {}, false },
     { "door",        -1, { 0.16f, 0.22f, 0.20f }, 1.0f, {}, false },
-    { "roof",        24, { 0.42f, 0.42f, 0.42f }, 4.0f, {}, false },
+    { "roof",        24, { 0.42f, 0.42f, 0.42f }, 2.0f, {}, false },
     { "console",     -1, { 0.42f, 0.44f, 0.46f }, 1.0f, { 0.06f, 0.065f, 0.07f }, false },
     { "console_top", -1, { 0.06f, 0.06f, 0.07f }, 1.0f, {}, false },
     { "screen",      -1, { 0.10f, 0.60f, 0.35f }, 1.0f, { 0.5f, 2.6f, 1.5f }, true },
@@ -193,12 +195,22 @@ void VulkanEngine::place_launch_site() {
     for (float sx : { -1.0f, 1.0f }) for (float sz : { -1.0f, 1.0f })
         col(pad, { sx * 63.0f - 1.0f, 0.0f, sz * 63.0f - 1.0f }, { sx * 63.0f + 1.0f, 34.0f, sz * 63.0f + 1.0f });
 
-    // The control house, up the slope west of the pad, its window to the rocket.
-    glm::vec3 hp(kLaunchSiteX - 156.0f, 0.0f, kLaunchSiteZ - 14.0f);
-    float top = -1e9f;
-    for (float dx : { -3.8f, 0.0f, 3.8f }) for (float dz : { -3.3f, 0.0f, 3.3f })
-        top = std::max(top, world_ground_height(hp.x + dx, hp.z + dz, rt_.water_level, 9));
-    hp.y = top - 0.05f;
+    // The control house: west of the pad, on the pad's own level ground (the terrace is flat to
+    // 100 m from the pad's centre; the apron ends at 70), its window to the rocket. (It stood
+    // 156 m out, on the slope: one corner on the ground, the rest in the air.)
+    glm::vec3 hp(kLaunchSiteX - 88.0f, kLaunchSiteH - 0.03f, kLaunchSiteZ - 14.0f);
+    // The site's lights (kind, position, direction: tools/rocket/make_rocket.py writes them).
+    pad_lights_.clear();
+    if (std::ifstream lf("assets/rocket/site.lights"); lf) {
+        std::string kind; float x, y, z, dx, dy, dz;
+        while (lf >> kind >> x >> y >> z >> dx >> dy >> dz) {
+            PadLight L;
+            L.kind = kind == "flood" ? 0 : kind == "flash" ? 2 : 1;
+            L.pos = pad + glm::vec3(x, y, z);
+            L.dir = glm::dot(glm::vec3(dx, dy, dz), glm::vec3(dx, dy, dz)) > 1e-6f ? glm::normalize(glm::vec3(dx, dy, dz)) : glm::vec3(0.0f, -1.0f, 0.0f);
+            pad_lights_.push_back(L);
+        }
+    }
     place_house(world_, hp);
 
     place_office();
@@ -410,7 +422,8 @@ void VulkanEngine::globe_update() {
         // large coordinates do no harm (engine/globe.h, "Small coordinates").
         // VIBE_TEST_NEAR_CHART=1: leave home's chart 3 km out already (the same place in both kinds of chart, for comparing).
         static const bool test_near = std::getenv("VIBE_TEST_NEAR_CHART") != nullptr;
-        if (rh < (test_near ? 3000.0 : globe::kHomeNear) || (up > globe::kHighDown && rh < globe::kHomeReach)) return;
+        // (and at the wheel: the jeep's physics is in home's coordinates - jeep.cpp)
+        if (rh < (test_near ? 3000.0 : globe::kHomeNear) || ((up > globe::kHighDown || jeep_driving()) && rh < globe::kHomeReach)) return;
     } else {
         const glm::dvec3 G = globe::to_planet(c, x, z);
         rh = glm::length(globe::home_az(G));

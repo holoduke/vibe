@@ -309,6 +309,9 @@ def truss(p0, p1, w, h, bays, chord=0.34, web=0.2, g='steel_dark'):
             obox(g, q + cs[0 + 2 * e], q2 + cs[2 - 2 * e], web, web); obox(g, q + cs[1 + 2 * e], q2 + cs[3 - 2 * e], web, web)
 
 
+LIGHTS = []      # (kind, position, direction) in the script's frame: written to site.lights
+
+
 def build_site():
     # Apron.
     box('concrete', (-70, -70, -2.5), (70, 70, 0.35), skip='-z')       # (its top clears the terrain's own relief)
@@ -359,7 +362,19 @@ def build_site():
     truss((0.0, TY + 4.0, TH + 6.0), (0.0, TY - 17.0, TH + 9.0), 1.2, 1.4, 9, 0.22, 0.12)
     obox('steel_grey', (0.0, TY, TH + 7.0), (0.0, TY, TH + 24.0), 0.3, 0.3)            # lightning rod
     obox('steel_grey', (0.0, TY, TH + 24.0), (0.0, TY, TH + 30.0), 0.1, 0.1)
-    for z in (TH + 23.6, 60.0, 30.0):                                                 # obstruction lights
+    # Obstruction lights, as on a real tower: flashing at the top (the rod's tip and the four
+    # corners of the head), steady at two thirds and one third of the height.
+    LIGHTS.append(('flash', (0.0, TY, TH + 30.2), (0, 0, 0)))
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            p = (sx * (hx + 0.85), TY + sy * (hx + 0.85), TH + 1.0)
+            box('steel_dark', (p[0] - 0.08, p[1] - 0.08, TH + 0.5), (p[0] + 0.08, p[1] + 0.08, TH + 0.8))
+            box('lamp_red', (p[0] - 0.16, p[1] - 0.16, TH + 0.8), (p[0] + 0.16, p[1] + 0.16, TH + 1.2))
+            LIGHTS.append(('flash', p, (0, 0, 0)))
+            for z in (72.0, 36.0):
+                box('lamp_red', (p[0] - 0.14, p[1] - 0.14, z), (p[0] + 0.14, p[1] + 0.14, z + 0.35))
+                LIGHTS.append(('red', (p[0], p[1], z + 0.18), (0, 0, 0)))
+    for z in (TH + 23.6, 60.0, 30.0):                                                 # (the older three)
         box('lamp_red', (hx + 0.7, TY + hx + 0.7, z), (hx + 1.0, TY + hx + 1.0, z + 0.4)) if z < TH else \
             box('lamp_red', (-0.2, TY - 0.2, z), (0.2, TY + 0.2, z + 0.4))
     # The arms ("chopsticks"): a carriage on the tower's front, two truss arms held open.
@@ -396,12 +411,28 @@ def build_site():
             obox('steel_grey', (x, y, 0.0), (x, y, 34.0), 0.55, 0.55)
             box('concrete_w', (x - 1.0, y - 1.0, 0.0), (x + 1.0, y + 1.0, 0.8))
             yaw = math.atan2(-y, -x)
+            box('steel_dark', (x - 0.1, y - 0.1, 36.0), (x + 0.1, y + 0.1, 36.5)); box('lamp_red', (x - 0.18, y - 0.18, 36.5), (x + 0.18, y + 0.18, 36.9))
+            LIGHTS.append(('red', (x, y, 36.7), (0, 0, 0)))
+            aim = Vector((-x, -y, 8.0 - 35.0)).normalized()                # the lamps point at the mount, a little above the apron
+            LIGHTS.append(('flood', (x + 0.45 * aim.x, y + 0.45 * aim.y, 35.0), tuple(aim)))
             with xf(T(x, y, 34.0) @ RZ(yaw) @ RY(math.radians(28.0))):
                 box('steel_dark', (-0.3, -2.4, -0.1), (0.25, 2.4, 1.9), skip='+x')
                 for r in range(2):
                     for c in range(4):
                         quad('lamp', (0.26, -2.2 + 1.1 * c + 0.08, 0.05 + 0.9 * r), (0.26, -2.2 + 1.1 * c + 1.02, 0.05 + 0.9 * r),
                              (0.26, -2.2 + 1.1 * c + 1.02, 0.85 + 0.9 * r), (0.26, -2.2 + 1.1 * c + 0.08, 0.85 + 0.9 * r), [(1, 0, 0)] * 4)
+    # Red lights round the apron's edge (one every 14 m, knee-high on a short post) and on the
+    # tanks' tops.
+    for s in (-1, 1):
+        for k in range(-4, 5):
+            for (x, y) in ((k * 14.0, s * 69.4), (s * 69.4, k * 14.0)):
+                if abs(x) > 60 and abs(y) > 60: continue                  # (the masts stand in the corners)
+                box('steel_dark', (x - 0.06, y - 0.06, 0.35), (x + 0.06, y + 0.06, 0.75))
+                box('lamp_red', (x - 0.11, y - 0.11, 0.75), (x + 0.11, y + 0.11, 0.95))
+                LIGHTS.append(('red', (x, y, 0.86), (0, 0, 0)))
+    for i in range(5):
+        box('lamp_red', (-58.0 + 8.2 * i - 0.15, -52.0 - 0.15, 19.3), (-58.0 + 8.2 * i + 0.15, -52.0 + 0.15, 19.7))
+        LIGHTS.append(('red', (-58.0 + 8.2 * i, -52.0, 19.5), (0, 0, 0)))
     # Painted markings on the apron: a ring round the mount and the edge lines.
     disc('hazard', (0, 0), 0.365, 17.0, 17.6, 64)
     for s in (-1, 1):
@@ -543,21 +574,24 @@ def make_hull():
 
 
 def make_concrete():
-    # One tile = 8 m: slabs of 4 m, pores, stains, a few cracks.
-    n = 1024; rng = np.random.default_rng(11)
+    # One tile = 4 m = one slab, at 512 px a metre (it was 8 m at 128 px a metre: a blur from
+    # eye height): pores, grit, stains, the broom's finish, a few cracks.
+    n = 2048; rng = np.random.default_rng(11)
     v, u = np.mgrid[0:n, 0:n].astype(np.float32) / n
-    fine = fbm(n, 128, 3, rng); mid = fbm(n, 16, 4, rng); big = fbm(n, 3, 3, rng)
-    joint = np.clip(line(u, 0.0, 0.0035) + line(u, 0.5, 0.0035) + line(v, 0.0, 0.0035) + line(v, 0.5, 0.0035), 0, 1)
-    slab = (np.floor(u * 2) + 2 * np.floor(v * 2))
-    tone = 1.0 + 0.05 * (np.sin(slab * 2.4) )                                                 # each slab its own pour
-    base = (0.47 + 0.10 * (mid - 0.5) + 0.07 * (fine - 0.5) + 0.06 * (big - 0.5)) * tone
-    crack = np.clip(1.0 - np.abs(fbm(n, 5, 5, rng) - 0.5) * 60.0, 0, 1) * (fbm(n, 4, 2, rng) > 0.56)
-    stain = np.clip(fbm(n, 7, 4, rng) - 0.58, 0, 1) * 2.2
+    fine = fbm(n, 256, 3, rng); mid = fbm(n, 12, 4, rng); big = fbm(n, 2, 3, rng)
+    grit = fbm(n, 1024, 1, rng)                                                              # sand grains: 4 mm
+    pores = np.clip(fbm(n, 512, 1, rng) - 0.80, 0, 1) * 5.0                                  # air holes
+    broom = np.repeat(fbm(n, 1024, 1, rng)[:, :1], n, axis=1)                                # the float's strokes, across the slab
+    joint = np.clip(line(u, 0.0, 0.006) + line(v, 0.0, 0.006), 0, 1)
+    base = 0.47 + 0.09 * (mid - 0.5) + 0.06 * (fine - 0.5) + 0.06 * (big - 0.5) + 0.05 * (grit - 0.5) + 0.03 * (broom - 0.5)
+    base *= 1.0 - 0.35 * pores
+    crack = np.clip(1.0 - np.abs(fbm(n, 3, 6, rng) - 0.5) * 140.0, 0, 1) * (fbm(n, 2, 2, rng) > 0.58)
+    stain = np.clip(fbm(n, 4, 4, rng) - 0.58, 0, 1) * 2.2
     col = np.stack([base * 1.0, base * 0.985, base * 0.95], axis=2)
     col *= (1.0 - 0.30 * stain)[:, :, None]
     col *= (1.0 - 0.55 * joint - 0.40 * crack)[:, :, None]
     save_png('concrete', col)
-    h = 0.6 + 0.25 * (fine - 0.5) + 0.15 * (mid - 0.5) - 0.5 * joint - 0.3 * crack
+    h = 0.6 + 0.18 * (fine - 0.5) + 0.10 * (mid - 0.5) + 0.14 * (grit - 0.5) + 0.06 * (broom - 0.5) - 0.25 * pores - 0.5 * joint - 0.3 * crack
     save_png('concrete_h', h)
 
 
@@ -566,5 +600,9 @@ build_rocket(); write_mesh('rocket')
 build_site(); write_mesh('site')
 build_house(); write_mesh('house')
 make_hull(); make_concrete()
+with open(os.path.join(OUT, 'site.lights'), 'w') as f:      # (the engine's frame: x, z, -y)
+    for kind, p, d in LIGHTS:
+        f.write('%s %.3f %.3f %.3f %.4f %.4f %.4f\n' % (kind, p[0], p[2], -p[1], d[0], d[2], -d[1]))
+print('LIGHTS', len(LIGHTS))
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(OUT, 'rocket.blend'))
 print('ROCKET OK')

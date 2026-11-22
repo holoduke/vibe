@@ -139,6 +139,7 @@ void update_player(Player& p, const PlayerInput& in,
         float speed_mult = 1.0f;
         if      (in.sprint) speed_mult = 1.5f;
         else if (in.crawl)  speed_mult = 0.4f;
+        if (in.aiming) speed_mult = std::min(speed_mult, 1.0f) * 0.55f;
         // Wading: water around the legs / waist slows the walk.
         speed_mult *= 1.0f - 0.55f * std::clamp(in.wade, 0.0f, 1.0f);
         wishspeed = kPlayerMove.max_walk_speed * speed_mult * amount;

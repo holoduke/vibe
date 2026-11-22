@@ -149,6 +149,9 @@ void VulkanEngine::recreate_taa_targets() {
     // Drop existing targets.
     if (scene_color_view_)  vkDestroyImageView(device_, scene_color_view_, nullptr);
     if (scene_color_image_) vmaDestroyImage(allocator_, scene_color_image_, scene_color_alloc_);
+    if (scene_copy_view_)   vkDestroyImageView(device_, scene_copy_view_, nullptr);
+    if (scene_copy_image_)  vmaDestroyImage(allocator_, scene_copy_image_, scene_copy_alloc_);
+    scene_copy_image_ = VK_NULL_HANDLE; scene_copy_view_ = VK_NULL_HANDLE; scene_copy_alloc_ = nullptr;
     scene_color_image_ = VK_NULL_HANDLE; scene_color_view_ = VK_NULL_HANDLE;
     scene_color_alloc_ = nullptr;
     if (motion_vec_view_)   vkDestroyImageView(device_, motion_vec_view_, nullptr);
@@ -229,8 +232,11 @@ void VulkanEngine::recreate_taa_targets() {
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                VK_IMAGE_USAGE_SAMPLED_BIT |
                // transfer dst: kept for blit/clear-based debug paths.
-               VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                scene_color_image_, scene_color_alloc_, scene_color_view_);
+    make_image(scene_color_format_, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+               scene_copy_image_, scene_copy_alloc_, scene_copy_view_);
+    write_scene_copy_binding();
     make_image(motion_vec_format_,
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -384,6 +390,9 @@ void VulkanEngine::destroy_taa() {
     }
     if (scene_color_view_)  vkDestroyImageView(device_, scene_color_view_, nullptr);
     if (scene_color_image_) vmaDestroyImage(allocator_, scene_color_image_, scene_color_alloc_);
+    if (scene_copy_view_)   vkDestroyImageView(device_, scene_copy_view_, nullptr);
+    if (scene_copy_image_)  vmaDestroyImage(allocator_, scene_copy_image_, scene_copy_alloc_);
+    scene_copy_image_ = VK_NULL_HANDLE; scene_copy_view_ = VK_NULL_HANDLE; scene_copy_alloc_ = nullptr;
     if (motion_vec_view_)   vkDestroyImageView(device_, motion_vec_view_, nullptr);
     if (motion_vec_image_)  vmaDestroyImage(allocator_, motion_vec_image_, motion_vec_alloc_);
     if (gbuffer0_view_)     vkDestroyImageView(device_, gbuffer0_view_, nullptr);

@@ -74,7 +74,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 22 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
+            kTextureCount * 2 + 23 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -94,7 +94,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[38]{};
+    VkDescriptorSetLayoutBinding bindings[39]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -355,11 +355,14 @@ void VulkanEngine::init_descriptors() {
     bindings[36].binding = 36;
     bindings[37] = bindings[31];
     bindings[37].binding = 37;
+    // Binding 38: a copy of the lit frame, for the glass (glass.frag).
+    bindings[38] = bindings[29];
+    bindings[38].binding = 38;
 
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 38, .pBindings = bindings,
+        .bindingCount = 39, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),

@@ -167,12 +167,12 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
         glm::vec3 up = glm::cross(right, dir);
         // ... of the weapon as it is held: at the ready it is lower than when aimed, and somebody
         // else's is in their shoulder. (Same frame the weapon is drawn in: view x offset.)
-        glm::vec3 m(0.18f, -0.18f, -0.72f);
+        glm::vec3 m = viewmodel_muzzle_;                 // (the top barrel's tip: props.cpp)
         const glm::mat4* wo = shot_weapon_offset_ ? shot_weapon_offset_
                             : (!mp_->remote_shot && body_animator_ && game_.player_body ? &body_fire_offset_ : nullptr);
         if (wo) m = glm::vec3(*wo * glm::vec4(m, 1.0f));
         glm::vec3 barrel = origin + right * m.x + up * m.y - dir * m.z;
-        p.trail_prev   = barrel;
+        p.trail_prev   = barrel + dir * 1.0f;      // (the beam is seen from a metre in front of the gun)
         p.trail_offset = barrel - spawn;
     }
     p.remote = mp_->remote_shot;

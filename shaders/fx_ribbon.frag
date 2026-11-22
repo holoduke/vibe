@@ -88,7 +88,15 @@ void main() {
         vec3  corec = (vTint.g < 0.1) ? vec3(1.0, 0.35, 0.25) : vec3(1.0, 0.95, 1.0);
         vec3  c = vTint * (halo * 1.4) + corec * core * 3.2;
         outColor = vec4(c * vUv.x * inten, 0.0);
+    } else if (kind == 6) {
+        // Tyre mark (jeep.cpp): rubber laid on the road - a dark band lying on the ground,
+        // soft at its edges, streaked along its length. uv = (strength, across).
+        float edge = 1.0 - smoothstep(0.55, 1.0, abs(vUv.y));
+        float streak = 0.70 + 0.30 * vnoise(vec3(vWorld.x * 7.0, vUv.y * 5.0, vWorld.z * 7.0));
+        float a = clamp(vUv.x * edge * streak * inten, 0.0, 0.92);
+        outColor = vec4(vec3(0.010, 0.010, 0.011) * a, a);
     } else if (kind == 4) {
+
         // Water droplet streak: a bright bead (droplets act as tiny lenses:
         // they show the sky and a sun glint), soft across, tapering back.
         float a = vUv.x * exp(-vUv.y * vUv.y * 3.5);

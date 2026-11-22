@@ -563,11 +563,13 @@ void VulkanEngine::run(const RunOptions& opts) {
             log::infof("[screenshot] F12 queued %s", buf);
         }
         loop_test_input(in, frame_dt, autodemo, headless, now, demo_start);
+        jeep_tick(in, frame_dt);           // (jeep.cpp: the driver's controls, before the physics)
         loop_handle_keys(in, frame_dt);
 
         loop_weapons_and_edit(in, frame_dt);
 
         loop_simulate(in, frame_dt);
+        jeep_after_sim(frame_dt);
 
         loop_upkeep(in, frame_dt);
         hz_ms[0] = hz_mark(hz_t);
@@ -613,6 +615,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             ImGui::NewFrame();
             build_hud_ui();
             mp_hud();
+            jeep_hud();
             site_labels_hud();                 // the sites' names, from high up (sites.cpp)
             anim_debug_overlay();
             if (terrain_shaders_compiling()) {

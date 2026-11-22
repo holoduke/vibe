@@ -149,7 +149,10 @@ float rm_highway(float h, vec2 wp) {
     if (!rm_hw_in(wp)) return h;
     vec2 dh = rm_hw_dh(wp);
     float w = 1.0 - smoothstep(8.0, 30.0, abs(dh.x));
-    return w <= 0.0 ? h : mix(h, dh.y, w);
+    // (the crown: 2 % from the centre line to the asphalt's edge, 5 % over the verge - highway.cpp cross_fall)
+    float ad = abs(dh.x);
+    float fall = 0.02 * min(ad, 5.5) + 0.05 * clamp(ad - 5.5, 0.0, 2.5);
+    return w <= 0.0 ? h : mix(h, dh.y - fall, w);
 }
 float rm_world_h(float a, vec2 wp) {
     if (!rm_far_chart()) return rm_highway(wm_height(a, wp, RM_WATER_LEVEL), wp);

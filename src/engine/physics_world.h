@@ -5,6 +5,7 @@
 #include <glm/vec3.hpp>
 #include <memory>
 #include <vector>
+#include <vector>
 
 namespace vibe {
 
@@ -174,9 +175,58 @@ public:
     // Apply a directional impulse (kg·m/s) to a dynamic body.
     void apply_impulse(uint32_t id, glm::vec3 impulse);
 
+    // ---- The vehicle (one at a time): a wheeled vehicle with suspension, engine, gearbox and
+    // tyres (Jolt's VehicleConstraint). Frame: +y up, the front toward -z, wheels 0/1 = front
+    // left / right, 2/3 = rear left / right.
+    struct VehicleDesc {
+        glm::vec3 position{0.0f};          // the body's origin (on the ground under mid-wheelbase)
+        float     yaw = 0.0f;
+        std::vector<StaticBox> boxes;      // the body, in its own frame
+        float     mass = 1250.0f;          // kg
+        // The centre of mass: its height above the ground line, and the share of the weight on
+        // the front axle. (Not the collision boxes' own: a windscreen and a roll bar weigh
+        // little, an engine and a frame much.)
+        float     com_height = 0.55f, front_weight = 0.52f;
+        float     front_drive = 0.4f;      // share of the engine's torque to the front axle (0: rear-wheel drive)
+        std::vector<float> gears;          // forward gear ratios (empty: four, 3.6 .. 1.0)
+        glm::vec3 wheel_pos[4];            // wheel centres at rest, in the body's frame
+        float     wheel_radius = 0.40f, wheel_width = 0.26f, wheel_mass = 22.0f;
+        float     suspension_rest = 0.30f;            // spring length at rest (m)
+        float     suspension_travel_up = 0.14f, suspension_travel_down = 0.16f;
+        float     suspension_hz = 1.6f, suspension_damping = 0.55f;
+        float     antiroll = 2600.0f;
+        float     max_steer = 0.58f;                  // rad
+        float     engine_torque = 310.0f, engine_max_rpm = 4600.0f, final_drive = 4.4f;
+        float     brake_torque = 2400.0f, handbrake_torque = 5200.0f;
+        float     grip = 1.0f;
+    };
+    struct VehicleState {
+        glm::mat4 body{1.0f};
+        glm::mat4 wheel[4];                // world; the wheel mesh's axle is +x
+        bool      wheel_contact[4]{};
+        float     wheel_spin[4]{}, wheel_slip[4]{}, suspension[4]{};
+        glm::vec3 velocity{0.0f}, angular_velocity{0.0f};
+        float     steer = 0.0f, rpm = 0.0f;
+        int       gear = 0;
+        bool      active = false;
+    };
+    struct OrientedBox { glm::vec3 center; glm::vec3 half_extents; float yaw; };
+    uint32_t vehicle_create(const VehicleDesc& d);
+    void     vehicle_remove();
+    bool     vehicle_exists() const;
+    void     vehicle_input(float forward, float right, float brake, float handbrake);
+    bool     vehicle_state(VehicleState& out) const;
+    void     vehicle_teleport(glm::vec3 position, float yaw);
+    void     vehicle_shift(glm::vec3 delta);
+    void     vehicle_impulse(glm::vec3 impulse, glm::vec3 at);
+    void     vehicle_set_ground(std::vector<float> samples, int n, glm::vec2 origin, float cell);
+    void     vehicle_set_obstacles(const OrientedBox* boxes, size_t count);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    struct VehicleImpl;
+    std::unique_ptr<VehicleImpl> vehicle_;
 };
 
 } // namespace vibe

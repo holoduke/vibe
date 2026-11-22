@@ -111,6 +111,7 @@ std::vector<glm::vec2> resample(const std::vector<glm::vec2>& in, float step) {
     return out;
 }
 
+// (not used by the course: kept for coast roads elsewhere)
 // The shoreline's contour, traced from `start` one way (dir = +1 / -1) in 25 m steps.
 std::vector<glm::vec2> trace(glm::vec2 start, float v0, float dir, int max_steps, float max_range) {
     auto V = [](glm::vec2 p) { return world_continent_home(p.x, p.y); };
@@ -139,6 +140,41 @@ std::vector<glm::vec2> trace(glm::vec2 start, float v0, float dir, int max_steps
     return out;
 }
 
+// A closed curve's values smoothed (running mean over +-r, `passes` times), cyclically.
+template <typename T>
+void smooth_loop(std::vector<T>& v, int r, int passes) {
+    const int n = int(v.size());
+    if (n < 2 * r + 2) return;
+    std::vector<T> tmp(v.size());
+    for (int p = 0; p < passes; ++p) {
+        for (int i = 0; i < n; ++i) {
+            T acc = v[size_t(i)];
+            for (int k = 1; k <= r; ++k) acc += v[size_t((i - k + n) % n)] + v[size_t((i + k) % n)];
+            tmp[size_t(i)] = acc / float(2 * r + 1);
+        }
+        v.swap(tmp);
+    }
+}
+// Points `step` apart round a closed polyline (the last joins the first).
+std::vector<glm::vec2> resample_loop(const std::vector<glm::vec2>& in, float step) {
+    std::vector<glm::vec2> closed = in;
+    closed.push_back(in.front());
+    float len = 0.0f;
+    for (size_t i = 0; i + 1 < closed.size(); ++i) len += glm::distance(closed[i], closed[i + 1]);
+    const int n = std::max(8, int(std::round(len / step)));
+    std::vector<glm::vec2> out = resample(closed, len / float(n));
+    while (int(out.size()) > n) out.pop_back();                    // (the closing point is the first again)
+    return out;
+}
+// A smooth number 0..1 of a place along the road (value noise of the metres along it):
+// the same every run.
+float along_noise(float s) {
+    const float i = std::floor(s), f = s - i;
+    auto h = [](float x) { const float v = std::sin(x * 127.1f + 311.7f) * 43758.5453f; return v - std::floor(v); };
+    const float u = f * f * (3.0f - 2.0f * f);
+    return glm::mix(h(i), h(i + 1.0f), u);
+}
+
 }  // namespace
 
 bool ready() { return g_ready.load(std::memory_order_acquire); }
@@ -155,131 +191,188 @@ void add_line(const std::vector<glm::vec3>& pts, float s0) {
 void build(float water_level) {
     std::lock_guard<std::mutex> lk(g_build_mutex);
     if (g_ready.load()) return;
-    // ---- the coast road ----
-    // The landscape formula's land / sea value is 0 at the waterline and rises inland. This
-    // coast is steep - the hills stand 40 to 90 m over the water within a hundred metres of it -
-    // so the road is a corniche: it follows the contour just above the waterline, benched into
-    // the foot of the slope, 8 to 15 m over the sea. Found by walking east from the launch pad.
-    const float v0 = 0.005f;
+    // ---- the course ----
+    // One closed road round home: along the coast past the launch pad, round the castle's
+    // country on the far side, through the mountains and back - some 12 km. Its line is FOUND,
+    // not drawn: of all the ways round, the cheapest by a cost that a road engineer would
+    // recognise (below), by dynamic programming over a polar grid about home - 720 bearings, a
+    // radius every 40 m between the edge of the home tile (whose ground is a bake: the road
+    // keeps out) and 2.7 km. The same search gives the same road every run.
+    //   a place costs:  water (a river is crossed where it must be; the sea is not), ground
+    //                   that falls away sideways, great height; and it earns for running by
+    //                   the shore
+    //   a step costs:   its length, the height it gains or loses, the swerve
     const glm::vec2 pad(kLaunchSiteX, kLaunchSiteZ);
-    auto V = [](glm::vec2 p) { return world_continent_home(p.x, p.y); };
-    glm::vec2 a = pad, b = pad;
-    bool found = false;
-    for (int i = 1; i <= 400 && !found; ++i) {
-        b = pad + glm::vec2(20.0f * float(i), 0.0f);
-        if (V(b) < v0) found = true; else a = b;
-    }
-    if (found) {
-        for (int i = 0; i < 24; ++i) { const glm::vec2 m = 0.5f * (a + b); if (V(m) < v0) b = m; else a = m; }
-        const glm::vec2 start = 0.5f * (a + b);
-        std::vector<glm::vec2> north = trace(start, v0, +1.0f, 640, 13000.0f), south = trace(start, v0, -1.0f, 640, 13000.0f);
-        std::vector<glm::vec2> raw(north.rbegin(), north.rend());
-        raw.push_back(start);
-        raw.insert(raw.end(), south.begin(), south.end());
-        if (raw.size() > 40) {
-            // A highway's curves, not a shoreline's: the coves and headlands shorter than a few
-            // hundred metres are cut across (fill over the water, a cutting through the land).
-            smooth(raw, 9, 4);
-            std::vector<glm::vec2> pts = resample(raw, 20.0f);
-            smooth(pts, 3, 2);
-            // No bend tighter than kMinRadius: where the line turns harder than that, that part of
-            // it is relaxed (each point toward the middle of its neighbours) until it does not.
-            const float kMinRadius = 160.0f;
-            auto radius_at = [&](size_t i) {
-                const glm::vec2 a = pts[i - 1], b = pts[i], c = pts[i + 1];
-                const float area2 = std::abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
-                return area2 < 1e-6f ? 1e9f : glm::distance(a, b) * glm::distance(b, c) * glm::distance(c, a) / (2.0f * area2);
-            };
-            for (int it = 0; it < 400; ++it) {
-                bool tight = false;
-                std::vector<glm::vec2> nx = pts;
-                for (size_t i = 1; i + 1 < pts.size(); ++i) {
-                    if (radius_at(i) >= kMinRadius) continue;
-                    tight = true;
-                    for (size_t k = (i > 6 ? i - 6 : 1); k <= i + 6 && k + 1 < pts.size(); ++k)
-                        nx[k] = glm::mix(pts[k], 0.5f * (pts[k - 1] + pts[k + 1]), 0.5f);
-                }
-                if (!tight) break;
-                pts.swap(nx);
-            }
-            pts = resample(pts, 20.0f);
-            // The surface follows the land: the natural ground under the line, with only the bumps
-            // shorter than a car smoothed off, never lower than 3 m over the water (a cove is
-            // crossed on fill) - and no steeper than a road can be (kGrade). Where the land is
-            // steeper than that along the line, the road climbs at its limit: the top of the
-            // rise is cut into and the foot filled, by equal measure.
-            const float kGrade = 0.10f;                           // 10 %
-            std::vector<float> hs(pts.size());
-            for (size_t i = 0; i < pts.size(); ++i)
-                hs[i] = std::max(world_ground_height_natural(pts[i].x, pts[i].y, water_level, 9), water_level + 3.0f);
-            smooth(hs, 2, 2);
-            {
-                const float g = kGrade * 20.0f;                   // (points are 20 m apart)
-                std::vector<float> up = hs, dn = hs;
-                // `up`: the lowest profile at or above the land that keeps the grade; `dn`: the
-                // highest one at or below it. Their mean keeps the grade too.
-                for (size_t i = 1; i < up.size(); ++i) up[i] = std::max(up[i], up[i - 1] - g);
-                for (size_t i = up.size() - 1; i-- > 0;) up[i] = std::max(up[i], up[i + 1] - g);
-                for (size_t i = 1; i < dn.size(); ++i) dn[i] = std::min(dn[i], dn[i - 1] + g);
-                for (size_t i = dn.size() - 1; i-- > 0;) dn[i] = std::min(dn[i], dn[i + 1] + g);
-                for (size_t i = 0; i < hs.size(); ++i) hs[i] = std::max(0.5f * (up[i] + dn[i]), water_level + 3.0f);
-            }
-            smooth(hs, 3, 2);                                     // (crests and dips rounded: a vertical curve, not a kink)
-            // Past the launch pad it runs at the pad's own level (it passes along its seaward edge).
-            for (size_t i = 0; i < pts.size(); ++i)
-                hs[i] = glm::mix(kLaunchSiteH, hs[i], sstep(130.0f, 420.0f, glm::distance(pts[i], pad)));
-            // The line: a smooth curve through these points (Catmull-Rom), in 4 m pieces - with 20 m
-            // pieces a bend was a polygon: the lane lines and the rail had a corner every 20 m.
-            Line L;
-            {
-                if (hs.size() > pts.size()) hs.resize(pts.size());
-                const size_t n = pts.size();
-                auto P3 = [&](size_t i) { return glm::vec3(pts[i].x, hs[i], pts[i].y); };
-                for (size_t i = 0; i + 1 < n; ++i) {
-                    const glm::vec3 p0 = P3(i ? i - 1 : 0), p1 = P3(i), p2 = P3(i + 1), p3 = P3(i + 2 < n ? i + 2 : n - 1);
-                    for (int k = 0; k < 5; ++k) {
-                        const float t = float(k) / 5.0f, t2 = t * t, t3 = t2 * t;
-                        L.p.push_back(0.5f * ((2.0f * p1) + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3));
-                    }
-                }
-                L.p.push_back(P3(n - 1));
-            }
-            finish_line(L, 0.0f);
-            {   // (for the log: how tight the tightest bend is, and where)
-                float rmin = 1e9f; size_t at = 0;
-                for (size_t i = 5; i + 5 < L.p.size(); i += 5) {
-                    const glm::vec2 a(L.p[i - 5].x, L.p[i - 5].z), b(L.p[i].x, L.p[i].z), c(L.p[i + 5].x, L.p[i + 5].z);
-                    const float area2 = std::abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
-                    const float r = area2 < 1e-6f ? 1e9f : glm::distance(a, b) * glm::distance(b, c) * glm::distance(c, a) / (2.0f * area2);
-                    if (r < rmin) { rmin = r; at = i; }
-                }
-                g_tightest = glm::vec4(L.p[at], rmin);
-            }
-            g_lines.push_back(std::move(L));
-            // ---- the spur to the launch pad ----
-            const Line& H = g_lines[0];
-            size_t jn = 0; float best = 1e30f;
-            for (size_t i = 0; i < H.p.size(); ++i) {
-                const float d2 = glm::dot(glm::vec2(H.p[i].x, H.p[i].z) - pad, glm::vec2(H.p[i].x, H.p[i].z) - pad);
-                if (d2 < best) { best = d2; jn = i; }
-            }
-            g_junction = int(jn);
-            const glm::vec2 J(H.p[jn].x, H.p[jn].z);
-            const float len = glm::distance(J, pad);
-            if (len > 160.0f) {
-                const glm::vec2 u = (pad - J) / len;
-                const float run = len - 96.0f;                 // (to the edge of the pad's level ground)
-                Line S;
-                const int n = std::max(2, int(std::ceil(run / 20.0f)));
-                for (int i = 0; i <= n; ++i) {
-                    const float t = float(i) / float(n);
-                    const glm::vec2 q = J + u * (run * t);
-                    S.p.push_back(glm::vec3(q.x, glm::mix(H.p[jn].y, kLaunchSiteH, sstep(0.0f, 1.0f, t)), q.y));
-                }
-                finish_line(S, H.s[jn]);
-                g_lines.push_back(std::move(S));
+    const glm::vec2 gate(kLaunchSiteX + 96.0f, kLaunchSiteZ - 13.0f);      // it passes the pad's seaward edge
+    constexpr int   kA = 720;
+    constexpr float kR0 = 1220.0f, kR1 = 2700.0f, kDr = 40.0f;
+    constexpr int   kNr = int((kR1 - 1150.0f) / kDr) + 1;
+    constexpr float kTau = 6.2831853f;
+    auto dir_of = [&](int a) { const float th = kTau * float(a) / float(kA); return glm::vec2(std::cos(th), std::sin(th)); };
+    auto rmin_of = [&](int a) { const glm::vec2 d = dir_of(a); return kR0 / std::max(std::abs(d.x), std::abs(d.y)); };     // (a square: the home tile)
+    auto pos_of = [&](int a, int j) { return dir_of(a) * (rmin_of(a) + kDr * float(j)); };
+    auto Hn = [&](glm::vec2 p) { return world_ground_height_natural(p.x, p.y, water_level, 6); };
+    const float kInf = 1e9f;
+    std::vector<float> node(size_t(kA) * kNr, kInf), hgt(size_t(kA) * kNr, 0.0f);
+    for (int a = 0; a < kA; ++a)
+        for (int j = 0; j < kNr; ++j) {
+            const glm::vec2 p = pos_of(a, j);
+            if (glm::length(p) > kR1) continue;
+            const float h = Hn(p);
+            hgt[size_t(a) * kNr + j] = h;
+            float c = 0.0f;
+            if (h < water_level + 1.5f) c += 600.0f;                                   // water
+            const glm::vec2 d = dir_of(a);
+            c += 60.0f * std::abs(Hn(p + d * 30.0f) - Hn(p - d * 30.0f)) / 60.0f;      // side slope (the road runs round)
+            c += 2.0f * std::max(h - water_level - 85.0f, 0.0f);                       // not over the tops
+            const float v = world_continent_home(p.x, p.y);
+            if (v > 0.003f && v < 0.05f) c -= 14.0f * (1.0f - (v - 0.003f) / 0.047f);  // the shore
+            if (glm::distance(p, pad) < 90.0f) c = kInf;                               // (not across the apron)
+            node[size_t(a) * kNr + j] = c;
+        }
+    // The bearing of the gate, and the ring radius nearest it: the search starts and ends there.
+    int a0 = int(std::round(std::atan2(gate.y, gate.x) / kTau * float(kA)));
+    a0 = (a0 % kA + kA) % kA;
+    const int j0 = std::clamp(int(std::round((glm::length(gate) - rmin_of(a0)) / kDr)), 0, kNr - 1);
+    std::vector<float> cost(size_t(kA + 1) * kNr, kInf);
+    std::vector<int8_t> from(size_t(kA + 1) * kNr, 0);
+    cost[size_t(j0)] = 0.0f;
+    for (int s = 1; s <= kA; ++s) {
+        const int a = (a0 + s) % kA, ap = (a0 + s - 1) % kA;
+        for (int j = 0; j < kNr; ++j) {
+            if (s == kA && j != j0) continue;                                          // (back at the gate)
+            const float nc = node[size_t(a) * kNr + j];
+            if (nc >= kInf) continue;
+            const glm::vec2 p = pos_of(a, j);
+            for (int dj = -1; dj <= 1; ++dj) {
+                const int k = j + dj;
+                if (k < 0 || k >= kNr) continue;
+                const float pc = cost[size_t(s - 1) * kNr + k];
+                if (pc >= kInf) continue;
+                const float len = glm::distance(p, pos_of(ap, k));
+                const float c = pc + nc + len * 0.5f + 3.0f * std::abs(hgt[size_t(a) * kNr + j] - hgt[size_t(ap) * kNr + k]) + (dj ? 6.0f : 0.0f);
+                if (c < cost[size_t(s) * kNr + j]) { cost[size_t(s) * kNr + j] = c; from[size_t(s) * kNr + j] = int8_t(dj); }
             }
         }
+    }
+    std::vector<glm::vec2> raw;
+    if (cost[size_t(kA) * kNr + j0] < kInf) {
+        int j = j0;
+        for (int s = kA; s >= 1; --s) {
+            raw.push_back(pos_of((a0 + s) % kA, j));
+            j += from[size_t(s) * kNr + j];
+        }
+        std::reverse(raw.begin(), raw.end());
+    }
+    if (raw.size() > 100) {
+        // A road's curves, not a grid's: the line is smoothed (bends shorter than a few hundred
+        // metres go), set out in 20 m steps, and relaxed wherever it turns tighter than
+        // kMinRadius.
+        // (and it keeps clear of the launch pad's apron: smoothing pulled it across)
+        auto clear_pad = [&](std::vector<glm::vec2>& v) {
+            for (int it = 0; it < 6; ++it) {
+                for (glm::vec2& p : v) {
+                    const glm::vec2 d = p - pad;
+                    const float l = glm::length(d);
+                    if (l < 96.0f && l > 1e-3f) p = pad + d * (96.0f / l);
+                }
+                smooth_loop(v, 2, 1);
+            }
+        };
+        smooth_loop(raw, 10, 4);
+        clear_pad(raw);
+        std::vector<glm::vec2> pts = resample_loop(raw, 20.0f);
+        smooth_loop(pts, 3, 2);
+        clear_pad(pts);
+        const float kMinRadius = 120.0f;
+        const size_t n = pts.size();
+        auto at = [&](size_t i) -> glm::vec2& { return pts[i % n]; };
+        auto radius_at = [&](size_t i) {
+            const glm::vec2 a = at(i + n - 1), b = at(i), c = at(i + 1);
+            const float area2 = std::abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+            return area2 < 1e-6f ? 1e9f : glm::distance(a, b) * glm::distance(b, c) * glm::distance(c, a) / (2.0f * area2);
+        };
+        for (int it = 0; it < 600; ++it) {
+            bool tight = false;
+            std::vector<glm::vec2> nx = pts;
+            for (size_t i = 0; i < n; ++i) {
+                if (radius_at(i) >= kMinRadius) continue;
+                tight = true;
+                for (size_t k = i + n - 6; k <= i + n + 6; ++k)
+                    nx[k % n] = glm::mix(pts[k % n], 0.5f * (pts[(k + n - 1) % n] + pts[(k + 1) % n]), 0.5f);
+            }
+            if (!tight) break;
+            pts.swap(nx);
+        }
+        pts = resample_loop(pts, 20.0f);
+        const size_t m = pts.size();
+        // The surface follows the land: the natural ground under the line, with only the bumps
+        // shorter than a car smoothed off, never lower than 3 m over the water (a river or a
+        // cove is crossed on fill) - and no steeper than a road can be (kGrade). Where the land
+        // is steeper than that along the line, the road climbs at its limit: the top of the
+        // rise is cut into and the foot filled, by equal measure.
+        const float kGrade = 0.10f;                               // 10 %
+        std::vector<float> hs(m);
+        for (size_t i = 0; i < m; ++i)
+            hs[i] = std::max(world_ground_height_natural(pts[i].x, pts[i].y, water_level, 9), water_level + 3.0f);
+        smooth_loop(hs, 2, 2);
+        {
+            const float g = kGrade * 20.0f;                       // (points are 20 m apart)
+            std::vector<float> up = hs, dn = hs;
+            // `up`: the lowest profile at or above the land that keeps the grade; `dn`: the
+            // highest one at or below it. Their mean keeps the grade too. (Twice round: a loop.)
+            for (size_t q = 1; q < 2 * m + 1; ++q) { const size_t i = q % m, p = (q - 1) % m; up[i] = std::max(up[i], up[p] - g); dn[i] = std::min(dn[i], dn[p] + g); }
+            for (size_t q = 2 * m; q-- > 0;) { const size_t i = q % m, p = (q + 1) % m; up[i] = std::max(up[i], up[p] - g); dn[i] = std::min(dn[i], dn[p] + g); }
+            for (size_t i = 0; i < m; ++i) hs[i] = std::max(0.5f * (up[i] + dn[i]), water_level + 3.0f);
+        }
+        smooth_loop(hs, 3, 2);                                    // (crests and dips rounded: a vertical curve, not a kink)
+        // Past the launch pad it runs at the pad's own level.
+        for (size_t i = 0; i < m; ++i)
+            hs[i] = glm::mix(kLaunchSiteH, hs[i], sstep(130.0f, 420.0f, glm::distance(pts[i], pad)));
+        // The line: a smooth closed curve through these points (Catmull-Rom), in 4 m pieces.
+        Line L;
+        auto P3 = [&](size_t i) { return glm::vec3(pts[i % m].x, hs[i % m], pts[i % m].y); };
+        for (size_t i = 0; i < m; ++i) {
+            const glm::vec3 p0 = P3(i + m - 1), p1 = P3(i), p2 = P3(i + 1), p3 = P3(i + 2);
+            for (int k = 0; k < 5; ++k) {
+                const float t = float(k) / 5.0f, t2 = t * t, t3 = t2 * t;
+                L.p.push_back(0.5f * ((2.0f * p1) + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3));
+            }
+        }
+        L.p.push_back(L.p.front());                               // (closed)
+        finish_line(L, 0.0f);
+        // No road is laid dead level: the surface rises and falls a hand's width over tens of
+        // metres (how the base settled), and a finger's over a car's length. A function of the
+        // metres along the road - the same every run - fading out where the road meets the pad
+        // and where the loop closes.
+        {
+            const float total = L.s.back();
+            for (size_t i = 0; i < L.p.size(); ++i) {
+                const float s = L.s[i];
+                float k = sstep(110.0f, 260.0f, glm::distance(glm::vec2(L.p[i].x, L.p[i].z), pad));
+                k *= sstep(0.0f, 60.0f, std::min(s, total - s));
+                L.p[i].y += k * (0.11f * (along_noise(s / 47.0f) - 0.5f) * 2.0f + 0.035f * (along_noise(s / 13.0f + 91.0f) - 0.5f) * 2.0f);
+            }
+        }
+        {   // (for the log: how tight the tightest bend is, and where)
+            float rmin = 1e9f; size_t where = 0;
+            for (size_t i = 5; i + 5 < L.p.size(); i += 5) {
+                const glm::vec2 a(L.p[i - 5].x, L.p[i - 5].z), b(L.p[i].x, L.p[i].z), c(L.p[i + 5].x, L.p[i + 5].z);
+                const float area2 = std::abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+                const float r = area2 < 1e-6f ? 1e9f : glm::distance(a, b) * glm::distance(b, c) * glm::distance(c, a) / (2.0f * area2);
+                if (r < rmin) { rmin = r; where = i; }
+            }
+            g_tightest = glm::vec4(L.p[where], rmin);
+        }
+        g_lines.push_back(std::move(L));
+        // (where the road passes the pad: the zero of point_along)
+        const Line& H = g_lines[0];
+        size_t jn = 0; float best = 1e30f;
+        for (size_t i = 0; i < H.p.size(); ++i) {
+            const float d2 = glm::dot(glm::vec2(H.p[i].x, H.p[i].z) - pad, glm::vec2(H.p[i].x, H.p[i].z) - pad);
+            if (d2 < best) { best = d2; jn = i; }
+        }
+        g_junction = int(jn);
     }
     for (uint32_t li = 0; li < g_lines.size(); ++li) index_line(li);
     g_ready.store(true, std::memory_order_release);
@@ -302,10 +395,14 @@ float distance(float x, float z) {
     return nearest(x, z, kFieldMaxD, d, h, s) ? std::abs(d) : 1e9f;
 }
 
+// The road is not flat across: the asphalt falls 2 % from the crown to its edge (the rain
+// runs off), the verge 5 % beyond. (shaders: rm_highway - keep in step.)
+float cross_fall(float ad) { return 0.02f * std::min(ad, kPaved) + 0.05f * std::clamp(ad - kPaved, 0.0f, kVerge - kPaved); }
+
 float ground(float h_nat, float x, float z) {
     float d, h, s;
     if (!nearest(x, z, kBlend, d, h, s)) return h_nat;
-    return glm::mix(h_nat, h, 1.0f - sstep(kVerge, kBlend, std::abs(d)));
+    return glm::mix(h_nat, h - cross_fall(std::abs(d)), 1.0f - sstep(kVerge, kBlend, std::abs(d)));
 }
 
 bool bake(glm::vec2 center, std::vector<uint8_t>& A, std::vector<uint8_t>& B, glm::vec4& bbox, const globe::Ring& ring) {
@@ -389,6 +486,7 @@ bool bake(glm::vec2 center, std::vector<uint8_t>& A, std::vector<uint8_t>& B, gl
     return true;
 }
 
+float course_length() { return (ready() && !g_lines.empty()) ? g_lines[0].s.back() : 0.0f; }
 int line_count() { return ready() ? int(g_lines.size()) : 0; }
 const std::vector<glm::vec3>& line_points(int line) { return g_lines[size_t(line)].p; }
 
@@ -397,7 +495,9 @@ glm::vec4 tightest_bend() { return g_tightest; }
 bool point_along(float metres, glm::vec3& pos, glm::vec2& dir) {
     if (!ready() || g_lines.empty() || g_junction < 0) return false;
     const Line& H = g_lines[0];
-    const float target = H.s[size_t(g_junction)] + metres;
+    const float total = H.s.back();
+    float target = std::fmod(H.s[size_t(g_junction)] + metres, total);
+    if (target < 0.0f) target += total;
     size_t i = 0;
     while (i + 2 < H.p.size() && H.s[i + 1] < target) ++i;
     const float t = std::clamp((target - H.s[i]) / std::max(H.s[i + 1] - H.s[i], 1e-3f), 0.0f, 1.0f);

@@ -21,10 +21,14 @@
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
+#include <Jolt/Physics/Vehicle/VehicleConstraint.h>
+#include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
+#include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/CollisionCollector.h>
 #include <Jolt/Physics/Collision/CollidePointResult.h>
@@ -260,6 +264,7 @@ PhysicsWorld::PhysicsWorld() {
 }
 
 PhysicsWorld::~PhysicsWorld() {
+    vehicle_remove();
     impl_.reset();
     global_shutdown_if_last();
 }
@@ -1025,6 +1030,288 @@ void PhysicsWorld::apply_impulse_h(BodyHandle h, glm::vec3 impulse) {
     if (h == 0) return;
     impl_->system.GetBodyInterfaceNoLock().AddImpulse(
         JPH::BodyID(h), JPH::Vec3(impulse.x, impulse.y, impulse.z));
+}
+
+// =====================================================================================
+// The vehicle (PhysicsWorld::vehicle_*): Jolt's wheeled vehicle - a rigid body on four
+// suspended wheels, with an engine, a clutch, a gearbox, two differentials and tyres whose
+// grip falls off as they slip. One vehicle at a time.
+// =====================================================================================
+struct PhysicsWorld::VehicleImpl {
+    JPH::BodyID body;
+    JPH::Ref<JPH::VehicleConstraint> constraint;
+    JPH::Ref<JPH::VehicleCollisionTester> tester;
+    JPH::BodyID patch;                 // the ground under it, outside the home tile's heightfield
+    JPH::BodyID obstacles;             // what stands near it (trees, rails, buildings)
+    std::vector<float> patch_samples;  // (Jolt keeps a pointer for the shape's life only: kept anyway)
+};
+
+uint32_t PhysicsWorld::vehicle_create(const VehicleDesc& d) {
+    vehicle_remove();
+    vehicle_ = std::make_unique<VehicleImpl>();
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    // The body: a few boxes, the centre of mass low between the axles.
+    JPH::StaticCompoundShapeSettings cs;
+    for (const StaticBox& b : d.boxes)
+        cs.AddShape(JPH::Vec3(b.center.x, b.center.y, b.center.z), JPH::Quat::sIdentity(),
+                    new JPH::BoxShape(JPH::Vec3(b.half_extents.x, b.half_extents.y, b.half_extents.z), 0.03f));
+    // Over each axle a box out to the tyres' outer faces: on its side or its roof the car lies
+    // on its wheels and arches, not on the narrower tub with the wheels sunk in the ground.
+    for (int ax = 0; ax < 2; ++ax) {
+        const glm::vec3 wl = d.wheel_pos[ax * 2], wr = d.wheel_pos[ax * 2 + 1];
+        const float half_w = 0.5f * std::abs(wr.x - wl.x) + 0.5f * d.wheel_width;
+        cs.AddShape(JPH::Vec3(0.0f, wl.y + 0.24f, 0.5f * (wl.z + wr.z)), JPH::Quat::sIdentity(),
+                    new JPH::BoxShape(JPH::Vec3(half_w, 0.20f, d.wheel_radius * 0.95f), 0.03f));
+    }
+    JPH::ShapeSettings::ShapeResult sr0 = cs.Create();
+    if (sr0.HasError()) { log::errorf("[jolt] vehicle shape: %s", sr0.GetError().c_str()); vehicle_.reset(); return 0; }
+    // The centre of mass where a car's is: low, between the axles. The boxes' own is that of
+    // a solid block of their shape - too high and too far forward: the car rolled about a
+    // point at window height and tipped over far too easily.
+    const float z_f0 = d.wheel_pos[0].z, z_r0 = d.wheel_pos[2].z;
+    const JPH::Vec3 com_want(0.0f, d.com_height, z_r0 + (z_f0 - z_r0) * d.front_weight);
+    JPH::OffsetCenterOfMassShapeSettings ocs(com_want - sr0.Get()->GetCenterOfMass(), sr0.Get());
+    JPH::ShapeSettings::ShapeResult sr = ocs.Create();
+    if (sr.HasError()) { log::errorf("[jolt] vehicle shape: %s", sr.GetError().c_str()); vehicle_.reset(); return 0; }
+    JPH::BodyCreationSettings bcs(sr.Get(), JPH::RVec3(d.position.x, d.position.y, d.position.z),
+                                  JPH::Quat::sRotation(JPH::Vec3::sAxisY(), d.yaw), JPH::EMotionType::Dynamic, Layers::MOVING);
+    bcs.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+    bcs.mMassPropertiesOverride.mMass = d.mass;
+    bcs.mLinearDamping = 0.02f; bcs.mAngularDamping = 0.10f;
+    bcs.mFriction = 0.6f; bcs.mRestitution = 0.12f;
+    bcs.mMotionQuality = JPH::EMotionQuality::LinearCast;
+    bcs.mAllowSleeping = true;
+    // The game's gravity is 25 m/s2 (for the feel of the player's jumps). A vehicle built from
+    // real numbers - mass, springs, tyres, engine - only behaves like one under the Earth's:
+    // at 25 it sat on its bump stops, cornered at 2.5 g and stalled on the slightest hill.
+    // So the vehicle falls at 9.81, and everything below is sized for that.
+    const float grav = 9.81f;
+    bcs.mGravityFactor = grav / std::max(impl_->system.GetGravity().Length(), 0.1f);
+    JPH::Body* body = bi.CreateBody(bcs);
+    if (!body) { vehicle_.reset(); return 0; }
+    // (the centre of mass: where the engine, gearbox and frame are - low, a little forward)
+    {
+        JPH::MotionProperties* mp = body->GetMotionProperties();
+        (void)mp;
+    }
+    bi.AddBody(body->GetID(), JPH::EActivation::Activate);
+    vehicle_->body = body->GetID();
+
+    JPH::VehicleConstraintSettings vs;
+    vs.mUp = JPH::Vec3(0, 1, 0);
+    vs.mForward = JPH::Vec3(0, 0, -1);                  // (the model's front is -z)
+    vs.mMaxPitchRollAngle = JPH::JPH_PI;                // it may roll over
+    const float com_z = sr.Get()->GetCenterOfMass().GetZ();
+    for (int i = 0; i < 4; ++i) {
+        JPH::WheelSettingsWV* w = new JPH::WheelSettingsWV;
+        const bool front = i < 2;
+        w->mPosition = JPH::Vec3(d.wheel_pos[i].x, d.wheel_pos[i].y + d.suspension_rest, d.wheel_pos[i].z);
+        w->mSuspensionDirection = JPH::Vec3(0, -1, 0);
+        w->mSteeringAxis = JPH::Vec3(0, 1, 0);
+        w->mWheelUp = JPH::Vec3(0, 1, 0);
+        w->mWheelForward = JPH::Vec3(0, 0, -1);
+        // The spring, from the weight this wheel carries (the body's centre of mass is not
+        // midway between the axles): stiff enough to swing at suspension_hz under that
+        // weight, and as long as it takes to stand at the rest length under it. (Jolt's
+        // frequency setting uses the mass the constraint sees at the wheel, which is much
+        // less than the weight on it: the springs sat on their stops.)
+        const float z_f = d.wheel_pos[0].z, z_r = d.wheel_pos[2].z;
+        const float share_f = glm::clamp((z_r - com_z) / (z_r - z_f), 0.3f, 0.7f);
+        const float m_w = 0.5f * d.mass * (front ? share_f : 1.0f - share_f);
+        // (The game's gravity is not the Earth's - 25 m/s2, for the feel of the jumps - so the
+        //  weight is taken from the physics, not from 9.81. The spring is stiffer by as much:
+        //  the same sag as on Earth at suspension_hz, which is what the eye judges.)
+        const float om = 6.2831853f * d.suspension_hz * std::sqrt(grav / 9.81f);
+        const float sag = grav / (om * om);
+        w->mSuspensionMinLength = d.suspension_rest - d.suspension_travel_up;
+        w->mSuspensionMaxLength = d.suspension_rest + sag;
+        w->mSuspensionSpring.mMode = JPH::ESpringMode::StiffnessAndDamping;
+        w->mSuspensionSpring.mStiffness = m_w * om * om;
+        w->mSuspensionSpring.mDamping = 2.0f * d.suspension_damping * m_w * om;
+        w->mRadius = d.wheel_radius;
+        w->mWidth = d.wheel_width;
+        w->mInertia = 0.5f * d.wheel_mass * d.wheel_radius * d.wheel_radius;
+        w->mAngularDamping = 0.25f;
+        w->mMaxSteerAngle = front ? d.max_steer : 0.0f;
+        w->mMaxBrakeTorque = front ? d.brake_torque : d.brake_torque * 0.6f;
+        w->mMaxHandBrakeTorque = front ? 0.0f : d.handbrake_torque;
+        // An all-terrain tyre: peak grip a little past 6 % slip, then it lets go.
+        // (Grip is friction x weight, and the weight here is 2.5 x the Earth's: with a real
+        //  tyre's friction the jeep cornered at 2.5 g and never slid. The friction is scaled so
+        //  that the grip is a real tyre's in m/s2.)
+        const float gk = d.grip * 9.81f / grav;
+        w->mLongitudinalFriction.Clear();
+        w->mLongitudinalFriction.AddPoint(0.0f, 0.0f);
+        w->mLongitudinalFriction.AddPoint(0.06f, 1.10f * gk);
+        w->mLongitudinalFriction.AddPoint(0.20f, 0.88f * gk);
+        w->mLongitudinalFriction.AddPoint(1.00f, 0.62f * gk);
+        w->mLateralFriction.Clear();
+        w->mLateralFriction.AddPoint(0.0f, 0.0f);
+        // (past about 6 degrees of slip it lets go, and a sliding tyre holds much less: the
+        //  tail comes round under power or the handbrake, and has to be caught)
+        const float lat = (front ? 1.0f : 0.93f) * gk;
+        w->mLateralFriction.AddPoint(4.0f, 1.05f * lat);
+        w->mLateralFriction.AddPoint(9.0f, 0.90f * lat);
+        w->mLateralFriction.AddPoint(25.0f, 0.68f * lat);
+        w->mLateralFriction.AddPoint(90.0f, 0.55f * lat);
+        vs.mWheels.push_back(w);
+    }
+    // Anti-roll bars, front and rear.
+    { JPH::VehicleAntiRollBar b; b.mLeftWheel = 0; b.mRightWheel = 1; b.mStiffness = d.antiroll; vs.mAntiRollBars.push_back(b); }
+    { JPH::VehicleAntiRollBar b; b.mLeftWheel = 2; b.mRightWheel = 3; b.mStiffness = d.antiroll * 0.7f; vs.mAntiRollBars.push_back(b); }
+    JPH::WheeledVehicleControllerSettings* cs2 = new JPH::WheeledVehicleControllerSettings;
+    cs2->mEngine.mMaxTorque = d.engine_torque;
+    cs2->mEngine.mMinRPM = 800.0f;
+    cs2->mEngine.mMaxRPM = d.engine_max_rpm;
+    cs2->mEngine.mInertia = 0.35f;
+    cs2->mEngine.mNormalizedTorque.Clear();              // a low-revving four: strongest in the middle
+    cs2->mEngine.mNormalizedTorque.AddPoint(0.0f, 0.72f);
+    cs2->mEngine.mNormalizedTorque.AddPoint(0.35f, 1.0f);
+    cs2->mEngine.mNormalizedTorque.AddPoint(0.75f, 0.92f);
+    cs2->mEngine.mNormalizedTorque.AddPoint(1.0f, 0.60f);
+    cs2->mTransmission.mMode = JPH::ETransmissionMode::Auto;
+    cs2->mTransmission.mGearRatios = { 3.60f, 2.10f, 1.40f, 1.00f };
+    if (!d.gears.empty()) { cs2->mTransmission.mGearRatios.clear(); for (float g : d.gears) cs2->mTransmission.mGearRatios.push_back(g); }
+    cs2->mTransmission.mReverseGearRatios = { -3.40f };
+    cs2->mTransmission.mSwitchTime = 0.35f;
+    cs2->mTransmission.mClutchReleaseTime = 0.25f;
+    cs2->mTransmission.mSwitchLatency = 0.4f;
+    cs2->mTransmission.mShiftUpRPM = d.engine_max_rpm * 0.74f;
+    cs2->mTransmission.mShiftDownRPM = d.engine_max_rpm * 0.36f;
+    cs2->mTransmission.mClutchStrength = 12.0f;
+    // Four-wheel drive: a differential on each axle, 40 % of the torque to the front.
+    cs2->mDifferentials.resize(2);
+    cs2->mDifferentials[0].mLeftWheel = 0; cs2->mDifferentials[0].mRightWheel = 1;
+    cs2->mDifferentials[0].mDifferentialRatio = d.final_drive; cs2->mDifferentials[0].mEngineTorqueRatio = d.front_drive;
+    cs2->mDifferentials[0].mLimitedSlipRatio = 1.6f;
+    cs2->mDifferentials[1].mLeftWheel = 2; cs2->mDifferentials[1].mRightWheel = 3;
+    cs2->mDifferentials[1].mDifferentialRatio = d.final_drive; cs2->mDifferentials[1].mEngineTorqueRatio = 1.0f - d.front_drive;
+    cs2->mDifferentials[1].mLimitedSlipRatio = 1.6f;
+    cs2->mDifferentialLimitedSlipRatio = 1.5f;
+    vs.mController = cs2;
+
+    vehicle_->constraint = new JPH::VehicleConstraint(*body, vs);
+    vehicle_->tester = new JPH::VehicleCollisionTesterCastCylinder(Layers::MOVING, 0.08f);
+    vehicle_->constraint->SetVehicleCollisionTester(vehicle_->tester);
+    impl_->system.AddConstraint(vehicle_->constraint);
+    impl_->system.AddStepListener(vehicle_->constraint);
+    return 1;
+}
+
+void PhysicsWorld::vehicle_remove() {
+    if (!vehicle_) return;
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    if (vehicle_->constraint) {
+        impl_->system.RemoveStepListener(vehicle_->constraint);
+        impl_->system.RemoveConstraint(vehicle_->constraint);
+    }
+    for (JPH::BodyID id : { vehicle_->body, vehicle_->patch, vehicle_->obstacles })
+        if (!id.IsInvalid()) { bi.RemoveBody(id); bi.DestroyBody(id); }
+    vehicle_.reset();
+}
+
+bool PhysicsWorld::vehicle_exists() const { return vehicle_ && !vehicle_->body.IsInvalid(); }
+
+void PhysicsWorld::vehicle_input(float forward, float right, float brake, float handbrake) {
+    if (!vehicle_exists()) return;
+    auto* c = static_cast<JPH::WheeledVehicleController*>(vehicle_->constraint->GetController());
+    c->SetDriverInput(forward, right, brake, handbrake);
+    if (forward != 0.0f || right != 0.0f || brake != 0.0f || handbrake != 0.0f)
+        impl_->system.GetBodyInterface().ActivateBody(vehicle_->body);
+}
+
+bool PhysicsWorld::vehicle_state(VehicleState& s) const {
+    if (!vehicle_exists()) return false;
+    const JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    const JPH::RMat44 m = bi.GetWorldTransform(vehicle_->body);
+    auto to_glm = [](const JPH::RMat44& t) {
+        glm::mat4 g(1.0f);
+        for (int c = 0; c < 3; ++c) { const JPH::Vec3 v = t.GetColumn3(c); g[c] = glm::vec4(v.GetX(), v.GetY(), v.GetZ(), 0.0f); }
+        const JPH::RVec3 p = t.GetTranslation();
+        g[3] = glm::vec4(float(p.GetX()), float(p.GetY()), float(p.GetZ()), 1.0f);
+        return g;
+    };
+    s.body = to_glm(m);
+    const JPH::Vec3 v = bi.GetLinearVelocity(vehicle_->body), w = bi.GetAngularVelocity(vehicle_->body);
+    s.velocity = glm::vec3(v.GetX(), v.GetY(), v.GetZ());
+    s.angular_velocity = glm::vec3(w.GetX(), w.GetY(), w.GetZ());
+    for (int i = 0; i < 4; ++i) {
+        // (the wheel mesh: axle along +x, up +y)
+        s.wheel[i] = to_glm(vehicle_->constraint->GetWheelWorldTransform(JPH::uint(i), JPH::Vec3::sAxisX(), JPH::Vec3::sAxisY()));
+        const JPH::Wheel* wh = vehicle_->constraint->GetWheel(JPH::uint(i));
+        s.wheel_contact[i] = wh->HasContact();
+        s.wheel_spin[i] = wh->GetAngularVelocity();
+        s.suspension[i] = wh->GetSuspensionLength();
+        const auto* wv = static_cast<const JPH::WheelWV*>(wh);
+        s.wheel_slip[i] = std::max(std::abs(wv->mLongitudinalSlip), std::abs(wv->mLateralSlip) * 0.1f);
+    }
+    s.steer = vehicle_->constraint->GetWheel(0)->GetSteerAngle();
+    const auto* c = static_cast<const JPH::WheeledVehicleController*>(vehicle_->constraint->GetController());
+    s.rpm = c->GetEngine().GetCurrentRPM();
+    s.gear = c->GetTransmission().GetCurrentGear();
+    s.active = bi.IsActive(vehicle_->body);
+    return true;
+}
+
+void PhysicsWorld::vehicle_teleport(glm::vec3 position, float yaw) {
+    if (!vehicle_exists()) return;
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    bi.SetPositionAndRotation(vehicle_->body, JPH::RVec3(position.x, position.y, position.z),
+                              JPH::Quat::sRotation(JPH::Vec3::sAxisY(), yaw), JPH::EActivation::Activate);
+    bi.SetLinearAndAngularVelocity(vehicle_->body, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+}
+
+void PhysicsWorld::vehicle_shift(glm::vec3 delta) {
+    if (!vehicle_exists()) return;
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    const JPH::RVec3 p = bi.GetPosition(vehicle_->body);
+    bi.SetPosition(vehicle_->body, p + JPH::RVec3(delta.x, delta.y, delta.z), JPH::EActivation::DontActivate);
+}
+
+void PhysicsWorld::vehicle_impulse(glm::vec3 impulse, glm::vec3 at) {
+    if (!vehicle_exists()) return;
+    impl_->system.GetBodyInterface().AddImpulse(vehicle_->body, JPH::Vec3(impulse.x, impulse.y, impulse.z), JPH::RVec3(at.x, at.y, at.z));
+}
+
+// The ground under the vehicle where the home tile's heightfield does not reach: a square of
+// `n` x `n` samples `cell` metres apart, its first sample at `origin`. A sample of 1e30 or more
+// is a hole (no ground there: the home tile's own heightfield has it). Replaces the last one.
+void PhysicsWorld::vehicle_set_ground(std::vector<float> samples, int n, glm::vec2 origin, float cell) {
+    if (!vehicle_) return;
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    if (!vehicle_->patch.IsInvalid()) { bi.RemoveBody(vehicle_->patch); bi.DestroyBody(vehicle_->patch); vehicle_->patch = JPH::BodyID(); }
+    if (n < 4 || samples.size() != size_t(n) * size_t(n)) return;
+    for (float& h : samples) if (h >= 1e30f) h = JPH::HeightFieldShapeConstants::cNoCollisionValue;
+    vehicle_->patch_samples = std::move(samples);
+    int block = 2;
+    for (int b = 8; b >= 2; b >>= 1) if (n % b == 0) { block = b; break; }
+    JPH::HeightFieldShapeSettings ss(vehicle_->patch_samples.data(), JPH::Vec3(origin.x, 0.0f, origin.y), JPH::Vec3(cell, 1.0f, cell), JPH::uint32(n));
+    ss.mBlockSize = JPH::uint32(block);
+    JPH::ShapeSettings::ShapeResult sr = ss.Create();
+    if (sr.HasError()) { log::errorf("[jolt] vehicle ground: %s", sr.GetError().c_str()); return; }
+    JPH::BodyCreationSettings bcs(sr.Get(), JPH::RVec3(0.0f, 0.0f, 0.0f), JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::NON_MOVING);
+    bcs.mFriction = 0.9f;
+    vehicle_->patch = bi.CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+}
+
+// What stands near the vehicle: boxes, each turned by `yaw` about the vertical. Replaces the last set.
+void PhysicsWorld::vehicle_set_obstacles(const OrientedBox* boxes, size_t count) {
+    if (!vehicle_) return;
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    if (!vehicle_->obstacles.IsInvalid()) { bi.RemoveBody(vehicle_->obstacles); bi.DestroyBody(vehicle_->obstacles); vehicle_->obstacles = JPH::BodyID(); }
+    if (!count) return;
+    JPH::StaticCompoundShapeSettings cs;
+    for (size_t i = 0; i < count; ++i) {
+        const OrientedBox& b = boxes[i];
+        const JPH::Vec3 he(std::max(b.half_extents.x, 0.03f), std::max(b.half_extents.y, 0.03f), std::max(b.half_extents.z, 0.03f));
+        cs.AddShape(JPH::Vec3(b.center.x, b.center.y, b.center.z), JPH::Quat::sRotation(JPH::Vec3::sAxisY(), b.yaw),
+                    new JPH::BoxShape(he, std::min(0.02f, 0.5f * std::min({ he.GetX(), he.GetY(), he.GetZ() }))));
+    }
+    JPH::ShapeSettings::ShapeResult sr = cs.Create();
+    if (sr.HasError()) { log::errorf("[jolt] vehicle obstacles: %s", sr.GetError().c_str()); return; }
+    JPH::BodyCreationSettings bcs(sr.Get(), JPH::RVec3(0.0f, 0.0f, 0.0f), JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::NON_MOVING);
+    bcs.mFriction = 0.5f;
+    vehicle_->obstacles = bi.CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
 }
 
 } // namespace vibe

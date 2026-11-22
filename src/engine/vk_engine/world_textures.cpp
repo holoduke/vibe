@@ -743,14 +743,17 @@ void VulkanEngine::load_foliage_textures() {
     // light and dark, which for these surfaces - grain, weave, rust, pores - is what the relief is.
     {
         struct OT { const char* file; float strength; };
-        const OT ot[5] = { { "corten", 2.6f }, { "oak", 1.6f }, { "floor", 0.7f }, { "board", 3.2f }, { "fabric", 3.0f } };
-        for (int k = 0; k < 5; ++k) {
+        // (and the jeep's: its paint and its seat canvas - assets/jeep/tex/)
+        const OT ot[7] = { { "corten", 2.6f }, { "oak", 1.6f }, { "floor", 0.7f }, { "board", 3.2f }, { "fabric", 3.0f },
+                           { "../../jeep/tex/paint", 1.1f }, { "../../jeep/tex/canvas", 2.6f } };
+        for (int k = 0; k < 7; ++k) {
+            const int slot = k < 5 ? kTexOffice + k : kTexJeep + (k - 5);
             const std::string p = resolve(std::string("../office/tex/") + ot[k].file + ".png");
             if (p.empty()) continue;
             int w = 0, h = 0, c = 0;
             unsigned char* px = ::stbi_load(p.c_str(), &w, &h, &c, 4);
             if (!px) continue;
-            put(albedo_textures_[kTexOffice + k], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "office/albedo");
+            put(albedo_textures_[slot], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "office/albedo");
             std::vector<float> lum(size_t(w) * size_t(h));
             for (size_t i = 0; i < lum.size(); ++i)
                 lum[i] = (0.30f * float(px[i * 4]) + 0.59f * float(px[i * 4 + 1]) + 0.11f * float(px[i * 4 + 2])) / 255.0f;
@@ -768,7 +771,7 @@ void VulkanEngine::load_foliage_textures() {
                     o[2] = static_cast<unsigned char>(std::clamp((il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
                     o[3] = static_cast<unsigned char>(std::clamp(Hh(x, y) * 255.0f, 0.0f, 255.0f));
                 }
-            put(normal_textures_[kTexOffice + k], nrm.data(), w, h, VK_FORMAT_R8G8B8A8_UNORM, "office/normal");
+            put(normal_textures_[slot], nrm.data(), w, h, VK_FORMAT_R8G8B8A8_UNORM, "office/normal");
             stbi_image_free(px);
             ++loaded;
         }

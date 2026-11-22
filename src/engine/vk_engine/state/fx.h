@@ -21,6 +21,8 @@ struct VulkanEngine::FxState {
     VkPipeline     volume_pipeline   = VK_NULL_HANDLE;
     VkPipeline     volume_inside_pipeline = VK_NULL_HANDLE;
     VkPipeline     decal_pipeline = VK_NULL_HANDLE;
+    VkPipeline     glass_pipeline = VK_NULL_HANDLE;       // window panes (glass.frag)
+    VkShaderModule glass_vert_module = VK_NULL_HANDLE, glass_frag_module = VK_NULL_HANDLE;
     VkShaderModule decal_frag_module = VK_NULL_HANDLE;
     VkBuffer       vbuf[2]{};        // per frame-slot host-visible ribbon verts
     VmaAllocation  valloc[2]{};

@@ -197,6 +197,11 @@ FetchContent_Declare(ozz
     GIT_SHALLOW TRUE)
 
 FetchContent_MakeAvailable(glfw glm vk_bootstrap vma Catch2 JoltPhysics imgui tinygltf tinyexr miniaudio fastnoiselite enet meshoptimizer ozz)
+# Jolt is built with warnings as errors; at link-time code generation its vehicle sources warn
+# that a __forceinline operator delete was not inlined (C4714) - harmless, but it failed the link.
+if(MSVC AND TARGET Jolt)
+    target_compile_options(Jolt PRIVATE /wd4714)
+endif()
 
 # AMD FidelityFX-FSR2 — vendored as a git submodule under
 # external/FidelityFX-FSR2 (MIT license; LICENSE.txt preserved). Use as-is
@@ -347,6 +352,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/sites.cpp
     src/engine/vk_engine/highway_field.cpp
     src/engine/vk_engine/highway_furniture.cpp
+    src/engine/vk_engine/jeep.cpp
     src/engine/vk_engine/frame.cpp
     src/engine/vk_engine/frame_upload.cpp
     src/engine/frame_pacer.cpp

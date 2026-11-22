@@ -376,7 +376,7 @@ blender -b --python tools/office/make_office.py      ->  assets/office/office.me
 
 - `office.mesh`: one group per material (`o_*`, the table in `rocket.cpp` `kMats`). `office.col`: the colliders (`box`) and the room lights (`light`), written by the same script - nothing about the building is typed into C++ by hand. `place_office()` in `rocket.cpp` puts it 86 m north of the pad's centre, on the level launch terrace, as part of home's content (`world_.meshes`, `world_.aabbs`, `lamp_lights_`).
 - Change the building: edit the script, run it, restart the game. The measures at the top of `build()` (bay, eave, ridge, mezzanine height) drive everything.
-- **Glass** is material `-3` (`o_glass`). It is not in the depth pre-pass nor in any shadow pass (`castle_mesh.cpp`), not in the ray-tracing structure (`rt.cpp`: the sun and the bounce light go through it), and `cube.frag` draws only a part of its pixels, in a pattern that changes every frame - the temporal pass blends that into a tinted pane, denser toward a grazing view. Any static mesh part can use it.
+- **Glass** is material `-3` (`o_glass`, the jeep's `j_glass`). It is in no depth, shadow or G-buffer pass and not in the ray-tracing structure (the sun and the bounce light go through it). It is drawn after the lighting - see "Glass" below.
 - **Lit by day.** Emissive parts dim to 12 % by day (lantern glass). A `LevelMesh` with `lit_by_day` does not (`emissive.a = 2`): the pavilion's screens and room lights. Its room lights are also real lights by day (`descriptors.cpp`, `office_lights_`), and its ceiling, walls and floor carry a little light of their own - a deep room is darker in this renderer than in life.
 - Beyond the home tile grass comes from the near-field bake; `home_grass_cuts_` keeps it out of the building and off its terrace (`veg_stream.cpp`).
 
@@ -459,3 +459,50 @@ Cost after all of it: the three benchmark views 25.1 / 21.0 / 27.8 ms.
 - The model's screens stand 12 mm proud of their panels (were 1.5 - 5 mm: depth fighting from across the hall).
 How it was found, for the next time: `VIBE_TEST_DOLLY=<vx>,<vy>,<vz>` moves the held camera at walking speed; capture two consecutive frames (`--screenshot-after 300` and `301`), difference them (a still camera's pair is the noise floor), then switch the lighting's parts off one at a time in the cfg (`FrShot.cmd`, `FqShot.cmd` on the test PC). On that PC a killed run leaves its batch file running: end the `cmd.exe` too, or two runs overlap and the captures are worthless.
 Cost: none measured (benchmark 25.3 / 21.3 / 27.7 ms).
+
+## Glass (2026-11-22)
+
+`shaders/glass.vert/.frag`, drawn in the FX pass (`fx.cpp`, before smoke and light ribbons).
+
+- Before the pass the lit frame is copied (`scene_copy_image_`, binding 38) - only when a pane is in view. The pane's shader reads what is behind it from that copy, looked up a little to the side (the refracted line of sight), tints it faintly green, and lays the sky's and the sun's reflection over it by Fresnel (4 % head-on, a mirror at a grazing angle).
+- Opaque to the blender, depth-tested, no depth write. Parts are sorted far to near; two panes of ONE part behind each other are not sorted (the nearer one's reflection can be lost where they overlap).
+- It replaced a pattern of opaque dots in `cube.frag`, which neither upscaler blended (boiling panes, flickering monitors).
+- New glass: give a static-mesh part material `-3`. Nothing else.
+
+## The launch pad's lights (2026-11-22)
+
+`tools/rocket/make_rocket.py` writes `assets/rocket/site.lights` (`kind x y z dx dy dz`): flood lights on the masts, steady red lights round the apron and on the tanks, flashing red ones on the tower. `rocket.cpp` reads them into `pad_lights_`; `fx.cpp` draws them: a flare (two billboards and a streak) and, at night, a soft beam for a flood; a glow for a red one (flashing: 1.5 s). Night is `env_->night` - `rt_.sun_pitch_deg` is not valid at night.
+
+## The course (2026-11-22)
+
+`highway::build` no longer follows the coast only: it searches a closed course of about 12 km round home (`highway.cpp`, a dynamic program over 720 bearings x 40 radii; water, side slope and height cost, the shore is cheap), smooths it, and pushes it clear of the launch pad's apron (`clear_pad`, 96 m). The road is not flat: `along_noise` (0.11 m over 47 m, 0.035 m over 13 m) and a crown (`cross_fall`: 2 % on the asphalt, 5 % on the verge) - the same functions on the CPU (`highway::ground`) and in the shader (`rm_highway`), from the position along the line only, so it is the same every run. The guard rail is material `-5` (galvanised: dull).
+
+## The jeep (2026-11-22)
+
+`vk_engine/jeep.cpp`, `PhysicsWorld::vehicle_*` (`physics_world.cpp`), `tools/jeep/make_jeep.py` -> `assets/jeep/` (`body.mesh`, `wheel.mesh`, `steering.mesh`, `jeep.json`: wheel places, seat, steering hub, collision boxes; `tex/paint.png`, `tex/canvas.png` in texture slots 34 / 35).
+
+- **Physics**: Jolt's `VehicleConstraint` with a wheeled controller: 1.25 t, four sprung wheels (cast cylinders), engine with a torque curve, clutch, four gears and reverse, a differential per axle (40 / 60), anti-roll bars. An ordinary rigid body: it rolls, and stops against what it hits. Front is -z; wheels 0 / 1 front left / right, 2 / 3 rear.
+- **The world for it**: Jolt has a heightfield for the home tile only. Round the jeep it gets a ground patch (128 x 128 at 2 m, from `world_ground_height` on a worker thread, renewed 48 m from its centre; a hole where the home tile's own heightfield is) and the obstacles within 70 m as boxes: `wv_cols_` (trunks), `world_.aabbs`, the guard rail (`hw_rail_boxes`). New kinds of solid things must be added in `jeep_feed_world`.
+- **Drawing**: through the static-mesh path, `jeep_draw_` (the wheel four times), each part with `xf` and `xf_prev` (`CastleMeshGpu::xf_prev`: motion vectors for moving parts - keep it equal to `xf` for what stands still). `jeep_signature()` is in the ray-tracing structure's signature.
+- **Driving**: Use gets in (within 3.6 m) and out. Forward / back: throttle, brake, then reverse. Steering is rate-limited and lighter at speed. Jump: handbrake. On its roof and at rest for 2.5 s it is put back on its wheels. The weapon is hidden. While driving the engine stays in home's chart (`rocket.cpp`): the vehicle's physics is in home's coordinates. Home's chart only, for now.
+- **Gravity is 25 m/s2 here, not 9.81** (`physics_world.cpp`, for the feel of the player's jumps). The vehicle falls at 9.81 (`mGravityFactor`): built from real numbers - mass, springs, tyres, engine - it only behaves like a car under the Earth's gravity. At 25 it sat on its bump stops, cornered at 2.5 g and stalled on the slightest hill. The springs are sized from the weight per axle (not Jolt's frequency setting, which uses a much smaller mass). Tyres let go past about 6 degrees of slip and hold about half when sliding; the rear a little less than the front.
+- **Camera**: stays behind the jeep by itself and turns with it a little late (`cam_yaw`). Holding the right mouse button the mouse looks round (`orbit_yaw / orbit_pitch`); released, the view returns. The player's own body is not drawn nor ray traced while driving (`body_rt.cpp`). It is parked on the concrete in front of the pavilion.
+- **Loop order** (`vk_engine.cpp`): `jeep_tick` (controls; clears the player's inputs) -> `loop_simulate` (physics) -> `jeep_after_sim` (parts, camera).
+- **Tests**: `VIBE_TEST_JEEP=<throttle>,<steer>` drives it (steer `9`: follows the course at throttle x 30 m/s), `VIBE_TEST_JEEP_AT=<x>,<z>,<yaw>` places it, `VIBE_LOG_JEEP=1` logs place, speed, gear and wheel contact once a second. Measured: 12 km course at 80-88 km/h, four wheels down throughout.
+
+## Small things (2026-11-22)
+
+- Aiming slows the player to 55 % (`player.cpp`, `aiming`).
+- The laser and the muzzle flash start at the barrel's own muzzle (`viewmodel_muzzle_`, found from the weapon's vertices in `props.cpp`); the bolt is drawn from 1 m in front of it.
+- Anti-air vehicles keep 45 m from the chapel (`aa.cpp`, `by_chapel`).
+- Grass: a ray that looks nearly along the ground took too-small steps above the blade tops and gave up in the middle distance (a band without grass). It now advances by its height above the tops (`grass_raymarch.frag`, `g_above_top`).
+
+## Cars: more than one, marks, smoke, the driver (2026-11-22)
+
+Additions to "The jeep" above (`jeep.cpp`; the type is still called `JeepState`, one per car).
+
+- **Several cars** (`jeep_all_`), one simulated: `jeep_` is the car last got into and the only one in the physics. The others stand where they were left (`jeep_park` / their last state), drawn but not simulated and not solid. Use at another car removes the vehicle from the physics and makes it again for that car where it stands. A new car: a folder under `assets/` with `body.mesh`, `wheel.mesh`, `steering.mesh` and a json like `jeep.json`, a line in `init_jeep` with its `VehicleDesc` (mass, centre of mass, drive, gears, engine, springs, grip) and its materials in `kJMats` / `kSMats`.
+- **Centre of mass** is set (`com_height`, `front_weight`; `OffsetCenterOfMassShape`), not left to the collision boxes - theirs is a solid block's, at window height: the car rolled over about the wrong point and far too easily. A box over each axle out to the tyres' outer faces is added, so on its side it lies on its wheels.
+- **Tyre marks and smoke** (`jeep_marks`, `jeep_fx`): per wheel, sliding = sideways speed of the contact point, or wheel speed against ground speed (spin, locked). On a hard surface (the road, a slab) it lays a mark - points along the ground, drawn as flat strips (`fx_ribbon.frag` kind 6) - and smoke (mist billboards, kind 5); off-road only dust. 700 points per wheel are kept.
+- **The driver**: the player's body is put in the seat (`jeep_driver` -> `player_body.cpp`: `body_model_` from the car's transform, hips on the seat) and posed by `CharacterAnimator::seated` - from the rest pose: thighs forward, shins down, back against the seat, wrists fitted to the rim, the hands going round with the wheel up to a quarter turn. The head is drawn (the camera is outside). `JeepState::hip`, `legs`, `rim_r` per car.
+- **Tests**: `VIBE_TEST_CAR=<n>` which car is simulated first, `VIBE_TEST_JEEP_SKID=<s>` full lock and handbrake after s seconds, `VIBE_TEST_JEEP_ORBIT=<yaw>,<pitch>,<distance>` holds the view round the car.
