@@ -6,15 +6,14 @@ planet, motion-matched characters and LAN multiplayer.
 
 Important: This engine was written by AI for humans. No code was (and never will be) seen by humans in development. 
 
-![Vibe game engine: a ray-traced castle in an open world (Vulkan, C++)](docs/screenshots/castle.png)
+![Vibe game engine: a castle on a lake in an open world (Vulkan, C++)](docs/screenshots/valley.png)
 
 | | |
 |---|---|
-| ![Stone bridge with ray-traced shadows](docs/screenshots/bridge.png) | ![Night with moonlight and lamps](docs/screenshots/night.png) |
-| ![Autumn season](docs/screenshots/autumn.png) | ![Winter with snow](docs/screenshots/winter.png) |
-| ![Storm weather with volumetric clouds](docs/screenshots/storm.png) | ![Spring](docs/screenshots/spring.png) |
-| ![Procedural sea at sunset](docs/screenshots/sea.png) | ![Beyond home](docs/screenshots/wild.png) |
-| ![From 1300 m](docs/screenshots/high.png) | ![The procedural planet from orbit](docs/screenshots/planet.png) |
+| ![Another player, a soldier, in daylight](docs/screenshots/soldier_day.png) | ![The same soldier at night under a lamp](docs/screenshots/soldier_night.png) |
+| ![A lake between the hills, seen from the stone wall](docs/screenshots/lake.png) | ![A paved road at dusk with a street lamp](docs/screenshots/road_dusk.png) |
+| ![The home valley among snow mountains, from high up](docs/screenshots/high.png) | ![The procedural planet from orbit](docs/screenshots/planet.png) |
+| ![The rocket on its launch tower](docs/screenshots/rocket.png) | |
 
 ## The technology
 
