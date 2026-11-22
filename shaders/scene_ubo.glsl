@@ -100,6 +100,14 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     ivec4  globe_cell[12];   // the landscape FBM's lattice at the chart's origin, per octave: cell ...
     vec4   globe_frac[12];   // ... and position in it (world_map.glsl wm_shape3)
     vec4   rm_perf;          // raymarched terrain, speed: x = bits (1: low-resolution march first, 2: simpler relief under grass, 4: sun shadows from that march's pass), y = that march's pixel size (full-res pixels), z = fast final approach 0..1, w = normal: drop detail finer than this many pixels (0 = keep all)
+    // The sea's wave field far from the world's origin (terrain_raymarch.frag sea_map). xy of
+    // sea_org: the point (m) the waves are worked out from, near the camera. Per octave of
+    // the wave field, that point's coordinate in the octave's own space, split up so that no
+    // large number reaches the shader: sea_a.xy = it modulo 2 pi (for the sines), .zw = its
+    // fraction and sea_b.xy = its whole part modulo 4096 (for the noise lattice).
+    vec4   sea_org;
+    vec4   sea_a[5];
+    vec4   sea_b[5];
 } scene;
 
 // Leaves through the year. `h`: a number 0..1 of the tree (each tree turns

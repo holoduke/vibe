@@ -162,35 +162,7 @@ float sampleHeightDelta(vec2 worldXZ) {
 }
 
 // === The open sea's wave field ======================================
-// After "Seascape" by Alexander Alekseev (TDM), shadertoy.com/view/Ms2SD1
-// (CC BY-NC-SA 3.0): each octave is a sheet of sharp-crested waves made
-// from |sin| and |cos| of a noise-bent coordinate, raised to a "choppy"
-// power; two copies run against each other, and every octave is turned,
-// 3.8x finer, 0.22x lower and a little less choppy than the last.
-// Here it is evaluated on the water plane (metres) for the surface normal
-// and the crest tint; an octave fades out where a pixel no longer resolves
-// it (`foot`: metres per pixel there).
-float sea_octave(vec2 uv, float choppy) {
-    uv += noised(uv).x * 2.0 - 1.0;
-    vec2 wv  = 1.0 - abs(sin(uv));
-    vec2 swv = abs(cos(uv));
-    wv = mix(wv, swv, wv);
-    return pow(1.0 - pow(wv.x * wv.y, 0.65), choppy);
-}
-float sea_map(vec2 p, float tm, float foot) {
-    float freq = 0.16, amp = 0.6, choppy = 4.0, wlen = 19.6, h = 0.0;
-    vec2 uv = vec2(p.x * 0.75, p.y);
-    for (int i = 0; i < 5; ++i) {
-        float keep = 1.0 - smoothstep(0.25, 0.7, foot / wlen);
-        if (keep <= 0.0) break;
-        float d = sea_octave((uv + tm) * freq, choppy) + sea_octave((uv - tm) * freq, choppy);
-        h += d * amp * keep;
-        uv = mat2(1.6, 1.2, -1.2, 1.6) * uv;
-        freq *= 1.9; amp *= 0.22; wlen /= 3.8;
-        choppy = mix(choppy, 1.0, 0.2);
-    }
-    return h;
-}
+// (the sea's wave field - sea_map - is further down, after scene_ubo.glsl: it reads the scene buffer)
 
 // === Mesh-terrain height (water-only mode) ==========================
 // Bilinear lookup of the FULL baked heightmap — identical to the
@@ -385,6 +357,59 @@ layout(set = 0, binding = 32) uniform sampler2D u_cloud_shadow;   // sunlight th
 
 #include "atmosphere.glsl"
 #include "sun_horizon.glsl"
+
+// After "Seascape" by Alexander Alekseev (TDM), shadertoy.com/view/Ms2SD1
+// (CC BY-NC-SA 3.0): each octave is a sheet of sharp-crested waves made
+// from |sin| and |cos| of a noise-bent coordinate, raised to a "choppy"
+// power; two copies run against each other, and every octave is turned,
+// 3.8x finer, 0.22x lower and a little less choppy than the last.
+// Here it is evaluated on the water plane (metres) for the surface normal
+// and the crest tint; an octave fades out where a pixel no longer resolves
+// it (`foot`: metres per pixel there).
+// The octave's coordinate comes in twice, for the same point: `uvn` for the noise lattice
+// (with `cell0`, the lattice cell of the local origin) and `uvt` for the sines. Both are
+// small numbers - see scene_ubo.glsl sea_a / sea_b: far from the world's origin the plain
+// coordinate (up to 34 x the distance) left a float too few digits, and the surface cracked
+// along the lattice.
+float sea_hash(ivec2 c) {
+    uvec2 q = uvec2(c & 4095);
+    uint h = q.x * 1597334677u ^ q.y * 3812015801u;
+    h *= 0x9E3779B1u; h ^= h >> 15; h *= 0x85EBCA6Bu; h ^= h >> 13;
+    return float(h >> 8) * (1.0 / 16777216.0);
+}
+float sea_noise(vec2 x, ivec2 cell0) {
+    vec2 fl = floor(x);
+    vec2 f = x - fl;
+    ivec2 c = ivec2(fl) + cell0;
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(sea_hash(c), sea_hash(c + ivec2(1, 0)), u.x),
+               mix(sea_hash(c + ivec2(0, 1)), sea_hash(c + ivec2(1, 1)), u.x), u.y);
+}
+float sea_octave(vec2 uvn, vec2 uvt, ivec2 cell0, float choppy) {
+    vec2 uv = uvt + (sea_noise(uvn, cell0) * 2.0 - 1.0);
+    vec2 wv  = 1.0 - abs(sin(uv));
+    vec2 swv = abs(cos(uv));
+    wv = mix(wv, swv, wv);
+    return pow(1.0 - pow(wv.x * wv.y, 0.65), choppy);
+}
+// `p`: the point on the water, in metres FROM scene.sea_org.xy.
+float sea_map(vec2 p, float tm, float foot) {
+    float freq = 0.16, amp = 0.6, choppy = 4.0, wlen = 19.6, h = 0.0;
+    vec2 uv = vec2(p.x * 0.75, p.y);
+    for (int i = 0; i < 5; ++i) {
+        float keep = 1.0 - smoothstep(0.25, 0.7, foot / wlen);
+        if (keep <= 0.0) break;
+        vec4  A = scene.sea_a[i];
+        ivec2 N = ivec2(scene.sea_b[i].xy);
+        vec2  lp = (uv + tm) * freq, lm = (uv - tm) * freq;
+        float d = sea_octave(A.zw + lp, A.xy + lp, N, choppy) + sea_octave(A.zw + lm, A.xy + lm, N, choppy);
+        h += d * amp * keep;
+        uv = mat2(1.6, 1.2, -1.2, 1.6) * uv;
+        freq *= 1.9; amp *= 0.22; wlen /= 3.8;
+        choppy = mix(choppy, 1.0, 0.2);
+    }
+    return h;
+}
 layout(set = 0, binding = 31) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
 // Atmosphere sky-view LUT (atmosphere.comp; GENERAL layout).
 layout(set = 0, binding = 30) uniform sampler2D u_skyview;

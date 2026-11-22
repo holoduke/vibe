@@ -48,7 +48,7 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 7968 (footprints[32]: prints in the snow).
 //     → 7984 (season weights).
 //     → 8448 (the globe: chart frame + FBM lattice).
-static_assert(sizeof(SceneUBO) == 8464, "scene ubo layout");
+static_assert(sizeof(SceneUBO) == 8640, "scene ubo layout");
 
 RtFuncs g_rt;
 

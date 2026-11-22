@@ -916,6 +916,30 @@ void VulkanEngine::update_scene_ubo() {
             data.globe_frac[i] = glm::vec4(fracs[i][0], fracs[i][1], fracs[i][2], 0.0f);
         }
     }
+    // The sea's wave field (terrain_raymarch.frag sea_map). It is a sum of octaves, each a
+    // pattern of its own coordinate  c = f_i * M_i * (0.75 x, z)  - turned and 1.9 x finer per
+    // octave, up to 34 x the world coordinate. Worked out from world coordinates in floats
+    // that ran out of precision a couple of kilometres from the origin: the surface cracked
+    // along the noise lattice. So the shader works from a point near the camera (sea_org),
+    // and what that point contributes to each octave's coordinate is worked out here in
+    // doubles and handed over in pieces that stay small: modulo 2 pi for the sines, fraction
+    // and whole part (modulo the lattice's period) for the noise. The result is the same
+    // pattern whatever the point, so moving it does not show.
+    {
+        const double ox = std::round(double(eye.x) / 64.0) * 64.0, oz = std::round(double(eye.z) / 64.0) * 64.0;
+        data.sea_org = glm::vec4(float(ox), float(oz), 0.0f, 0.0f);
+        double ux = ox * 0.75, uy = oz, freq = 0.16;
+        const double kTwoPi = 6.283185307179586;
+        for (int i = 0; i < 5; ++i) {
+            const double cx = ux * freq, cy = uy * freq;
+            const double fx = std::floor(cx), fy = std::floor(cy);
+            auto wrap = [](double v, double m) { double r = std::fmod(v, m); return r < 0.0 ? r + m : r; };
+            data.sea_a[i] = glm::vec4(float(wrap(cx, kTwoPi)), float(wrap(cy, kTwoPi)), float(cx - fx), float(cy - fy));
+            data.sea_b[i] = glm::vec4(float(wrap(fx, 4096.0)), float(wrap(fy, 4096.0)), 0.0f, 0.0f);
+            const double nx = 1.6 * ux - 1.2 * uy, ny = 1.2 * ux + 1.6 * uy;     // (the shader's mat2(1.6, 1.2, -1.2, 1.6))
+            ux = nx; uy = ny; freq *= 1.9;
+        }
+    }
     // Raymarched terrain, speed settings (terrain_raymarch.frag; scene_ubo.glsl rm_perf).
     data.rm_perf = glm::vec4((tr_march_prepass_on() ? 1.0f : 0.0f) + (rt_.terrain_rm_relief_lite ? 2.0f : 0.0f) +
                                  ((tr_march_prepass_on() && rt_.terrain_rm_shade_lo) ? 4.0f : 0.0f),

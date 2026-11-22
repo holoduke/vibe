@@ -144,6 +144,7 @@
                 if (sea_far < 1.0) {
                     float tm = 1.0 + wave_t * 0.8;
                     float e  = max(foot, 0.04);
+                    sea_p -= scene.sea_org.xy;      // (from the local origin: sea_map, scene_ubo.glsl sea_org)
                     float h0 = sea_map(sea_p, tm, foot);
                     g_sea = vec2(sea_map(sea_p + vec2(e, 0.0), tm, foot) - h0,
                                  sea_map(sea_p + vec2(0.0, e), tm, foot) - h0) / e * sea_amp;

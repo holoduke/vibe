@@ -396,6 +396,9 @@ struct SceneUBO {
     glm::ivec4 globe_cell[12];
     glm::vec4  globe_frac[12];
     glm::vec4  rm_perf;          // raymarched terrain, speed settings (scene_ubo.glsl)
+    glm::vec4  sea_org;          // the sea's wave field: local origin + per-octave constants (scene_ubo.glsl)
+    glm::vec4  sea_a[5];
+    glm::vec4  sea_b[5];
 };
 
 // ---- KHR ray tracing entry points ----
