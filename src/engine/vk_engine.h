@@ -7,6 +7,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -1212,6 +1213,14 @@ private:
     float flash_move_ = 0.0f;                        // eased 0..1 walking amount
     glm::vec3 flash_pos_{0.0f}, flash_fwd_{0.0f, 0.0f, -1.0f}, flash_right_{1.0f, 0.0f, 0.0f}, flash_up_{0.0f, 1.0f, 0.0f};
     void tick_flashlight(float dt);
+    // One turn of the main loop, in the order run() calls them (vk_engine/game_loop.cpp).
+    void loop_test_input(InputFrame& in, float frame_dt, bool autodemo, bool headless,
+                         std::chrono::steady_clock::time_point now,
+                         std::chrono::steady_clock::time_point demo_start);
+    void loop_handle_keys(InputFrame& in, float frame_dt);
+    void loop_weapons_and_edit(InputFrame& in, float frame_dt);
+    void loop_simulate(InputFrame& in, float frame_dt);
+    void loop_upkeep(InputFrame& in, float frame_dt);
     void draw_flashlight_model(VkCommandBuffer cmd, const glm::mat4& vp);
     Mesh flash_mesh_[9]{};           // body, bezel, reflector, emitter, glass, switch, sphere, forearm, (spare)
     int   flash_level_ = 1;          // brightness 0..3 (left click cycles; after the brightest back to the lowest)
