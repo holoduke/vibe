@@ -746,6 +746,20 @@ void build_pine(LevelMesh& m, const PineParams& p, int lod, const Ico& lo, const
             o.leaf_size = 2.7f;
             o.gnarliness[0] = 0.09f;
         }
+        // Side twigs: a bough is not one rod with needles stuck on it - it carries short twigs
+        // to both sides, and those carry the needle sprays. One more branching level: the
+        // boughs fork into 3 - 4 twigs each along their outer two thirds (they come in late in
+        // the detail order, so only trees near the camera pay for them).
+        o.levels = 2;
+        o.children[1] = 3 + int(v1 * 1.99f);
+        o.angle[2] = 34.0f + 14.0f * v2;
+        o.length[2] = 6.5f + 2.5f * v1;
+        o.radius[2] = 0.55f;
+        o.sections[2] = 2; o.segments[2] = 3;
+        o.start[2] = 0.30f;
+        o.gnarliness[2] = 0.10f;
+        o.leaf_count = 5;                       // per twig (was 14 per bough: about the same number of sprays)
+        o.leaf_start = 0.05f;
         // Roots: pines hold theirs mostly under the needle litter; the old ones show more.
         o.roots = (p.H > 18.0f) ? 0.80f + 0.35f * v1 : 0.30f + 0.40f * v2;
         build_ez_tree(m, o, kVegDetail[lod], p.H);
@@ -817,6 +831,12 @@ void build_oak(LevelMesh& m, const OakParams& p, int lod, const Ico& lo, const I
             o.leaf_size *= 1.12f;
             o.start[1] = 0.36f;
         }
+        // Twigs: more of them and curved (two sections each, they were straight sticks), so a
+        // crown seen from below or in winter is a web of fine branches, not a few bare limbs.
+        o.children[2] = 4 + int(v2 * 1.99f);
+        o.sections[3] = 2;
+        o.gnarliness[3] = 0.22f;
+        o.leaf_count = std::max(6, o.leaf_count - 2);      // (more twigs carry them: the crown keeps its leaf count)
         // Roots: a birch stands on a modest foot, an oak on a spreading one, an old oak on buttresses.
         o.roots = (p.H > 10.5f) ? 1.10f + 0.40f * v1 : (birch ? 0.35f + 0.35f * v1 : 0.65f + 0.45f * v2);
         build_ez_tree(m, o, kVegDetail[lod], p.H * 1.2f);

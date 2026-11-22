@@ -232,6 +232,7 @@ void VulkanEngine::init_vulkan() {
             vrs_feat.primitiveFragmentShadingRate = VK_FALSE;
             vkb_phys.enable_extension_if_present(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
             vrs_supported_ = true;
+            log::infof("VRS with shader depth writes: %s (the raymarched terrain writes its depth)", vrs_props.fragmentShadingRateWithShaderDepthStencilWrites ? "yes" : "no - forced to 1x1 there");
             log::infof("VRS supported — tile %ux%u",
                        vrs_texel_size_.width, vrs_texel_size_.height);
         } else {
@@ -598,6 +599,7 @@ void VulkanEngine::recreate_swapchain() {
     dlssg_destroy_hudless();      // swapchain-sized; recreated on next use
     sl_update_frame_gen(false);   // FG off around window / swapchain changes (SDK rule)
     deferred_desc_sig_ = 0;   // handles may be recreated (even at the same address)
+    cloud_depth_bound_ = VK_NULL_HANDLE;   // (the same: the clouds' depth binding must be rewritten)
     uint32_t w = 0, h = 0;
     window_->framebuffer_size(w, h);
     const double wait_t0 = glfwGetTime();

@@ -28,6 +28,7 @@ enum class ClipID : uint8_t {
     Thunder1, Thunder2, Thunder3,   // thunder: close clap, distant roll, overhead crackle (assets/sounds/thunder_*.mp3, generated)
     RocketRoar, // the launch: 8 s of engine roar with a Hann envelope, overlapped like the rain (assets/sounds/rocket_roar.wav, synthesised)
     Beep,       // the count's tick (assets/sounds/beep.wav, synthesised)
+    Land,       // landing after a fall (assets/sounds/land.ogg)
     Count
 };
 

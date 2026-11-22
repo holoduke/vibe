@@ -520,6 +520,10 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_rm_normal_px", s.rt_.terrain_rm_normal_px);
     f("terrain_rm_relief_lite", s.rt_.terrain_rm_relief_lite);
     f("terrain_rm_shade_lo", s.rt_.terrain_rm_shade_lo);
+    f("terrain_vrs", s.rt_.terrain_vrs);
+    f("foliage_ray_mode", s.rt_.foliage_ray_mode);
+    f("fov_deg", s.rt_.fov_deg);
+    f("mouse_sens", s.rt_.mouse_sens);
     f("render_scale", s.rt_.render_scale);
     f("fsr_min_render_scale", s.rt_.fsr_min_render_scale);
     f("quality_preset", s.rt_.quality_preset);
@@ -717,8 +721,13 @@ void VulkanEngine::load_settings() {
     clampf(rt_.terrain_ao_final_strength,0.0f, 1.0f);
     clampf(rt_.terrain_rm_contrast, 0.5f, 2.5f);
     clampi(rt_.terrain_rm_prepass_div, 2, 4);
+    clampi(rt_.terrain_vrs, 0, 2);
     clampf(rt_.terrain_rm_converge, 0.0f, 1.0f);
     clampf(rt_.terrain_rm_normal_px, 0.0f, 4.0f);
+    clampi(rt_.foliage_ray_mode, 0, 2);
+    clampi(rt_.water_style, 0, 2);
+    clampf(rt_.fov_deg, 55.0f, 100.0f);
+    clampf(rt_.mouse_sens, 0.2f, 4.0f);
     clampf(rt_.render_scale,     0.4f,    2.5f);
     clampf(rt_.fsr_min_render_scale, 0.5f, 1.0f);
     clampi(rt_.quality_preset,  -1,         3);  // -1 = custom

@@ -56,6 +56,10 @@ layout(set = 0, binding = 13) uniform sampler2D u_grass_mask;
 // Depth PRE-PASS copy (binding 27). Bounds the march: nothing behind the
 // nearest opaque surface can be visible, so stop there.
 layout(set = 0, binding = 27) uniform sampler2D u_prepass_depth;
+// The terrain's low-resolution march (binding 34, RG32F; terrain_rm_heightfield.glsl
+// raymarch_lo): .g = for each block of pixels, how far a ray goes before it comes within a
+// blade's height of the ground. This pass starts its march there.
+layout(set = 0, binding = 34) uniform sampler2D u_march_lo;
 
 layout(push_constant) uniform PC {
     mat4 mvp;          // view_proj — for gl_FragDepth at the hit
@@ -715,6 +719,15 @@ void main() {
                 i_bias = (t > kMaxDist * 0.55) ? 24 : 0;
             }
         }
+    }
+    // Skip the open air (raymarched terrain, settings 'low-resolution march first'): the
+    // nearest of the four blocks round this pixel says where a ray first comes near the
+    // ground. Nothing nearer than that can be a blade.
+    if ((int(scene.rm_perf.x) & 1) != 0 && pc.emissive.x < 0.5) {
+        vec4 g4 = textureGather(u_march_lo, gl_FragCoord.xy / (scene.rm_perf.y * vec2(textureSize(u_march_lo, 0))), 1);
+        float tg = min(min(g4.x, g4.y), min(g4.z, g4.w));
+        if (tg > 1e8) discard;
+        if (tg > 0.5) t = max(t, tg - 0.3);
     }
     float step_cap_a = kMaxDist * 0.55;
     float step_cap_b = kMaxDist * 0.85;

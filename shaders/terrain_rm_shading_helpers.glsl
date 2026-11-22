@@ -412,7 +412,13 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
     vec3 sand  = scene.terrain_sand_color.rgb;
     vec3 col = rock;
     col = mix(col, grass, smoothstep(0.5, 0.8, slope));
-    float snowMask = smoothstep(80.0 - 20.0 * nz, 90.0, h)
+    // The snow line depends on which way the slope faces, as on a real mountain: a slope
+    // turned to the south (toward the midday sun, +z here) loses its snow up to ~16 m higher
+    // than a level shelf, a north face keeps it that much lower - so the two sides of one
+    // ridge carry their snow to different heights, and gullies facing north stay white well
+    // below the line. (The steeper the face, the stronger: a level top is not shifted.)
+    float snow_aspect = clamp(nor.z * 30.0, -16.0, 16.0);
+    float snowMask = smoothstep(80.0 - 20.0 * nz, 90.0, h - snow_aspect)
                    * smoothstep(0.3, 0.7, slope);
     col = mix(col, snow, snowMask);
     float beachMask = smoothstep(2.5, 1.0, h) * smoothstep(0.5, 0.9, slope);

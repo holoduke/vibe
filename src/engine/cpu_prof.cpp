@@ -49,7 +49,10 @@ void end_frame() {
     {
         const auto now = std::chrono::steady_clock::now();
         const double frame_ms = std::chrono::duration<double, std::milli>(now - g_last_end).count();
-        const bool hitch = ++g_total_frames > 30 && frame_ms > 28.0 && frame_ms < 5000.0;
+        // (as in vk_engine.cpp: much longer than the frames around it, not merely over 28 ms)
+        static double avg_ms = 16.0;
+        const bool hitch = ++g_total_frames > 30 && frame_ms > std::max(28.0, 1.8 * avg_ms) && frame_ms < 5000.0;
+        avg_ms += (std::min(frame_ms, 200.0) - avg_ms) * 0.03;
         g_last_end = now;
         std::string line;
         char hb[96];

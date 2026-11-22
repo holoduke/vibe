@@ -76,7 +76,7 @@ VulkanEngine::FrameView VulkanEngine::compute_frame_view() {
         static const float kAimFov = glm::clamp(std::getenv("QLIKE_AIM_FOV") ? float(std::atof(std::getenv("QLIKE_AIM_FOV"))) : 62.0f, 20.0f, 80.0f);
         const float dtz = glm::clamp(last_frame_dt_, 0.0f, 0.1f);
         aim_zoom_ += ((body_aim_ ? 1.0f : 0.0f) - aim_zoom_) * (1.0f - std::exp(-dtz / 0.07f));
-        view_fov_deg_ = glm::mix(80.0f, kAimFov, glm::smoothstep(0.0f, 1.0f, aim_zoom_));
+        view_fov_deg_ = glm::mix(glm::clamp(rt_.fov_deg, 55.0f, 100.0f), kAimFov, glm::smoothstep(0.0f, 1.0f, aim_zoom_));
     }
     fv.proj = glm::perspective(glm::radians(view_fov_deg_), aspect, 0.05f, view_far_);
     fv.proj[1][1] *= -1.0f;

@@ -144,7 +144,8 @@
         float t_sand = WIDE_BAND(scene.terrain_h_low.x,  scene.terrain_h_low.y,  jh);
         float t_dirt = WIDE_BAND(scene.terrain_h_low.z,  scene.terrain_h_low.w,  jh);
         float t_rock = WIDE_BAND(scene.terrain_h_high.x, scene.terrain_h_high.y, jh);
-        float t_snow = WIDE_BAND(scene.terrain_h_high.z, scene.terrain_h_high.w, jh);
+        // (the snow line by the way the slope faces, as in terrain_rm_shading_helpers.glsl getMaterial)
+        float t_snow = WIDE_BAND(scene.terrain_h_high.z, scene.terrain_h_high.w, jh - clamp(N.z * 30.0, -16.0, 16.0));
         // Snow only settles on flatter faces (raymarcher getMaterial rule);
         // steep micro-faces stay bare rock -> mottled snow / rock slopes.
         t_snow *= smoothstep(0.30, 0.72, N.y);

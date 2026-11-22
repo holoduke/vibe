@@ -246,11 +246,15 @@ const int kStaticBlasSentinel = 0xFFFFFF;
 const int kCubeTrisPerBox     = 12;
 
 bool leaf_card_hit(rayQueryEXT rq);   // defined after the texture arrays
+// Leaf cards as solid cards for the rays traced while this is set (as in
+// deferred_lighting.frag, settings 'foliage rays'): the search for a shadow's blocker and
+// the single far shadow ray do not need the leaf texture asked at every card they cross.
+bool g_rq_leaf_solid = false;
 // Mask 0x02 = "anything except the terrain BLAS instance".
 bool any_hit_no_terrain(vec3 origin, vec3 dir, float t_max) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topLevelAS,
-                          gl_RayFlagsTerminateOnFirstHitEXT,
+                          gl_RayFlagsTerminateOnFirstHitEXT | (g_rq_leaf_solid ? gl_RayFlagsOpaqueEXT : 0u),
                           0x02, origin, 0.001, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
@@ -265,7 +269,7 @@ bool any_hit_no_terrain(vec3 origin, vec3 dir, float t_max) {
 bool closest_hit_no_terrain(vec3 origin, vec3 dir, float t_max,
                              out float out_t) {
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT,
+    rayQueryInitializeEXT(rq, topLevelAS, g_rq_leaf_solid ? gl_RayFlagsOpaqueEXT : gl_RayFlagsNoneEXT,
                           0x02, origin, 0.001, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
@@ -736,6 +740,8 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
             vec3 j    = (cos(ph) * tan_u + sin(ph) * tan_v) * r;
             vec3 d    = normalize(sunDir + j);
             float t_b;
+            // (exact leaf test here: with solid cards nearly every ray under a tree "finds a blocker"
+            // and the full set of shadow rays is then traced for all those pixels - slower, not faster)
             if (closest_hit_no_terrain(origin, d, 100.0, t_b)) {
                 sum_t += t_b;
                 ++hits;
@@ -788,7 +794,9 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
         rt_lod_t < 0.999 && cam_dist_pos < 900.0 && self_shadow < 0.99 && !RMDBG(32)) {
         float far_w = 1.0 - smoothstep(700.0, 900.0, cam_dist_pos);
         vec3  fo = pos + nor * (0.15 + cam_dist_pos * 0.002) + sunDir * (0.3 + cam_dist_pos * 0.002);
+        g_rq_leaf_solid = scene.season.w <= 0.02 && ((scene.rt_flags.x >> 2) & 3) >= 1;
         float far_sh = any_hit_no_terrain(fo, sunDir, 220.0) ? scene.rt_params.w * far_w : 0.0;
+        g_rq_leaf_solid = false;
         dyn_shadow = mix(far_sh, dyn_shadow, rt_lod_t);
     }
     return dyn_shadow;
@@ -917,9 +925,12 @@ void main() {
                 if (t_lim < 0.0 || t_obj_far < t_lim) t_lim = t_obj_far;
             }
         }
+        float tg = 0.0;
         float r = (water_only || air_lo) ? 0.0
-                : raymarch_lo(ro, rd, t_lim, 1.68 * scene.viewport.w * scene.rm_perf.y * 0.75);
-        outColor = vec4(r, 0.0, 0.0, 0.0);
+                : raymarch_lo(ro, rd, t_lim, 1.68 * scene.viewport.w * scene.rm_perf.y * 0.75, tg);
+        // (stopped at an object, or at the water: the grass may still stand in front of it)
+        if (tg > 1e8 && t_lim > 0.0) tg = 0.0;
+        outColor = vec4(r, tg, 0.0, 0.0);
         // The sun's shadow at this block's hit (rm_perf.x bit 4): march on to the ground, and
         // unless something stands in front of it there, work out the two shadow terms once
         // for the whole block.
@@ -1097,7 +1108,7 @@ void main() {
         // river style (advected FBM + flow-driven foam). Packed in
         // water_foam_params.y as an int.
         int water_style = int(scene.water_foam_params.y + 0.5);
-        if (water_style >= 1) {
+        if (water_style >= 1) {   // (so the lake style, 2, takes this branch too and never its own below: left as it is - the look in use was tuned with it)
             // Full P_Malin GetFlowRate — flow vector + foam amount in
             // one pass over the local depth field.
             vec3 flow_and_foam = pm_get_flow_rate(wpos.xz,
@@ -1178,7 +1189,9 @@ void main() {
                 const float kAng[7] = float[7](2.83, 3.71, 3.19, 2.27, 4.02, 2.51, 3.47);          // where each train runs to (rad; the sea lies east)
                 const float kLen[7] = float[7](83.0, 47.0, 26.0, 14.5, 8.1, 4.6, 2.7);
                 const float kSlope[7] = float[7](0.070, 0.070, 0.065, 0.058, 0.050, 0.042, 0.036);
-                float foot = max(t_water, 1.0) * 0.0025;
+                // (along a shallow line of sight a pixel covers 1 / |rd.y| times more water: without that
+                // the fine wave trains were kept far too long and shimmered as moire from the air)
+                float foot = max(t_water, 1.0) * 0.0025 / max(abs(rd.y), 0.12);
                 // Near and middle distance: the Seascape wave field (sea_map above). Its slope
                 // is taken over about a pixel, so it smooths itself out with distance.
                 // Far out, where a pixel is wider than its longest wave, the long swell
@@ -1588,7 +1601,7 @@ void main() {
         // look (red attenuates fastest, then green, blue lasts). Mixed
         // against the user's deep tint at 60% so the slider still has
         // colour authority.
-        if (water_style >= 1) {
+        if (water_style >= 1) {   // (so the lake style, 2, takes this branch too and never its own below: left as it is - the look in use was tuned with it)
             // User-tunable extinction colour + density (defaults to
             // P_Malin's (0.5, 0.4, 0.1) × 3.0).
             vec3  ext_col = scene.water_river_extinct.rgb;

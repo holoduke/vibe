@@ -385,7 +385,7 @@ void main() {
         }
         float moss = smoothstep(0.55, 0.9, Nr.y) * smoothstep(0.45, 0.75, rk_fbm(po * 2.6 - seed, 3)) * 0.55;
         alb = mix(alb, vec3(0.10, 0.17, 0.05), moss);
-        float snr = smoothstep(scene.terrain_h_high.x + 10.0, scene.terrain_h_high.z, wposr.y) * smoothstep(0.35, 0.75, Nr.y);
+        float snr = smoothstep(scene.terrain_h_high.x + 10.0, scene.terrain_h_high.z, wposr.y - clamp(Nr.z * 30.0, -16.0, 16.0)) * smoothstep(0.35, 0.75, Nr.y);
         alb = mix(alb, vec3(0.88, 0.9, 0.95), clamp(snr, 0.0, 1.0));
         // Where the rock meets the ground: soil creeps up the foot (colour
         // and normal blend toward the ground) and the contact is darkened,
@@ -758,7 +758,7 @@ void main() {
     }
     // GPU-veg rocks: snow caps on up-facing surfaces in the rock/snow band.
     if (is_mesh_draw && pc.grass_params.x > 0.5 && use_albedo) {
-        float sn = smoothstep(scene.terrain_h_high.x + 10.0, scene.terrain_h_high.z, vWorldPos.y) *
+        float sn = smoothstep(scene.terrain_h_high.x + 10.0, scene.terrain_h_high.z, vWorldPos.y - clamp(N.z * 30.0, -16.0, 16.0)) *
                    smoothstep(0.35, 0.75, N.y);
         sn *= 0.75 + 0.25 * tnoise(vWorldPos.xz * 1.7);
         albedo = mix(albedo, vec3(0.88, 0.9, 0.95), clamp(sn, 0.0, 1.0));

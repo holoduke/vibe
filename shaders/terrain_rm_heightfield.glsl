@@ -649,17 +649,22 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
 // full-resolution pass starts its own march there - the walk through the open air and down
 // to the ground is done once for the block instead of once for every pixel.
 // Returns 0 = nothing known (march from the eye), 1e9 = no ground within the march's range.
-float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone) {
+// `t_grass`: the last point at which the ray was still more than a blade's height above the
+// ground (0 = not known, 1e9 = it never comes that low): where the grass pass starts its own
+// march (grass_raymarch.frag), instead of walking through the open air again.
+float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone, out float t_grass) {
+    t_grass = 0.0;
     float maxH = terrainMaxHeight();
     float t = 0.0;
-    if (ro.y > maxH && rd.y >= 0.0) return 1e9;
+    if (ro.y > maxH && rd.y >= 0.0)  { t_grass = 1e9; return 1e9; }
     if (ro.y > maxH) t = (ro.y - maxH) / (-rd.y);
     float t_limit = (t_max > 0.0) ? min(t_max, 1500.0) : 1500.0;
-    if (t > t_limit) return 1e9;
+    if (t > t_limit)  { t_grass = 1e9; return 1e9; }
     // (the eye in the ground: the full pass has its own march for that)
     if (all(lessThan(abs(ro.xz), vec2(kHeightmapSide * 0.5 - 2.0))) && ro.y - terrainM_lod(ro.xz, 0.0) < 0.12) return 0.0;
     int   kSteps = int(pc.tex_params.x);
     float kStep  = abs(pc.emissive.x);
+    t_grass = t;
     float t_safe = t;
     // (the same fast approach as the full march, aimed at where the clearance reaches the
     // margin - without it a ray skimming the ground crept toward it in dozens of steps)
@@ -683,6 +688,7 @@ float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone) {
             g_rm_ray_y = -1e9;
         }
         float thr = 3.0 * cone * t + 0.06;
+        if (h >= thr + 1.25) t_grass = t;
         if (h < thr) return t_safe;
         if (t > t_limit) return 1e9;
         t_safe = t;

@@ -139,10 +139,22 @@ bool leaf_card_hit(rayQueryEXT rq) {
                     (cell >= 2.0 ? 0.5 : 0.0) + (1.0 - clamp(uv.y, 0.006, 0.994)) * 0.5);
     return textureLod(LEAF_ATLAS, auv, 1.5).a > 0.33;
 }
+// Leaf cards as solid cards for the rays traced while this is set (settings: 'foliage rays').
+// A ray through a tree crown otherwise stops at EVERY card on its way to ask the leaf
+// texture whether it hit a leaf or a gap - in a forest that is most of the cost of the
+// lighting, and on a Radeon nearly all of it. Rays that only need "is there foliage that
+// way, and about how far" (bounce light, ambient occlusion, the search for a shadow's
+// blocker, shadows far from the camera) take the first card as the answer. The sun's
+// shadow close by keeps the exact leaf shapes.
+bool g_rq_leaf_solid = false;
+// Foliage ray mode (rt_flags.x bits 2-3): 0 exact everywhere, 1 as described above,
+// 2 solid cards for every ray. Not in winter: bare trees keep their cards in the BLAS and
+// only the per-leaf test knows they are gone.
+int rq_leaf_mode() { return scene.season.w > 0.02 ? 0 : ((scene.rt_flags.x >> 2) & 3); }
 bool any_hit_m(vec3 origin, vec3 dir, float t_max, uint mask) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topLevelAS,
-                          gl_RayFlagsTerminateOnFirstHitEXT,
+                          gl_RayFlagsTerminateOnFirstHitEXT | (g_rq_leaf_solid ? gl_RayFlagsOpaqueEXT : 0u),
                           mask, origin, 0.001, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
@@ -158,7 +170,7 @@ bool any_hit(vec3 origin, vec3 dir, float t_max) {
 // Closest-hit with t-value — used by the PCSS blocker search.
 bool closest_hit_m(vec3 origin, vec3 dir, float t_max, uint mask, out float out_t) {
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT,
+    rayQueryInitializeEXT(rq, topLevelAS, g_rq_leaf_solid ? gl_RayFlagsOpaqueEXT : gl_RayFlagsNoneEXT,
                           mask, origin, 0.001, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
@@ -559,7 +571,10 @@ void main() {
             vec3 jitter = (vx * tan_u + vy * tan_v) * r;
             vec3 dir = normalize(L + jitter);
             float t;
-            if (closest_hit_m(origin, dir, kBlockerTMax, shadow_mask, t)) {
+            g_rq_leaf_solid = rq_leaf_mode() >= 1;      // (only "is anything that way, how far")
+            bool blk = closest_hit_m(origin, dir, kBlockerTMax, shadow_mask, t);
+            g_rq_leaf_solid = false;
+            if (blk) {
                 sum_t += t;
                 ++hits;
             }
@@ -621,7 +636,10 @@ void main() {
                     float vy = pp_s_s * v.x + pp_c_s * v.y;
                     vec3 jitter = (vx * tan_u + vy * tan_v) * r;
                     vec3 dir = normalize(L + jitter);
+                    // (exact leaf shapes near the camera; solid cards where a leaf is a pixel)
+                    g_rq_leaf_solid = rq_leaf_mode() >= 2 || (rq_leaf_mode() == 1 && cam_dist > 70.0);
                     if (any_hit_m(origin, dir, kShadowTMax, shadow_mask)) blocked += 1.0;
+                    g_rq_leaf_solid = false;
                     ++taken;
                 }
             }
@@ -818,7 +836,9 @@ void main() {
             float st = sqrt(1.0 - r2);
             vec3 dir = normalize(
                 t_u * (cos(phi) * st) + t_v * (sin(phi) * st) + N * ct);
+            g_rq_leaf_solid = rq_leaf_mode() >= 1;
             if (any_hit(origin, dir, ao_radius)) hits += 1.0;
+            g_rq_leaf_solid = false;
         }
         ao = mix(1.0, 1.0 - (hits / float(n_taps)), ao_w);
     }
@@ -910,6 +930,7 @@ void main() {
         // Frame-cycled seed offset: the temporal accumulator below needs
         // DIFFERENT ray directions every frame to converge to the true
         // irradiance — a frame-stable seed would just freeze the grain.
+        g_rq_leaf_solid = rq_leaf_mode() >= 1;      // bounce light: every ray of it (reset before the reflections)
         vec2 fseed = vec2(float(scene.rt_flags.w & 31)) * vec2(17.13, 9.71);
         for (int i = 0; i < taken_gi; ++i) {
             float r1 = hash12(gl_FragCoord.xy + fseed + vec2(i * 13.0, 73.0));
@@ -1402,6 +1423,7 @@ void main() {
         // 1-ray lobe cleanly, so rougher surfaces and far ones are traced
         // too (roughness < 0.85, < 150 m, 300 m rays) instead of falling
         // back to the sky / ground gradient.
+        g_rq_leaf_solid = false;
         bool  rr_q = (scene.rt_flags.x & 2) != 0;
         float rt_w = rr_q
             ? (1.0 - smoothstep(0.55, 0.85, roughness)) * (1.0 - smoothstep(110.0, 150.0, cam_dist))

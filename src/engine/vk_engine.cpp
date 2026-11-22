@@ -113,6 +113,7 @@ void VulkanEngine::init() {
     audio_->load_clip(ClipID::Shot,   "assets/sounds/shot.ogg");
     audio_->load_clip(ClipID::Impact, "assets/sounds/impact.ogg");
     audio_->load_clip(ClipID::Jump,   "assets/sounds/jump.ogg");
+    audio_->load_clip(ClipID::Land,   "assets/sounds/land.ogg");
     // Single shot cut from laser_gun_#4 (0.045-0.225 s, 100 ms fade, -3.5 dB
     // to sit at the old shot level).
     audio_->load_clip(ClipID::Laser,  "assets/sounds/laser_shot.wav");
@@ -453,7 +454,16 @@ void VulkanEngine::run(const RunOptions& opts) {
         auto hz_t = now;
         float hz_ms[6] = {};
         const float hz_frame_ms = frame_dt * 1000.0f;
-        if (hz_frame_ms > 28.0f && frame_number_ > 30)
+        // (a hitch is a frame much longer than the ones around it - not every frame of a scene
+        // that runs under 36 fps, which filled the log with thousands of these - and at most
+        // two lines a second)
+        static float hz_avg_ms = 16.0f;
+        static uint64_t hz_last_frame = 0;
+        const bool hz_is_hitch = hz_frame_ms > std::max(28.0f, 1.8f * hz_avg_ms) && frame_number_ > 30 &&
+                                 frame_number_ - hz_last_frame > 30;
+        hz_avg_ms = glm::mix(hz_avg_ms, std::min(hz_frame_ms, 200.0f), 0.03f);
+        if (hz_is_hitch) hz_last_frame = frame_number_;
+        if (hz_is_hitch)
             log::warnf("[hitch] frame %.1f ms | prev: update %.1f, jets+fx %.1f, ui %.1f, fence %.1f, acquire %.1f, draw %.1f "
                        "(draw: tlas-wait %.1f, cpu-build %.1f, record+submit %.1f)",
                        hz_frame_ms, hitch_prev_[0], hitch_prev_[1], hitch_prev_[2], hitch_prev_[3],
@@ -493,7 +503,7 @@ void VulkanEngine::run(const RunOptions& opts) {
 
         InputFrame in = window_->consume_input();
         {   // zoomed in (aiming), the same hand movement turns the view less: the picture moves as much as ever
-            const double zoom_k = double(std::tan(glm::radians(view_fov_deg_) * 0.5f) / std::tan(glm::radians(80.0f) * 0.5f));
+            const double zoom_k = double(std::tan(glm::radians(view_fov_deg_) * 0.5f) / std::tan(glm::radians(glm::clamp(rt_.fov_deg, 55.0f, 100.0f)) * 0.5f));
             in.mouse_dx *= zoom_k;
             in.mouse_dy *= zoom_k;
         }
@@ -817,8 +827,8 @@ void VulkanEngine::run(const RunOptions& opts) {
             window_->has_focus()) {
             float dx = static_cast<float>(in.mouse_dx);
             float dy = static_cast<float>(in.mouse_dy);
-            player_.yaw   += dx * game::Player::kMouseSensitivity;
-            player_.pitch -= dy * game::Player::kMouseSensitivity;
+            player_.yaw   += dx * game::Player::kMouseSensitivity * rt_.mouse_sens;
+            player_.pitch -= dy * game::Player::kMouseSensitivity * rt_.mouse_sens;
             // kHalfPi from engine/vk_engine/internal.h.
             constexpr float kPitchCap = kHalfPi - 0.01f;
             if (player_.pitch >  kPitchCap) player_.pitch =  kPitchCap;
@@ -997,6 +1007,7 @@ void VulkanEngine::run(const RunOptions& opts) {
                 pin.mouse_dy = 0.0f;
                 glm::vec3 pre_vel = player_.velocity;
                 bool was_on_ground = player_.on_ground;
+                const int pre_air_jumps = player_.air_jumps_left;
                 if (fly_mode_) {
                     // Free flight: along the view direction, Space up, Ctrl
                     // down, Shift for a burst. No gravity, no collision.
@@ -1158,6 +1169,13 @@ void VulkanEngine::run(const RunOptions& opts) {
                     if (was_on_ground && !player_.on_ground && pin.jump && !player_swimming_) {
                         audio_->play_local(ClipID::Jump, 0.7f, 0.06f, 0.10f);
                     }
+                    // The second jump, in the air: it had no sound at all.
+                    if (player_.air_jumps_left < pre_air_jumps && !player_.on_ground && !player_swimming_)
+                        audio_->play_local(ClipID::Jump, 0.5f, 0.06f, 0.10f);
+                    // Landing: only after a real fall (5 m/s down or more). The plain "touched the
+                    // ground" test flickers while walking over bumps - that is why it was removed.
+                    if (!was_on_ground && player_.on_ground && pre_vel.y < -5.0f && !player_swimming_)
+                        audio_->play_local(ClipID::Land, glm::clamp(-pre_vel.y / 15.0f, 0.3f, 1.0f), 0.06f, 0.08f);
                 }
                 { CPU_SCOPE("+pushes"); apply_player_pushes(pre_vel); }
                 if (physics_) { CPU_SCOPE("+physics"); physics_->step(kFixedDt); }

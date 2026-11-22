@@ -594,7 +594,7 @@ void VulkanEngine::collect_veg_rt_instances(glm::vec3 eye, uint32_t cap,
         const float px = r / std::max(glm::distance(cc, eye), 0.1f) * ppr * dither;
         uint32_t lvl = px > 85.0f ? 0u : px > 40.0f ? 1u : px > 16.0f ? 2u : 3u;
         if (a < veg_arch_.size() && veg_arch_[a].species <= 2) {     // trees / bushes: same detail curve as veg_cull.comp
-            const float detail = std::clamp(std::pow(px / (veg_arch_[a].species == 2 ? 25.0f : 60.0f), 1.2f), 0.03f, 1.0f);
+            const float detail = std::clamp(std::pow(px / (veg_arch_[a].species == 2 ? 25.0f : 60.0f), 0.8f), 0.03f, 1.0f);
             lvl = detail > 0.5f ? 0u : detail > 0.22f ? 1u : detail > 0.09f ? 2u : 3u;
         }
         out.push_back(c.second | (lvl << 30));

@@ -655,7 +655,11 @@ struct RtSettings {
         float terrain_rm_converge        = 0.8f;  // fast final approach to the ground (0 = off, the old small steps)
         float terrain_rm_normal_px       = 1.5f;  // normal: drop detail finer than this many pixels (0 = keep all)
         bool  terrain_rm_relief_lite     = true;  // under dense grass the normal reads the main rills only
-        bool  terrain_rm_shade_lo        = true;  // the sun's shadows on the ground: once per block of the low-resolution march, not per pixel
+        bool  terrain_rm_shade_lo        = false; // the sun's shadows on the ground once per block of the low-resolution march, not per pixel. Off: measured, it costs as much in that pass as it saves in the main one (a loss on a Radeon)
+        // Shading rate of the raymarched ground toward the edges of the screen (VRS; needs a GPU
+        // that keeps it with shader depth writes): 0 = every pixel everywhere, 1 = one shade
+        // per 2x2 pixels in the outer part of the picture, 2 = that and 4x4 in the corners.
+        int   terrain_vrs                = 0;
         // Specular reflection on flagged surfaces (the pedestal).
         bool  reflections_enabled = true;
         float reflection_strength = 0.5f;
@@ -697,6 +701,11 @@ struct RtSettings {
         // With RR active, trace shadows / AO / GI at ~1 sample per pixel
         // and let RR resolve the noise (the speed side of RR).
         bool  dlss_rr_low_samples = true;
+        // Rays through foliage (deferred_lighting.frag g_rq_leaf_solid): 0 = every ray tests the
+        // leaf texture on every card it crosses (exact, very slow in a forest), 1 = only the
+        // sun's shadow near the camera does; bounce light, ambient occlusion, the blocker
+        // search and far shadows take a card as solid, 2 = all rays do.
+        int   foliage_ray_mode = 1;
         // FSR3 Frame Generation. Only meaningful when fsr_backend == 1.
         // Session 3 dispatches FG to a private output image without
         // presenting it — sessions 4-6 wire it into the swapchain
@@ -757,6 +766,10 @@ struct RtSettings {
         // a reasonable default that recovers most lost detail without
         // ringing on edges. >1 looks deliberately punchy / over-sharpened.
         float compose_sharpen_strength = 0.55f;
+        // The view: vertical field of view (degrees; 80 = the value it always had, about 112
+        // across on a 16:9 screen) and the mouse's speed as a multiple of the built-in one.
+        float fov_deg    = 80.0f;
+        float mouse_sens = 1.0f;
         // FSR path only (AMD / no DLSS): the least the scene is rendered at, as a share of the
         // output size, whatever 'render_scale' says. FSR needs more pixels than DLSS to give a
         // sharp picture: at half size it is soft and blocky, most of all in grass and leaves.

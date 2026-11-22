@@ -311,7 +311,7 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
     if (tr_march_module_) {
         vkpipe::GraphicsPipelineConfig mo = cfg;
         mo.frag = tr_march_module_;
-        mo.color_formats = { VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT };   // the march's distance, the shadow terms
+        mo.color_formats = { VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT };   // the march's distance, the shadow terms
         mo.depth_format = VK_FORMAT_UNDEFINED;
         mo.depth_test = false;
         mo.depth_write = false;
@@ -375,7 +375,12 @@ void VulkanEngine::finish_terrain_raymarch_pipeline(int mode) {
 }
 
 void VulkanEngine::destroy_terrain_raymarch_pipeline() {
-    finish_terrain_raymarch_pipeline();          // (a build still running must not outlive its shader modules)
+    // A build still running must not outlive its shader modules: wait for it. Quietly - this is
+    // shutdown, and presenting "loading" frames here (as the wait at start-up does) ran into
+    // frame generation timing out on them: a device-lost error on the way out.
+    for (auto& f : terrain_rm_build_) if (f.valid()) f.wait();
+    if (terrain_water_build_.valid()) terrain_water_build_.wait();
+    finish_terrain_raymarch_pipeline();          // (all ready now: just collects them)
     if (terrain_raymarch_lite_pipeline_)    vkDestroyPipeline(device_, terrain_raymarch_lite_pipeline_, nullptr);
     if (terrain_raymarch_lite_lr_pipeline_) vkDestroyPipeline(device_, terrain_raymarch_lite_lr_pipeline_, nullptr);
     if (terrain_raymarch_lite_module_)      vkDestroyShaderModule(device_, terrain_raymarch_lite_module_, nullptr);
@@ -691,7 +696,7 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
             .imageType = VK_IMAGE_TYPE_2D,
-            .format = VK_FORMAT_R32_SFLOAT,
+            .format = VK_FORMAT_R32G32_SFLOAT,
             .extent = { tr_march_extent_.width, tr_march_extent_.height, 1 },
             .mipLevels = 1, .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -707,7 +712,7 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
         VkImageViewCreateInfo vci{
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = nullptr, .flags = 0, .image = tr_march_image_,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R32_SFLOAT,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R32G32_SFLOAT,
             .components = {},
             .subresourceRange = {
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -786,8 +791,12 @@ void VulkanEngine::init_vrs_attachment() {
     // 8×8 or 16×16. Round up so the attachment covers every pixel even
     // if (extent % tile) != 0; the trailing partial-tile texels just
     // shade slightly extra area, which is harmless.
-    const uint32_t base_w = std::max<uint32_t>(1, tr_lr_extent_.width);
-    const uint32_t base_h = std::max<uint32_t>(1, tr_lr_extent_.height);
+    // (from the render size itself, as init_terrain_raymarch_lowres works it out: this runs on a
+    // render-scale change BEFORE those targets exist, and with their size still zero the rate
+    // image came out 1x1 - it never covered the picture)
+    const float lr_s = rt_.terrain_raymarch_enabled ? std::clamp(rt_.terrain_raymarch_scale, 0.25f, 1.0f) : 1.0f;
+    const uint32_t base_w = std::max<uint32_t>(1, uint32_t(std::round(float(render_extent_.width)  * lr_s)));
+    const uint32_t base_h = std::max<uint32_t>(1, uint32_t(std::round(float(render_extent_.height) * lr_s)));
     const uint32_t tw = std::max<uint32_t>(1, vrs_texel_size_.width);
     const uint32_t th = std::max<uint32_t>(1, vrs_texel_size_.height);
     vrs_extent_.width  = (base_w + tw - 1) / tw;
@@ -847,9 +856,12 @@ void VulkanEngine::init_vrs_attachment() {
             float dy = static_cast<float>(y) - cy;
             float r = std::sqrt(dx * dx + dy * dy) / std::max(r_max, 1.0f);
             uint8_t rate;
-            if      (r < 0.60f) rate = 0;            // 1×1
-            else if (r < 0.85f) rate = (1u << 2) | 1u; // 2×2 = 5
-            else                rate = (2u << 2) | 2u; // 4×4 = 10
+            // (rt_.terrain_vrs 1: the middle 70 % of the way out at full rate, 2x2 beyond and no
+            // 4x4 - the mild setting for the full-resolution ground; otherwise the pattern above)
+            const float r1 = rt_.terrain_vrs == 1 ? 0.70f : 0.60f, r2 = rt_.terrain_vrs == 1 ? 2.0f : 0.85f;
+            if      (r < r1) rate = 0;                // 1x1
+            else if (r < r2) rate = (1u << 2) | 1u;   // 2x2 = 5
+            else             rate = (2u << 2) | 2u;   // 4x4 = 10
             rates[static_cast<size_t>(y) * vrs_extent_.width + x] = rate;
         }
     }

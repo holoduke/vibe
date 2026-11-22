@@ -525,7 +525,9 @@ void VulkanEngine::record_shadow_passes(FrameData& frame) {
     // sample this instead of doing the inline 24/40-tap PCSS trace. The
     // entire pass is skipped (zero cost) when the toggle is off or the
     // shadow_strength slider is at 0.
-    if (rt_.half_rate_shadows && shadow_lr_pipeline_ &&
+    // (not with deferred lighting: only the forward path reads its result - it was traced
+    // every frame for nothing)
+    if (rt_.half_rate_shadows && shadow_lr_pipeline_ && !deferred_lighting_active_ &&
         rt_.shadow_strength > 0.0f) {
         vkinit::transition_image(frame.command_buffer, shadow_lr_image_,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
@@ -731,9 +733,22 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .clearValue = clear_depth,
     };
+    // Shading rate of the raymarched ground (settings 'ground shading rate'): the rate image
+    // is attached to the world pass; only the terrain pipeline listens to it (the others
+    // have no shading-rate state: 1x1, attachment ignored).
+    VkRenderingFragmentShadingRateAttachmentInfoKHR world_vrs{};
+    const bool world_vrs_on = rt_.terrain_vrs > 0 && vrs_supported_ && vrs_view_ && !tr_use_lowres() &&
+                              vrs_extent_.width * vrs_texel_size_.width >= render_extent_.width &&
+                              vrs_extent_.height * vrs_texel_size_.height >= render_extent_.height;
+    if (world_vrs_on) {
+        world_vrs.sType = VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR;
+        world_vrs.imageView = vrs_view_;
+        world_vrs.imageLayout = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+        world_vrs.shadingRateAttachmentTexelSize = vrs_texel_size_;
+    }
     VkRenderingInfo rendering{
         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-        .pNext = nullptr, .flags = 0,
+        .pNext = world_vrs_on ? &world_vrs : nullptr, .flags = 0,
         // Pass 1 outputs scene_color + motion_vec at render_extent_.
         .renderArea = { {0, 0}, render_extent_ },
         .layerCount = 1, .viewMask = 0,
@@ -997,8 +1012,9 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         // inverse view-projection loses the view DIRECTIONS in rounding (the horizon
         // tilted, the sky tore into bands). Directions do not need the position: use
         // the inverse of the projection times the rotation only. Below 2 km: as always.
-        sp.inv_view_proj = current_frame_view_.eye_pos.y > 2000.0f
-            ? glm::mat4(glm::inverse(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view)))) : last_inv_view_proj_;
+        // (Always: the loss is there at any height, only smaller - from a few hundred metres up
+        // the sky already showed horizontal bands. This pass only needs directions.)
+        sp.inv_view_proj = glm::mat4(glm::inverse(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view))));
         // Sky motion: last frame's view-projection (columns 0..2: a direction has w = 0),
         // with the jitter difference folded in like every other motion vector.
         // Carried in three fields the sky-fill shader does not use otherwise.
@@ -1391,8 +1407,11 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
                 pc_data.brush_indicator = glm::vec4(rt_.water_level - ueye.y, anim_time_,
                                                      rt_.underwater_turbidity, -1.0f);
         }
-        pc_data.inv_view_proj = current_frame_view_.eye_pos.y > 2000.0f      // (see the sky fill above)
-            ? glm::mat4(glm::inverse(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view)))) : last_inv_view_proj_;
+        // (see the sky fill above. The full matrix only where compose needs world POSITIONS: the
+        // terrain brush ring and the underwater view - both flagged in brush_indicator.w.)
+        pc_data.inv_view_proj = (std::abs(pc_data.brush_indicator.w) > 0.5f && current_frame_view_.eye_pos.y <= 2000.0f)
+            ? last_inv_view_proj_
+            : glm::mat4(glm::inverse(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view))));
         // tone.x: tonemap mode, +8 = colour is DLSS output whose alpha
         // carries exact sky coverage (deferred writes geometry alpha 0).
         pc_data.tone = glm::vec4(float(rt_.tonemap_mode) +

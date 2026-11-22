@@ -535,7 +535,7 @@ void VulkanEngine::update_scene_ubo() {
     // .x: 0 = RT shadows off, 1 = on, 3 = on + Ray Reconstruction quality
     // mode (deferred_lighting.frag: longer / rougher reflections, a second
     // GI bounce on every ray). Shaders test != 0 for "shadows on".
-    data.rt_flags = glm::ivec4(rt_.shadow_enabled ? (rr_low ? 3 : 1) : 0,
+    data.rt_flags = glm::ivec4(rt_.shadow_enabled ? ((rr_low ? 3 : 1) | (std::clamp(rt_.foliage_ray_mode, 0, 2) << 2)) : 0,   // bits 2-3: foliage ray mode
                                shadow_samples_eff,
                                ao_samples_eff,
                                static_cast<int>(frame_number_));

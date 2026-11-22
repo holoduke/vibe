@@ -567,7 +567,13 @@ void VulkanEngine::build_menu_ui() {
         {
             static const char* kVendor[] = { "unknown", "NVIDIA", "AMD", "Intel", "other" };
             ImGui::Text("GPU: %s (%s)", gpu_name_.c_str(), kVendor[int(gpu_vendor_)]);
+            ImGui::SliderFloat("Field of view (vertical, degrees)", &rt_.fov_deg, 55.0f, 100.0f, "%.0f");
+            ImGui::SliderFloat("Mouse sensitivity", &rt_.mouse_sens, 0.2f, 4.0f, "%.2f");
             ImGui::Checkbox("Auto-pick upscaler for this GPU (at start-up)", &rt_.upscaler_auto);
+            {
+                const char* fr_labels[] = { "Exact (slow in forests)", "Exact sun shadows nearby (default)", "Solid leaf cards for all rays (fastest)" };
+                ImGui::Combo("Foliage rays", &rt_.foliage_ray_mode, fr_labels, 3);
+            }
             if (ImGui::SliderFloat("FSR: least render scale", &rt_.fsr_min_render_scale, 0.5f, 1.0f, "%.2f") && rt_.fsr_backend == 1)
                 apply_render_scale();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("NVIDIA: DLSS + Ray Reconstruction + DLSS Frame Generation + Reflex.\nAMD / Intel: FSR 3.1 + FSR Frame Generation (+ AMD Anti-Lag 2).");
@@ -785,6 +791,10 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SliderFloat("Normal detail limit (pixels)", &rt_.terrain_rm_normal_px, 0.0f, 4.0f, "%.1f");
         ImGui::Checkbox("Simpler relief under dense grass", &rt_.terrain_rm_relief_lite);
         ImGui::Checkbox("Sun shadows at low resolution (needs the march first)", &rt_.terrain_rm_shade_lo);
+        {
+            const char* vrs_labels[] = { "Every pixel", "2x2 toward the screen edges", "2x2 edges, 4x4 corners" };
+            if (ImGui::Combo("Ground shading rate", &rt_.terrain_vrs, vrs_labels, 3)) recreate_vrs_attachment();
+        }
         ImGui::TextDisabled("%s",
             "March first: one ray per block of pixels walks to the ground,\n"
             "every pixel then starts its own march there.\n"

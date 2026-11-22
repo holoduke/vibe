@@ -318,77 +318,14 @@ float tpom_h(vec2 u, int kind, float k) {
 }
 
 // ---- Grass blade shadows on the terrain ----
-// Mirrors grass_raymarch.frag's blade field exactly (0.17 m cell grid,
-// hash42 per cell, rotation, sub-cell jitter, height, wind sway) so the
-// blades the player sees cast their shadows on the ground. Soft-shadow
-// sphere trace toward the sun (IQ penumbra estimate, k * d / t).
-vec4 gs_hash42(vec2 p) {
-    vec4 p4 = fract(vec4(p.xyxy) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
-    p4 += dot(p4, p4.wzxy + 33.33);
-    return fract((p4.xxyz + p4.yzzw) * p4.zywx);
-}
-float gs_blade2d(vec2 p) {
-    float d = length(p - vec2(1.7, -1.3)) - 2.0;
-    d = max(d, -(length(p - vec2(1.7, -1.0)) - 1.8));
-    d = max(d, -(p.y + 1.0));
-    d = max(d, -(-p.x + 1.7));
-    return d;
-}
-float gs_blade(vec3 p, float th) {
-    p.y -= 1.0;
-    float d2 = max(0.0, gs_blade2d(p.xy));
-    return sqrt(d2 * d2 + p.z * p.z) - th;
-}
-// Distance to the nearest blade; `gy` = ground height (blade roots).
-float gs_map(vec3 p, float gy) {
-    const float kPeriod = 0.17;
-    const float kPi2 = 6.28318530718;
-    vec3 lp = p; lp.y -= gy;
-    if (lp.y > 0.9) return lp.y - 0.6;
-    vec2 cellId = floor((lp.xz + 0.5 * kPeriod) / kPeriod);
-    lp.xz = mod(lp.xz + 0.5 * kPeriod, kPeriod) - 0.5 * kPeriod;
-    float bh = clamp(scene.grass_rm_params.x, 0.05, 3.0) * 0.36;
-    float d = 1e3;
-    for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
-            vec2 nId = cellId + vec2(float(dx), float(dy));
-            vec2 muv = (nId * kPeriod / 2048.0) + vec2(0.5);
-            vec2 mg = textureLod(u_grass_mask, muv, 0.0).rg;
-            float sm = scene.grass_rm_params2.x;
-            float elig = mg.r * (1.0 - smoothstep(sm * 0.7, sm * 1.2, mg.g * 2.0));
-            if (elig < 0.10) continue;
-            vec4 r = gs_hash42(nId);
-            if (r.x > scene.grass_rm_params.w) continue;
-            vec3 np = lp - vec3(float(dx), 0.0, float(dy)) * kPeriod;
-            float a = r.z * kPi2;
-            float c = cos(a), s = sin(a);
-            np.xz = mat2(c, -s, s, c) * np.xz;
-            np.xz += (r.xy - 0.5) * kPeriod;
-            float wind_t = scene.grass_rm_params.z + r.w * kPi2;
-            np.x += sin(wind_t * 1.4) * scene.grass_rm_params.y * 0.025 *
-                    smoothstep(0.0, 1.7 * bh, np.y);
-            float sc = max(0.65, sqrt(r.w)) * bh;
-            d = min(d, gs_blade(np / sc, 0.002 / sc) * sc);
-        }
-    }
-    return d;
-}
+// The lawn's blade field is grass_blades.glsl - the one the lawn itself is drawn from and the
+// raymarched terrain shades with (this file had an older copy of it: one grass type, one blade
+// height, so the shadows on the mesh terrain no longer matched the blades).
+#include "grass_blades.glsl"
 // Sun visibility 0..1 at ground point `p` (on the terrain surface).
 float grass_blade_shadow(vec3 p, vec3 L) {
     if (L.y < 0.05) return 1.0;
-    float bh = clamp(scene.grass_rm_params.x, 0.05, 3.0) * 0.36;
-    float t_max = min((bh * 1.05) / L.y, 3.0);
-    float res = 1.0;
-    float t = 0.01;
-    for (int i = 0; i < 12; ++i) {
-        if (t > t_max) break;
-        vec3 q = p + L * t;
-        float d = gs_map(q, p.y);
-        res = min(res, 10.0 * max(d, 0.0) / t);
-        if (res < 0.02) break;
-        t += clamp(d, 0.015, 0.14);
-    }
-    return smoothstep(0.0, 1.0, res);
+    return grass_blade_vis(p, p.y, L, 0.01);
 }
 
 // Relief occlusion march (Tatarchuk 2006, "Practical POM" self-shadow):
