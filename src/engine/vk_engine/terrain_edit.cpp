@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 
 // Classic GLSL-style hash + value-noise + 3-octave FBM, used by every
@@ -691,4 +691,4 @@ void VulkanEngine::add_fbm_erosion_to_sculpted(float amplitude_factor,
 }
 
 
-} // namespace qlike
+} // namespace vibe

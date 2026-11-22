@@ -12,7 +12,7 @@
 // The binary blocks are opaque here; only the runtime that wrote them reads them.
 #include "anim/skeleton_def.h"
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 struct AnimAsset {
     static constexpr uint32_t kVersion = 2;
@@ -31,4 +31,4 @@ struct AnimAsset {
     int  find_clip(std::string_view name) const;
 };
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

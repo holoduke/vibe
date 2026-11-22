@@ -20,7 +20,7 @@
 #include <fstream>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_world() {
     // load_settings() runs AFTER init_world, but world generation (road
@@ -678,7 +678,7 @@ void VulkanEngine::init_world() {
 
 
 
-} // namespace qlike
+} // namespace vibe
 
 
 

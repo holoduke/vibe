@@ -10,7 +10,7 @@
 #include "anim/motion_db.h"
 #include "anim/trajectory.h"
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 struct MatcherParams {
     float search_interval = 0.10f;      // seconds between searches while nothing changes
@@ -78,4 +78,4 @@ MatcherOutput matcher_goto(const MotionDatabase& db, MatcherState& st, int frame
 // The output for the state as it is (no advance, no search).
 MatcherOutput matcher_output(const MotionDatabase& db, const MatcherState& st);
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

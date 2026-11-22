@@ -3,8 +3,8 @@
 
 #include "fixtures.h"
 
-using namespace qlike::anim;
-using namespace qlike::anim::offline;
+using namespace vibe::anim;
+using namespace vibe::anim::offline;
 using Catch::Matchers::WithinAbs;
 using Catch::Matchers::WithinRel;
 

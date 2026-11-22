@@ -9,7 +9,7 @@
 #include <mutex>
 #include <vector>
 
-namespace qlike::log {
+namespace vibe::log {
 
 namespace {
 std::mutex g_mu;
@@ -84,4 +84,4 @@ void infof(const char* fmt, ...)  { va_list ap; va_start(ap, fmt); info(vformat(
 void warnf(const char* fmt, ...)  { va_list ap; va_start(ap, fmt); warn(vformat(fmt, ap));  va_end(ap); }
 void errorf(const char* fmt, ...) { va_list ap; va_start(ap, fmt); error(vformat(fmt, ap)); va_end(ap); }
 
-} // namespace qlike::log
+} // namespace vibe::log

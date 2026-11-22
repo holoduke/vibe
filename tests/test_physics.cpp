@@ -5,10 +5,10 @@
 
 #include <glm/geometric.hpp>
 
-using qlike::physics::accelerate;
-using qlike::physics::air_accelerate;
-using qlike::physics::apply_friction;
-using qlike::physics::apply_gravity;
+using vibe::physics::accelerate;
+using vibe::physics::air_accelerate;
+using vibe::physics::apply_friction;
+using vibe::physics::apply_gravity;
 using Catch::Approx;
 
 namespace {

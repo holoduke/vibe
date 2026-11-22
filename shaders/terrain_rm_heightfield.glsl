@@ -62,7 +62,7 @@ float rm_ground_detail(vec2 wp, float t, float h) {
     // instead of three plus a texture fetch on every near-ground step. The
     // hit point lands within ~5 cm of the full surface; the normal and the
     // shading (called without the flag) still use the full relief.
-#ifndef QLIKE_LITE
+#ifndef VIBE_LITE
     if (g_rm_ray_y > -1e8 && RMDBG(128)) return 0.0;       // profiling: the march without the relief
 #endif
     if (g_rm_ray_y > -1e8) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
@@ -187,7 +187,7 @@ float terrainM_lod(vec2 p, float ray_t) {
     // top octave; `frac` is the [0..1] weight that octave gets so the
     // FBM is C0-continuous across the integer threshold.
     float oct_f  = float(oct_full) - lod_f * float(oct_full - oct_min);
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     // Pixel-footprint cap: octave i has wavelength 333 m / 2^i; drop
     // octaves smaller than ~1.5 pixels at this distance (sub-pixel
     // detail the march would only alias on). 1.68 = 2 tan(40 deg).
@@ -196,7 +196,7 @@ float terrainM_lod(vec2 p, float ray_t) {
         float oct_fp = log2(333.333 / (1.5 * fp)) + 1.0;
         oct_f = min(oct_f, max(oct_fp, float(oct_min)));
     }
-#endif /* ! QLIKE_WATER */
+#endif /* ! VIBE_WATER */
     int   oct    = int(ceil(oct_f));
     float frac   = 1.0 - (float(oct) - oct_f);
     float a = 0.0, b = 1.0;
@@ -378,7 +378,7 @@ float terrainM_shadow(vec2 p, float ray_t) {
 // unbounded (default 1500 m). Caller can pass a tighter bound — e.g.
 // the water-plane intersection distance — so the loop bails as soon
 // as any terrain hit past the bound is irrelevant.
-// Steps the last raymarch() took (profiling view, QLIKE_RM_SKIP bit 64).
+// Steps the last raymarch() took (profiling view, VIBE_RM_SKIP bit 64).
 int g_rm_steps = 0;
 // `t_start`: a distance known to be clear of the ground (from the low-resolution march,
 // terrain_raymarch.frag main), 0 = none.
@@ -408,7 +408,7 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
     // sub-pixel only.
     t += jitter * 0.5;
     float maxH_cap = terrainMaxHeight();
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     // Eye at or under the marched surface. The full FBM sits up to ~0.5 m
     // above the baked heightmap the player stands on (plus the close-range
     // ground detail), so a crouching / crawling eye can be INSIDE it: every
@@ -464,7 +464,7 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
         // to camera, smoothly fading down at distance (sub-pixel
         // detail) for a perf saving on long rays. (Reverted to the
         // plain terrainM_lod; the _d grad variant is unused now.)
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         // Empty-space skipping on the BAKED heightmap: one texture fetch
         // instead of up to 14 noise octaves. The bake holds octaves 0..8 of
         // this same FBM at 1 m (plus sculpt + road carving); the full
@@ -518,21 +518,21 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
                     h = mix(pos.y - meshHeight(pos.xz), h, smoothstep(keep, keep + 0.9, rdist));
             }
         }
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         g_rm_ray_y = pos.y;
         float h = pos.y - terrainM_lod(pos.xz, t);
         g_rm_ray_y = -1e9;
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         // P7: loosen the hit threshold with distance. At grazing angle a
         // typical pixel covers 0.3-1 m of world space past 200 m, so
         // demanding sub-millimetre convergence wastes ~30 % of the
         // march steps on far rays. mix 0.0015 → 0.005 over [150, 600] m.
         float hit_eps = mix(0.0015, 0.0025, smoothstep(150.0, 600.0, t)) * t;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         if (!coarse && abs(h) < hit_eps) return t;   // only real-surface steps may hit (was: break + a full re-evaluation below)
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         if (abs(h) < hit_eps) break;
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         if (t > t_limit) return -1.0;
         // Phase 6 — relaxation cone-stepping. Step grows with
         // distance so the same ray covers more ground in fewer
@@ -553,7 +553,7 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
         } else {
             advance = kStep_eff * h;
         }
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         // Fast final approach. Close over the ground a step of `kStep * h` shrinks with the
         // clearance: a ray skimming the ground took dozens of ever smaller steps - most of
         // this pass. Two steps on the real surface tell how fast the clearance is being lost;
@@ -581,7 +581,7 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
             // ray started underground (black speckle). Bisect back to the
             // surface between the last point above it and this one.
             float ta = t_prev, tb = t;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             if (conv > 0.0 && real_last && h_last > 0.0) {
                 // With the fast approach nearly every ray ends here, so the search has to
                 // be cheap: the clearance is known at both ends (above at ta, below at tb)
@@ -641,7 +641,7 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
     return t;
 }
 
-#ifdef QLIKE_MARCH_ONLY
+#ifdef VIBE_MARCH_ONLY
 // The low-resolution march (terrain_march_lo.frag.spv; frame.cpp "march pre-pass"). One ray
 // for a block of pixels: it walks until the ground comes within the width of that block
 // (`cone` = its radius per metre of distance), over an upper bound of the surface (no close
@@ -705,7 +705,7 @@ float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone, out float t_grass) 
 }
 #endif
 
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
 // How far the landscape is marched. 1500 m on the ground and up to 1 km
 // altitude (unchanged); from there it grows with height, so that flying up
 // the real landscape stays under the camera out to tens of kilometres (the

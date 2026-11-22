@@ -13,7 +13,7 @@
 
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_taa() {
     // Linear sampler for history+depth lookups. Owned by TAA but the
@@ -121,7 +121,7 @@ void VulkanEngine::init_taa() {
     vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &taa_pipeline_layout_),
              "taa pipeline layout");
 
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     taa_vert_module_ = vkpipe::load_shader_module(device_, sd + "/taa.vert.spv");
     taa_frag_module_ = vkpipe::load_shader_module(device_, sd + "/taa.frag.spv");
 
@@ -501,7 +501,7 @@ void VulkanEngine::init_taau() {
                                      &taau_pipeline_layout_),
              "taau pipeline layout");
 
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     taau_frag_module_ = vkpipe::load_shader_module(device_, sd + "/taau.frag.spv");
 
     vkpipe::GraphicsPipelineConfig cfg{};
@@ -643,4 +643,4 @@ void VulkanEngine::rewrite_compose_for_taau() {
     log::infof("compose source switched to %s", want_taau ? "TAAU" : "TAA");
 }
 
-} // namespace qlike
+} // namespace vibe

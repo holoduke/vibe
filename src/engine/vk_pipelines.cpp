@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace qlike::vkpipe {
+namespace vibe::vkpipe {
 
 // Set by the engine via set_pipeline_cache() once it's loaded the disk blob.
 // Stays VK_NULL_HANDLE until then; vkCreateGraphicsPipelines accepts null and
@@ -279,4 +279,4 @@ void set_pipeline_cache(VkPipelineCache cache) {
     g_pipeline_cache = cache;
 }
 
-} // namespace qlike::vkpipe
+} // namespace vibe::vkpipe

@@ -8,7 +8,7 @@
 #include <cmath>
 #include <limits>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -302,4 +302,4 @@ std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts, glm::ivec2
     return out;
 }
 
-} // namespace qlike
+} // namespace vibe

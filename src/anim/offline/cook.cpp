@@ -20,7 +20,7 @@
 #include <map>
 #include <sstream>
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 namespace {
 
@@ -272,4 +272,4 @@ bool cook_takes(const std::string& dir, const std::vector<TakeSource>& sources, 
     return true;
 }
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline

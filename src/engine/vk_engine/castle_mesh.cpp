@@ -18,7 +18,7 @@
 
 #include <cstring>
 
-namespace qlike {
+namespace vibe {
 
 static_assert(sizeof(game::LevelVertex) == sizeof(Vertex),
               "LevelVertex must match the engine Vertex layout");
@@ -305,4 +305,4 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
     }
 }
 
-} // namespace qlike
+} // namespace vibe

@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <cstring>
 
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
   // Includes <windows.h> internally — keep ABOVE Vulkan/Win32 headers
   // already pulled in by internal.h to avoid macro collisions.
   #include "ffx_api/ffx_api.h"
@@ -28,9 +28,9 @@
   #include "ffx_api/vk/ffx_api_vk.h"
 #endif
 
-namespace qlike {
+namespace vibe {
 
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
 namespace {
 
 // Process-wide DLL handle + resolved function table. Loaded lazily on
@@ -150,7 +150,7 @@ bool allocate_fsr3_output(VmaAllocator allocator, VkDevice device,
 #endif
 
 void VulkanEngine::init_fsr3() {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (fsr3_context_valid_ || swapchain_extent_.width == 0) return;
     if (!ensure_loaded()) return;
 
@@ -242,7 +242,7 @@ void VulkanEngine::init_fsr3() {
 }
 
 void VulkanEngine::destroy_fsr3() {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (fsr3_context_valid_ && fsr3_upscaler_context_ && g_ffx_loaded) {
         if (device_) vkDeviceWaitIdle(device_);
         ffxContext ctx = static_cast<ffxContext>(fsr3_upscaler_context_);
@@ -256,7 +256,7 @@ void VulkanEngine::destroy_fsr3() {
 }
 
 void VulkanEngine::recreate_fsr3_context() {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     // Only re-init if a context already exists. Without this guard, a
     // swapchain recreate at startup (when load_settings applies a non-
     // 1.0 render_scale) would force-init FSR3 even when the user has
@@ -270,7 +270,7 @@ void VulkanEngine::recreate_fsr3_context() {
 }
 
 void VulkanEngine::dispatch_fsr3(VkCommandBuffer cmd) {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (!fsr3_context_valid_ || !fsr3_output_image_ || !g_ffx_loaded) return;
 
     vkinit::transition_image(cmd, fsr3_output_image_,
@@ -351,7 +351,7 @@ void VulkanEngine::dispatch_fsr3(VkCommandBuffer cmd) {
 // ============================================================================
 
 void VulkanEngine::init_fsr3_swapchain() {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (fsr3_swapchain_active_ || fsr3_swapchain_fatal_) return;
     if (!ensure_loaded()) return;
     if (swapchain_ == VK_NULL_HANDLE) return;
@@ -615,7 +615,7 @@ void VulkanEngine::init_fsr3_swapchain() {
 // gets motion-interpolated and shimmers on every other frame.
 void VulkanEngine::capture_hudless_snapshot(VkCommandBuffer cmd,
                                              uint32_t swapchain_idx) {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (!fsr3_swapchain_active_ || !fsr3_hudless_image_) return;
 
     // swapchain → TRANSFER_SRC, hudless → TRANSFER_DST.
@@ -655,7 +655,7 @@ void VulkanEngine::capture_hudless_snapshot(VkCommandBuffer cmd,
 // SDK's pacer uses the configure'd state for the next pair of
 // (real, generated) presents. frameID must increment by exactly 1.
 void VulkanEngine::update_fsr3_fg_per_frame_config() {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (!fsr3_fg_context_valid_ || !fsr3_swapchain_active_) return;
 
     FfxApiResource hudless = (fsr3_hudless_image_)
@@ -696,7 +696,7 @@ void VulkanEngine::update_fsr3_fg_per_frame_config() {
 }
 
 void VulkanEngine::destroy_fsr3_swapchain() {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (fsr3_swapchain_active_ && fsr3_swapchain_context_ && g_ffx_loaded) {
         if (device_) vkDeviceWaitIdle(device_);
         // Tell the FG context to stop generating BEFORE we kill the
@@ -726,7 +726,7 @@ void VulkanEngine::destroy_fsr3_swapchain() {
 
 VkResult VulkanEngine::acquire_next_image(uint64_t timeout, VkSemaphore sem,
                                           VkFence fence, uint32_t* out_idx) {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (fsr3_swapchain_active_ && fsr3_acquire_fn_) {
         return fsr3_acquire_fn_(device_, swapchain_, timeout, sem, fence, out_idx);
     }
@@ -746,7 +746,7 @@ VkResult VulkanEngine::queue_present_image(uint32_t image_index,
         present.waitSemaphoreCount = 1;
         present.pWaitSemaphores = &wait_sem;
     }
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (fsr3_swapchain_active_ && fsr3_present_fn_) {
         return fsr3_present_fn_(graphics_queue_, &present);
     }
@@ -766,7 +766,7 @@ VkResult VulkanEngine::queue_present_image(uint32_t image_index,
 // without crashing, validation clean, no GPU device-lost.
 
 void VulkanEngine::init_fsr3_fg() {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (fsr3_fg_context_valid_ || fsr3_fg_fatal_) return;
     if (!ensure_loaded()) return;
     if (swapchain_extent_.width == 0) return;
@@ -862,7 +862,7 @@ void VulkanEngine::init_fsr3_fg() {
 }
 
 void VulkanEngine::destroy_fsr3_fg() {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (fsr3_fg_context_valid_ && fsr3_fg_context_ && g_ffx_loaded) {
         if (device_) vkDeviceWaitIdle(device_);
         ffxContext ctx = static_cast<ffxContext>(fsr3_fg_context_);
@@ -878,7 +878,7 @@ void VulkanEngine::destroy_fsr3_fg() {
 }
 
 void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     if (!fsr3_fg_context_valid_ || !fsr3_fg_output_image_) return;
     // FG dispatch needs the FSR3 upscaler output as presentColor — must
     // already be in SHADER_READ from dispatch_fsr3 above.
@@ -979,7 +979,7 @@ void VulkanEngine::dispatch_fsr3_fg(VkCommandBuffer cmd) {
 }
 
 void VulkanEngine::rewrite_compose_for_fsr3() {
-#ifdef QLIKE_HAVE_FSR3
+#ifdef VIBE_HAVE_FSR3
     // CRITICAL: must also check rt_.fsr2_enabled — that's the master
     // toggle for ANY FSR upscale. Without it, when the user turns FSR
     // off the compose desc set stays bound to the (stale) FSR3 output
@@ -996,4 +996,4 @@ void VulkanEngine::rewrite_compose_for_fsr3() {
 #endif
 }
 
-} // namespace qlike
+} // namespace vibe

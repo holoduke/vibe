@@ -9,7 +9,7 @@ phases land. Status per phase is in the last section.
 | Topic | Finding | Where |
 |---|---|---|
 | Language / build | C++20, MSVC (`/W4 /permissive-`, Release `/O2 /GL /arch:AVX2`, no `/fp:fast`), CMake + Ninja, dependencies by `FetchContent` pinned to tags | `CMakeLists.txt`, `build.ps1` |
-| Targets | `qlike_core` (gameplay, no Vulkan; what tests link), `qlike_engine` (Vulkan), `vibe` (exe), `qlike_tests` (Catch2 3.7.1, 30 tests) | `CMakeLists.txt`, `tests/` |
+| Targets | `vibe_core` (gameplay, no Vulkan; what tests link), `vibe_engine` (Vulkan), `vibe` (exe), `vibe_tests` (Catch2 3.7.1, 30 tests) | `CMakeLists.txt`, `tests/` |
 | Platform | Windows x64, Vulkan 1.3. Other platforms have compile switches but are not built | |
 | Math | glm 1.0.1 (`vec3`, `quat`, `mat4`), radians, depth 0..1 | |
 | Coordinates | Right-handed, +Y up, metres. Yaw 0 looks down -Z; forward = `(sin yaw, 0, -cos yaw)`, right = `(cos yaw, 0, sin yaw)` | `game/player.cpp` |
@@ -51,7 +51,7 @@ trajectory prediction, so retuning the controller retunes the prediction.
 - `tools/anim/build_motion_db.py`: BVH import, retarget, feature extraction (needs numpy).
 - No tests cover any of it. No clip runtime, no blending, no layers, no debug views.
 
-Baseline (Release, 9800X3D, body shown with `QLIKE_BODY_FRONT`, running at 6 m/s):
+Baseline (Release, 9800X3D, body shown with `VIBE_BODY_FRONT`, running at 6 m/s):
 `player body` 0.80 - 0.90 ms per frame for one character (search + pose + skinning 43k vertices);
 database 14.8 MB on disk, about 46 MB in memory (93,838 frames with mirrors x (27 features +
 8 header floats + 22 quaternions)). Capture: `docs/animation/captures/baseline_run6.png`.
@@ -93,7 +93,7 @@ Consequences for the requirements document, which assumes a server-authoritative
 | ACL | Not adopted | MIT | ozz's own compressed clips are measured first (section 7). A second sampling path is only justified by a measured need |
 | Motion matching, inertialisation, trajectory prediction, contacts, foot lock, warping, shooter layers | Written for this engine in `src/anim/` | MIT (project) | No suitable library |
 
-Update policy: bump the tag in `CMakeLists.txt`, run `qlike_anim_tests` (bind-pose parity and
+Update policy: bump the tag in `CMakeLists.txt`, run `vibe_anim_tests` (bind-pose parity and
 sampling tests catch format or convention changes), re-cook the assets (the runtime archive
 version is checked at load).
 
@@ -112,7 +112,7 @@ carries its source file, frame range and licence string in the asset (`ClipInfo:
 ## 4. Target architecture
 
 ```
-tools/anim/vibe_animcook (offline)                    src/anim (runtime library qlike_anim: glm + ozz, no Vulkan)
+tools/anim/vibe_animcook (offline)                    src/anim (runtime library vibe_anim: glm + ozz, no Vulkan)
   BVH -> retarget to the soldier rig                    IAnimationRuntime  <- OzzRuntime (skeleton, clips, blend, FK, IK)
       -> validate (joints, units, contacts, rates)      MotionDatabase     versioned features + metadata
       -> ozz clips (compressed)                         MotionSearch       exhaustive, AVX2, hysteresis
@@ -151,7 +151,7 @@ struct; it is deterministic for a given input sequence; no allocation in `update
 
 | Change | File |
 |---|---|
-| New library `qlike_anim`, cook tool, tests | `CMakeLists.txt`, `src/anim/**`, `tools/anim/cook_main.cpp`, `tests/anim/**` |
+| New library `vibe_anim`, cook tool, tests | `CMakeLists.txt`, `src/anim/**`, `tools/anim/cook_main.cpp`, `tests/anim/**` |
 | Body: load, per-character animator, skinning, draw | `src/engine/vk_engine/player_body.cpp`, members in `vk_engine.h` |
 | Remote players: animator per avatar, no state swapping | `src/engine/vk_engine/multiplayer.cpp` |
 | Ragdoll hand-over (reads the model-space pose) | `src/engine/vk_engine/ragdoll.cpp` |
@@ -200,7 +200,7 @@ struct; it is deterministic for a given input sequence; no allocation in `update
 
 The game runs on the new system; `engine/motion_match.*`, `tools/anim/build_motion_db.py` and
 `assets/character/motion.qmm` are gone. Build: `./build.ps1 -Config Release -Test` - 101 tests
-(30 existing + 71 in `qlike_anim_tests`), all passing. The animation library and its tests also
+(30 existing + 71 in `vibe_anim_tests`), all passing. The animation library and its tests also
 build and pass in Debug (MSVC checked iterators); the whole game was only built in Release.
 
 Second pass, same day: skinning moved to the GPU (`cube_skin.vert`); a real two-instance run with
@@ -230,11 +230,11 @@ Measured against the baseline (same machine, body shown from outside, running):
 | # | Criterion | State |
 |---|---|---|
 | 1 | Builds cleanly, existing tests green | pass |
-| 2 | Demo map showcase | not built as a map; every listed movement runs in the scenario tests and can be shown with the `QLIKE_BODY_*` hooks |
+| 2 | Demo map showcase | not built as a map; every listed movement runs in the scenario tests and can be shown with the `VIBE_BODY_*` hooks |
 | 3 | No obvious foot sliding in planted phases | pass below 4 m/s (locks, < 1.5 cm in tests) and at the crawl pace (0 - 1 %). At walk and sprint: 8 - 11 % of the body's speed forward, diagonally and sideways (a strafe run), 14 - 18 % backward (runs played backward) (measured, `performance.md`; bounded by the `[asset]` test). Not zero: the capture tops out near 2 m/s (gap G1) |
 | 4 | No pops, NaNs, oscillation | pass in tests (joint rates bounded, 0 invalid poses, switch rate bounded at 5 - 10 Hz input), and on the real asset at walk and sprint in every direction (fastest joint 17 - 38 rad/s; it was 100 - 184 until the arm and knee solves were fixed) |
 | 5 | Input never delayed or altered | pass: controller trajectories bit-identical with and without animation |
-| 6 | Debug tools | pass (`QLIKE_ANIM_DEBUG=1`) |
+| 6 | Debug tools | pass (`VIBE_ANIM_DEBUG=1`) |
 | 7 | Automated tests | pass |
 | 8 | Benchmarks recorded, budgets agreed | recorded (`performance.md`); budgets are the owner's to set |
 | 9 | Licences and provenance | pass (per clip in the asset; `THIRD_PARTY.md`) |

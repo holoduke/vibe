@@ -6,7 +6,7 @@
 #include <chrono>
 #include <cmath>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 namespace {
 
@@ -1096,4 +1096,4 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
     }
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

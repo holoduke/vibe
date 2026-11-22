@@ -17,7 +17,7 @@
 #include <cstring>
 #include <random>
 
-namespace qlike::net {
+namespace vibe::net {
 
 namespace {
 
@@ -34,10 +34,10 @@ struct MsgWorld   { uint8_t type; WorldState w; };
 enum : uint8_t { kMsgState = 1, kMsgSnap = 2, kMsgEvent = 3, kMsgHello = 4, kMsgWorld = 5 };
 constexpr uint8_t kVersion = kProtocolVersion;
 
-// QLIKE_NET_PORT=<n>: another discovery port (game ports follow it), so test instances on a
+// VIBE_NET_PORT=<n>: another discovery port (game ports follow it), so test instances on a
 // machine or a network do not meet games that are being played.
 uint16_t discovery_port() {
-    static const uint16_t p = [] { const char* e = std::getenv("QLIKE_NET_PORT"); const int v = e ? std::atoi(e) : 0; return uint16_t(v > 1024 && v < 65000 ? v : kDiscoveryPort); }();
+    static const uint16_t p = [] { const char* e = std::getenv("VIBE_NET_PORT"); const int v = e ? std::atoi(e) : 0; return uint16_t(v > 1024 && v < 65000 ? v : kDiscoveryPort); }();
     return p;
 }
 uint16_t game_port() { return uint16_t(discovery_port() == kDiscoveryPort ? kGamePort : discovery_port() + 1); }
@@ -441,4 +441,4 @@ void Session::update(double now, const PlayerState& local) {
     interpolate(uint32_t(std::max(0.0, server_now)), now);
 }
 
-}  // namespace qlike::net
+}  // namespace vibe::net

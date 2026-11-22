@@ -33,7 +33,7 @@
 #include <string>
 #include <vector>
 
-namespace qlike::net {
+namespace vibe::net {
 
 constexpr uint16_t kDiscoveryPort = 47777;
 constexpr uint16_t kGamePort      = 47778;   // first choice; the next free one of 8 is taken
@@ -121,4 +121,4 @@ private:
     void to_solo(const char* why);
 };
 
-}  // namespace qlike::net
+}  // namespace vibe::net

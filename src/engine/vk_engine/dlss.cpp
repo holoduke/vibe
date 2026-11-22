@@ -21,7 +21,7 @@
 #define NOMINMAX
 #include <windows.h>
 
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
@@ -34,9 +34,9 @@
 #include <fstream>
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
 namespace {
 void sl_log(sl::LogType type, const char* msg) {
     if (type == sl::LogType::eError) log::errorf("[streamline] %s", msg);
@@ -95,7 +95,7 @@ bool VulkanEngine::dlss_rr_active() const {
 }
 
 void VulkanEngine::sl_init_early() {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     sl::Preferences pref{};
     pref.showConsole = false;
     pref.logLevel = sl::LogLevel::eDefault;
@@ -124,7 +124,7 @@ void VulkanEngine::sl_init_early() {
             else if (k == "fsr2_enabled") upscale = v;
         }
     }
-    if (const char* e = std::getenv("QLIKE_DLSS_FG")) want_fg = std::atoi(e);   // test override
+    if (const char* e = std::getenv("VIBE_DLSS_FG")) want_fg = std::atoi(e);   // test override
     const bool load_fg = want_fg > 0 && backend == 2 && upscale != 0;
     static const sl::Feature kFeatures[] = { sl::kFeatureDLSS, sl::kFeatureDLSS_RR, sl::kFeatureReflex,
                                              sl::kFeaturePCL, sl::kFeatureDLSS_G };
@@ -182,7 +182,7 @@ void VulkanEngine::sl_init_early() {
 }
 
 void VulkanEngine::sl_set_vulkan_info() {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     if (!sl_ok_) return;
     if (sl_gipa_ && sl_gdpa_) {
         // Device + instance came from the SL proxies (vk-bootstrap was handed
@@ -223,7 +223,7 @@ void VulkanEngine::sl_set_vulkan_info() {
 }
 
 void VulkanEngine::init_dlss() {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     if (!dlss_supported_) return;
     destroy_dlss();
     VkImageCreateInfo ici{};
@@ -266,7 +266,7 @@ void VulkanEngine::destroy_dlss() {
 }
 
 void VulkanEngine::sl_shutdown() {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     if (sl_ok_) slShutdown();
     sl_ok_ = false;
 #endif
@@ -277,7 +277,7 @@ void VulkanEngine::sl_shutdown() {
 // compose at it. Doing this inside dispatch_dlss / draw() rewrote descriptor
 // sets the frame had already bound (invalid command buffer).
 void VulkanEngine::ensure_dlss_bindings() {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     if (dlss_supported_ && rt_.fsr2_enabled && rt_.fsr_backend == 2 &&
         (!dlss_output_view_ || dlss_output_extent_.width != swapchain_extent_.width ||
          dlss_output_extent_.height != swapchain_extent_.height)) {
@@ -310,7 +310,7 @@ void VulkanEngine::ensure_dlss_bindings() {
 }
 
 void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     if (!dlss_supported_ || !dlss_output_view_) return;   // set up by ensure_dlss_bindings()
     // One token per frame, taken in sl_frame_begin (Reflex / PCL / DLSS-G
     // need the same frame identity from simulation to present).
@@ -455,7 +455,7 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
 // Reflex + PCL + DLSS Frame Generation
 // ---------------------------------------------------------------------
 void VulkanEngine::sl_setup_latency_and_fg(const void* adapter) {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     const sl::AdapterInfo& ai = *static_cast<const sl::AdapterInfo*>(adapter);
     reflex_ok_ = slIsFeatureSupported(sl::kFeatureReflex, ai) == sl::Result::eOk;
     pcl_ok_ = slIsFeatureSupported(sl::kFeaturePCL, ai) == sl::Result::eOk;
@@ -484,7 +484,7 @@ void VulkanEngine::sl_setup_latency_and_fg(const void* adapter) {
 }
 
 void VulkanEngine::sl_frame_begin() {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     sl_frame_token_ = nullptr;
     dlssg_tagged_this_frame_ = false;
     if (!sl_ok_) return;
@@ -502,7 +502,7 @@ void VulkanEngine::sl_frame_begin() {
 }
 
 void VulkanEngine::sl_marker(int m) {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     if (!pcl_ok_ || !sl_frame_token_ || fsr3_swapchain_active_) return;
     // Frame generation: decide right before present whether this frame
     // is a real, fully tagged game frame (menus / loading / FSR paths
@@ -533,9 +533,9 @@ void VulkanEngine::sl_marker(int m) {
 }
 
 void VulkanEngine::sl_update_frame_gen(bool game_frame) {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     if (!dlssg_loaded_) return;
-    static const int env_fg = std::getenv("QLIKE_DLSS_FG") ? std::atoi(std::getenv("QLIKE_DLSS_FG")) : -1;   // test override
+    static const int env_fg = std::getenv("VIBE_DLSS_FG") ? std::atoi(std::getenv("VIBE_DLSS_FG")) : -1;   // test override
     const int fg = env_fg >= 0 ? env_fg : rt_.dlss_fg;
     const bool want = game_frame && fg > 0 && dlss_active();
     const int frames = std::clamp(fg, 1, int(dlssg_max_frames_));
@@ -573,7 +573,7 @@ void VulkanEngine::dlssg_destroy_hudless() {
 }
 
 void VulkanEngine::dlssg_capture_hudless(VkCommandBuffer cmd, uint32_t img_index) {
-#ifdef QLIKE_HAVE_STREAMLINE
+#ifdef VIBE_HAVE_STREAMLINE
     // Only while frame generation runs (mode set at the previous present).
     if (!dlssg_mode_on_ || !sl_frame_token_ || !dlssg_tagged_this_frame_ ||
         img_index >= swapchain_images_.size()) return;
@@ -628,4 +628,4 @@ void VulkanEngine::dlssg_capture_hudless(VkCommandBuffer cmd, uint32_t img_index
 #endif
 }
 
-} // namespace qlike
+} // namespace vibe

@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 struct Heightmap;
 
@@ -70,4 +70,4 @@ float road_edge_jitter(float x, float z);
 // road within the returned polyline (0, 0 = none).
 std::vector<glm::vec4> road_gpu_points(const Road& road, int max_pts, glm::ivec2* spur_seg = nullptr);
 
-} // namespace qlike
+} // namespace vibe

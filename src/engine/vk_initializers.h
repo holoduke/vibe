@@ -7,7 +7,7 @@
 
 #include "engine/log.h"
 
-namespace qlike {
+namespace vibe {
 
 // Shared error-check helper. Use anywhere a Vulkan call can fail. The throw
 // site is logged BEFORE the throw so we still see the cause if the exception
@@ -17,7 +17,7 @@ namespace qlike {
 inline void vk_check_loc(VkResult r, const char* what,
                          const char* file, int line) {
     if (r != VK_SUCCESS) {
-        qlike::log::errorf("[vk_check] %s failed: VkResult=%d at %s:%d",
+        vibe::log::errorf("[vk_check] %s failed: VkResult=%d at %s:%d",
                            what, static_cast<int>(r), file, line);
         throw std::runtime_error(std::string("vulkan error: ") + what +
                                  " (VkResult=" + std::to_string(static_cast<int>(r)) +
@@ -29,12 +29,12 @@ inline void vk_check(VkResult r, const char* what) {
     vk_check_loc(r, what, "?", 0);
 }
 
-} // namespace qlike
+} // namespace vibe
 
 // Prefer this form at call sites — it captures the caller's location.
-#define QLIKE_VK_CHECK(expr, what) ::qlike::vk_check_loc((expr), (what), __FILE__, __LINE__)
+#define VIBE_VK_CHECK(expr, what) ::vibe::vk_check_loc((expr), (what), __FILE__, __LINE__)
 
-namespace qlike::vkinit {
+namespace vibe::vkinit {
 
 VkCommandPoolCreateInfo command_pool_create_info(uint32_t queue_family,
                                                  VkCommandPoolCreateFlags flags = 0);
@@ -138,4 +138,4 @@ void one_time_submit(VkDevice device, VkQueue queue, uint32_t queue_family,
     vkDestroyCommandPool(device, pool, nullptr);
 }
 
-} // namespace qlike::vkinit
+} // namespace vibe::vkinit

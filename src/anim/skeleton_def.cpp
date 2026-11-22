@@ -4,7 +4,7 @@
 #include <cstring>
 #include <fstream>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 namespace {
 const char* const kRoleNames[int(Role::Count)] = {
@@ -127,4 +127,4 @@ Rig make_rig(const SkeletonDef& s) {
     return rig;
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

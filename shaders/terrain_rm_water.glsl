@@ -127,26 +127,26 @@ vec3 pm_get_flow_rate(vec2 wp, float water_y, float ray_t) {
     // Slow down BEHIND obstacles. dot(normalised_grad, -normalised_flow)
     // is +1 when flow runs into a rising bed → big slowdown; -1 when
     // the bed slopes away ahead → no slowdown. behind ∈ [0..1].
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     // Compare squared lengths to avoid two sqrt() in the guard; if
     // both pass, use inversesqrt() to normalize and dot in one pass.
     float grad_l2 = dot(grad, grad);
     float flow_l2 = dot(flow, flow);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     float grad_len = length(grad);
     float flow_len = length(flow);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
     float behind = 0.0;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     if (grad_l2 > 1e-6 && flow_l2 > 1e-6) {
         float inv_g = inversesqrt(grad_l2);
         float inv_f = inversesqrt(flow_l2);
         behind = 0.5 - dot(grad * inv_g, -flow * inv_f) * 0.5;
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     if (grad_len > 1e-3 && flow_len > 1e-3) {
         behind = 0.5 - dot(grad / grad_len,
                             -flow / flow_len) * 0.5;
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
     }
     float slow = clamp(d_c * 5.0, 0.0, 1.0);
     slow = mix(slow * 0.9 + 0.1, 1.0, behind * 0.9);
@@ -155,17 +155,17 @@ vec3 pm_get_flow_rate(vec2 wp, float water_y, float ray_t) {
 
     // Foam amount — concentrates where flow is fast over shallow
     // water (rapids/eddies). P_Malin's exact mapping.
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     // Recover the (pre-`flow *= slow`) length from the squared length
     // computed above — one sqrt vs the previous length()+sqrt pair we
     // already paid; behind-test now uses inversesqrt so flow_len wasn't
     // computed there anymore.
     float flow_len = sqrt(flow_l2);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     // flow_len was already computed above; after `flow *= slow` the new
     // length is flow_len * slow. Skips a second length() (sqrt+dot) per
     // pixel. abs() of a non-negative length was a no-op — dropped.
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
     float foam = flow_len * slow * 0.5;
     foam += clamp(foam - 0.4, 0.0, 1.0);
     foam = 1.0 - pow(max(0.0, d_c), foam * 0.35);

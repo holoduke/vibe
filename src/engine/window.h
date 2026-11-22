@@ -7,7 +7,7 @@ struct GLFWwindow;
 struct VkSurfaceKHR_T;
 struct VkInstance_T;
 
-namespace qlike {
+namespace vibe {
 
 struct WindowConfig {
     uint32_t width = 1280;
@@ -135,4 +135,4 @@ private:
     bool prev_pad_sprint_ = false;
 };
 
-} // namespace qlike
+} // namespace vibe

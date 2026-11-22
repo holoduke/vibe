@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 bool build_motion_features(const SkeletonDef& skel, const std::vector<RawClip>& clips, const MotionBuildParams& p,
                            MotionDatabaseBuilder& out, std::string* why) {
@@ -148,4 +148,4 @@ bool build_motion_database(const SkeletonDef& skel, const std::vector<RawClip>& 
     return true;
 }
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline

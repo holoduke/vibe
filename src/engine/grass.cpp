@@ -20,7 +20,7 @@
 #  undef min
 #endif
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -346,4 +346,4 @@ void destroy_grass(VmaAllocator alloc, GrassMesh& g) {
     g.instance_count = 0;
 }
 
-} // namespace qlike
+} // namespace vibe

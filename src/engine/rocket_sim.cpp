@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike {
+namespace vibe {
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kScaleH = 7200.0;                 // m, the atmosphere's scale height
@@ -199,4 +199,4 @@ void RocketSim::plan_return() {
     }
 }
 
-}  // namespace qlike
+}  // namespace vibe

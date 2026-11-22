@@ -1,5 +1,5 @@
 // world_props_meshes.inl - mesh builders for trees, bushes and rocks (conifer, broadleaf, pine, shrub, slab rock)
-// Included by world_props.cpp inside namespace qlike (not a compile unit of its own).
+// Included by world_props.cpp inside namespace vibe (not a compile unit of its own).
 
 namespace {
 

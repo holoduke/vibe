@@ -6,7 +6,7 @@
 #include "anim/motion_db.h"
 #include "game/physics.h"
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 struct TrajectoryInput {
     glm::vec2 velocity{0.0f};           // world, horizontal (x, z), m/s
@@ -37,4 +37,4 @@ glm::vec2 facing_to_world(glm::vec2 local_xz, float yaw);
 Trajectory predict_trajectory(const TrajectoryInput& in, const physics::MoveParams& move, const float* horizons,
                               const TrajectoryParams& p = {});
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

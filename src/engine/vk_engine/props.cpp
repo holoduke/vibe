@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_viewmodel() {
     init_flashlight_meshes();
@@ -277,11 +277,11 @@ glm::vec3 rotate_axis(const glm::vec3& v, const glm::vec3& axis, float a) {
 }  // namespace
 
 void VulkanEngine::tick_spacejet(float dt) {
-    // Test hook: QLIKE_TEST_BLAST=x,z,frame fires a crash-sized ground blast.
+    // Test hook: VIBE_TEST_BLAST=x,z,frame fires a crash-sized ground blast.
     {
         static float bx = 0.0f, bz = 0.0f; static int bf = -1;
         static bool init = false;
-        if (!init) { init = true; if (const char* e = std::getenv("QLIKE_TEST_BLAST")) std::sscanf(e, "%f,%f,%d", &bx, &bz, &bf); }
+        if (!init) { init = true; if (const char* e = std::getenv("VIBE_TEST_BLAST")) std::sscanf(e, "%f,%f,%d", &bx, &bz, &bf); }
         if (bf >= 0 && int(frame_number_) == bf)
             spawn_explosion(glm::vec3(bx, sample_terrain_height(bx, bz), bz), 2.3f, true);
     }
@@ -412,8 +412,8 @@ void VulkanEngine::tick_spacejet(float dt) {
         if (f.dead) continue;
 
         const float half_len = 3.0f * f.scale;   // asset normalised to 6 m
-        // Test hook: QLIKE_TEST_SHOOTDOWN=<s> downs every jet after <s> s of flight once it is within 450 m of the camera.
-        static const float kTestDown = [] { const char* e = std::getenv("QLIKE_TEST_SHOOTDOWN"); return e ? float(std::atof(e)) : -1.0f; }();
+        // Test hook: VIBE_TEST_SHOOTDOWN=<s> downs every jet after <s> s of flight once it is within 450 m of the camera.
+        static const float kTestDown = [] { const char* e = std::getenv("VIBE_TEST_SHOOTDOWN"); return e ? float(std::atof(e)) : -1.0f; }();
         if (kTestDown >= 0.0f && !f.destroying && f.t > kTestDown &&
             glm::distance(f.pos, current_frame_view_.eye_pos) < 450.0f) {   // near the camera
             f.destroying = true; f.destroy_t = 0.0f; spawn_explosion(f.pos, 0.55f, false);
@@ -1443,4 +1443,4 @@ void VulkanEngine::spawn_random_box() {
     }
 }
 
-} // namespace qlike
+} // namespace vibe

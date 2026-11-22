@@ -17,7 +17,7 @@
 #include <cmath>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 struct Heightmap;
 struct HeightmapParams;
@@ -142,4 +142,4 @@ inline uint32_t scatter_draw_cells(VkCommandBuffer cmd, uint32_t index_count,
     return drawn;
 }
 
-} // namespace qlike
+} // namespace vibe

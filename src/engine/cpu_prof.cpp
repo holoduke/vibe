@@ -65,7 +65,7 @@ void end_frame() {
             line += hb;
         }
         if (hitch)
-            qlike::log::warnf("[hitch] frame %.1f ms: %s (unaccounted %.1f)", frame_ms,
+            vibe::log::warnf("[hitch] frame %.1f ms: %s (unaccounted %.1f)", frame_ms,
                               line.empty() ? "no section over 0.5 ms" : line.c_str(),
                               std::max(0.0, frame_ms - covered));
     }
@@ -82,7 +82,7 @@ void end_frame() {
         line += buf;
     }
     g_frames = 0;
-    qlike::log::infof("[cpuprof] ms/frame: %s", line.c_str());
+    vibe::log::infof("[cpuprof] ms/frame: %s", line.c_str());
 }
 
 }  // namespace cpuprof

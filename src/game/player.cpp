@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike::game {
+namespace vibe::game {
 
 namespace {
 constexpr float kHalfPi   = 1.57079632679f;
@@ -50,7 +50,7 @@ void update_player(Player& p, const PlayerInput& in,
     // Smooth crouch lerp at ~8/sec (≈125 ms full transition). Decoupled from
     // hitbox to avoid the "uncrouch into a low ceiling" trap.
     {
-        static const bool test_crawl = std::getenv("QLIKE_TEST_CRAWL") != nullptr;   // capture hook
+        static const bool test_crawl = std::getenv("VIBE_TEST_CRAWL") != nullptr;   // capture hook
         float target = ((in.crawl && !in.swim) || test_crawl) ? 1.0f : 0.0f;
         float k = std::min(1.0f, 8.0f * dt);
         p.crouch_factor += (target - p.crouch_factor) * k;
@@ -218,4 +218,4 @@ void update_player(Player& p, const PlayerInput& in,
     p.step_smooth_offset = std::clamp(p.step_smooth_offset, -0.6f, 0.6f);
 }
 
-} // namespace qlike::game
+} // namespace vibe::game

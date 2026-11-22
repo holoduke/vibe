@@ -8,8 +8,8 @@
 // (at the end), and update the sizeof static_assert in helpers.cpp.
 //
 // Include after #version with GL_GOOGLE_include_directive enabled.
-#ifndef QLIKE_SCENE_UBO_GLSL
-#define QLIKE_SCENE_UBO_GLSL
+#ifndef VIBE_SCENE_UBO_GLSL
+#define VIBE_SCENE_UBO_GLSL
 
 layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   sun_direction;
@@ -96,7 +96,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   season;           // how much of each season shows: x spring, y summer, z autumn, w winter
     // The globe (engine/globe.h): the chart the engine is in.
     mat4   globe_frame;      // columns: the chart's east, up, south at its origin (planet frame)
-    vec4   globe_info;       // x: 1 = a far chart (not home's), y: the chart origin's local x (m), z: 1 = the near-field ground bake is valid, w: profiling mask (QLIKE_RM_SKIP: terrain shader sections left out)
+    vec4   globe_info;       // x: 1 = a far chart (not home's), y: the chart origin's local x (m), z: 1 = the near-field ground bake is valid, w: profiling mask (VIBE_RM_SKIP: terrain shader sections left out)
     ivec4  globe_cell[12];   // the landscape FBM's lattice at the chart's origin, per octave: cell ...
     vec4   globe_frac[12];   // ... and position in it (world_map.glsl wm_shape3)
     vec4   rm_perf;          // raymarched terrain, speed: x = bits (1: low-resolution march first, 2: simpler relief under grass, 4: sun shadows from that march's pass), y = that march's pixel size (full-res pixels), z = fast final approach 0..1, w = normal: drop detail finer than this many pixels (0 = keep all)
@@ -119,7 +119,7 @@ vec3 season_leaf(vec3 col, float h) {
 
 // Weather on surfaces (packed in ripple_info.z by descriptors.cpp).
 float scene_wet()  { return fract(scene.ripple_info.z); }
-#ifdef QLIKE_SUMMER
+#ifdef VIBE_SUMMER
 float scene_snow() { return 0.0; }       // the no-snow build of a shader: all winter code folds away
 #else
 float scene_snow() { return floor(scene.ripple_info.z) / 255.0; }

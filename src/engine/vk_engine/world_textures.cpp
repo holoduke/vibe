@@ -30,7 +30,7 @@ extern "C" {
     void           stbi_image_free(void*);
 }
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_skybox() {
     // EXR first — keeps real sun radiance so the bloom pass naturally produces
@@ -813,7 +813,7 @@ void VulkanEngine::load_foliage_textures() {
             put(normal_textures_[kTexPlant], ia.normal.data(), ia.w, ia.h, VK_FORMAT_R8G8B8A8_UNORM, "tree impostors (normal)");
             log::infof("[veg] tree impostors: %d archetypes x 8 views baked in %.0f ms (%d x %d)", ia.rows,
                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), ia.w, ia.h);
-            if (const char* dump = std::getenv("QLIKE_DUMP_IMPOSTORS")) {       // (test hook: the colour atlas as a raw RGBA file)
+            if (const char* dump = std::getenv("VIBE_DUMP_IMPOSTORS")) {       // (test hook: the colour atlas as a raw RGBA file)
                 if (FILE* fp = std::fopen(dump, "wb")) { std::fwrite(ia.color.data(), 1, ia.color.size(), fp); std::fclose(fp); }
             }
         }
@@ -1441,4 +1441,4 @@ void VulkanEngine::update_texture_sampler_for_fsr2() {
 // raymarched grass + the terrain green-tint sample this same texture
 // for consistent eligibility.
 
-} // namespace qlike
+} // namespace vibe

@@ -3,7 +3,7 @@
 #include <atomic>
 #include <cmath>
 
-namespace qlike::globe {
+namespace vibe::globe {
 
 namespace {
 // Charts are published as immutable objects (re-anchoring is rare; the old ones are left
@@ -145,4 +145,4 @@ float ranges3(const glm::dvec3& G) {
     return float(smooth(0.56, 0.72, double(noise3(k * 0.08 + glm::dvec3(7.3)) * 0.65f + noise3(k * 0.21 + glm::dvec3(3.1)) * 0.35f)));
 }
 
-}  // namespace qlike::globe
+}  // namespace vibe::globe

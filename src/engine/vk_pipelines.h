@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace qlike::vkpipe {
+namespace vibe::vkpipe {
 
 VkShaderModule load_shader_module(VkDevice device, const std::string& spv_path);
 
@@ -88,4 +88,4 @@ VkPipeline build_graphics_pipeline(VkDevice device, const GraphicsPipelineConfig
 // the data back at shutdown.
 void set_pipeline_cache(VkPipelineCache cache);
 
-} // namespace qlike::vkpipe
+} // namespace vibe::vkpipe

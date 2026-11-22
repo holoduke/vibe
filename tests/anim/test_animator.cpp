@@ -11,8 +11,8 @@
 #include <functional>
 #include <random>
 
-using namespace qlike;
-using namespace qlike::anim;
+using namespace vibe;
+using namespace vibe::anim;
 using Catch::Matchers::WithinAbs;
 
 namespace {
@@ -744,7 +744,7 @@ TEST_CASE("animator: teleport drops world-space memory; swimming and no ground c
 TEST_CASE("real asset: steady crawl, walk and sprint in every direction", "[anim][animator][asset]") {
     AnimationSet set;
     std::string why;
-    if (!set.load((std::string(QLIKE_SOURCE_DIR) + "/assets/character/soldier.qanim").c_str(), &why)) {
+    if (!set.load((std::string(VIBE_SOURCE_DIR) + "/assets/character/soldier.qanim").c_str(), &why)) {
         WARN("assets/character/soldier.qanim not loaded (" << why << "): skipped");
         return;
     }
@@ -1128,7 +1128,7 @@ TEST_CASE("animator: dying, the body buckles the way the shot went, without a ju
 TEST_CASE("real asset: the face blinks, looks and lets go", "[anim][animator][asset]") {
     AnimationSet set;
     std::string why;
-    if (!set.load((std::string(QLIKE_SOURCE_DIR) + "/assets/character/soldier.qanim").c_str(), &why)) {
+    if (!set.load((std::string(VIBE_SOURCE_DIR) + "/assets/character/soldier.qanim").c_str(), &why)) {
         WARN("assets/character/soldier.qanim not loaded (" << why << "): skipped");
         return;
     }

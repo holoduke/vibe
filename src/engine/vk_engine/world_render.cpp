@@ -22,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 // Per-frame camera state shared across the three render passes
 // (terrain_raymarch_lr, world depth pre-pass, world color pass). draw()
@@ -71,9 +71,9 @@ VulkanEngine::FrameView VulkanEngine::compute_frame_view() {
     // under the camera inside 1.5 km and the full one (raymarch_far) beyond, the border between the
     // two sweeping over the land while climbing. Airborne, the LOD distances move out of range.
     rm_air_lod_k_ = 1.0f + 40.0f * glm::smoothstep(80.0f, 350.0f, fv.eye_pos.y - rt_.water_level);
-    // Aiming narrows the view a little (QLIKE_AIM_FOV=<degrees>, default 62; 80 = no zoom).
+    // Aiming narrows the view a little (VIBE_AIM_FOV=<degrees>, default 62; 80 = no zoom).
     {
-        static const float kAimFov = glm::clamp(std::getenv("QLIKE_AIM_FOV") ? float(std::atof(std::getenv("QLIKE_AIM_FOV"))) : 62.0f, 20.0f, 80.0f);
+        static const float kAimFov = glm::clamp(std::getenv("VIBE_AIM_FOV") ? float(std::atof(std::getenv("VIBE_AIM_FOV"))) : 62.0f, 20.0f, 80.0f);
         const float dtz = glm::clamp(last_frame_dt_, 0.0f, 0.1f);
         aim_zoom_ += ((body_aim_ ? 1.0f : 0.0f) - aim_zoom_) * (1.0f - std::exp(-dtz / 0.07f));
         view_fov_deg_ = glm::mix(glm::clamp(rt_.fov_deg, 55.0f, 100.0f), kAimFov, glm::smoothstep(0.0f, 1.0f, aim_zoom_));
@@ -624,11 +624,11 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         // occlude correctly. Misses (sky) discard, leaving compose's
         // sky pass to fill those pixels.
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          (env_snow_ * 255.0f < 1.0f && terrain_raymarch_summer_pipeline_ && !std::getenv("QLIKE_NO_SUMMER_SHADER"))
+                          (env_snow_ * 255.0f < 1.0f && terrain_raymarch_summer_pipeline_ && !std::getenv("VIBE_NO_SUMMER_SHADER"))
                               ? terrain_raymarch_summer_pipeline_
                               : terrain_raymarch_pipeline_ ? terrain_raymarch_pipeline_ : terrain_raymarch_lite_pipeline_);
-        // (QLIKE_LITE_TERRAIN=1: look at the first-start build)
-        static const bool kForceLite = std::getenv("QLIKE_LITE_TERRAIN") != nullptr;
+        // (VIBE_LITE_TERRAIN=1: look at the first-start build)
+        static const bool kForceLite = std::getenv("VIBE_LITE_TERRAIN") != nullptr;
         if (kForceLite && terrain_raymarch_lite_pipeline_) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrain_raymarch_lite_pipeline_);
         PushConstants pc{};
         pc.mvp = vp;
@@ -891,7 +891,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // raymarch` call further down.
     // (the single-blade sprites lit themselves differently from everything
     // around them and stood out as glowing: with the raymarched grass on they are not drawn)
-    static const bool kBladeSprites = std::getenv("QLIKE_GRASS_SPRITES") != nullptr;
+    static const bool kBladeSprites = std::getenv("VIBE_GRASS_SPRITES") != nullptr;
     if (rt_.grass_enabled && grass_.instance_count > 0 &&
         (kBladeSprites || !rt_.grass_raymarch_enabled) &&
         grass_pipeline_ != VK_NULL_HANDLE) {
@@ -998,7 +998,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
             if (all(greaterThan(eye_c, a.min - glm::vec3(0.5f))) && all(lessThan(eye_c, a.max + glm::vec3(0.5f)))) continue;
             occ.push_back({ mn, mx });
         }
-        const bool occl_on = !std::getenv("QLIKE_NO_SCATTER_OCCL");
+        const bool occl_on = !std::getenv("VIBE_NO_SCATTER_OCCL");
         auto seg_hits = [&](const Occ& o, const glm::vec3& p) {
             const glm::vec3 d = p - eye_c;
             float t0 = 0.0f, t1 = 1.0f;
@@ -1254,9 +1254,9 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     last_culled_      = culled_static + culled_dyn;
 }
 
-} // namespace qlike
+} // namespace vibe
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::compute_brush_face_masks() {
     const auto& bs = world_.brushes;
@@ -1301,4 +1301,4 @@ void VulkanEngine::compute_brush_face_masks() {
                bs.size() * 6);
 }
 
-} // namespace qlike
+} // namespace vibe

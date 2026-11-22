@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike {
+namespace vibe {
 
 // Patch vertex reuses the engine Vertex struct so create_mesh_from_data
 // handles the upload: position = (grid_x, skirt_flag, grid_z). normal/uv
@@ -255,4 +255,4 @@ void select_clod_nodes(const ClodParams& p, const ClodHeightPyramid& pyr,
     select_rec(c, p.levels - 1, 0, 0);
 }
 
-} // namespace qlike
+} // namespace vibe

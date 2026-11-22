@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-namespace qlike {
+namespace vibe {
 
 // Compile-time clip handles. Maps to a small array inside the engine —
 // no string allocation per play call. Add new entries as the game
@@ -108,4 +108,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace qlike
+} // namespace vibe

@@ -6,7 +6,7 @@
 #include <memory>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 // Thin Jolt wrapper. Owns a PhysicsSystem ready for non-player rigid bodies
 // (dynamic crates, projectiles, ragdolls). The player movement is *not* run
@@ -162,7 +162,7 @@ public:
     struct RayHit {
         bool hit = false;
         bool dynamic = false;     // true if a MOVING-layer body was hit
-        uint32_t body_id = 0;     // qlike id (only valid if `dynamic`)
+        uint32_t body_id = 0;     // vibe id (only valid if `dynamic`)
         glm::vec3 position{0.0f}; // world-space hit point
         glm::vec3 normal{0.0f};   // surface normal at hit
         float distance = 0.0f;
@@ -179,4 +179,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace qlike
+} // namespace vibe

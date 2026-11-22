@@ -11,7 +11,7 @@
 
 #include <chrono>
 
-namespace qlike {
+namespace vibe {
 
 class FramePacer {
 public:
@@ -33,4 +33,4 @@ private:
     void* timer_ = nullptr;   // HANDLE (high-resolution waitable timer) or null
 };
 
-} // namespace qlike
+} // namespace vibe

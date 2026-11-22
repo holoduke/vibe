@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 glm::vec3 quat_to_scaled_axis(glm::quat q) {
     if (q.w < 0.0f) q = -q;
@@ -75,4 +75,4 @@ bool is_finite(const glm::mat4& m) {
     return true;
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

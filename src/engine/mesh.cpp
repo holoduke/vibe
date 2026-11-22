@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -272,4 +272,4 @@ Mesh create_cylinder_mesh(VkDevice device, VmaAllocator alloc, VkQueue queue,
     return m;
 }
 
-} // namespace qlike
+} // namespace vibe

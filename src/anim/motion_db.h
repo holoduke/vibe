@@ -26,7 +26,7 @@
 
 #include <atomic>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 enum FeatureGroup : int { kFootPos, kFootVel, kHipVel, kTrajPos, kTrajDir, kFeatureGroups };
 
@@ -152,4 +152,4 @@ struct MotionDatabaseBuilder {
     std::vector<uint8_t> serialize() const;
 };
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

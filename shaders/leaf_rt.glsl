@@ -6,8 +6,8 @@
 // from the triangle's parity and the barycentrics; the instance's SBT
 // record offset carries the atlas cell + 1 (0 = not a card instance).
 // Every other geometry is flagged opaque and never reaches the loop body.
-#ifndef QLIKE_LEAF_RT_GLSL
-#define QLIKE_LEAF_RT_GLSL
+#ifndef VIBE_LEAF_RT_GLSL
+#define VIBE_LEAF_RT_GLSL
 bool leaf_card_hit(rayQueryEXT rq) {
     uint cell1 = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);
     if (cell1 == 0u) return true;

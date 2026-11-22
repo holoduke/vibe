@@ -23,7 +23,7 @@
 #include <filesystem>
 #include <limits>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -264,4 +264,4 @@ GltfModel load_gltf(const std::string& path) {
     return out;
 }
 
-} // namespace qlike
+} // namespace vibe

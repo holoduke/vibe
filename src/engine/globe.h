@@ -18,7 +18,7 @@
 
 #include <cstdint>
 
-namespace qlike::globe {
+namespace vibe::globe {
 
 constexpr double kR = 6360000.0;            // m (the atmosphere model's planet)
 // (Coordinates stay under 100 km: a float is then fine to under a centimetre, which the
@@ -62,4 +62,4 @@ float shape3(const glm::dvec3& P_m, float oct_f);       // wm_shape3
 float continent3(const glm::dvec3& G);                  // wm_continent3
 float ranges3(const glm::dvec3& G);                     // wm_ranges3
 
-}  // namespace qlike::globe
+}  // namespace vibe::globe

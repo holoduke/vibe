@@ -1,5 +1,5 @@
 // scatter_plant_meshes.inl - mesh builders for the small plants: ferns, flowers, reeds, clover, mushrooms, grass tufts, water lilies, the rock
-// Included by scatter.cpp inside namespace qlike (not a compile unit of its own).
+// Included by scatter.cpp inside namespace vibe (not a compile unit of its own).
 
 namespace {
 

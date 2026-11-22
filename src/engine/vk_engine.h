@@ -43,7 +43,7 @@
 
 struct ImFont;      // Dear ImGui (HUD fonts)
 
-namespace qlike {
+namespace vibe {
 struct GlobeChartRef { globe::Chart c; };
 
 // Running totals of validation-layer warnings / errors observed during this
@@ -463,7 +463,7 @@ private:
     // terrain pipelines built from it. Bound instead of pipeline_ /
     // terrain_pipeline_ while deferred_owns_lighting() is true.
     VkShaderModule frag_gbuf_module_ = VK_NULL_HANDLE;
-    VkShaderModule frag_gbuf_terrain_module_ = VK_NULL_HANDLE;   // cube_gbuf_terrain (QLIKE_TERRAIN_ONLY)
+    VkShaderModule frag_gbuf_terrain_module_ = VK_NULL_HANDLE;   // cube_gbuf_terrain (VIBE_TERRAIN_ONLY)
     VkPipeline pipeline_gbuf_ = VK_NULL_HANDLE;
     VkPipeline terrain_gbuf_pipeline_ = VK_NULL_HANDLE;
     bool deferred_owns_lighting() const {
@@ -508,7 +508,7 @@ private:
     VkPipeline      terrain_raymarch_pipeline_   = VK_NULL_HANDLE;
     VkPipeline      terrain_raymarch_summer_pipeline_ = VK_NULL_HANDLE;   // the same without winter code: bound while there is no snow
     VkShaderModule  terrain_raymarch_summer_module_ = VK_NULL_HANDLE;
-    // The small "first start" build of the terrain shader (QLIKE_LITE): drawn until the driver
+    // The small "first start" build of the terrain shader (VIBE_LITE): drawn until the driver
     // has compiled the full one.
     VkShaderModule  terrain_raymarch_lite_module_ = VK_NULL_HANDLE;
     VkPipeline      terrain_raymarch_lite_pipeline_ = VK_NULL_HANDLE, terrain_raymarch_lite_lr_pipeline_ = VK_NULL_HANDLE;
@@ -1234,8 +1234,8 @@ private:
     void pose_update_all(PoseJob* jobs, int count);
     void pose_finish(anim::CharacterAnimator& a, const anim::CharacterAnimationInput& in, int* palette, std::vector<glm::vec4>* keep = nullptr);
     float anim_ground_height(float x, float z, float feet_y) const;   // what a foot at (x, z) stands on
-    void apply_anim_tuning(anim::AnimTuning& t) const; // QLIKE_ANIM_TUNE
-    void anim_debug_overlay();                         // QLIKE_ANIM_DEBUG=1 / the menu: chosen clip, costs, contacts, IK targets
+    void apply_anim_tuning(anim::AnimTuning& t) const; // VIBE_ANIM_TUNE
+    void anim_debug_overlay();                         // VIBE_ANIM_DEBUG=1 / the menu: chosen clip, costs, contacts, IK targets
     bool anim_debug_ = false;
     game::PlayerInput last_pin_{};                     // the movement keys of the last tick (what the player wants)
     uint32_t  body_hit_seq_ = 0;                       // hits the local player took (his own body flinches)
@@ -1289,7 +1289,7 @@ private:
     void record_body_rt(VkCommandBuffer cmd);
     void pose_characters_for_frame();                        // camera of the frame + every soldier's pose (before the TLAS build)
     int  body_mesh_lod(glm::vec3 pos, int previous) const;    // by height on screen
-    bool          body_front_ = false;                // QLIKE_BODY_FRONT: the local body is looked at from outside (head drawn)
+    bool          body_front_ = false;                // VIBE_BODY_FRONT: the local body is looked at from outside (head drawn)
     // The bone palette: three rows (a 3x4 matrix, rest -> posed, model space) per bone, for every
     // character drawn this frame, one region per frame in flight. Binding 33 of the scene set.
     static constexpr uint32_t kSkinBones = 64, kSkinCharacters = 48;
@@ -3146,7 +3146,7 @@ private:
     // per-shape model matrix (rotation + translation).
     struct VoxelChunk {
         int      shape_index;     // index into voxel_world_->shapes()
-        uint32_t body_id;         // qlike Jolt id
+        uint32_t body_id;         // vibe Jolt id
         uint32_t jolt_handle;     // cached BodyHandle
         float    ttl;             // seconds remaining before forced despawn
         float    age = 0.0f;      // seconds since spawn — gates sleep-cull
@@ -3182,7 +3182,7 @@ private:
     // away Vulkan instance). Drives the upscaler / frame-generation choice:
     // NVIDIA -> DLSS (+RR, DLSS-G, Reflex), everything else -> FSR 3.1
     // (+ FSR frame generation, AMD Anti-Lag 2 where the driver has it).
-    // QLIKE_FORCE_VENDOR=amd|nvidia|intel overrides (testing).
+    // VIBE_FORCE_VENDOR=amd|nvidia|intel overrides (testing).
     enum class GpuVendor { Unknown, Nvidia, Amd, Intel, Other };
     GpuVendor gpu_vendor_ = GpuVendor::Unknown;
     std::string gpu_name_;
@@ -3211,4 +3211,4 @@ private:
     int  ingame_screenshot_counter_ = 0;
 };
 
-} // namespace qlike
+} // namespace vibe

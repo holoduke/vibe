@@ -54,7 +54,7 @@ frames, the least and greatest of every feature, and a block that cannot beat th
 far is skipped whole. Same result (the tests compare it with the plain search); in this benchmark
 it looks at 5 % of the rows, and a fully animated character costs 19 - 23 us instead of 48 - 56.
 In the game the other players' animators are updated together on the job threads
-(`pose_update_all`; `QLIKE_ANIM_SERIAL=1` for one after the other).
+(`pose_update_all`; `VIBE_ANIM_SERIAL=1` for one after the other).
 
 ## In the game
 
@@ -62,10 +62,10 @@ In the game the other players' animators are updated together on the job threads
 |---|---|
 | Local body, per frame (`player body` in the `[cpuprof]` line) | 0.08 - 0.40 ms: the animation (0.02 idle, up to 0.35 on a frame that searches) plus 0.002 ms to write the bone palette |
 | The same before skinning moved to the GPU | 0.75 - 0.85 ms (skinning 43,155 vertices on the CPU ~0.6 ms) |
-| Two bodies in view (two-instance run, `QLIKE_ANIM_LOG=1`) | animation 0.03 - 0.3 ms, palettes 0.002 ms |
+| Two bodies in view (two-instance run, `VIBE_ANIM_LOG=1`) | animation 0.03 - 0.3 ms, palettes 0.002 ms |
 | GPU, body + weapon (`w_viewmodel` in `gpu-passes`, RTX 4080, 1440p internal) | 0.06 ms |
-| GPU, 33 skinned bodies (`QLIKE_BODY_CROWD=32`) | 0.31 - 0.37 ms |
-| GPU, 129 skinned bodies (`QLIKE_BODY_CROWD=128`) | 1.25 - 1.47 ms |
+| GPU, 33 skinned bodies (`VIBE_BODY_CROWD=32`) | 0.31 - 0.37 ms |
+| GPU, 129 skinned bodies (`VIBE_BODY_CROWD=128`) | 1.25 - 1.47 ms |
 | Pose search | 0.20 - 0.45 ms over 86,135 frames, both mirror halves; 0.005 ms while idle |
 
 **Skinning is on the GPU** (`shaders/cube_skin.vert`): the rest-pose mesh and each vertex's bones
@@ -117,7 +117,7 @@ upper arm or a knee turning at 100 - 184 rad/s for a frame (a visible snap). Wha
   degrees to the side, the torso twisted back onto the aim (the captured sidestep is 1.4 m/s; stretched
   to 8 - 12 it slid 25 - 43 %).
 
-Measured for the ray-traced copies (`QLIKE_BODY_RT_TEST=5`: six soldiers skinned and rebuilt
+Measured for the ray-traced copies (`VIBE_BODY_RT_TEST=5`: six soldiers skinned and rebuilt
 every frame): 7.7 ms a frame with them and without, 0.13 ms of CPU against 0.09 for the TLAS
 build. Nothing to optimise there at six.
 

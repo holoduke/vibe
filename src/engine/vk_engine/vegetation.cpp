@@ -29,11 +29,11 @@
 #include <cstdlib>
 #include <cstring>
 
-#ifndef QLIKE_SHADER_DIR
-#define QLIKE_SHADER_DIR "shaders"
+#ifndef VIBE_SHADER_DIR
+#define VIBE_SHADER_DIR "shaders"
 #endif
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 VkBuffer make_buffer(VmaAllocator a, VkDeviceSize size, VkBufferUsageFlags usage,
@@ -104,7 +104,7 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
         }
         // Rocks: also as a cluster hierarchy (seamless detail per part of the rock).
         if (veg_cluster_meshes_.size() != veg_arch_.size()) veg_cluster_meshes_.assign(veg_arch_.size(), ClusterMesh{});
-        if (veg_arch_[a].species == 3 && !std::getenv("QLIKE_NO_CLUSTERS")) {
+        if (veg_arch_[a].species == 3 && !std::getenv("VIBE_NO_CLUSTERS")) {
             const auto& src = veg_arch_[a].lods[0];
             std::vector<Vertex> cv(src.verts.size());
             for (size_t k = 0; k < cv.size(); ++k) cv[k] = { src.verts[k].p, src.verts[k].n, glm::vec2(src.verts[k].u, src.verts[k].v) };
@@ -259,7 +259,7 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
 
 void VulkanEngine::init_vegetation_pipelines() {
     if (!veg_set_layout_) return;
-    const std::string sd = QLIKE_SHADER_DIR;
+    const std::string sd = VIBE_SHADER_DIR;
     veg_vert_module_ = vkpipe::load_shader_module(device_, sd + "/veg.vert.spv");
     veg_cull_module_ = vkpipe::load_shader_module(device_, sd + "/veg_cull.comp.spv");
 
@@ -309,7 +309,7 @@ void VulkanEngine::init_vegetation_pipelines() {
         // vertex shader, `invariant gl_Position`): draw only the pixels that
         // ARE them. Before, every cut-out leaf pixel and every pixel of a
         // fading LOD ran the whole material shader up to its discard.
-        if (!std::getenv("QLIKE_VEG_NO_EQ")) { g.depth_compare = VK_COMPARE_OP_EQUAL; g.depth_write = false; }
+        if (!std::getenv("VIBE_VEG_NO_EQ")) { g.depth_compare = VK_COMPARE_OP_EQUAL; g.depth_write = false; }
         veg_gbuf_pipeline_ = vkpipe::build_graphics_pipeline(device_, g);
     }
     auto d = cfg;
@@ -355,7 +355,7 @@ void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
     pc.cam = glm::vec4(fv.eye_pos, ppr);
     const uint32_t regular = veg_cluster_count_ ? veg_cluster_first_ : veg_count_;     // (clustered rocks: cull_clusters)
     pc.params = glm::vec4(float(regular), object_far_, std::max(0.25f, rt_.veg_lod_bias) * veg_lod_res_scale(),
-                          (veg_hiz_ready_ && !std::getenv("QLIKE_NO_HIZ")) ? 1.0f : 0.0f);
+                          (veg_hiz_ready_ && !std::getenv("VIBE_NO_HIZ")) ? 1.0f : 0.0f);
     {
         // Camera cut (teleport, respawn, big snap turn): last frame's Hi-Z
         // no longer describes this view and would cull visible trees for a
@@ -421,7 +421,7 @@ void VulkanEngine::draw_vegetation(VkCommandBuffer cmd, bool depth_only) {
     // level: a stride of kVegDrawLods picks one level of every archetype.)
     {
         const uint32_t n_arch = uint32_t(veg_cmd_template_.size()) / uint32_t(kVegDrawLods);
-        const bool by_level = !std::getenv("QLIKE_VEG_NO_ORDER");
+        const bool by_level = !std::getenv("VIBE_VEG_NO_ORDER");
         if (by_level) {
             for (int l = 0; l < kVegDrawLods; ++l)
                 vkCmdDrawIndexedIndirect(cmd, veg_ind_buf_, VkDeviceSize(l) * sizeof(VkDrawIndexedIndirectCommand), n_arch,
@@ -681,7 +681,7 @@ void VulkanEngine::create_veg_hiz() {
         plci.setLayoutCount = 1; plci.pSetLayouts = &veg_hiz_set_layout_;
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pr;
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &veg_hiz_layout_), "hiz layout");
-        veg_hiz_module_ = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/hiz_build.comp.spv");
+        veg_hiz_module_ = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/hiz_build.comp.spv");
         VkComputePipelineCreateInfo cci{};
         cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -863,4 +863,4 @@ void VulkanEngine::blast_vegetation(glm::vec3 pos, float radius) {
                pos.x, pos.y, pos.z, radius, n_trees, cols);
 }
 
-} // namespace qlike
+} // namespace vibe

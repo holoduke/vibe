@@ -32,8 +32,8 @@
 // Pulled in here (not in vk_engine.h) so the unique_ptr<voxel::VoxelWorld>
 // member's destructor can be generated in this TU where the type is
 // complete. Forward-declared in the header to keep its include surface tight.
-// Must be at file scope (NOT inside namespace qlike) so voxel_world.h's
-// `namespace qlike::voxel` resolves to the same fully-qualified name as
+// Must be at file scope (NOT inside namespace vibe) so voxel_world.h's
+// `namespace vibe::voxel` resolves to the same fully-qualified name as
 // the forward decl in vk_engine.h.
 #include "engine/voxel/voxel_world.h"
 
@@ -74,15 +74,15 @@
 #include <thread>
 #include <typeinfo>
 
-#ifndef QLIKE_SHADER_DIR
-#define QLIKE_SHADER_DIR "shaders"
+#ifndef VIBE_SHADER_DIR
+#define VIBE_SHADER_DIR "shaders"
 #endif
 
 // (declared here instead of including windows.h, whose macros clash with our names)
 extern "C" __declspec(dllimport) void* __stdcall GetCurrentProcess();
 extern "C" __declspec(dllimport) int __stdcall TerminateProcess(void*, unsigned int);
 
-namespace qlike {
+namespace vibe {
 
 // PushConstants, SceneUBO, debug_callback, spark_blackbody, align_local_y_to,
 // recoil_kick, xorshift32 / frand / frand_range, buffer_device_address,
@@ -98,9 +98,9 @@ VulkanEngine::~VulkanEngine() { shutdown(); }
 
 void VulkanEngine::init() {
     log::info("VulkanEngine::init()");
-    // QLIKE_TEST_SIZE=WxH: window size for profiling at the played resolution.
+    // VIBE_TEST_SIZE=WxH: window size for profiling at the played resolution.
     uint32_t win_w = 1280, win_h = 720;
-    if (const char* ts = std::getenv("QLIKE_TEST_SIZE")) {
+    if (const char* ts = std::getenv("VIBE_TEST_SIZE")) {
         unsigned tw = 0, th = 0;
         if (std::sscanf(ts, "%ux%u", &tw, &th) == 2 && tw >= 320 && th >= 200) { win_w = tw; win_h = th; }
     }
@@ -604,21 +604,21 @@ void VulkanEngine::run(const RunOptions& opts) {
             in.mouse_dx = 0.0;
             in.mouse_dy = 0.0;
         }
-        // Dev hook for headless captures of weapon visuals: QLIKE_TEST_FIRE=1
+        // Dev hook for headless captures of weapon visuals: VIBE_TEST_FIRE=1
         // pulls the trigger every 8th frame (pair with --screenshot).
         {
-            static const bool test_fire = std::getenv("QLIKE_TEST_FIRE") != nullptr;
+            static const bool test_fire = std::getenv("VIBE_TEST_FIRE") != nullptr;
             static int test_fire_n = 0;
-            // QLIKE_TEST_FIRE=<n > 1>: one single shot at frame n instead.
-            static const int test_fire_at = test_fire ? std::atoi(std::getenv("QLIKE_TEST_FIRE")) : 0;
+            // VIBE_TEST_FIRE=<n > 1>: one single shot at frame n instead.
+            static const int test_fire_at = test_fire ? std::atoi(std::getenv("VIBE_TEST_FIRE")) : 0;
             if (test_fire && (test_fire_at > 1 ? (++test_fire_n == test_fire_at) : ((++test_fire_n % 8) == 0))) {
                 in.fire = true;
                 in.fire_held = true;
             }
-            // QLIKE_TEST_MOVE=1: real movement keys on a 9 s loop (forward with a jump, sprint,
+            // VIBE_TEST_MOVE=1: real movement keys on a 9 s loop (forward with a jump, sprint,
             // strafe, back, a turning arc) - an unattended player for watching animation and
             // netcode from a second instance.
-            static const bool test_move = std::getenv("QLIKE_TEST_MOVE") != nullptr;
+            static const bool test_move = std::getenv("VIBE_TEST_MOVE") != nullptr;
             if (test_move) {
                 static const auto move_t0 = std::chrono::steady_clock::now();
                 const float t = std::fmod(std::chrono::duration<float>(std::chrono::steady_clock::now() - move_t0).count(), 9.0f);
@@ -627,14 +627,14 @@ void VulkanEngine::run(const RunOptions& opts) {
                 else if (t < 6.0f) in.back = true;
                 else if (t < 8.5f) { in.fwd = true; in.left = t > 7.2f; in.mouse_dx = 6.0; in.jump = t > 7.9f && t < 8.0f; }
             }
-            // QLIKE_TEST_HOLD=1: pin the camera at the restored settings
+            // VIBE_TEST_HOLD=1: pin the camera at the restored settings
             // pose (no gravity) for aerial / overview captures.
-            static const bool test_hold = std::getenv("QLIKE_TEST_HOLD") != nullptr;
+            static const bool test_hold = std::getenv("VIBE_TEST_HOLD") != nullptr;
             static bool hold_init = false;
             static glm::vec3 hold_pos{0.0f};
-            // QLIKE_TEST_BOOM=<metres>: ground explosion that far ahead of
+            // VIBE_TEST_BOOM=<metres>: ground explosion that far ahead of
             // the camera at frame 40 (headless explosion captures).
-            static const char* test_boom = std::getenv("QLIKE_TEST_BOOM");
+            static const char* test_boom = std::getenv("VIBE_TEST_BOOM");
             static int boom_frame = 0;
             if (test_boom && ++boom_frame == 40) {
                 glm::vec3 f = player_.forward(); f.y = 0.0f;
@@ -646,10 +646,10 @@ void VulkanEngine::run(const RunOptions& opts) {
             if (test_hold) {
                 if (!hold_init) {
                     hold_pos = player_.position; hold_init = true;
-                    // QLIKE_DUMP_HEIGHTS=<file>: the ground the CPU knows, as raw float32, every 8 m
+                    // VIBE_DUMP_HEIGHTS=<file>: the ground the CPU knows, as raw float32, every 8 m
                     // over x -1400..3000, z -1400..1400 (551 x 351, rows of x) - for laying out
                     // rivers / roads against the real relief.
-                    if (const char* dump = std::getenv("QLIKE_DUMP_HEIGHTS")) {
+                    if (const char* dump = std::getenv("VIBE_DUMP_HEIGHTS")) {
                         if (FILE* f = std::fopen(dump, "wb")) {
                             for (int j = 0; j < 351; ++j) for (int i = 0; i < 551; ++i) {
                                 const float g = sample_terrain_height(-1400.0f + 8.0f * float(i), -1400.0f + 8.0f * float(j));
@@ -658,9 +658,9 @@ void VulkanEngine::run(const RunOptions& opts) {
                             std::fclose(f);
                         }
                     }
-                    // QLIKE_TEST_GROUND=1: stand the held camera on the ground the CPU knows there (eye
+                    // VIBE_TEST_GROUND=1: stand the held camera on the ground the CPU knows there (eye
                     // 1.7 m up) - a capture then shows whether that is the ground the GPU draws.
-                    if (std::getenv("QLIKE_TEST_GROUND")) {
+                    if (std::getenv("VIBE_TEST_GROUND")) {
                         const float g = sample_terrain_height(hold_pos.x, hold_pos.z);
                         hold_pos.y = std::max(g, rt_.water_level) + 1.7f - 0.75f;   // (position is 0.75 m below the eye)
                         log::infof("[test] ground at (%.0f, %.0f): %.2f m (water %.2f)", hold_pos.x, hold_pos.z, g, rt_.water_level);
@@ -668,11 +668,11 @@ void VulkanEngine::run(const RunOptions& opts) {
                 }
                 if (globe_moved_player_) { hold_pos = player_.position; globe_moved_player_ = false; }    // (re-anchored on the globe)
                 player_.position = hold_pos;
-                // QLIKE_TEST_FLIGHT=<y0>,<y1>,<frames>[,<yaw per frame>]: from frame 60 on the
+                // VIBE_TEST_FLIGHT=<y0>,<y1>,<frames>[,<yaw per frame>]: from frame 60 on the
                 // held camera flies from altitude y0 to y1 (evenly in the logarithm, so every
                 // part of a castle-to-space flight gets its share of frames) while turning.
                 // With --frames the time step is fixed, so a given frame is the same in every run.
-                static const char* test_flight = std::getenv("QLIKE_TEST_FLIGHT");
+                static const char* test_flight = std::getenv("VIBE_TEST_FLIGHT");
                 if (test_flight) {
                     static float fy0 = 0.0f, fy1 = 0.0f, fn = 1.0f, fyaw = 0.0f, fyaw0 = 0.0f; static bool fi = false;
                     if (!fi) { fi = true; std::sscanf(test_flight, "%f,%f,%f,%f", &fy0, &fy1, &fn, &fyaw); fyaw0 = player_.yaw; }
@@ -682,8 +682,8 @@ void VulkanEngine::run(const RunOptions& opts) {
                 }
 
                 player_.velocity = glm::vec3(0.0f);
-                // QLIKE_TEST_PAN=<rad/s>: steady yaw pan (motion artefact captures).
-                static const char* test_pan = std::getenv("QLIKE_TEST_PAN");
+                // VIBE_TEST_PAN=<rad/s>: steady yaw pan (motion artefact captures).
+                static const char* test_pan = std::getenv("VIBE_TEST_PAN");
                 if (test_pan) player_.yaw += static_cast<float>(std::atof(test_pan)) * frame_dt;
             }
         }
@@ -745,8 +745,8 @@ void VulkanEngine::run(const RunOptions& opts) {
             body_reload_left_ = body_animator_->weapon.reload_time;
         }
         prev_reload_key_ = in.brush_mode_next;
-        // Right mouse: aim. (Test hook: QLIKE_TEST_AIM=1 holds it.)
-        static const bool kTestAim = std::getenv("QLIKE_TEST_AIM") != nullptr;
+        // Right mouse: aim. (Test hook: VIBE_TEST_AIM=1 holds it.)
+        static const bool kTestAim = std::getenv("VIBE_TEST_AIM") != nullptr;
         body_aim_ = state_ == State::Playing && !terrain_edit_mode_ && weapon_ == 0 && !flashlight_on_ && (in.alt_fire_held || kTestAim);
         if (state_ != State::Playing) last_pin_ = game::PlayerInput{};
         if (in.fly_key && !prev_fly_key_ && state_ == State::Playing) {
@@ -862,7 +862,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         if (recoil_timer_       > 0.0f) recoil_timer_       -= frame_dt;
         mp_update(frame_dt);               // LAN multiplayer: network, other players' shots, hits
         if (state_ == State::Playing && (window_->cursor_captured() ||
-                                           std::getenv("QLIKE_TEST_FIRE"))) {
+                                           std::getenv("VIBE_TEST_FIRE"))) {
             // Raymarch terrain reads FBM directly in the shader — sculpting
             // the heightmap has no visual effect and only triggers wasted
             // chunk rebuilds / BLAS rebuilds / texture uploads.
@@ -1068,9 +1068,9 @@ void VulkanEngine::run(const RunOptions& opts) {
                 }
                 { CPU_SCOPE("tick-aabbs"); rebuild_tick_aabbs(); }
                 CPU_SCOPE("tick-rest");
-                // QLIKE_TEST_BROADPHASE=1: replay the tick against EVERY static
+                // VIBE_TEST_BROADPHASE=1: replay the tick against EVERY static
                 // collider and report any difference from the near-set result.
-                static const bool kCheckBroad = std::getenv("QLIKE_TEST_BROADPHASE") != nullptr;
+                static const bool kCheckBroad = std::getenv("VIBE_TEST_BROADPHASE") != nullptr;
                 game::Player ref_player = player_;
                 { CPU_SCOPE("+player");
                 game::update_player(player_, pin, tick_aabbs_, kFixedDt, tick_static_count_); }
@@ -1246,13 +1246,13 @@ void VulkanEngine::run(const RunOptions& opts) {
         // rebuild) once per frame, off the per-bullet impact path.
         process_voxel_updates(frame_dt);
         tick_flashlight(frame_dt);       // F key, sway, beam direction
-        // Test hooks: QLIKE_TEST_ZONE=<zone> paints a 70 m disc of that zone
-        // 90 m ahead of the camera on frame 5; QLIKE_TEST_EDIT=1 opens edit
+        // Test hooks: VIBE_TEST_ZONE=<zone> paints a 70 m disc of that zone
+        // 90 m ahead of the camera on frame 5; VIBE_TEST_EDIT=1 opens edit
         // mode with the zone tool (for UI captures).
         {
-            static const char* kTestZone = std::getenv("QLIKE_TEST_ZONE");
-            static const bool kTestEdit = std::getenv("QLIKE_TEST_EDIT") != nullptr;
-            static const bool kTestMenu = std::getenv("QLIKE_TEST_MENU") != nullptr;
+            static const char* kTestZone = std::getenv("VIBE_TEST_ZONE");
+            static const bool kTestEdit = std::getenv("VIBE_TEST_EDIT") != nullptr;
+            static const bool kTestMenu = std::getenv("VIBE_TEST_MENU") != nullptr;
             if (kTestMenu && frame_number_ == 5) state_ = State::Paused;
             if (frame_number_ == 5 && (kTestZone || kTestEdit)) {
                 const glm::vec3 fw(std::sin(player_.yaw), 0.0f, -std::cos(player_.yaw));
@@ -1528,7 +1528,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             hz_ms[2] = hz_mark(hz_t);
             sl_marker(1);   // PCL simulation end
             auto& frame = current_frame();
-            QLIKE_VK_CHECK(vkWaitForFences(device_, 1, &frame.render_fence,
+            VIBE_VK_CHECK(vkWaitForFences(device_, 1, &frame.render_fence,
                                            VK_TRUE, UINT64_MAX),
                            "vkWaitForFences");
             hz_ms[3] = hz_mark(hz_t);
@@ -1545,12 +1545,12 @@ void VulkanEngine::run(const RunOptions& opts) {
                                               VK_NULL_HANDLE, &img_index);
             if (acq == VK_ERROR_OUT_OF_DATE_KHR) { resize_requested_ = true; continue; }
             if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
-                QLIKE_VK_CHECK(acq, "vkAcquireNextImageKHR");
+                VIBE_VK_CHECK(acq, "vkAcquireNextImageKHR");
             }
 
-            QLIKE_VK_CHECK(vkResetFences(device_, 1, &frame.render_fence),
+            VIBE_VK_CHECK(vkResetFences(device_, 1, &frame.render_fence),
                            "vkResetFences");
-            QLIKE_VK_CHECK(vkResetCommandBuffer(frame.command_buffer, 0),
+            VIBE_VK_CHECK(vkResetCommandBuffer(frame.command_buffer, 0),
                            "vkResetCommandBuffer");
 
             hz_ms[4] = hz_mark(hz_t);
@@ -1728,8 +1728,8 @@ void VulkanEngine::shutdown() {
     // Everything of ours is saved and released. What is left - tearing down the
     // device, the instance and the upscaler SDK's plug-ins - took 7 seconds and
     // gives nothing back that the operating system does not reclaim at once:
-    // leave now. (QLIKE_FULL_SHUTDOWN=1 runs the complete teardown, for leak checks.)
-    if (!std::getenv("QLIKE_FULL_SHUTDOWN")) {
+    // leave now. (VIBE_FULL_SHUTDOWN=1 runs the complete teardown, for leak checks.)
+    if (!std::getenv("VIBE_FULL_SHUTDOWN")) {
         log::info("Vibe shutdown (fast exit)");
         log::close();
         std::fflush(nullptr);
@@ -1776,4 +1776,4 @@ void VulkanEngine::shutdown() {
     initialized_ = false;
 }
 
-} // namespace qlike
+} // namespace vibe

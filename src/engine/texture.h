@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 // One uploaded 2D texture: device-local image + view + the VMA allocation
 // that backs it. Sampler is shared across textures and owned elsewhere.
@@ -97,4 +97,4 @@ BackgroundDecodeHandle start_background_decode(
     const std::vector<std::string>& paths);
 std::vector<TextureCpuPixels> finish_background_decode(BackgroundDecodeHandle h);
 
-} // namespace qlike
+} // namespace vibe

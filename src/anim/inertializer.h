@@ -9,7 +9,7 @@
 // plain vector offsets. The character's root is not touched: the controller owns it.
 #include "anim/types.h"
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 class Inertializer {
 public:
@@ -30,4 +30,4 @@ private:
     float energy_ = 0.0f;
 };
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

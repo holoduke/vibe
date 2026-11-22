@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 class ByteWriter {
 public:
@@ -77,4 +77,4 @@ private:
     const uint8_t* end_;
 };
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

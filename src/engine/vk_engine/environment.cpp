@@ -30,7 +30,7 @@
 #include <cmath>
 #include <cstdlib>
 
-namespace qlike {
+namespace vibe {
 
 // rt_ <-> env_base_ for every driven field (its own inverse).
 void VulkanEngine::env_swap_base() {
@@ -366,7 +366,7 @@ void VulkanEngine::apply_environment(float dt) {
             const float vis_now = moon_is_light ? sun_horizon_visibility(player_.eye_position()) : 1.0f;
             env_moon_vis_ += (vis_now - env_moon_vis_) * glm::clamp(dt * 1.5f, 0.0f, 1.0f);
             const float moon_gnd = moon_sky * cloud_tr * glm::mix(0.10f, 1.0f, env_moon_vis_);
-            { static int dbg = 0; if (std::getenv("QLIKE_TEST_MOONLOG") && (++dbg % 120) == 0) log::infof("[moon] elev %.1f deg, in sky %.2f, is light %d, visible from player %.2f (now %.2f)", em, moon_sky, moon_is_light ? 1 : 0, env_moon_vis_, vis_now); }
+            { static int dbg = 0; if (std::getenv("VIBE_TEST_MOONLOG") && (++dbg % 120) == 0) log::infof("[moon] elev %.1f deg, in sky %.2f, is light %d, visible from player %.2f (now %.2f)", em, moon_sky, moon_is_light ? 1 : 0, env_moon_vis_, vis_now); }
             const float star_gnd = 0.10f * glm::clamp(rt_.star_brightness, 0.0f, 1.5f) *
                                    (1.0f - overcast) * (1.0f - overcast);
             // The directional light: the moon at its real height (so mountains
@@ -421,8 +421,8 @@ void VulkanEngine::apply_environment(float dt) {
     env_golden_ = golden_k;
 
     // ---------------- lightning ----------------
-    // QLIKE_TEST_LIGHTNING=1: a strike every ~0.7 s, 500 m straight ahead (captures).
-    static const bool test_lightning = std::getenv("QLIKE_TEST_LIGHTNING") != nullptr;
+    // VIBE_TEST_LIGHTNING=1: a strike every ~0.7 s, 500 m straight ahead (captures).
+    static const bool test_lightning = std::getenv("VIBE_TEST_LIGHTNING") != nullptr;
     if (test_lightning) lightning_timer_ = std::min(lightning_timer_, 0.7f);
     if (storm > 0.05f || test_lightning) {
         lightning_timer_ -= dt;
@@ -535,8 +535,8 @@ void VulkanEngine::update_footprints(float dt) {
     auto prints_at = [&](const glm::vec3& p) {
         return snowy || (!castle_road_.empty() && castle_road_.distance(p.x, p.z) < castle_road_.half_width + 0.9f);
     };
-    // QLIKE_TEST_FOOTPRINTS=1: a trail of prints straight ahead of the player (captures).
-    if (static bool done = false; !done && std::getenv("QLIKE_TEST_FOOTPRINTS")) {
+    // VIBE_TEST_FOOTPRINTS=1: a trail of prints straight ahead of the player (captures).
+    if (static bool done = false; !done && std::getenv("VIBE_TEST_FOOTPRINTS")) {
         done = true;
         const glm::vec3 f(std::sin(player_.yaw), 0.0f, -std::cos(player_.yaw));
         for (int i = 0; i < 12; ++i) add_footprint(player_.position + f * (1.2f + 0.7f * float(i)), player_.yaw, (i & 1) != 0);
@@ -588,4 +588,4 @@ void VulkanEngine::tick_rain_audio(float rain) {
     }
 }
 
-}  // namespace qlike
+}  // namespace vibe

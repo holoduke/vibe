@@ -31,7 +31,7 @@
 #include <cstdlib>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -303,7 +303,7 @@ void VulkanEngine::tick_flashlight(float dt) {
     // F toggles (edge), not while typing in a text field or in the menu.
     const bool down = in_flashlight_;      // (F, or the controller's button: menu, Controls)
     const bool typing = imgui_initialized_ && ImGui::GetIO().WantTextInput;
-    static const bool kTestOn = std::getenv("QLIKE_TEST_FLASHLIGHT") != nullptr;
+    static const bool kTestOn = std::getenv("VIBE_TEST_FLASHLIGHT") != nullptr;
     if (kTestOn && frame_number_ == 5) flashlight_on_ = true;
     if (down && !flash_key_prev_ && state_ == State::Playing && !typing) {
         flashlight_on_ = !flashlight_on_;
@@ -367,17 +367,17 @@ void VulkanEngine::tick_flashlight(float dt) {
     // re-anchors it once the camera is known (begin_frame_commands).
     flash_off_ = cr * (0.118f + bob_x) + cu * (-0.118f + bob_y) + cf * 0.275f;
     flash_pos_ = player_.eye_position() + flash_off_;
-    // Test hook: QLIKE_TEST_FLASHVIEW=<deg> holds the lamp in front of the eye, turned by that angle (model inspection).
-    static const char* kView = std::getenv("QLIKE_TEST_FLASHVIEW");
+    // Test hook: VIBE_TEST_FLASHVIEW=<deg> holds the lamp in front of the eye, turned by that angle (model inspection).
+    static const char* kView = std::getenv("VIBE_TEST_FLASHVIEW");
     if (kView) {
         basis(player_.yaw + glm::radians(float(std::atof(kView))), player_.pitch - 0.25f, f, r, u);
         flash_fwd_ = f; flash_right_ = r; flash_up_ = u;
         flash_off_ = cf * 0.24f - cu * 0.01f;
         flash_pos_ = player_.eye_position() + flash_off_;
     }
-    // Test hook: QLIKE_TEST_FLASHSIDE=<m> moves the lamp that far to the right (shadow check).
-    static const char* kSide = std::getenv("QLIKE_TEST_FLASHSIDE");
+    // Test hook: VIBE_TEST_FLASHSIDE=<m> moves the lamp that far to the right (shadow check).
+    static const char* kSide = std::getenv("VIBE_TEST_FLASHSIDE");
     if (kSide) { flash_off_ += cr * float(std::atof(kSide)); flash_pos_ = player_.eye_position() + flash_off_; }
 }
 
-}  // namespace qlike
+}  // namespace vibe

@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 void clip_fk(const SkeletonDef& s, const RawClip& c, int frame, std::vector<glm::quat>& rot, std::vector<glm::vec3>& pos) {
     const int n = s.size();
@@ -112,4 +112,4 @@ ClipReport validate_clip(const SkeletonDef& s, const RawClip& c, float max_root_
     return r;
 }
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline

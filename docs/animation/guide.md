@@ -6,7 +6,7 @@ measurements in `performance.md`.
 ## The shape of it
 
 ```
-src/anim/                    library qlike_anim: glm + ozz, no Vulkan, no engine headers
+src/anim/                    library vibe_anim: glm + ozz, no Vulkan, no engine headers
   runtime.h, ozz_runtime.cpp   skeleton, clips, sampling, blending, FK, IK (IAnimationRuntime; ozz behind it)
   motion_db.*                  the motion-matching database and its search
   trajectory.*                 where the controller will take the character (its own movement model)
@@ -21,7 +21,7 @@ shaders/cube_skin.vert                 skins on the GPU (bone palette: binding 3
 src/engine/net/net_state.h, net_anim.h what is replicated and how it becomes a remote animator's input
 tools/anim/cook_main.cpp     vibe_animcook
 tools/anim/bench_main.cpp    vibe_animbench
-tests/anim/                  qlike_anim_tests
+tests/anim/                  vibe_anim_tests
 ```
 
 ## Runtime API
@@ -85,7 +85,7 @@ or asset version constants change.
 ## Tuning
 
 `AnimTuning` (per animator; `character_animator.h`). Without a rebuild:
-`QLIKE_ANIM_TUNE="halflife=0.06,lean=0,foot_lock=0"` — names are listed above
+`VIBE_ANIM_TUNE="halflife=0.06,lean=0,foot_lock=0"` — names are listed above
 `apply_anim_tuning` in `player_body.cpp`. The switches (`foot_ik`, `foot_lock`, `stride_warp`,
 `orient_warp`, `hand_ik`, `lean`, `air`) exist for side-by-side comparison.
 
@@ -96,28 +96,28 @@ prediction follows.
 
 | Hook | Effect |
 |---|---|
-| `QLIKE_ANIM_DEBUG=1` | Overlay: clip and time, cost by feature group, predicted path, foot targets (green = locked), hand targets, muzzle line, phases, timings, levels of detail, network counters |
-| `QLIKE_BODY_DEBUG=1` | One log line a second with the same |
-| `QLIKE_BODY_FRONT=<m>`, `QLIKE_BODY_TURN=<deg>` | Stand the local body in front of the camera, turned |
-| `QLIKE_BODY_WALK=<m/s>`, `QLIKE_BODY_STRAFE=<m/s>`, `QLIKE_BODY_AIR=<m/s>` | Drive it |
-| `QLIKE_BODY_FIRE=<shots/s>`, `QLIKE_BODY_RELOAD=1` | Fire / reload in a loop |
-| `QLIKE_TEST_AIM=1` | Hold the aim (right mouse) |
-| `QLIKE_BODY_REST=1` | Rest pose |
-| `QLIKE_BODY_CROWD=<n>` | Draw the local body n more times (GPU cost of n skinned characters) |
-| `QLIKE_TEST_MOVE=1` | The player moves by itself on a 9 s loop of real key input: forward, jump, sprint, strafe, back, a turning arc |
-| `QLIKE_ANIM_LOD=<0..3>` | Force other players' level of detail |
-| `QLIKE_MESH_LOD=<0..2>` | Force which mesh every soldier is drawn with |
-| `QLIKE_NO_BODY_SHADOW=1` | Soldiers are not drawn into the small-object shadow map (comparison) |
-| `QLIKE_NO_BODY_RT=1` | Soldiers are not in the ray-traced scene (comparison); `QLIKE_BODY_RT_INSET=<m>` sets how far their copy is pulled in under the drawn skin |
-| `QLIKE_ANIM_LOG=1` | Per-frame animation cost, level counts, network bytes, and what each remote player's animator is doing, in the log |
-| `QLIKE_NET_PORT=<n>` | Another discovery port: test instances do not meet real games |
-| `QLIKE_CFG=<file>` | Another settings file (captures without touching the player's own) |
+| `VIBE_ANIM_DEBUG=1` | Overlay: clip and time, cost by feature group, predicted path, foot targets (green = locked), hand targets, muzzle line, phases, timings, levels of detail, network counters |
+| `VIBE_BODY_DEBUG=1` | One log line a second with the same |
+| `VIBE_BODY_FRONT=<m>`, `VIBE_BODY_TURN=<deg>` | Stand the local body in front of the camera, turned |
+| `VIBE_BODY_WALK=<m/s>`, `VIBE_BODY_STRAFE=<m/s>`, `VIBE_BODY_AIR=<m/s>` | Drive it |
+| `VIBE_BODY_FIRE=<shots/s>`, `VIBE_BODY_RELOAD=1` | Fire / reload in a loop |
+| `VIBE_TEST_AIM=1` | Hold the aim (right mouse) |
+| `VIBE_BODY_REST=1` | Rest pose |
+| `VIBE_BODY_CROWD=<n>` | Draw the local body n more times (GPU cost of n skinned characters) |
+| `VIBE_TEST_MOVE=1` | The player moves by itself on a 9 s loop of real key input: forward, jump, sprint, strafe, back, a turning arc |
+| `VIBE_ANIM_LOD=<0..3>` | Force other players' level of detail |
+| `VIBE_MESH_LOD=<0..2>` | Force which mesh every soldier is drawn with |
+| `VIBE_NO_BODY_SHADOW=1` | Soldiers are not drawn into the small-object shadow map (comparison) |
+| `VIBE_NO_BODY_RT=1` | Soldiers are not in the ray-traced scene (comparison); `VIBE_BODY_RT_INSET=<m>` sets how far their copy is pulled in under the drawn skin |
+| `VIBE_ANIM_LOG=1` | Per-frame animation cost, level counts, network bytes, and what each remote player's animator is doing, in the log |
+| `VIBE_NET_PORT=<n>` | Another discovery port: test instances do not meet real games |
+| `VIBE_CFG=<file>` | Another settings file (captures without touching the player's own) |
 
 Two instances on one PC, one observing the other:
 
 ```bash
-QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=a.cfg QLIKE_TEST_MOVE=1 QLIKE_TEST_FIRE=1 ./build/vibe.exe --frames 5000 &
-QLIKE_NET=1 QLIKE_NET_PORT=48777 QLIKE_CFG=b.cfg QLIKE_TEST_HOLD=1 QLIKE_ANIM_DEBUG=1 QLIKE_ANIM_LOG=1 ./build/vibe.exe --frames 1500 --screenshot obs.png --screenshot-after 130
+VIBE_NET=1 VIBE_NET_PORT=48777 VIBE_CFG=a.cfg VIBE_TEST_MOVE=1 VIBE_TEST_FIRE=1 ./build/vibe.exe --frames 5000 &
+VIBE_NET=1 VIBE_NET_PORT=48777 VIBE_CFG=b.cfg VIBE_TEST_HOLD=1 VIBE_ANIM_DEBUG=1 VIBE_ANIM_LOG=1 ./build/vibe.exe --frames 1500 --screenshot obs.png --screenshot-after 130
 ```
 
 ## Measuring the gait
@@ -135,7 +135,7 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 
 ## Tests
 
-`./build.ps1 -Config Release -Test`, or `build/tests/qlike_anim_tests.exe "[animator]"`.
+`./build.ps1 -Config Release -Test`, or `build/tests/vibe_anim_tests.exe "[animator]"`.
 
 | Tag | Covers |
 |---|---|
@@ -152,7 +152,7 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 | Symptom | Cause |
 |---|---|
 | No body; log says `no animation: ... soldier.qanim` | Asset missing, cooked for another ozz version, or its skeleton is not the mesh's: cook again |
-| Log: `the animator produced N pose(s) that were not finite` | A bug; the last good pose was shown. `QLIKE_BODY_DEBUG=1` shows the clip and mode at that time |
+| Log: `the animator produced N pose(s) that were not finite` | A bug; the last good pose was shown. `VIBE_BODY_DEBUG=1` shows the clip and mode at that time |
 | Overlay says `FALLBACK: path only` often | The request is outside what was captured: the clip is chosen by direction alone. Should be rare since requests are mapped onto the pace each direction of the capture sustains |
 | Feet slide when running | Some is expected with this data, most of it sideways (G1); `vibe_animbench <asset> slide` gives the numbers |
 | An arm or a knee snaps over for a frame | Should not happen (the `[asset]` test bounds every joint's rate): run `vibe_animbench <asset> slide` and look at the last column |
@@ -188,17 +188,17 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   face does not move.
 - **G7 — not watched in motion by a person.** Verified by tests, stills, and a two-instance run
   on the real netcode in which one instance walks, sprints, jumps, strafes, back-pedals and swims
-  by itself (`QLIKE_TEST_MOVE=1`) and the other logs what its animator reconstructs
+  by itself (`VIBE_TEST_MOVE=1`) and the other logs what its animator reconstructs
   (`captures/mp_moving.png`).
 - **G8 — reload is cosmetic** (the laser has no magazine); weapon switching has an equip layer
   but no captured draw / holster.
 - **Aim and ready.** Right mouse is the aim (`CharacterAnimationInput::aiming`, replicated as
   `kFlagAim`). Seen from outside: the rifle in the shoulder, the head on the sights. In the
   player's own view, and only there: the weapon in the middle of the screen, its top under the
-  crosshair (`WeaponDef::ads_shift_fp`; `QLIKE_ADS="x,y,z"` to try other places). Without the aim
+  crosshair (`WeaponDef::ads_shift_fp`; `VIBE_ADS="x,y,z"` to try other places). Without the aim
   the rifle is at the ready: lower (at the ribs from outside, lower right and a little canted in
   the player's view), pointing where the view does all the same (`ready_*`). Aiming also narrows
-  the view from 80 to 62 degrees (`QLIKE_AIM_FOV`; the mouse turns the view correspondingly less).
+  the view from 80 to 62 degrees (`VIBE_AIM_FOV`; the mouse turns the view correspondingly less).
   The shot goes where the crosshair is either way; there is no change of spread or speed.
   A shot's tracer starts at the muzzle of the weapon as held (`weapon_fire_offset`), the player's
   own and other players' alike.
@@ -216,13 +216,13 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
   0.11 s up, now and then twice), eyes that are on the idle look's target before the head gets
   there and dart a little in between, lids that follow the eyes up and down, a jaw that drops
   and brows that lift with a hit, a jaw that hangs and eyes that close when killed, a slightly
-  open mouth at a sprint. `QLIKE_ANIM_TUNE="blink=1"`, `jaw=0.3`, `eyes=0.5` hold one of them to
+  open mouth at a sprint. `VIBE_ANIM_TUNE="blink=1"`, `jaw=0.3`, `eyes=0.5` hold one of them to
   look at it; `face=0` switches the layer off. No lips, cheeks or speech: the mouth corners and
   the tongue stay with the head or the jaw. Capture: `captures/face_rig.png` (open, shut, jaw,
   eyes right, eyes left).
 - **Looking down at oneself.** The body has no head and its clothes are open at the collar: the
   export closes it with the base of the neck, and the body stands further behind the eye the
-  further down the view goes (`QLIKE_BODY_BACK`, `QLIKE_BODY_BACK_DOWN`), so straight down shows
+  further down the view goes (`VIBE_BODY_BACK`, `VIBE_BODY_BACK_DOWN`), so straight down shows
   chest and legs, not the inside of the torso.
 - **Third person hold.** Seen from outside, the rifle is moved so its butt sits in the right shoulder
   (`WeaponDef::butt`, `shoulder_offset`; `AnimTuning::shoulder_weapon`) and the head leans to the
@@ -238,7 +238,7 @@ lock,footik,hand,lean,rate` switches layers off for comparison; `SLIDE_STRIDE`, 
 - **Death.** A killed player's body stands for 0.38 s more where it was hit (`MpAvatar::dying_t`; they
   themselves respawn at once) and buckles: `CharacterAnimationInput::dying` 0 -> 1 lets the legs give,
   folds the torso the way the last shot went, drops the head and lets the weapon sink. Then it is
-  a ragdoll, started from that pose and speed (`QLIKE_DYING=<s>`, 0 = straight to the ragdoll).
+  a ragdoll, started from that pose and speed (`VIBE_DYING=<s>`, 0 = straight to the ragdoll).
   Not a powered ragdoll: nothing reacts to the ground during the buckle.
 - **G9 — one weapon definition** (`default_rifle()`); `WeaponDef` holds grips, muzzle, recoil
   and reload timing per weapon, but the game has one gun model. No ADS in the game, so none here.

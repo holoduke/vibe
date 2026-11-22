@@ -11,9 +11,9 @@
 #include <functional>
 #include <random>
 
-using namespace qlike;
-using namespace qlike::anim;
-using namespace qlike::net;
+using namespace vibe;
+using namespace vibe::anim;
+using namespace vibe::net;
 using Catch::Matchers::WithinAbs;
 
 namespace {

@@ -19,7 +19,7 @@
 #include <cstdlib>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -174,7 +174,7 @@ void VulkanEngine::corpses_update(float dt) {
         }
         else c.av.settle = 0.0f;
         CPU_SCOPE("ragdoll");
-        if (std::getenv("QLIKE_RAGDOLL_DEBUG") && (frame_number_ % 20) == 0) {
+        if (std::getenv("VIBE_RAGDOLL_DEBUG") && (frame_number_ % 20) == 0) {
             glm::vec3 p; glm::quat q; physics_->ragdoll_part(c.rag, 0, p, q);
             const PhysicsWorld::RayHit h = physics_->raycast(c.origin + glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 20.0f);
             log::infof("[ragdoll] age %.2f pelvis %.2f %.2f %.2f  origin %.2f %.2f %.2f  physics ground y %.2f (hit %d dyn %d)", c.age, p.x, p.y, p.z, c.origin.x, c.origin.y, c.origin.z, h.position.y, int(h.hit), int(h.dynamic));
@@ -243,4 +243,4 @@ void VulkanEngine::corpses_destroy() {
     }
 }
 
-}  // namespace qlike
+}  // namespace vibe

@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::detect_gpu_vendor() {
     // Throw-away instance through the plain loader: which GPU will we get?
@@ -47,11 +47,11 @@ void VulkanEngine::detect_gpu_vendor() {
     }
     gpu_vendor_ = vendor == 0x10DE ? GpuVendor::Nvidia : vendor == 0x1002 ? GpuVendor::Amd
                 : vendor == 0x8086 ? GpuVendor::Intel : vendor ? GpuVendor::Other : GpuVendor::Unknown;
-    if (const char* e = std::getenv("QLIKE_FORCE_VENDOR")) {
+    if (const char* e = std::getenv("VIBE_FORCE_VENDOR")) {
         const std::string v = e;
         gpu_vendor_ = v == "amd" ? GpuVendor::Amd : v == "nvidia" ? GpuVendor::Nvidia
                     : v == "intel" ? GpuVendor::Intel : gpu_vendor_;
-        log::warnf("[gpu] vendor forced to '%s' (QLIKE_FORCE_VENDOR)", e);
+        log::warnf("[gpu] vendor forced to '%s' (VIBE_FORCE_VENDOR)", e);
     }
     static const char* kNames[] = { "unknown", "NVIDIA", "AMD", "Intel", "other" };
     log::infof("[gpu] %s (vendor %s, 0x%04x)", gpu_name_.c_str(), kNames[int(gpu_vendor_)], vendor);
@@ -408,12 +408,12 @@ void VulkanEngine::init_swapchain() {
     vkb::SwapchainBuilder sb{ physical_device_, device_, surface_ };
     auto sc_ret = sb
         .set_desired_format(want)
-        // QLIKE_PRESENT_IMMEDIATE=1: no vsync (benchmarking the GPU/CPU
+        // VIBE_PRESENT_IMMEDIATE=1: no vsync (benchmarking the GPU/CPU
         // frame cost without the refresh-rate cap). Falls back to FIFO.
         // DLSS Frame Generation: no VSync on Vulkan (SDK limitation) - use
         // mailbox (tear-free, uncapped) so generated frames are not queued
         // behind the refresh.
-        .set_desired_present_mode((std::getenv("QLIKE_PRESENT_IMMEDIATE")) ? VK_PRESENT_MODE_IMMEDIATE_KHR
+        .set_desired_present_mode((std::getenv("VIBE_PRESENT_IMMEDIATE")) ? VK_PRESENT_MODE_IMMEDIATE_KHR
                                   : dlssg_loaded_ ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR)
         .add_fallback_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR)
         .add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR)
@@ -919,9 +919,9 @@ void VulkanEngine::destroy_readback_buffer() {
     }
 }
 
-} // namespace qlike
+} // namespace vibe
 
-namespace qlike {
+namespace vibe {
 // Upscaler / frame generation for the detected GPU (when 'upscaler_auto').
 // Runs after load_settings: the saved choice is overridden per vendor so a
 // config moved between machines still gets the right path.
@@ -958,4 +958,4 @@ void VulkanEngine::anti_lag_mark(bool present_stage) {
     d.pPresentationInfo = &pi;
     anti_lag_fn_(device_, &d);
 }
-}  // namespace qlike
+}  // namespace vibe

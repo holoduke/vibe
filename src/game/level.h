@@ -9,7 +9,7 @@
 
 #include "game/collision.h"
 
-namespace qlike::game {
+namespace vibe::game {
 
 struct Brush {
     glm::vec3 center;
@@ -133,4 +133,4 @@ float stone_bridge_deck_height(glm::vec3 a, glm::vec3 b, float width, float x, f
 // Timber lamp post with a hanging lantern; returns the lantern's centre.
 glm::vec3 append_lamp_post(Level& lv, glm::vec3 base, glm::vec3 arm_dir, uint32_t seed);
 
-} // namespace qlike::game
+} // namespace vibe::game

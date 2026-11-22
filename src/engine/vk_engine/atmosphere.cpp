@@ -20,7 +20,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr uint32_t kTransW = 256, kTransH = 64;
@@ -141,7 +141,7 @@ void VulkanEngine::init_atmosphere() {
         plci.setLayoutCount = 1; plci.pSetLayouts = &atmo_set_layout_;
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &atmo_pipeline_layout_), "atmo layout");
-        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/atmosphere.comp.spv");
+        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/atmosphere.comp.spv");
         VkComputePipelineCreateInfo cci{};
         cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -354,7 +354,7 @@ void VulkanEngine::init_clouds() {
         plci.setLayoutCount = 1; plci.pSetLayouts = &cloud_set_layout_;
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &cloud_pipeline_layout_), "cloud layout");
-        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/clouds.comp.spv");
+        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/clouds.comp.spv");
         VkComputePipelineCreateInfo cci{};
         cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -685,7 +685,7 @@ void VulkanEngine::init_fog() {
         plci.setLayoutCount = 1; plci.pSetLayouts = &fog_set_layout_;
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &fog_pipeline_layout_), "fog layout");
-        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/froxel_fog.comp.spv");
+        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/froxel_fog.comp.spv");
         VkComputePipelineCreateInfo cci{};
         cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -790,4 +790,4 @@ void VulkanEngine::dispatch_fog(VkCommandBuffer cmd) {
     barrier();
 }
 
-} // namespace qlike
+} // namespace vibe

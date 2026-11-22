@@ -6,7 +6,7 @@
 
 #include <cmath>
 
-namespace qlike {
+namespace vibe {
 namespace {
 
 using game::LevelMesh;
@@ -424,4 +424,4 @@ AaModel build_sam_model() {
     return M;
 }
 
-} // namespace qlike
+} // namespace vibe

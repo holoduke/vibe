@@ -7,7 +7,7 @@
 #include <limits>
 #include <utility>
 
-namespace qlike::collision {
+namespace vibe::collision {
 
 namespace {
 constexpr float kEpsilon = 1e-4f;
@@ -246,4 +246,4 @@ MoveResult slide_move(const AABB& player, glm::vec3 position, glm::vec3 velocity
     return { pos, velocity, grounded, step_amount };
 }
 
-} // namespace qlike::collision
+} // namespace vibe::collision

@@ -6,7 +6,7 @@
 
 #include <functional>
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 bool build_runtime_skeleton(const SkeletonDef& s, std::vector<uint8_t>& blob, std::string* why = nullptr);
 
@@ -54,5 +54,5 @@ bool cook_takes(const std::string& dir, const std::vector<TakeSource>& sources, 
                 const CompressParams& cp, const std::string& provenance, const std::string& licence, AnimAsset& asset,
                 CookedClips& cooked, const CookLog& log, std::string* why = nullptr);
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline
 

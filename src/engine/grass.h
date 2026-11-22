@@ -24,7 +24,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 // Layout MUST match grass.vert's vertex inputs (locations 3/4/5 each
 // declared as vec4, so each entry consumes 16 bytes). Earlier 36-byte
@@ -101,4 +101,4 @@ GrassMesh build_grass(VkDevice device, VmaAllocator alloc, VkQueue queue,
 
 void destroy_grass(VmaAllocator alloc, GrassMesh& g);
 
-} // namespace qlike
+} // namespace vibe

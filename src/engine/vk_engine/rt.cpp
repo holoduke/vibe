@@ -13,7 +13,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 // Sentinel instanceCustomIndex for the merged-static-BLAS TLAS instance.
 // cube.frag's GI loop sees this and switches to per-primitive material
@@ -39,7 +39,7 @@ void VulkanEngine::init_rt() {
     const uint32_t rt_share_count = compute_queue_distinct_ ? 2u : 0u;
     const uint32_t* rt_share_indices = compute_queue_distinct_ ? shared_families : nullptr;
 
-    // Build a BLAS for an arbitrary qlike::Mesh. Reused for cube + cylinder.
+    // Build a BLAS for an arbitrary vibe::Mesh. Reused for cube + cylinder.
     auto build_mesh_blas = [&](const Mesh& mesh, const char* tag,
                                VkBuffer& out_buffer, VmaAllocation& out_alloc,
                                VkAccelerationStructureKHR& out_as,
@@ -1370,4 +1370,4 @@ void VulkanEngine::rebuild_tlas(VkCommandBuffer cmd) {
     // error on a compute-only queue (which doesn't support that stage).
 }
 
-} // namespace qlike
+} // namespace vibe

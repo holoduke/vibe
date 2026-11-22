@@ -25,7 +25,7 @@
 #include <thread>
 #include <unordered_set>
 
-namespace qlike {
+namespace vibe {
 #include "engine/world_props_meshes.inl"   // mesh builders for trees, bushes and rocks (conifer, broadleaf, pine, shrub, slab rock)
 
 // Boulders sculpted and baked in Blender (tools/rocks/make_rocks.py):
@@ -421,8 +421,8 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
             }
             return;
         }
-        // Test aid: QLIKE_LOG_ROCKS=1 lists the larger boulders near the castle.
-        { static const bool kLog = std::getenv("QLIKE_LOG_ROCKS") != nullptr; static int shown = 0;
+        // Test aid: VIBE_LOG_ROCKS=1 lists the larger boulders near the castle.
+        { static const bool kLog = std::getenv("VIBE_LOG_ROCKS") != nullptr; static int shown = 0;
           if (kLog && s > 1.6f && std::abs(x) < 160.0f && std::abs(z) < 160.0f && shown++ < 12)
               log::infof("[rock] baked %d at (%.1f, %.1f, %.1f) scale %.2f", arch[size_t(ai)].baked, x, gy, z, s); }
         float he = s * 0.72f;
@@ -488,9 +488,9 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
     }
     // Trees. max_trees counts trees only (out already holds the rocks).
 
-    // Test hook: QLIKE_TEST_ROCKS=1 lines up one rock of every variant on the
+    // Test hook: VIBE_TEST_ROCKS=1 lines up one rock of every variant on the
     // open castle road (from about (-45, 52) toward the gate) for inspection.
-    if (std::getenv("QLIKE_TEST_ROCKS")) {
+    if (std::getenv("VIBE_TEST_ROCKS")) {
         for (int k = 0; k < 8; ++k) {
             const float x = -45.0f + 1.25f * float(k) + ((k & 1) ? 2.6f : -2.6f);
             const float z = 52.0f - 3.9f * float(k);
@@ -605,7 +605,7 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
             ++placed;
         }
         st.river_shrubs = placed;
-        if (std::getenv("QLIKE_LOG_VEG")) {            // where to look: a few shrubs and trees for test captures
+        if (std::getenv("VIBE_LOG_VEG")) {            // where to look: a few shrubs and trees for test captures
             int rn = 0, tn = 0, on = 0;
             for (const auto& v : out) {
                 const auto& A = arch[size_t(v.rot_arch_phase.y + 0.5f)];
@@ -674,4 +674,4 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
     return out;
 }
 
-} // namespace qlike
+} // namespace vibe

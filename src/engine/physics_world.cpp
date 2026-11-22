@@ -41,7 +41,7 @@
 
 JPH_SUPPRESS_WARNINGS
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -83,7 +83,7 @@ public:
     }
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
     const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer) const override {
-        return "qlike-bp";
+        return "vibe-bp";
     }
 #endif
 private:
@@ -1027,4 +1027,4 @@ void PhysicsWorld::apply_impulse_h(BodyHandle h, glm::vec3 impulse) {
         JPH::BodyID(h), JPH::Vec3(impulse.x, impulse.y, impulse.z));
 }
 
-} // namespace qlike
+} // namespace vibe

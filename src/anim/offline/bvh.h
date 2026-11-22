@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 struct Bvh {
     struct Joint {
@@ -34,4 +34,4 @@ bool load_bvh(const std::string& path, Bvh& out, std::string* why = nullptr);
 // the file's own axes). Rotation channels are applied in file order.
 void bvh_fk(const Bvh& b, int frame, std::vector<glm::dmat3>& rot, std::vector<glm::dvec3>& pos);
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline

@@ -11,7 +11,7 @@
 
 #include <glm/glm.hpp>
 
-namespace qlike::net {
+namespace vibe::net {
 
 struct RemoteFrame {
     glm::mat4 model{1.0f};        // the body's model matrix (model space: +X right, +Y up, -Z forward)
@@ -74,4 +74,4 @@ inline uint8_t move_bits(const game::PlayerInput& p) {
                    (p.sprint ? kMoveSprint : 0) | (p.jump ? kMoveJump : 0) | (p.crawl ? kMoveCrawl : 0));
 }
 
-}  // namespace qlike::net
+}  // namespace vibe::net

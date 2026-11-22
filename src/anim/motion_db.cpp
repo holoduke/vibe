@@ -10,7 +10,7 @@
 #include <immintrin.h>
 #endif
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 namespace {
 constexpr char kConvention[] = "right-handed, +Y up, root frame x right / z back, metres, seconds";
@@ -340,4 +340,4 @@ MotionMatch MotionDatabase::search_reference(const MotionQuery& q) const {
     return best;
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

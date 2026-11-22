@@ -3,7 +3,7 @@
 // parents, rest joint positions), plus the roles the animation code needs by name.
 #include "anim/types.h"
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 enum class Role : int {
     Root, Hips, Spine, Spine1, Spine2, Neck, Head,
@@ -49,4 +49,4 @@ struct Rig {
 };
 Rig make_rig(const SkeletonDef& s);
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

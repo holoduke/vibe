@@ -7,7 +7,7 @@
 #include "engine/vk_engine.h"
 
 #include "engine/log.h"
-#include "engine/vk_initializers.h"   // qlike::vk_check
+#include "engine/vk_initializers.h"   // vibe::vk_check
 #include "engine/window.h"
 
 #include <imgui.h>
@@ -20,7 +20,7 @@
 #include <cstdio>
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 
 // What an action is bound to on the device in the hands of the player: for prompts on screen.
@@ -119,8 +119,8 @@ void VulkanEngine::build_menu_ui() {
     }
 
     // ----- Controls tab: view, mouse, controller, keys and buttons -----------
-    // Test hook: QLIKE_TEST_MENU=controls opens the pause menu on this tab (captures).
-    static int test_controls_tab = [] { const char* e = std::getenv("QLIKE_TEST_MENU"); return (e && e[0] == 'c') ? 3 : 0; }();
+    // Test hook: VIBE_TEST_MENU=controls opens the pause menu on this tab (captures).
+    static int test_controls_tab = [] { const char* e = std::getenv("VIBE_TEST_MENU"); return (e && e[0] == 'c') ? 3 : 0; }();
     const ImGuiTabItemFlags controls_flags = test_controls_tab > 0 ? ImGuiTabItemFlags_SetSelected : 0;
     if (test_controls_tab > 0) --test_controls_tab;
     if (ImGui::BeginTabItem("Controls", nullptr, controls_flags)) {
@@ -205,8 +205,8 @@ void VulkanEngine::build_menu_ui() {
     }
 
     // ----- Weather tab: time, weather, moon, sun, sky, clouds, fog ---------
-    // Test hook: QLIKE_TEST_MENU=weather opens the pause menu on this tab (captures).
-    static int test_weather_tab = [] { const char* e = std::getenv("QLIKE_TEST_MENU"); return (e && e[0] == 'w') ? 3 : 0; }();
+    // Test hook: VIBE_TEST_MENU=weather opens the pause menu on this tab (captures).
+    static int test_weather_tab = [] { const char* e = std::getenv("VIBE_TEST_MENU"); return (e && e[0] == 'w') ? 3 : 0; }();
     const ImGuiTabItemFlags weather_flags = test_weather_tab > 0 ? ImGuiTabItemFlags_SetSelected : 0;
     if (test_weather_tab > 0) --test_weather_tab;
     if (ImGui::BeginTabItem("Weather", nullptr, weather_flags)) {
@@ -1409,4 +1409,4 @@ void VulkanEngine::build_menu_ui() {
 }
 
 
-} // namespace qlike
+} // namespace vibe

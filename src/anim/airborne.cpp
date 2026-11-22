@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 const char* air_phase_name(AirPhase p) {
     switch (p) {
@@ -134,4 +134,4 @@ AirborneOutput update_airborne(const MotionDatabase& db, AirborneState& st, cons
     return o;
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

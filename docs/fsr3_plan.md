@@ -234,7 +234,7 @@ session 4's SwapChain context creation succeeds.
   Pin to a known-good tag (latest stable, currently v3.1.x).
 - CMake: `add_subdirectory(...)` with `FFX_FSR3_API_VK=ON` + DX12 off.
   Mirror the FSR 2 wiring in our top-level `CMakeLists.txt`.
-- Add `QLIKE_HAVE_FSR3=1` define gated on submodule presence.
+- Add `VIBE_HAVE_FSR3=1` define gated on submodule presence.
 - **No code calls FSR 3 yet** — just verify it links.
 - Build, run, no behaviour change.
 

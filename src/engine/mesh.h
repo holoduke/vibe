@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 struct Vertex {
     glm::vec3 position;
@@ -47,4 +47,4 @@ Mesh create_mesh_from_data(VkDevice device, VmaAllocator alloc, VkQueue queue,
                            const Vertex* vertices, uint32_t vertex_count,
                            const uint32_t* indices, uint32_t index_count);
 
-} // namespace qlike
+} // namespace vibe

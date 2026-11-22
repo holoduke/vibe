@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 float capture_speed(float s, const MatcherParams& p) {
     if (s <= p.walk_speed) return s;
@@ -131,4 +131,4 @@ MatcherOutput update_matcher(const MotionDatabase& db, MatcherState& st, const M
     return o;
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

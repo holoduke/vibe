@@ -1,9 +1,9 @@
 #version 460
 // ONE source for two passes:
 //   * terrain_raymarch.frag.spv - procedural ray-marched terrain (default)
-//   * water.frag.spv            - water surface, compiled with -DQLIKE_WATER=1
+//   * water.frag.spv            - water surface, compiled with -DVIBE_WATER=1
 //     (see CMakeLists.txt). The two used to be ~3100-line near-copies;
-//     the pass-specific parts are the QLIKE_WATER blocks below.
+//     the pass-specific parts are the VIBE_WATER blocks below.
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_ray_query : require
 
@@ -22,17 +22,17 @@
 layout(location = 0) in vec2 vNDC;
 layout(location = 1) in vec4 vWNear;
 layout(location = 2) in vec4 vWFar;
-#ifdef QLIKE_WATER
+#ifdef VIBE_WATER
 // Perspective-correct world position of the water surface at this
 // pixel, output by water.vert from the actual plane mesh vertices.
 // Replaces the per-frame inv(view_proj) reconstruction below — that
 // was the source of the "water orientation drifts with camera" wobble.
 layout(location = 3) in vec3 vWPos;
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
 
 layout(location = 0) out vec4 outColor;
-#ifdef QLIKE_MARCH_ONLY
-// The low-resolution build (main: QLIKE_MARCH_ONLY) writes the sun-shadow terms of its hit
+#ifdef VIBE_MARCH_ONLY
+// The low-resolution build (main: VIBE_MARCH_ONLY) writes the sun-shadow terms of its hit
 // here: x self-shadow, y object shadow (both 0 lit .. 1 shadowed), z distance of the hit,
 // w 1 = valid.
 layout(location = 1) out vec4 outShadeLo;
@@ -40,14 +40,14 @@ layout(location = 1) out vec4 outShadeLo;
 #else
 layout(location = 1) out vec2 outMotion;
 #endif
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
 // G-buffer dual writes (deferred migration). Raymarched terrain
 // pixels carry material_id 8 = pre-shaded pass-through.
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
 // G-buffer dual writes — Phase 2/5 of the deferred-render migration.
 // Water pixels get material_id 7 so the deferred lighting pass sees the
 // already-shaded water colour and passes it through unmodified.
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
 layout(location = 2) out vec4 outGBuffer0;
 layout(location = 3) out vec4 outGBuffer1;
 
@@ -112,7 +112,7 @@ layout(set = 0, binding = 35) uniform sampler2D u_shade_lo;
 // loops used to compute per-tap. UV maps q→texture as `q / 16.0` so
 // the texture tiles every 16 q-units (≈800 m of world space).
 layout(set = 0, binding = 14) uniform sampler2D u_fog_wisp;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
 // Small-object (flowers / ferns / clutter rocks) sun shadow map, D32.
 layout(set = 0, binding = 28) uniform sampler2DArray u_clutter_shadow;   // layer 0 = 64 m, 1 = 16 m near
 // Smooth 3x3 PCF on one layer of the small-caster shadow map: the edge
@@ -134,7 +134,7 @@ float clutterOcc(vec2 uv, int layer, float zref) {
     }
     return occ / 9.0;
 }
-#endif /* ! QLIKE_WATER */
+#endif /* ! VIBE_WATER */
 // (in a far chart - another part of the planet - there is no home tile: its side is nothing)
 bool g_far_chart = false;        // (set first thing in main: scene.globe_info.x)
 #define kHeightmapSide (g_far_chart ? 1.0e-3 : 2048.0)
@@ -412,7 +412,7 @@ bool leaf_card_hit(rayQueryEXT rq) {
     return textureLod(LEAF_ATLAS, auv, 1.5).a > 0.33;
 }
 
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
 // Slab-test ray vs AABB. Used to check sun occlusion through the voxel
 // castle AABB (voxels aren't in the TLAS — see voxel_origin comment).
 bool ray_aabb_hit(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
@@ -425,7 +425,7 @@ bool ray_aabb_hit(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
     float t1 = min(min(hi.x, hi.y), hi.z);
     return t1 > max(t0, 0.0);
 }
-#endif /* ! QLIKE_WATER */
+#endif /* ! VIBE_WATER */
 // Voxel brickmap atlas + shape directory. Shared with cube.frag at the
 // same binding slots — both shaders live in the same descriptor set.
 // Suffixed _w so glslang doesn't see a block-name conflict if both
@@ -639,7 +639,7 @@ float rm_self_shadow_base(vec3 pos, vec3 nor, vec3 sunDir) {
     float self_shadow = 1.0;
     {
         float lit_g = 1.0;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         if (distance(pos, scene.camera_pos.xyz) < 220.0) {
             float tg = 0.10;
             float g_top = terrainMaxHeight();
@@ -653,7 +653,7 @@ float rm_self_shadow_base(vec3 pos, vec3 nor, vec3 sunDir) {
                 tg *= (i < 14) ? 1.5 : 1.22;
             }
         }
-#endif /* ! QLIKE_WATER */
+#endif /* ! VIBE_WATER */
         // The FBM self-shadow march (the most expensive part of terrain
         // shading) only where the heightmap walk left the point lit.
         self_shadow = 1.0 - lit_g;
@@ -707,7 +707,7 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
         // each pixel's shadow cone slightly and produces dither.
         vec3 origin = pos + sunDir * 0.1;
         // Per-pixel + per-frame seed — TAA averages noisy samples.
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         // World-anchored seed. The per-pixel + per-frame seed relied on
         // TAA to average it, but DLSS keeps it as detail: under tree
         // canopies (wide penumbra, every pixel partly lit) the ground was
@@ -724,9 +724,9 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
         // temporal denoiser needs noise that changes every frame; the
         // frozen grain read as texture and stayed as a blocky speckle.
         if ((scene.rt_flags.x & 2) != 0) seed_base = uvec3(gl_FragCoord.xy, scene.rt_flags.w);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         uvec3 seed_base = uvec3(gl_FragCoord.xy, scene.rt_flags.w);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
 
         // 1. Blocker search (4 rays, 4× softness cone).
         const int kBlocker = 4;
@@ -802,7 +802,7 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
     return dyn_shadow;
 }
 
-#ifdef QLIKE_LITE
+#ifdef VIBE_LITE
 // The "first start" build of this shader (terrain_raymarch_lite.frag.spv). The full shader is so
 // large that a graphics driver needs a minute or more to compile it the first time; the game
 // does not wait for that. It starts on this build - the same ground, found by the same march,
@@ -826,12 +826,12 @@ void main() {
     g_far_chart = scene.globe_info.x > 0.5;
     nf_setup();
     foot_bounds_init();      // footprints in the snow (winter)
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     // Ray reconstruction: vWNear / vWFar (relative to the camera) were computed in the vert
     // shader (pc.model × ndc-near / ndc-far) and interpolated. Per
     // pixel we just need the homogeneous divide + subtract + normalize
     // — the matrix multiplies that used to dominate this stub are gone.
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     // World position of the water surface at this pixel comes directly
     // from the rasterised plane's vertex interpolation (vWPos). The old
     // inv(view_proj) reconstruction (`pc.model * ndc...`) drifted by
@@ -841,14 +841,14 @@ void main() {
     // pose and matches the rasterised depth exactly. Ray dir & ray-t
     // are derived from (vWPos - camera) so reflection helpers below see
     // the same world geometry.
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
     vec3 ro = scene.camera_pos.xyz;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     vec3 rd = normalize(vWFar.xyz / vWFar.w - vWNear.xyz / vWNear.w);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     vec3 _to_surf = vWPos - ro;
     vec3 rd = normalize(_to_surf);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
 
     // Water plane intersection FIRST — its `t` gives us a max distance
     // for the heightfield march: terrain past the water plane can't be
@@ -857,7 +857,7 @@ void main() {
     // beneath water.
     bool water_on = scene.water_params.x > 0.5;
     float water_y = scene.water_params.y;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     float t_water_plane = -1.0;
     if (water_on && abs(rd.y) > 1e-4) {
         float tw = (water_y - ro.y) / rd.y;
@@ -871,12 +871,12 @@ void main() {
     // range by 1200 m. It used to drop to that range the moment the camera passed 220 m - all
     // the sea between 23 km and the horizon turned into the far field's colour in one frame.)
     if (ro.y > 220.0 && t_water_plane > rm_far_limit(ro.y) * mix(3.0, 1.0, smoothstep(220.0, 1200.0, ro.y))) t_water_plane = -1.0;
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     // Distance to the water plane is just |vWPos - camera|. Replaces the
     // analytic ray-vs-plane intersection (which was algebraically equal
     // but numerically drifted with inv_vp, same root cause as wpos drift).
     float t_water_plane = water_on ? length(_to_surf) : -1.0;
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
 
     // Water-only mode: the mesh terrain path already rasterised the
     // ground (with depth) this frame, so we must NOT raymarch terrain
@@ -890,15 +890,15 @@ void main() {
     // Skips the expensive terrain march entirely — only the water
     // plane + the existing full water shading (all styles, foam,
     // showthrough, reflection) run. Identical water to the FBM path.
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     bool water_only = scene.terrain_local_info.x > 0.5;
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     // This shader is ONLY ever bound by the rasterised water-plane
     // pipeline, so water-only is unconditional — the mesh terrain
     // already owns the ground this frame; we just shade water.
     bool water_only = true;
-#endif /* QLIKE_WATER */
-#ifdef QLIKE_MARCH_ONLY
+#endif /* VIBE_WATER */
+#ifdef VIBE_MARCH_ONLY
     {
         // This build IS the low-resolution march: one distance per block of pixels, nothing else.
         bool  air_lo = ro.y > terrainMaxHeight() + 60.0;
@@ -973,7 +973,7 @@ void main() {
     // In water-only mode the FBM terrain itself is never SHADED (the
     // mesh owns the ground); terrain-hit pixels are discarded below so
     // the rasterised mesh shows through.
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     // Stop at the nearest pre-pass surface (full-resolution pass only: the
     // depth copy matches this target pixel for pixel). The depth test
     // already rejected the terrain behind trees / rocks / the castle - but
@@ -1031,9 +1031,9 @@ void main() {
         if (obj_stop && t < 0.0) discard;
     }
 
-#if !defined(QLIKE_WATER) && !defined(QLIKE_LITE)
+#if !defined(VIBE_WATER) && !defined(VIBE_LITE)
     if (RMDBG(64)) {
-        // Profiling (QLIKE_RM_SKIP bit 64): the march alone. Nothing is shaded; the picture
+        // Profiling (VIBE_RM_SKIP bit 64): the march alone. Nothing is shaded; the picture
         // shows how many steps each pixel's march took (black 0 .. white 64, red beyond).
         if (t < 0.0) discard;
         vec4 cd = pc.mvp * vec4(ro + rd * t, 1.0);
@@ -1054,7 +1054,7 @@ void main() {
 
     if (t < 0.0 && t_water < 0.0) {
         // Sky — let the existing compose-pass sky handle this pixel.
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     // RASTERISED WATER PLANE: this shader is only ever bound by the
     // water-plane pipeline. The terrain mesh already wrote its depth
     // this frame, so occlusion (terrain in front of water) is a
@@ -1071,13 +1071,13 @@ void main() {
     if (t_water <= 0.0) {
         // Ray never crosses the water plane (degenerate / looking away)
         // — nothing to shade. Plane geometry rarely produces these.
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         discard;
     }
 
     // === Water surface shading ===========================================
     if (t_water > 0.0) {
-#ifdef QLIKE_LITE
+#ifdef VIBE_LITE
         {
             vec3 wp = ro + rd * t_water;
             float fres = 0.03 + 0.97 * pow(1.0 - clamp(-rd.y, 0.0, 1.0), 5.0);
@@ -1087,15 +1087,15 @@ void main() {
             return;
         }
 #endif
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         vec3 wpos = ro + rd * t_water;
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         // Hardware depth-test (depth_test ON in setup.cpp) handles
         // "is terrain in front?" occlusion. wpos comes straight from
         // vWPos — perspective-correct world position from the plane
         // mesh vertices, no per-frame inv_vp drift, no need to snap.
         vec3 wpos = vWPos;
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         float wave_str = scene.water_params.z;
         float wave_t   = scene.water_params.w;
         // wave-frequency multiplier — packed in water_color_shallow.w
@@ -1559,11 +1559,11 @@ void main() {
         deep = max(deep, vec3(0.0));
         float shore_blend = max(0.1, scene.water_shore.x);
         float shore_noise = scene.water_shore.y;
-#ifdef QLIKE_WATER
+#ifdef VIBE_WATER
         // wpos.xz was already 1 cm-snapped at the source (line ~1692)
         // so everything in this block — terrain_y, foam, shore noise,
         // wave normals — sees TAA-jitter-stable coordinates.
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         float terrain_y = water_only ? meshHeight(wpos.xz)
                                       : terrainM_lod(wpos.xz, t_water);
         // Noise-free depth — the foam band uses this so the highlight
@@ -1572,22 +1572,22 @@ void main() {
         // for the wider shallow→deep tint transition only.
         float depth_clean = max(0.0, water_y - terrain_y);
         float depth_m   = depth_clean;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         float dn = noise2(wpos.xz * 0.18) +
                     0.5 * noise2(wpos.xz * 0.42);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         // Lower-frequency shore noise: the old metre-scale octaves made
         // the water/land boundary visibly crawl when the camera moved
         // along the shore. A slow meander reads as a natural coastline
         // without the swim.
         float dn = noise2(wpos.xz * 0.10) +
                     0.35 * noise2(wpos.xz * 0.26);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         depth_m += (dn - 0.6) * shore_blend * shore_noise;
         depth_m  = max(0.0, depth_m);
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         float water_blend = smoothstep(0.0, shore_blend, depth_m);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         // Screen-space anti-alias the shore transition. A fixed
         // metre-width smoothstep collapses to <1 px at grazing angles
         // / distance, so the shoreline aliases and jumps frame-to-
@@ -1595,7 +1595,7 @@ void main() {
         // than ~2.5 px of depth gradient.
         float sb_aa = max(shore_blend, fwidth(depth_m) * 2.5);
         float water_blend = smoothstep(0.0, sb_aa, depth_m);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         // P_Malin-style underwater extinction when river style is on.
         // exp2(-depth * ext_col) gives the characteristic green-river
         // look (red attenuates fastest, then green, blue lasts). Mixed
@@ -1659,13 +1659,13 @@ void main() {
             //   3. Skip past 80 m view distance — the shadow-map
             //      cascade already covers everything within its frustum
             //      and beyond that the FBM detail is sub-pixel.
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             float w_dist = length(wpos - scene.camera_pos.xyz);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
             // t_water_plane (line 1765) already holds the camera-to-surface
             // distance — reuse it instead of recomputing a length() here.
             float w_dist = t_water_plane;
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
             if (water_lit > 0.95 && w_dist < 80.0 &&
                 dot(wnor, sunDirW) > 0.05) {
                 float self_lit = water_only
@@ -1673,7 +1673,7 @@ void main() {
                     : calcShadow(wpos + wnor * 0.05, sunDirW);
                 water_lit = min(water_lit, self_lit);
             }
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             // Explicit TLAS shadow ray — catches brushes/dyn-props that
             // may not be in the sun shadow map cascade. Mask 0x01 = all
             // shadow casters (terrain + brushes + dyn-props).
@@ -1698,7 +1698,7 @@ void main() {
                     water_lit = 0.0;
                 }
             }
-#endif /* ! QLIKE_WATER */
+#endif /* ! VIBE_WATER */
         }
 
         // Underwater showthrough — for shallow water we evaluate the
@@ -1707,21 +1707,21 @@ void main() {
         // T = exp(-depth * absorption) so deep water still hides
         // the bottom while shallow water reads transparent.
         vec3 baseTint = shallow;     // current shore-blended water colour
-#ifdef QLIKE_WATER
+#ifdef VIBE_WATER
         // Transparency / water clarity. The slider now controls how far
         // light penetrates: 0 = murky (bottom hidden within ~0.5 m),
         // 1 = very clear (seabed visible many metres down). Crucially
         // SHALLOW water is strongly see-through whenever clarity > ~0.2,
         // which is what reads as real shallow water over a sandy bottom.
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         float trans_amt = scene.water_shore.w;
         if (trans_amt > 0.001) {
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             // Reuse the depth_m we already computed for the shore
             // blend. Absorption coefficient picks ~50 % attenuation
             // at a 2 m depth, ~95 % by 6 m.
             float absorp = 0.5;
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
             // Two decoupled controls:
             //   trans_amt (Transparency slider) = master see-through
             //     strength: 0 = always opaque, 1 = full clarity.
@@ -1734,18 +1734,18 @@ void main() {
             // `clarity_depth` metres; shallower water is clear.
             float clarity_depth = max(0.1, pc.color.y);
             float absorp = 3.0 / clarity_depth;
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
             float Tw = exp(-depth_m * absorp);
             // Visibility gate: skip the entire underwater shading
             // (calcNormal = 1× FBM, getMaterial = several `noise2`
             // taps, lambert + ambient) when the contribution is
             // below ~5 % of the surface tint. At 6 m depth Tw drops
             // to 0.05; deep-water pixels read as opaque tint anyway.
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             if (Tw * trans_amt > 0.05) {
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
             if (Tw > 0.04) {
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
                 // Underwater surface — terrain material at the under-
                 // water point, lambert-shaded by sun (with shadow), no
                 // shore noise so the look is calm.
@@ -1792,15 +1792,15 @@ void main() {
                 // reads as "looking through water", not "no water".
                 u_col *= mix(vec3(1.0), shallow * 1.5 + vec3(0.05),
                               0.5);
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
                 // Blend: shallow → underwater visible, deep → opaque
                 // water_color. trans_amt scales the maximum showthrough.
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
                 // Beer's-law transmittance (depth fade governed by the
                 // clarity-depth knob) × trans_amt (master strength). At
                 // Transparency=1 + small clarity depth: shallow reads
                 // crystal-clear, deep water stays fully opaque.
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
                 baseTint = mix(baseTint, u_col, Tw * trans_amt);
             }
         }
@@ -1824,9 +1824,9 @@ void main() {
         // the natural foam / surf-line you see at real shorelines.
         // Tunable via UI: water_foam_color (rgb tint + a strength)
         // and water_foam_params.x (band width). Strength = 0 disables.
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         if (scene.water_foam_color.a > 0.001) {
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         float foam_amt = 0.0;   // hoisted so the final alpha can see it
         // Foam opacity (pc.color.w) is a MASTER override: it scales
         // both the foam colour AND its alpha, so 0 = no foam at all
@@ -1836,7 +1836,7 @@ void main() {
         // white foam tint visible at 0).
         float foam_op = clamp(pc.color.w, 0.0, 1.0);
         if (scene.water_foam_color.a > 0.001 && foam_op > 0.001) {
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
             // (the sea's shore has surf: the same lapping foam, several times as wide as a lake's)
             float foam_w = max(0.05, scene.water_foam_params.x) * (1.0 + 5.0 * smoothstep(1350.0, 1750.0, rm_home_dist(wpos.xz)));
             float band   = exp(-depth_clean * (4.0 / foam_w));
@@ -1871,14 +1871,14 @@ void main() {
             // above (1.0 when river style is off, so no effect).
             float flow_foam = clamp(1.0 - pm_foam_tex, 0.0, 1.0);
             float foam_mix = max(band, flow_foam);
-#ifdef QLIKE_WATER
+#ifdef VIBE_WATER
             foam_amt = foam_mix;
-#endif /* QLIKE_WATER */
-#ifndef QLIKE_WATER
+#endif /* VIBE_WATER */
+#ifndef VIBE_WATER
             foam_cover = foam_mix * scene.water_foam_color.a;
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
             foam_cover = foam_mix * scene.water_foam_color.a * foam_op;
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
             baseTint = mix(baseTint, scene.water_foam_color.rgb, foam_cover);
         }
         // Reflection goes over the tinted water; foam is matte, so it
@@ -1903,28 +1903,28 @@ void main() {
         // the wind direction gives the field motion. Foam intensity
         // also modulated by `water_lit` so shadowed water doesn't get
         // bright white speckles.
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         {
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         // Gated by the SAME foam-opacity master (foam_op) as the shore
         // band, and folded into foam_amt so the final alpha drops here
         // too — this whitecap foam was previously independent of the
         // slider, which is why low foam opacity still looked opaque.
         if (foam_op > 0.001) {
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
             float steepness = clamp(1.0 - wnor.y * 1.04, 0.0, 1.0);
             vec2 fp = wpos.xz * 0.55 + vec2(wave_t * 0.30, wave_t * 0.18);
             float fn = noise2(fp) * 0.6 + noise2(fp * 2.13) * 0.4;
             float foam = smoothstep(0.45, 0.85, fn * steepness * 1.6);
-#ifdef QLIKE_WATER
+#ifdef VIBE_WATER
             foam_amt = max(foam_amt, foam);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
             col_w = mix(col_w, vec3(0.95, 0.97, 1.0),
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
                         foam * 0.85 * water_lit);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
                         foam * 0.85 * water_lit * foam_op);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         }
 
         // Churned, aerated patch where something just hit the water.
@@ -1932,9 +1932,9 @@ void main() {
             vec2 fq = wpos.xz * 7.0;
             float fnz = noise2(fq) * 0.6 + noise2(fq * 2.3 + 3.1) * 0.4;
             float rf_amt = rip_w.z * smoothstep(0.25, 0.75, fnz + rip_w.z * 0.5);
-#ifdef QLIKE_WATER
+#ifdef VIBE_WATER
             foam_amt = max(foam_amt, rf_amt * 0.8);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
             col_w = mix(col_w, vec3(0.95, 0.97, 1.0) * (0.35 + 0.65 * water_lit), rf_amt * 0.6);
         }
         // Ring crests read mostly through what they reflect: the face
@@ -1962,36 +1962,36 @@ void main() {
                            0.3 * sd8);
         col_w = col_w * ext_w + fogColW * (1.0 - ext_w);
 
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         // Write hit depth; rasterised geometry that's actually in
         // front (e.g. a cube on a pier) still occludes us.
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         // Depth is owned by the RASTERISED water plane (this is real
         // geometry now, not a fullscreen analytic pass) — do NOT write
         // gl_FragDepth. That makes the terrain↔water silhouette a
         // pixel-exact hardware depth test (the whole point of the
         // rasterised-plane port). clipW is still needed for the motion
         // vector below.
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         vec4 clipW = pc.mvp * vec4(wpos, 1.0);
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         // See main terrain branch — cap below the compose sky-cutoff
         // threshold so far water doesn't get repainted as sky-below-
         // horizon (black). Guard against w<=0 (point behind camera) so
         // the depth divide doesn't produce NaN.
         gl_FragDepth = min(clipW.z / max(clipW.w, 1e-4), 0.999989);
-#endif /* ! QLIKE_WATER */
+#endif /* ! VIBE_WATER */
         // Distance fog on the water surface too.
         {
             float fa = distanceFogAmount(wpos, scene.camera_pos.xyz);
             col_w = mix(col_w, scene.distance_fog_color.rgb, fa);
         }
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         if (cam_under) col_w = under_col;      // seen from below (compose adds the water fog)
         outColor = vec4(col_w, 1.0);
         outGBuffer0 = vec4(clamp(col_w, vec3(0.0), vec3(1.0)), 8.0 / 255.0);
         outGBuffer1 = vec4(0.5, 0.5, 0.7, 0.0);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         // Soft shore depth-feather. The flat water plane and the
         // terrain mesh INTERSECT at the shoreline, where their depths
         // are ~equal — the razor-thin coplanar edge z-fights and
@@ -2080,7 +2080,7 @@ void main() {
         outColor = vec4(col_w, a);
         outGBuffer0 = vec4(clamp(col_w, vec3(0.0), vec3(1.0)), 7.0 / 255.0);
         outGBuffer1 = vec4(0.5, 0.5, 0.2, 0.0);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         // Motion vector for TAA reprojection. clip-space derivation
         // (resolution-independent) so the LR raymarch path doesn't
         // pick up a constant ~0.5 offset from scene.viewport being
@@ -2117,7 +2117,7 @@ void main() {
             discard;
         }
     }
-#ifdef QLIKE_LITE
+#ifdef VIBE_LITE
     {
         vec3 n_l = calcNormal(pos, t);
         float up_l = n_l.y, wl = scene.water_params.y;
@@ -2192,7 +2192,7 @@ void main() {
     // the pixel works its shadows out itself, exactly as before.
     bool lo_ok = false;
     vec2 lo_sh = vec2(0.0);
-#if !defined(QLIKE_WATER) && !defined(QLIKE_MARCH_ONLY)
+#if !defined(VIBE_WATER) && !defined(VIBE_MARCH_ONLY)
     if ((int(scene.rm_perf.x) & 5) == 5 && pc.emissive.x < 0.0 && !water_only && t > 0.0 && t < 1400.0) {
         float dv = scene.rm_perf.y;
         vec2  tc = gl_FragCoord.xy / dv - 0.5;
@@ -2487,12 +2487,12 @@ void main() {
     // the diffuse term. Strength + sample count + reach are all UI
     // sliders (0 strength = entirely off, no taps).
     float gcs_strength = scene.grass_shadow_params.x;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     // Legacy mask-probe shadow only when the exact blade march is off.
     float grass_shadow = (scene.grass_rm_params2.y > 0.5) ? 0.0 : grassCastShadow(pos, sunDir);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     float grass_shadow = grassCastShadow(pos, sunDir);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
     // Combine multiplicatively with self_shadow as transmittances.
     // shadow_amount=1 → light_through=0, so combined-blocked
     // = 1 - (1-self)*(1-grass) (union of independent occluders).
@@ -2500,7 +2500,7 @@ void main() {
     // also have grass nearby — the comment was right, the code wasn't.
     self_shadow = 1.0 - (1.0 - self_shadow) *
                         (1.0 - grass_shadow * gcs_strength);
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     // Flowers / ferns / clutter rocks: dedicated small-caster depth map
     // around the camera (same test as deferred_lighting.frag).
     if (scene.clutter_vp[3].w > 0.5 && dif > 0.0 && !RMDBG(16)) {
@@ -2549,7 +2549,7 @@ void main() {
             self_shadow = 1.0 - (1.0 - self_shadow) * gvis;
         }
     }
-#endif /* ! QLIKE_WATER */
+#endif /* ! VIBE_WATER */
 
     // RT PCSS for castle / boxes / dyn-props. Mirrors cube.frag's
     // terrain-receiver shadow path 1:1 — the cube.frag terrain
@@ -2672,7 +2672,7 @@ void main() {
     }
 
     vec3 mate = getMaterial(pos, nor) * rm_det_tint;
-#if !defined(QLIKE_LITE) && !defined(QLIKE_WATER)
+#if !defined(VIBE_LITE) && !defined(VIBE_WATER)
     if (RMDBG(256)) mate = lo_ok ? vec3(0.1, 0.8, 0.1) : vec3(0.9, 0.1, 0.1);    // profiling: green = sun shadows taken from the low-resolution pass
 #endif
     // The ground is darker where plants stand over it (leaf litter, damp soil,
@@ -3107,13 +3107,13 @@ void main() {
         if (fl_ndl > 0.0 && (fl.r + fl.g + fl.b) > 1e-4 &&
             !any_hit_no_terrain(pos + nor * 0.08, fl_dir, max(fl_dist - 0.05, 0.05))) {
             float blade_vis = 1.0;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             if (scene.grass_rm_params2.y > 0.5 && distance(pos, scene.camera_pos.xyz) < 20.0 &&
                 grassEligibility(pos.xz, pos.y) > 0.02)
                 blade_vis = mix(1.0, grass_blade_shadow(pos, fl_dir), scene.grass_rm_params2.z * 0.6 + 0.4);
 #endif
             float plant_vis;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             FLASH_PLANT_VIS(u_clutter_shadow, pos + nor * 0.03, plant_vis)
 #else
             plant_vis = 1.0;
@@ -3139,7 +3139,7 @@ void main() {
             float fall = 1.0 - d / r; fall *= fall;
             if (any_hit_no_terrain(pos + nor * 0.08, ld, max(d - 0.3, 0.05))) continue;
             float blade_vis = 1.0;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             if (scene.grass_rm_params2.y > 0.5 && distance(pos, scene.camera_pos.xyz) < 20.0 &&
                 grassEligibility(pos.xz, pos.y) > 0.02)
                 blade_vis = mix(1.0, grass_blade_shadow(pos, ld), scene.grass_rm_params2.z * 0.6 + 0.4);
@@ -3172,7 +3172,7 @@ void main() {
             // blade field the sun uses): exact near the camera, an averaged
             // darkening further out.
             float blade_vis = 1.0;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             if (scene.grass_rm_params2.y > 0.5) {
                 float gp = grassEligibility(pos.xz, pos.y);
                 if (gp > 0.02) {
@@ -3185,7 +3185,7 @@ void main() {
             }
 #endif
             float lamp_pv = 1.0;
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             LAMP_PLANT_VIS(u_clutter_shadow, pos + nor * 0.03, li, lamp_pv)
 #endif
             lin += vec3(1.0, 0.62, 0.28) * (lI * ndl * fall * blade_vis * lamp_pv);
@@ -3468,12 +3468,12 @@ void main() {
             // P16: exp2(-x * 1.4427) ≈ exp(-x), and exp2 is a single
             // hardware instruction on most archs vs exp's exp/log
             // pair. Hoisted constant 1.4427 = 1/ln(2).
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
             const float kLog2e = 1.44269504;   // log2(e) — converts exp() to exp2()
             float seg  = exp2(-sigma_e * dt * kLog2e);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
             float seg  = exp2(-sigma_e * dt * 1.44269504);
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
             vec3  Sint = (Lin - Lin * seg) / max(sigma_e, 1e-4);
             scatter += trans * Sint * sigma_e;   // re-multiply σs because we factored σe out
             trans   *= seg;
@@ -3512,17 +3512,17 @@ void main() {
     // (which is black for typical HDRIs). Result: distant raymarch
     // terrain renders as pure black. Capping keeps compose's sky-
     // detection from misfiring on far terrain hits.
-#ifdef QLIKE_WATER
+#ifdef VIBE_WATER
     // Terrain branch is DEAD in water.frag (water_only is forced true →
     // discarded long before here). `clip` is still needed by the motion
     // block below, but we deliberately write NO gl_FragDepth anywhere in
     // this shader so it is not depth-replacing — the rasterised water
     // plane's hardware depth is used as-is (pixel-exact shoreline).
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
     vec4 clip = pc.mvp * vec4(pos, 1.0);
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     gl_FragDepth = min(clip.z / max(clip.w, 1e-4), 0.999989);
-#endif /* ! QLIKE_WATER */
+#endif /* ! VIBE_WATER */
 
     // Distance fog — final atmospheric mix, after all the other
     // shading, GI, water, volumetric fog and grass-shadow work.
@@ -3531,15 +3531,15 @@ void main() {
         col = mix(col, scene.distance_fog_color.rgb, fa);
     }
     outColor = vec4(col, 1.0);
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     outGBuffer0 = vec4(clamp(col, vec3(0.0), vec3(1.0)), 8.0 / 255.0);
     outGBuffer1 = vec4(0.5, 0.5, 0.7, 0.0);
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
     // G-buffer pass-through. Water is already fully shaded; material_id 7
     // tells the deferred lighting pass to use albedo unmodified.
     outGBuffer0 = vec4(clamp(col, vec3(0.0), vec3(1.0)), 7.0 / 255.0);
     outGBuffer1 = vec4(0.5, 0.5, 0.2, 0.0);   // placeholder normal+rough
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
     // Screen-space motion vector for TAA. World position is stationary
     // — only the camera moves — so prev_uv comes from prev_view_proj
     // applied to the same world hit point. Without this, TAA cannot

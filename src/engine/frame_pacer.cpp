@@ -12,7 +12,7 @@
 #endif
 #endif
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 // Woken this long before the deadline; the remainder is spun. The
@@ -60,4 +60,4 @@ void FramePacer::wait() {
     next_ += period_;
 }
 
-} // namespace qlike
+} // namespace vibe

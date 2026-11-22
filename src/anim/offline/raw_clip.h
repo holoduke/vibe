@@ -3,7 +3,7 @@
 // produce and what the cook step turns into runtime clips and motion-database frames.
 #include "anim/skeleton_def.h"
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 struct RawClip {
     ClipInfo               info;
@@ -43,4 +43,4 @@ struct ClipReport {
 // speed within `max_root_speed`, feet not under the ground, frame rate, boundaries.
 ClipReport validate_clip(const SkeletonDef& s, const RawClip& c, float max_root_speed = 14.0f);
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline

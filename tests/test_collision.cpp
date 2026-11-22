@@ -5,10 +5,10 @@
 
 #include <array>
 
-using qlike::collision::AABB;
-using qlike::collision::aabb_overlap;
-using qlike::collision::sweep_aabb;
-using qlike::collision::slide_move;
+using vibe::collision::AABB;
+using vibe::collision::aabb_overlap;
+using vibe::collision::sweep_aabb;
+using vibe::collision::slide_move;
 using Catch::Approx;
 
 namespace {

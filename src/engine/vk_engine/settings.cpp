@@ -17,7 +17,7 @@
 #include <type_traits>
 #include <unordered_map>
 
-namespace qlike {
+namespace vibe {
 
 // Quick scan of vibe_settings.cfg for the raymarch flag — load_settings()
 // runs AFTER init_world() (it restores the saved player pose, which init_world
@@ -605,12 +605,12 @@ template <class T> bool parse_value(const std::string& s, T& out) {
 
 void VulkanEngine::save_settings() const {
     // Test / capture runs (--frames, --screenshot, --autodemo, --scene,
-    // QLIKE_TEST_* hooks) pin or move the camera and tweak modes - never let
+    // VIBE_TEST_* hooks) pin or move the camera and tweak modes - never let
     // them overwrite the player's saved cfg (pose, toggles).
     static const bool test_run = [this] {
-        for (const char* e : { "QLIKE_TEST_HOLD", "QLIKE_TEST_MOVE", "QLIKE_TEST_FLIGHT", "QLIKE_TEST_GROUND", "QLIKE_TEST_PAN", "QLIKE_TEST_SHOOTDOWN",
-                               "QLIKE_TEST_BOOM", "QLIKE_TEST_BLAST", "QLIKE_TEST_FIRE", "QLIKE_TEST_CHUTE", "QLIKE_TEST_SAM",
-                               "QLIKE_TEST_CRAWL", "QLIKE_TEST_FLARE", "QLIKE_TEST_STRIKE", "QLIKE_TEST_ROCKS", "QLIKE_TEST_AAFIRE", "QLIKE_TEST_ZONE", "QLIKE_TEST_EDIT", "QLIKE_TEST_MENU", "QLIKE_TEST_FLASHLIGHT" })
+        for (const char* e : { "VIBE_TEST_HOLD", "VIBE_TEST_MOVE", "VIBE_TEST_FLIGHT", "VIBE_TEST_GROUND", "VIBE_TEST_PAN", "VIBE_TEST_SHOOTDOWN",
+                               "VIBE_TEST_BOOM", "VIBE_TEST_BLAST", "VIBE_TEST_FIRE", "VIBE_TEST_CHUTE", "VIBE_TEST_SAM",
+                               "VIBE_TEST_CRAWL", "VIBE_TEST_FLARE", "VIBE_TEST_STRIKE", "VIBE_TEST_ROCKS", "VIBE_TEST_AAFIRE", "VIBE_TEST_ZONE", "VIBE_TEST_EDIT", "VIBE_TEST_MENU", "VIBE_TEST_FLASHLIGHT" })
             if (std::getenv(e)) return true;
         return opts_.max_frames > 0 || !opts_.screenshot_path.empty() ||
                opts_.autodemo_seconds > 0.0f || opts_.scene != 0;
@@ -791,4 +791,4 @@ void VulkanEngine::load_settings() {
     game_prev_frame_ = game_;
 }
 
-} // namespace qlike
+} // namespace vibe

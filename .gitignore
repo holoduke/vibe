@@ -7,11 +7,8 @@ out/
 CMakeUserPresets.json
 
 # runtime-generated files
-qlike.log
 vibe.log
-qlike_pipeline.cache
 vibe_pipeline.cache
-qlike_settings.cfg
 vibe_settings.cfg
 
 # crash dump / temp logs
@@ -54,11 +51,9 @@ shot*.jpg
 shell_*.png
 ssdm_*.png
 voxb_*.png
-qlike_settings.cfg.bak
 vibe_settings.cfg.bak
 
 assets/level1_heights.bin
-qlike_imgui.ini
 vibe_imgui.ini
 autodemo_*.out
 autodemo_*.err
@@ -78,9 +73,7 @@ external/_dl/
 /screenshot_*.png
 tools/*.exe
 tools/*.obj
-qlike_settings.cfg.user-backup
 vibe_settings.cfg.user-backup
-qlike_settings.cfg.tmp
 vibe_settings.cfg.tmp
 
 # F12 photos (copy the good ones to docs/screenshots/)

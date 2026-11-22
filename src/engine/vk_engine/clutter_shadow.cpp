@@ -17,11 +17,11 @@
 
 #include <cmath>
 
-#ifndef QLIKE_SHADER_DIR
-#define QLIKE_SHADER_DIR "shaders"
+#ifndef VIBE_SHADER_DIR
+#define VIBE_SHADER_DIR "shaders"
 #endif
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr uint32_t kClutterDim  = 2048;
@@ -89,7 +89,7 @@ void VulkanEngine::init_clutter_shadow() {
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
     vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &clutter_shadow_layout_), "clutter layout");
-    clutter_shadow_vert_ = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/clutter_shadow.vert.spv");
+    clutter_shadow_vert_ = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/clutter_shadow.vert.spv");
 
     vkpipe::GraphicsPipelineConfig cfg{};
     cfg.vert = clutter_shadow_vert_;
@@ -112,7 +112,7 @@ void VulkanEngine::init_clutter_shadow() {
     clutter_shadow_pipeline_ = vkpipe::build_graphics_pipeline(device_, cfg);
     // Skinned characters: two vertex streams (rest pose; bones and weights), the scene set for
     // the bone palette.
-    skin_shadow_vert_ = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/skin_shadow.vert.spv");
+    skin_shadow_vert_ = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/skin_shadow.vert.spv");
     if (skin_shadow_vert_ && pipeline_layout_) {
         vkpipe::GraphicsPipelineConfig sc = cfg;
         sc.vert = skin_shadow_vert_;
@@ -165,7 +165,7 @@ void VulkanEngine::destroy_clutter_shadow() {
 // Computed in update_scene_ubo() (before any pass) so the deferred pass
 // AND the raymarched terrain (via the scene UBO) use the same matrix the
 // map is rendered with this frame.
-static const bool kNoClutter = std::getenv("QLIKE_NO_CLUTTER_SHADOW") != nullptr;   // A/B test hook
+static const bool kNoClutter = std::getenv("VIBE_NO_CLUTTER_SHADOW") != nullptr;   // A/B test hook
 void VulkanEngine::update_clutter_shadow_vp() {
     // Every other frame (in turn with the sun's shadow map); every frame while the flashlight
     // is on - its shadows move with the hand.
@@ -299,7 +299,7 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
 // player's own body (with the head it is otherwise drawn without: a shadow has one), the other
 // players and the fallen. One level of detail below what is drawn; a shadow does not show it.
 void VulkanEngine::draw_skinned_shadows(VkCommandBuffer cmd, const glm::mat4& light_vp, bool with_local) {
-    static const bool kOff = std::getenv("QLIKE_NO_BODY_SHADOW") != nullptr;
+    static const bool kOff = std::getenv("VIBE_NO_BODY_SHADOW") != nullptr;
     if (kOff || !skin_shadow_pipeline_ || !body_lod_[0].index_count || !body_palette_map_) return;
     bool bound = false;
     auto draw = [&](const glm::mat4& model, int palette, int lod) {
@@ -334,5 +334,5 @@ void VulkanEngine::draw_skinned_shadows(VkCommandBuffer cmd, const glm::mat4& li
         if (c.rag && c.av.drawn) draw(c.av.model, c.av.palette, c.av.mesh_lod);
 }
 
-} // namespace qlike
+} // namespace vibe
 

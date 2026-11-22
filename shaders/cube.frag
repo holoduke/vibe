@@ -484,7 +484,7 @@ void main() {
     // self-shadowing inside SPOM bricks at almost no cost.
     vec3 shading_pos = vWorldPos;
 
-#ifdef QLIKE_TERRAIN_ONLY
+#ifdef VIBE_TERRAIN_ONLY
     const bool is_terrain_pre = true;    // cube_gbuf_terrain variant (mesh terrain pipeline)
 #else
     bool is_terrain_pre = vTexParams.w > 1.5;
@@ -651,7 +651,7 @@ void main() {
     //   2 = terrain shading: sand→grass→dirt→rock→snow blended by
     //       world height + slope, with optional triplanar Ground054
     //       detail multiplied on top.
-#ifdef QLIKE_TERRAIN_ONLY
+#ifdef VIBE_TERRAIN_ONLY
     const bool is_terrain = true;
 #else
     bool  is_terrain     = vTexParams.w > 1.5;
@@ -979,10 +979,10 @@ void main() {
     // (PCSS shadow, path-traced GI, AO, muzzle light, fog) was ~200+ ray
     // queries per pixel of pure waste. Write the G-buffer and leave.
     // Emissive (mat 5) still needs the forward colour, so it falls through.
-    // QLIKE_GBUFFER_ONLY (cube_gbuf.frag.spv) takes this path
+    // VIBE_GBUFFER_ONLY (cube_gbuf.frag.spv) takes this path
     // unconditionally so the compiler strips every ray query, the GI
     // loops and the SSBO/image side-effect stores below.
-#ifdef QLIKE_GBUFFER_ONLY
+#ifdef VIBE_GBUFFER_ONLY
     if (true) {
 #else
     if (scene.terrain_disp_params.w > 0.5 && vEmissive.a <= 0.5) {

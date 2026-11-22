@@ -7,7 +7,7 @@
 #include "engine/vk_engine.h"
 
 #include "engine/log.h"
-#include "engine/vk_initializers.h"   // qlike::vk_check
+#include "engine/vk_initializers.h"   // vibe::vk_check
 #include "engine/window.h"
 
 #include <imgui.h>
@@ -18,7 +18,7 @@
 #include <cstddef>
 #include <cstdio>
 
-namespace qlike {
+namespace vibe {
 
 
 void VulkanEngine::init_imgui() {
@@ -217,4 +217,4 @@ void VulkanEngine::destroy_imgui() {
 }
 
 
-} // namespace qlike
+} // namespace vibe

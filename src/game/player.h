@@ -10,7 +10,7 @@
 
 #include <span>
 
-namespace qlike::game {
+namespace vibe::game {
 
 struct PlayerInput {
     bool fwd = false, back = false, left = false, right = false;
@@ -121,4 +121,4 @@ void update_player(Player& p, const PlayerInput& in,
 // Convenience overload: collision against the static level only.
 void update_player(Player& p, const PlayerInput& in, const Level& world, float dt);
 
-} // namespace qlike::game
+} // namespace vibe::game

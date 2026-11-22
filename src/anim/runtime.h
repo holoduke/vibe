@@ -14,7 +14,7 @@
 
 #include <memory>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 struct PoseLayer {
     std::span<const Transform> pose;
@@ -101,4 +101,4 @@ void mirror_pose(const Rig& rig, std::span<Transform> pose, std::span<Transform>
 bool pose_is_valid(std::span<const Transform> pose);      // finite, unit quaternions
 bool pose_is_valid(std::span<const glm::mat4> pose);
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -443,13 +443,13 @@ void destroy_texture_2d(VkDevice device, VmaAllocator alloc, Texture2D& t) {
 // Texture streaming budget. 8K source assets are decoded at half
 // resolution (4K) — drops JPG decode + GPU upload by 4× without a
 // visible quality hit at typical viewing distance. Override via the
-// QLIKE_TEX_MAX_DIM env var (set to 0 to disable, 8192 to keep full
+// VIBE_TEX_MAX_DIM env var (set to 0 to disable, 8192 to keep full
 // resolution). 8K textures are overkill at 1280×720 anyway; mip-LOD
 // already drops to 4K-equivalent for most pixels.
 static int texture_max_dim() {
     static int cached = -1;
     if (cached >= 0) return cached;
-    const char* e = std::getenv("QLIKE_TEX_MAX_DIM");
+    const char* e = std::getenv("VIBE_TEX_MAX_DIM");
     cached = e ? std::atoi(e) : 4096;
     if (cached < 0) cached = 0;
     return cached;
@@ -580,4 +580,4 @@ std::vector<TextureCpuPixels> finish_background_decode(BackgroundDecodeHandle h)
     return out;
 }
 
-} // namespace qlike
+} // namespace vibe

@@ -198,10 +198,10 @@ float terrainH_mesh(vec2 wp) {
 // march step was ~70 % of this pass (3.3 -> 1.0 ms at 3440x1369), and the
 // bake follows the drawn 10-12 octave surface at least as well as those 8
 // octaves did.
-#define QLIKE_GRASS_BAKED_HEIGHT 1
+#define VIBE_GRASS_BAKED_HEIGHT 1
 float terrainH_lod(vec2 wp, float ray_t) {
     // One bilinear fetch instead of 8 octaves of FBM per march step.
-    if (pc.emissive.x > 0.5 || QLIKE_GRASS_BAKED_HEIGHT == 1) return terrainH_mesh(wp);
+    if (pc.emissive.x > 0.5 || VIBE_GRASS_BAKED_HEIGHT == 1) return terrainH_mesh(wp);
     vec2 p = wp * TERRAIN_SCALE;
     const int oct_full = 8;
     int   oct_min = max(2, min(oct_full, int(pc.emissive.w)));
@@ -227,7 +227,7 @@ float terrainH_lod(vec2 wp, float ray_t) {
 }
 
 // Backwards-compat: rest of the shader still calls sampleHeight.
-float sampleHeight(vec2 wp_xz) { return (pc.emissive.x > 0.5 || QLIKE_GRASS_BAKED_HEIGHT == 1) ? terrainH_mesh(wp_xz) : terrainH(wp_xz); }
+float sampleHeight(vec2 wp_xz) { return (pc.emissive.x > 0.5 || VIBE_GRASS_BAKED_HEIGHT == 1) ? terrainH_mesh(wp_xz) : terrainH(wp_xz); }
 // Close-range ground relief of terrain_raymarch.frag (rm_ground_detail:
 // rills + side cracks + sand ripples, the dirt texture's displacement at
 // its mean; CPU twin raymarch_ground_relief). The raymarched ground
@@ -339,7 +339,7 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
     // pass uses; without it every step from the camera to the ground paid
     // for the full FBM (the bulk of this pass).
     float terrainY;
-#if QLIKE_GRASS_BAKED_HEIGHT == 1
+#if VIBE_GRASS_BAKED_HEIGHT == 1
     {
         // One fetch of the baked height serves the air skip AND the ground
         // (it used to be fetched twice per near-ground step).

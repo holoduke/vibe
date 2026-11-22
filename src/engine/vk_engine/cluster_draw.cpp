@@ -23,7 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 VkBuffer cl_buffer(VmaAllocator a, VkDeviceSize size, VkBufferUsageFlags usage, VmaAllocation& alloc,
@@ -120,7 +120,7 @@ void VulkanEngine::init_cluster_draw() {
     pli.setLayoutCount = 1; pli.pSetLayouts = &cl_set_layout_;
     pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
     vk_check(vkCreatePipelineLayout(device_, &pli, nullptr, &cl_layout_), "cluster layout");
-    const std::string sd = QLIKE_SHADER_DIR;
+    const std::string sd = VIBE_SHADER_DIR;
     cl_module_ = vkpipe::load_shader_module(device_, sd + "/cluster_cull.comp.spv");
     VkComputePipelineCreateInfo cci{};
     cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -210,7 +210,7 @@ void VulkanEngine::cull_clusters(VkCommandBuffer cmd) {
     pc.cam = glm::vec4(fv.eye_pos, ppr);
     pc.range = glm::uvec4(veg_cluster_first_, veg_cluster_count_, cl_vis_base_, cl_cmd_cap_);
     // One pixel of error at detail 1; the vegetation detail slider scales it.
-    const bool occl = veg_cull_hiz_on_ && veg_hiz_view_ && !std::getenv("QLIKE_NO_CLUSTER_OCCL");
+    const bool occl = veg_cull_hiz_on_ && veg_hiz_view_ && !std::getenv("VIBE_NO_CLUSTER_OCCL");
     pc.params = glm::vec4(object_far_, 1.0f / std::max(0.25f, rt_.veg_lod_bias), occl ? 1.0f : 0.0f, 0.0f);
     pc.prev_vp = veg_cull_prev_vp_;
     pc.hiz = glm::vec4(float(veg_hiz_w_), float(veg_hiz_h_), float(veg_hiz_mips_), 0.0f);
@@ -256,7 +256,7 @@ struct StreamJobData { std::vector<uint32_t> data; std::atomic<int> done{0}; dou
 }
 
 void VulkanEngine::init_static_clusters() {
-    if (std::getenv("QLIKE_NO_CLUSTERS") || std::getenv("QLIKE_NO_STATIC_CLUSTERS") || scl_pipeline_) return;
+    if (std::getenv("VIBE_NO_CLUSTERS") || std::getenv("VIBE_NO_STATIC_CLUSTERS") || scl_pipeline_) return;
     std::vector<ClusterGpu> clusters;
     std::vector<glm::uvec4> meta;
     size_t src_tris = 0, coarse_idx = 0, fine_idx = 0;
@@ -383,7 +383,7 @@ void VulkanEngine::init_static_clusters() {
     pli.setLayoutCount = 1; pli.pSetLayouts = &scl_set_layout_;
     pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
     vk_check(vkCreatePipelineLayout(device_, &pli, nullptr, &scl_layout_), "static cluster layout");
-    const std::string sd = QLIKE_SHADER_DIR;
+    const std::string sd = VIBE_SHADER_DIR;
     scl_module_ = vkpipe::load_shader_module(device_, sd + "/static_cluster_cull.comp.spv");
     VkComputePipelineCreateInfo cci{};
     cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -432,7 +432,7 @@ void VulkanEngine::stream_static_clusters(glm::vec3 eye, float ppr) {
             scl_retired_.erase(scl_retired_.begin() + ptrdiff_t(r));
         } else ++r;
     }
-    static const bool kAll = std::getenv("QLIKE_STREAM_ALL") != nullptr;     // keep everything loaded
+    static const bool kAll = std::getenv("VIBE_STREAM_ALL") != nullptr;     // keep everything loaded
     for (size_t pi = 0; pi < scl_parts_.size(); ++pi) {
         SclPart& P = scl_parts_[pi];
         const glm::vec3 q = glm::clamp(eye, P.bmin, P.bmax);
@@ -515,7 +515,7 @@ void VulkanEngine::cull_static_clusters(VkCommandBuffer cmd) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scl_pipeline_);
     // 1. The camera's view.
     for (int i = 0; i < 6; ++i) pc.planes[i] = fv.frustum.planes[i];
-    const bool occl = veg_cull_hiz_on_ && !std::getenv("QLIKE_NO_CLUSTER_OCCL");
+    const bool occl = veg_cull_hiz_on_ && !std::getenv("VIBE_NO_CLUSTER_OCCL");
     pc.params = glm::vec4(float(scl_total_), 1.0f, occl ? 1.0f : 0.0f, 0.0f);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scl_layout_, 0, 1, &scl_set_, 0, nullptr);
     vkCmdPushConstants(cmd, scl_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
@@ -538,4 +538,4 @@ void VulkanEngine::cull_static_clusters(VkCommandBuffer cmd) {
     scl_ready_ = true;
 }
 
-}  // namespace qlike
+}  // namespace vibe

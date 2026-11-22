@@ -14,7 +14,7 @@
 #  pragma comment(lib, "Dbghelp.lib")
 #endif
 
-namespace qlike::crash {
+namespace vibe::crash {
 
 namespace {
 
@@ -23,7 +23,7 @@ std::atomic<bool> g_installed{false};
 #if defined(_WIN32)
 
 void log_line(const char* line) {
-    qlike::log::error(line);
+    vibe::log::error(line);
     std::fprintf(stderr, "%s\n", line);
 }
 
@@ -166,7 +166,7 @@ LONG WINAPI seh_filter(EXCEPTION_POINTERS* ep) {
     }
 
     dump_stack_from_context(ep->ContextRecord);
-    qlike::log::close();    // flush
+    vibe::log::close();    // flush
     return EXCEPTION_EXECUTE_HANDLER;   // process will die after we return
 }
 
@@ -192,7 +192,7 @@ void terminate_handler() {
     CONTEXT ctx{};
     RtlCaptureContext(&ctx);
     dump_stack_from_context(&ctx);
-    qlike::log::close();
+    vibe::log::close();
     std::abort();
 }
 
@@ -206,8 +206,8 @@ void install() {
     if (!g_installed.compare_exchange_strong(expected, true)) return;
     SetUnhandledExceptionFilter(seh_filter);
     std::set_terminate(terminate_handler);
-    qlike::log::info("[crash] handler installed (SEH + set_terminate)");
+    vibe::log::info("[crash] handler installed (SEH + set_terminate)");
 #endif
 }
 
-} // namespace qlike::crash
+} // namespace vibe::crash

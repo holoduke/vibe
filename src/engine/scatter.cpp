@@ -16,7 +16,7 @@
 #include <random>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 #include "engine/scatter_plant_meshes.inl"   // mesh builders for the small plants: ferns, flowers, reeds, clover, mushrooms, grass tufts, water lilies, the rock
 
 ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
@@ -166,7 +166,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                                                              fv.data(), uint32_t(fv.size()), fi.data(), uint32_t(fi.size()));
                 t1 = uint32_t(fi.size() / 3);
                 s.plant_mesh_far2[sp] = simplified(fv, fi, 0.45f, t2);
-            } else if (!std::getenv("QLIKE_NO_PLANT_LOD")) {
+            } else if (!std::getenv("VIBE_NO_PLANT_LOD")) {
                 s.plant_mesh_far[sp] = simplified(pv, pi, 0.32f, t1);
                 s.plant_mesh_far2[sp] = simplified(pv, pi, 0.11f, t2);
             }
@@ -409,7 +409,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 auto tseed = [&trs](uint32_t k, uint32_t salt) {
                     trs = ((k + 1u) * 2654435761u) ^ salt; trs ^= trs >> 15; trs *= 0x2C1B3C6Du; trs ^= trs >> 12; trs |= 1u;
                 };
-                static const bool kAutoTufts = std::getenv("QLIKE_NO_TUFTS") == nullptr;
+                static const bool kAutoTufts = std::getenv("VIBE_NO_TUFTS") == nullptr;
                 for (int i = 0; kAutoTufts && i < ttries && tufts < 120000; ++i) {
                     tseed(uint32_t(i), 0x7F4A7C15u);
                     const float wx = (tu() * 2.0f - 1.0f) * ext;
@@ -591,9 +591,9 @@ void destroy_scatter(VmaAllocator alloc, ScatterSet& s) {
     s.instance_count = 0;
 }
 
-} // namespace qlike
+} // namespace vibe
 
-namespace qlike {
+namespace vibe {
 void scatter_set_raymarch_surface(ScatterSet& s, bool on) {
     if (s.rm_surface == on) return;
     const float sign = on ? 1.0f : -1.0f;
@@ -607,4 +607,4 @@ void scatter_set_raymarch_surface(ScatterSet& s, bool on) {
     ++s.plant_gen;
     s.rm_surface = on;
 }
-} // namespace qlike
+} // namespace vibe

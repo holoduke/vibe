@@ -13,7 +13,7 @@
 
 #include <cstring>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 // Scene UBO (~6 KB) + pass UBOs + TLAS materials / prev transforms for up
@@ -147,9 +147,9 @@ void VulkanEngine::flush_frame_uploads(VkCommandBuffer cmd) {
     r.copies.clear();
 }
 
-} // namespace qlike
+} // namespace vibe
 
-namespace qlike {
+namespace vibe {
 
 // Rare runtime descriptor rewrites (resize, toggles, a reallocated TLAS)
 // must not touch a set the in-flight frame still uses
@@ -164,9 +164,9 @@ void VulkanEngine::wait_gpu_frames_idle() {
     vk_check(vkWaitSemaphores(device_, &wi, UINT64_MAX), "wait gpu frames");
 }
 
-} // namespace qlike
+} // namespace vibe
 
-namespace qlike {
+namespace vibe {
 
 // Frames in flight, TLAS side: this frame's TLAS was built into
 // tlas_stage_[slot] on the compute queue while the previous frame was
@@ -204,4 +204,4 @@ void VulkanEngine::record_tlas_publish(VkCommandBuffer cmd) {
     vkCmdPipelineBarrier2(cmd, &di);
 }
 
-} // namespace qlike
+} // namespace vibe

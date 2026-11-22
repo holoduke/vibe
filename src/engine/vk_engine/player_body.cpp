@@ -25,7 +25,7 @@
 #include <cstring>
 #include <fstream>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -182,19 +182,19 @@ void VulkanEngine::init_player_body() {
     }
     body_animator_ = std::make_unique<anim::CharacterAnimator>(anim_set_);
     apply_anim_tuning(body_animator_->tuning);
-    anim_debug_ = std::getenv("QLIKE_ANIM_DEBUG") != nullptr;
+    anim_debug_ = std::getenv("VIBE_ANIM_DEBUG") != nullptr;
     log::infof("[body] animation: %s, %d clips (%.1f MB compressed), motion database %u frames (%.1f MB), %zu jumps",
                anim_set_.runtime->name(), anim_set_.runtime->num_clips(), double(anim_set_.runtime->clip_bytes()) / 1048576.0,
                anim_set_.db.frames(), double(anim_set_.db.memory_bytes()) / 1048576.0, anim_set_.db.jumps().size());
 }
 
-// The animation's style, without a rebuild: QLIKE_ANIM_TUNE="name=value,name=value". Names:
+// The animation's style, without a rebuild: VIBE_ANIM_TUNE="name=value,name=value". Names:
 //   halflife (s, inertial blend)   run_speed (m/s the game's run is matched to in the capture)
 //   max_rate  max_stride  max_warp (rad)  lean (0 = none)  foot_ik  foot_lock  stride_warp  orient_warp
 //   hand_ik (0/1)   air (airborne pose strength)   air_sway   land_dip   reach_time (s)
 //   search (s between searches)   lock_speed (m/s above which feet are not held)
 void VulkanEngine::apply_anim_tuning(anim::AnimTuning& t) const {
-    const char* s = std::getenv("QLIKE_ANIM_TUNE");
+    const char* s = std::getenv("VIBE_ANIM_TUNE");
     if (!s) return;
     std::string spec(s);
     size_t at = 0;
@@ -228,7 +228,7 @@ void VulkanEngine::apply_anim_tuning(anim::AnimTuning& t) const {
         else if (k == "eyes") t.eyes_hold = v;
         else if (k == "idle_look") t.idle_look = v;
         else if (k == "lock_speed") t.foot_lock_max_speed = v;
-        else log::warnf("[body] QLIKE_ANIM_TUNE: unknown name '%s'", k.c_str());
+        else log::warnf("[body] VIBE_ANIM_TUNE: unknown name '%s'", k.c_str());
     }
 }
 
@@ -287,7 +287,7 @@ void VulkanEngine::pose_update_all(PoseJob* jobs, int count) {
         ++anim_lod_count_[glm::clamp(in.lod, 0, 3)];
     }
     const double t0 = now_ms();
-    static const bool kSerial = std::getenv("QLIKE_ANIM_SERIAL") != nullptr;       // A/B: one after the other
+    static const bool kSerial = std::getenv("VIBE_ANIM_SERIAL") != nullptr;       // A/B: one after the other
     if (count == 1 || kSerial) {
         for (int i = 0; i < count; ++i) jobs[i].animator->update(*jobs[i].in);
     } else {
@@ -336,9 +336,9 @@ void VulkanEngine::update_player_body(float dt) {
     const float crouch = glm::clamp(player_.crouch_factor, 0.0f, 1.0f);
     const float look_down = glm::smoothstep(0.15f, 1.25f, -pitch);
     // The eye sits in front of the neck; further when looking down, so the view is never inside the chest.
-    static const float kBack0 = env_float("QLIKE_BODY_BACK", 0.11f);
+    static const float kBack0 = env_float("VIBE_BODY_BACK", 0.11f);
     // (looking down, the bottom of the view looks back past straight down: the body stays behind that)
-    static const float kBackDown = env_float("QLIKE_BODY_BACK_DOWN", 0.30f);
+    static const float kBackDown = env_float("VIBE_BODY_BACK_DOWN", 0.30f);
     const float back = kBack0 + kBackDown * look_down + 0.25f * crouch;
     const glm::vec3 eye = current_frame_view_.eye_pos;
     const glm::vec3 feet = eye - glm::vec3(0.0f, eye_h, 0.0f) - fwd * back;
@@ -351,15 +351,15 @@ void VulkanEngine::update_player_body(float dt) {
     auto dir_to_model = [&](glm::vec3 d) { return glm::vec3(glm::dot(d, right), d.y, -glm::dot(d, fwd)); };
 
     // ---- what the controller says ----
-    // Test hooks: QLIKE_BODY_WALK=<m/s> moves the body as if walking forward at that speed,
-    // QLIKE_BODY_STRAFE=<m/s> adds a sideways speed (to the right), QLIKE_BODY_AIR=<m/s> holds it
-    // in the air rising at that speed, QLIKE_BODY_FIRE=<shots/s> fires, QLIKE_BODY_RELOAD=1 reloads
+    // Test hooks: VIBE_BODY_WALK=<m/s> moves the body as if walking forward at that speed,
+    // VIBE_BODY_STRAFE=<m/s> adds a sideways speed (to the right), VIBE_BODY_AIR=<m/s> holds it
+    // in the air rising at that speed, VIBE_BODY_FIRE=<shots/s> fires, VIBE_BODY_RELOAD=1 reloads
     // in a loop.
-    // (QLIKE_BODY_WALKBACK=<m/s>: backward at that speed)
-    static const float kWalkBack = env_float("QLIKE_BODY_WALKBACK", 0.0f);
-    static const float kWalk = kWalkBack > 0.0f ? 0.0f : env_float("QLIKE_BODY_WALK", -1.0f), kStrafe = env_float("QLIKE_BODY_STRAFE", 0.0f);
-    static const float kAir = env_float("QLIKE_BODY_AIR", 1e9f), kFire = env_float("QLIKE_BODY_FIRE", 0.0f);
-    static const bool kReload = std::getenv("QLIKE_BODY_RELOAD") != nullptr;
+    // (VIBE_BODY_WALKBACK=<m/s>: backward at that speed)
+    static const float kWalkBack = env_float("VIBE_BODY_WALKBACK", 0.0f);
+    static const float kWalk = kWalkBack > 0.0f ? 0.0f : env_float("VIBE_BODY_WALK", -1.0f), kStrafe = env_float("VIBE_BODY_STRAFE", 0.0f);
+    static const float kAir = env_float("VIBE_BODY_AIR", 1e9f), kFire = env_float("VIBE_BODY_FIRE", 0.0f);
+    static const bool kReload = std::getenv("VIBE_BODY_RELOAD") != nullptr;
     const bool hooked = kWalk >= 0.0f || kAir < 1e8f;
     anim::CharacterAnimationInput in;
     in.dt = dt;
@@ -372,7 +372,7 @@ void VulkanEngine::update_player_body(float dt) {
     in.wants_jump = last_pin_.jump;
     in.crouch = crouch;
     in.eye_local = glm::vec3(0.0f, eye_h, -back);
-    in.first_person = std::getenv("QLIKE_BODY_FRONT") == nullptr;      // (looked at from outside by the test hook: as others see it)
+    in.first_person = std::getenv("VIBE_BODY_FRONT") == nullptr;      // (looked at from outside by the test hook: as others see it)
     {
         glm::vec3 wish(0.0f);
         if (last_pin_.fwd) wish += fwd;
@@ -401,8 +401,8 @@ void VulkanEngine::update_player_body(float dt) {
     in.shot_seq = body_shot_seq_;
     in.reload_seq = body_reload_seq_;
     in.aiming = body_aim_;
-    {   // (QLIKE_TEST_RAGDOLL: the 23 frames before it the body buckles, as a killed player's does)
-        static const int kRagAt = int(env_float("QLIKE_TEST_RAGDOLL", -1.0f));
+    {   // (VIBE_TEST_RAGDOLL: the 23 frames before it the body buckles, as a killed player's does)
+        static const int kRagAt = int(env_float("VIBE_TEST_RAGDOLL", -1.0f));
         const int to_go = kRagAt - int(frame_number_);
         if (kRagAt >= 0 && to_go >= 0 && to_go < 23) { in.dying = 1.0f - float(to_go) / 23.0f; in.hit_dir = dir_to_model(fwd); in.first_person = false; }
     }
@@ -414,8 +414,8 @@ void VulkanEngine::update_player_body(float dt) {
     in.teleported = glm::length(feet - last_feet) > 6.0f + 2.0f * glm::length(player_.velocity) * dt;
     last_feet = feet;
 
-    // (QLIKE_ADS="x,y,z": where the aimed weapon goes in the player's own view, metres from its usual place)
-    if (static const char* e = std::getenv("QLIKE_ADS"); e) {
+    // (VIBE_ADS="x,y,z": where the aimed weapon goes in the player's own view, metres from its usual place)
+    if (static const char* e = std::getenv("VIBE_ADS"); e) {
         glm::vec3 v = body_animator_->weapon.ads_shift_fp;
         if (std::sscanf(e, "%f,%f,%f", &v.x, &v.y, &v.z) == 3) body_animator_->weapon.ads_shift_fp = v;
     }
@@ -423,11 +423,11 @@ void VulkanEngine::update_player_body(float dt) {
     body_weapon_offset_ = body_animator_->weapon_offset();
     body_fire_offset_ = body_animator_->weapon_fire_offset();
 
-    // Test hooks: QLIKE_BODY_FRONT=<m> stands the body that far in front of the camera (turned
-    // by QLIKE_BODY_TURN degrees) to look at the pose from outside; QLIKE_BODY_REST=1 shows the
-    // rest pose; QLIKE_BODY_DEBUG=1 logs what the animator is doing once a second.
-    static const float kFront = env_float("QLIKE_BODY_FRONT", 0.0f), kTurn = glm::radians(env_float("QLIKE_BODY_TURN", 180.0f));
-    static const bool kRest = std::getenv("QLIKE_BODY_REST") != nullptr, kDebug = std::getenv("QLIKE_BODY_DEBUG") != nullptr;
+    // Test hooks: VIBE_BODY_FRONT=<m> stands the body that far in front of the camera (turned
+    // by VIBE_BODY_TURN degrees) to look at the pose from outside; VIBE_BODY_REST=1 shows the
+    // rest pose; VIBE_BODY_DEBUG=1 logs what the animator is doing once a second.
+    static const float kFront = env_float("VIBE_BODY_FRONT", 0.0f), kTurn = glm::radians(env_float("VIBE_BODY_TURN", 180.0f));
+    static const bool kRest = std::getenv("VIBE_BODY_REST") != nullptr, kDebug = std::getenv("VIBE_BODY_DEBUG") != nullptr;
     body_front_ = kFront > 0.0f;
     if (kFront > 0.0f) {
         const glm::mat4 T = glm::translate(glm::mat4(1.0f), glm::vec3(eye.x, eye.y - eye_h, eye.z) + fwd * kFront);
@@ -451,17 +451,17 @@ void VulkanEngine::update_player_body(float dt) {
         const uint32_t bad = body_animator_->debug().invalid_poses;
         if (bad != reported) { log::warnf("[body] the animator produced %u pose(s) that were not finite; the last good pose was shown", bad); reported = bad; }
     }
-    // Test hook: QLIKE_TEST_RAGDOLL=<frame>: at that frame the body as posed here is shot (from
-    // the camera, at chest height unless QLIKE_TEST_RAGDOLL_Y=<m above the feet>) and falls.
+    // Test hook: VIBE_TEST_RAGDOLL=<frame>: at that frame the body as posed here is shot (from
+    // the camera, at chest height unless VIBE_TEST_RAGDOLL_Y=<m above the feet>) and falls.
     {
-        static const int kRag = int(env_float("QLIKE_TEST_RAGDOLL", -1.0f));
+        static const int kRag = int(env_float("VIBE_TEST_RAGDOLL", -1.0f));
         if (kRag >= 0 && int(frame_number_) == kRag) {
             glm::mat4 bm = body_model_;
             bm[3].y = sample_terrain_height(bm[3].x, bm[3].z);          // (standing on the ground there)
             const glm::vec3 base = glm::vec3(bm[3]);
-            const glm::vec3 hp = base + glm::vec3(0.0f, env_float("QLIKE_TEST_RAGDOLL_Y", 1.25f), 0.0f);
+            const glm::vec3 hp = base + glm::vec3(0.0f, env_float("VIBE_TEST_RAGDOLL_Y", 1.25f), 0.0f);
             const glm::mat4 vi = bm * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, eye_h, -back));
-            corpse_spawn(bm, vi, in.velocity, hp, glm::normalize(hp - eye), env_float("QLIKE_TEST_RAGDOLL_POWER", 1.0f));
+            corpse_spawn(bm, vi, in.velocity, hp, glm::normalize(hp - eye), env_float("VIBE_TEST_RAGDOLL_POWER", 1.0f));
         }
     }
     body_drawn_ = body_palette_ >= 0;
@@ -469,7 +469,7 @@ void VulkanEngine::update_player_body(float dt) {
 
 // What the animation is doing, drawn over the game: the chosen clip and frame, the match's cost
 // by feature group, the predicted path, foot contacts and locks, IK targets, phases and timings
-// for the local player; levels of detail and cost for everybody. (QLIKE_ANIM_DEBUG=1, or the menu.)
+// for the local player; levels of detail and cost for everybody. (VIBE_ANIM_DEBUG=1, or the menu.)
 void VulkanEngine::anim_debug_overlay() {
     if (!anim_debug_ || !body_animator_) return;
     const anim::AnimDebug& d = body_animator_->debug();
@@ -595,7 +595,7 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     if (palette < 0 || !skin_pipeline()) return;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skin_pipeline());
     // Which mesh: the player's own body is always the full one; others by their size on screen.
-    static const int kForceMesh = std::getenv("QLIKE_MESH_LOD") ? std::atoi(std::getenv("QLIKE_MESH_LOD")) : -1;
+    static const int kForceMesh = std::getenv("VIBE_MESH_LOD") ? std::atoi(std::getenv("VIBE_MESH_LOD")) : -1;
     int lod = kForceMesh >= 0 ? kForceMesh : (mp_draw_ ? mp_draw_->mesh_lod : 0);
     lod = glm::clamp(lod, 0, kBodyLods - 1);
     auto level = [&](const SkinMesh* set) -> const SkinMesh* {
@@ -640,9 +640,9 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
     draw_mesh(*body);
     if (head) draw_mesh(*head);
-    // Test hook: QLIKE_BODY_CROWD=<n> draws the local body n more times in a block ahead
+    // Test hook: VIBE_BODY_CROWD=<n> draws the local body n more times in a block ahead
     // (the same pose): what n skinned characters cost the GPU (gpu-passes: w_viewmodel).
-    static const int kCrowd = std::getenv("QLIKE_BODY_CROWD") ? std::atoi(std::getenv("QLIKE_BODY_CROWD")) : 0;
+    static const int kCrowd = std::getenv("VIBE_BODY_CROWD") ? std::atoi(std::getenv("VIBE_BODY_CROWD")) : 0;
     if (kCrowd > 0 && !mp_draw_) {
         const int side = int(std::ceil(std::sqrt(float(kCrowd))));
         for (int i = 0; i < kCrowd; ++i) {
@@ -661,4 +661,4 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());      // (the caller goes on with rigid parts)
 }
 
-}  // namespace qlike
+}  // namespace vibe

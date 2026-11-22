@@ -9,7 +9,7 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_compose() {
     // Compose set's binding 3 samples bloom_mip_views_[0], so init_bloom()
@@ -81,7 +81,7 @@ void VulkanEngine::init_compose() {
              "compose pipeline layout");
 
     {
-        std::string sd2 = QLIKE_SHADER_DIR;
+        std::string sd2 = VIBE_SHADER_DIR;
         compose_frag_module_ = vkpipe::load_shader_module(device_, sd2 + "/compose.frag.spv");
     }
     vkpipe::GraphicsPipelineConfig ccfg{};
@@ -97,7 +97,7 @@ void VulkanEngine::init_compose() {
     // Sky fill (compose.frag -DSKY_FILL): same layout / set / push
     // constants, renders into the render-res scene colour before DLSS.
     {
-        std::string sd3 = QLIKE_SHADER_DIR;
+        std::string sd3 = VIBE_SHADER_DIR;
         sky_fill_frag_module_ = vkpipe::load_shader_module(device_, sd3 + "/sky_fill.frag.spv");
         vkpipe::GraphicsPipelineConfig scfg = ccfg;
         scfg.frag = sky_fill_frag_module_;
@@ -293,7 +293,7 @@ void VulkanEngine::init_exposure() {
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &exposure_pipeline_layout_),
                  "exposure pipeline layout");
-        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/exposure.comp.spv");
+        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/exposure.comp.spv");
         VkComputePipelineCreateInfo cci{};
         cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -346,4 +346,4 @@ void VulkanEngine::dispatch_exposure(VkCommandBuffer cmd) {
     vkCmdPipelineBarrier2(cmd, &di);
 }
 
-} // namespace qlike
+} // namespace vibe

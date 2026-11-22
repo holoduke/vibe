@@ -27,7 +27,7 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -337,9 +337,9 @@ void AudioEngine::set_master_volume(float v) {
     ma_engine_set_volume(&impl_->engine, v);
 }
 
-} // namespace qlike
+} // namespace vibe
 
-namespace qlike {
+namespace vibe {
 
 void AudioEngine::set_paused(bool paused) {
     if (!impl_ || !impl_->ok || impl_->paused == paused) return;
@@ -348,4 +348,4 @@ void AudioEngine::set_paused(bool paused) {
     else        ma_engine_start(&impl_->engine);
 }
 
-} // namespace qlike
+} // namespace vibe

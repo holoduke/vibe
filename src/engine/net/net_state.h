@@ -12,7 +12,7 @@
 #include <deque>
 #include <vector>
 
-namespace qlike::net {
+namespace vibe::net {
 
 constexpr uint8_t  kProtocolVersion = 2;       // 2: packed state with weapon / input / shot counter, stamped events
 constexpr uint32_t kInterpDelayMs = 100;       // remote players are shown at least this far in the past
@@ -230,4 +230,4 @@ private:
     std::vector<Event> queue_;
 };
 
-}  // namespace qlike::net
+}  // namespace vibe::net

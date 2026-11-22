@@ -228,12 +228,12 @@ float calcShadow(vec3 pos, vec3 sunDir) {
         // Bigger min-step and lower hard-cap at distance — same logic
         // as the primary march. Combined with the receiver-distance
         // step budget above, distant shadow contributions converge in
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
         // 4 jumps instead of crawling 24+ tiny steps. min_step hoisted
         // above the loop (loop-invariant).
-#else /* QLIKE_WATER */
+#else /* VIBE_WATER */
         // 4 jumps instead of crawling 24+ tiny steps.
-#endif /* QLIKE_WATER */
+#endif /* VIBE_WATER */
         t += clamp(h, min_step, 100.0);
         if (t > 800.0 || res < 0.001) break;
     }
@@ -249,7 +249,7 @@ float calcShadow(vec3 pos, vec3 sunDir) {
 // shadow inaccuracy. Returns 0..1 (0 = no grass shadow, 1 = fully
 // in a grass cell's shadow). Caller multiplies the diffuse term by
 // (1 - grass_shadow * strength).
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
 // ---- Exact grass blade shadows (shared with cube.frag) ----
 #include "grass_blades.glsl"
 // Light visibility 0..1 at ground point `p` (on the terrain surface).
@@ -259,7 +259,7 @@ float grass_blade_shadow(vec3 p, vec3 L) {
 }
 
 
-#endif /* ! QLIKE_WATER */
+#endif /* ! VIBE_WATER */
 float grassCastShadow(vec3 pos, vec3 sunDir) {
     float strength = scene.grass_shadow_params.x;
     int   N        = int(scene.grass_shadow_params.y);
@@ -462,7 +462,7 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
     vec3 grass_top  = mix(ground_base, ground_base * 0.7, nz);
     float tint_str  = clamp(scene.grass_color_ground.w, 0.0, 1.0);
     col = mix(col, grass_top, grass_amt * tint_str);
-#ifndef QLIKE_WATER
+#ifndef VIBE_WATER
     // Grass floor: close up, what shows between the blades is the matted
     // base of the lawn - old flattened leaves in the blades' own shadow -
     // not soil in the meadow's (much lighter) far colour. Gaps between the

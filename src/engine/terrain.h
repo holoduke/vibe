@@ -18,7 +18,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 struct HeightmapParams {
     int   dim         = 256;     // grid cells per side; vertex grid is dim+1.
@@ -158,4 +158,4 @@ void rebuild_chunk_vertices(VkDevice device, VmaAllocator alloc, VkQueue queue,
                             uint32_t queue_family,
                             const Heightmap& hm, TerrainChunk& c);
 
-} // namespace qlike
+} // namespace vibe

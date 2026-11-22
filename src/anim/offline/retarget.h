@@ -14,7 +14,7 @@
 #include "anim/offline/bvh.h"
 #include "anim/offline/raw_clip.h"
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 struct BoneMap {
     std::string target;          // soldier joint
@@ -46,4 +46,4 @@ RetargetParams cmu_params();
 bool retarget_bvh(const Bvh& bvh, int first, int end, const SkeletonDef& skel, const RetargetParams& params, RawClip& out,
                   std::string* why = nullptr);
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline

@@ -29,7 +29,7 @@
 #include <cstring>
 #include <fstream>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 const char* const kPaintFile = "assets/level1_paint.bin";
@@ -679,4 +679,4 @@ void VulkanEngine::build_edit_ui() {
     ImGui::End();
 }
 
-}  // namespace qlike
+}  // namespace vibe

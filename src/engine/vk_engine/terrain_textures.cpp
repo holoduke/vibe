@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_terrain_height_texture() {
     if (terrain_data_.heights.empty()) {
@@ -880,4 +880,4 @@ void VulkanEngine::destroy_fog_wisp_texture() {
 }
 
 
-} // namespace qlike
+} // namespace vibe

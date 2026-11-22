@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <cfloat>
 
-namespace qlike {
+namespace vibe {
 
 ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const uint32_t* indices, size_t index_count,
                                float uv_weight) {
@@ -75,7 +75,7 @@ ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const u
     return out;
 }
 
-}  // namespace qlike
+}  // namespace vibe
 
 // ---------------------------------------------------------------------
 // Disk cache: the hierarchy of a mesh only depends on the mesh, and building
@@ -85,7 +85,7 @@ ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const u
 #include <filesystem>
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 uint64_t fnv1a(const void* data, size_t n, uint64_t h) {
@@ -135,4 +135,4 @@ ClusterMesh build_cluster_mesh_cached(const Vertex* verts, size_t vertex_count, 
     return m;
 }
 
-}  // namespace qlike
+}  // namespace vibe

@@ -10,7 +10,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace qlike::voxel {
+namespace vibe::voxel {
 
 VoxelShape& VoxelWorld::new_shape_(glm::vec3 origin_world, int bx, int by, int bz) {
     shapes_.emplace_back();
@@ -1058,4 +1058,4 @@ int VoxelWorld::add_procedural_tower(glm::vec3 base_corner_world) {
     return static_cast<int>(shapes_.size()) - 1;
 }
 
-} // namespace qlike::voxel
+} // namespace vibe::voxel

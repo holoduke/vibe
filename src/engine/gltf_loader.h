@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 // One glTF primitive flattened into raw data ready for upload + BLAS build.
 // Node-hierarchy transforms are pre-baked into vertex positions / normals so
@@ -31,4 +31,4 @@ struct GltfModel {
 // (UV, tangent, joint weights) are dropped — the engine doesn't use them yet.
 GltfModel load_gltf(const std::string& path);
 
-} // namespace qlike
+} // namespace vibe

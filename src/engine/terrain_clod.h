@@ -28,7 +28,7 @@
 
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 struct Heightmap;
 
@@ -110,4 +110,4 @@ void update_clod_pyramid_region(ClodHeightPyramid& pyr,
 void select_clod_nodes(const ClodParams& p, const ClodHeightPyramid& pyr,
                        glm::vec3 cam, std::vector<ClodNode>& out);
 
-} // namespace qlike
+} // namespace vibe

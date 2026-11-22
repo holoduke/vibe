@@ -4,7 +4,7 @@
 
 #include <fstream>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 std::vector<uint8_t> AnimAsset::serialize() const {
     ByteWriter w;
@@ -106,4 +106,4 @@ int AnimAsset::find_clip(std::string_view name) const {
     return -1;
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

@@ -20,12 +20,12 @@
 #include <cstdint>
 #include <cstdlib>
 
-namespace qlike {
+namespace vibe {
 
 // ---- Validation layer toggle ----
 // Debug builds: always on. Release builds: OFF by default (validation
 // is far too slow for shipping), but force-enable when the env var
-// QLIKE_VK_VALIDATION is set to a non-empty value. This lets us run
+// VIBE_VK_VALIDATION is set to a non-empty value. This lets us run
 // the normal Release exe WITH SYNC + GPU-ASSISTED validation to
 // diagnose intermittent device-lost crashes that leave no signal in
 // a plain Release build (validation was previously compiled out, so
@@ -35,7 +35,7 @@ inline bool vk_validation_enabled() {
     return true;
 #else
     static const bool v = []{
-        const char* e = std::getenv("QLIKE_VK_VALIDATION");
+        const char* e = std::getenv("VIBE_VK_VALIDATION");
         return e != nullptr && e[0] != '\0';
     }();
     return v;
@@ -43,8 +43,8 @@ inline bool vk_validation_enabled() {
 }
 
 // Path of the autosaved settings file relative to CWD.
-// QLIKE_CFG=<path>: another settings file (test runs use a copy, so a game the user is playing is not disturbed).
-inline const char* const kSettingsPath = std::getenv("QLIKE_CFG") ? std::getenv("QLIKE_CFG") : "vibe_settings.cfg";
+// VIBE_CFG=<path>: another settings file (test runs use a copy, so a game the user is playing is not disturbed).
+inline const char* const kSettingsPath = std::getenv("VIBE_CFG") ? std::getenv("VIBE_CFG") : "vibe_settings.cfg";
 
 // Pi constants used by several engine sections. Float-precision; matches the
 // literal `3.14159265f` previously scattered across combat / world / helpers.
@@ -515,4 +515,4 @@ inline float fbm_noise2(float x, float y) {
 // `noised()` GLSL helper in terrain_raymarch.frag. The brush's
 // "FBM erosion" mode uses this so a stroke's high-frequency detail
 // matches the procedural raymarched terrain in character.
-} // namespace qlike
+} // namespace vibe

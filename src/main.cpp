@@ -12,7 +12,7 @@
 namespace {
 
 struct Args {
-    qlike::RunOptions opts;
+    vibe::RunOptions opts;
     std::string log_path = "vibe.log";
 };
 
@@ -73,13 +73,13 @@ int main(int argc, char** argv) {
     Args args{};
     if (!parse_args(argc, argv, args)) return 2;
 
-    qlike::log::open(args.log_path);
-    qlike::crash::install();
-    qlike::log::infof("Vibe startup (argc=%d)", argc);
+    vibe::log::open(args.log_path);
+    vibe::crash::install();
+    vibe::log::infof("Vibe startup (argc=%d)", argc);
 
     int rc = 0;
     try {
-        qlike::VulkanEngine engine;
+        vibe::VulkanEngine engine;
         try { engine.init(); }
         catch (...) { engine.dump_device_fault_public(); throw; }      // which GPU fault killed the start?
         engine.run(args.opts);
@@ -89,21 +89,21 @@ int main(int argc, char** argv) {
         // e.what(). On the gameplay-stall path the runtime_error's
         // heap-allocated message is freed before we catch (we've reproduced
         // an AV here on `raw[scan_len]` read). The throw site already logs
-        // the cause via QLIKE_VK_CHECK / vk_check_loc, so the message is
+        // the cause via VIBE_VK_CHECK / vk_check_loc, so the message is
         // already in the log file — the catch only needs to record that we
         // exited via exception.
         const char* type = typeid(e).name();
-        qlike::log::errorf("fatal: caught std::exception (type=%s) — see "
+        vibe::log::errorf("fatal: caught std::exception (type=%s) — see "
                            "earlier '[vk_check]' line for cause", type);
         std::fprintf(stderr, "fatal: caught std::exception (type=%s)\n", type);
         rc = 1;
     } catch (...) {
-        qlike::log::error("fatal: caught non-std exception (type unknown)");
+        vibe::log::error("fatal: caught non-std exception (type unknown)");
         std::fprintf(stderr, "fatal: caught non-std exception (type unknown)\n");
         rc = 1;
     }
 
-    qlike::log::info("Vibe shutdown");
-    qlike::log::close();
+    vibe::log::info("Vibe shutdown");
+    vibe::log::close();
     return rc;
 }

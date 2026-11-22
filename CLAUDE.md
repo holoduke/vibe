@@ -43,7 +43,7 @@ cd C:\Users\gillis\dev\quake-like     # cwd MUST be project root or all textures
 ```
 
 Validation is OFF by default in Release builds (zero overhead). Only set
-`QLIKE_VK_VALIDATION=1` to enable Vulkan validation layers for debugging.
+`VIBE_VK_VALIDATION=1` to enable Vulkan validation layers for debugging.
 
 ## CLI flags
 

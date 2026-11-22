@@ -10,7 +10,7 @@
 #undef min
 #undef max
 
-namespace qlike {
+namespace vibe {
 namespace {
 
 constexpr float kPi = 3.14159265358979f;
@@ -441,4 +441,4 @@ game::LevelMesh& m, const EzTreeOptions& o, float max_detail, float target_heigh
     }
 }
 
-}  // namespace qlike
+}  // namespace vibe

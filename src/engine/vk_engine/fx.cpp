@@ -34,11 +34,11 @@
 #include <cmath>
 #include <cstring>
 
-#ifndef QLIKE_SHADER_DIR
-#define QLIKE_SHADER_DIR "shaders"
+#ifndef VIBE_SHADER_DIR
+#define VIBE_SHADER_DIR "shaders"
 #endif
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr float kFxG = 9.81f;
@@ -393,8 +393,8 @@ void VulkanEngine::tick_fx(float dt) {
                       explosions_.end());
     cam_shake_ *= std::exp(-dt * 3.2f);
 
-    // Test hook: QLIKE_TEST_CHUTE=1 hangs an opened parachute bomb in front of the camera.
-    static const bool kTestChute = std::getenv("QLIKE_TEST_CHUTE") != nullptr;
+    // Test hook: VIBE_TEST_CHUTE=1 hangs an opened parachute bomb in front of the camera.
+    static const bool kTestChute = std::getenv("VIBE_TEST_CHUTE") != nullptr;
     if (kTestChute && bombs_.empty()) {
         Bomb b{};
         b.pos = player_.position + glm::vec3(std::sin(player_.yaw), 0.0f, -std::cos(player_.yaw)) * 24.0f + glm::vec3(0.0f, 26.0f, 0.0f);
@@ -459,7 +459,7 @@ void VulkanEngine::tick_fx(float dt) {
 // GPU resources
 // ---------------------------------------------------------------------
 void VulkanEngine::init_fx() {
-    const std::string sd = QLIKE_SHADER_DIR;
+    const std::string sd = VIBE_SHADER_DIR;
     fx_vert_module_        = vkpipe::load_shader_module(device_, sd + "/fx.vert.spv");
     fx_ribbon_frag_module_ = vkpipe::load_shader_module(device_, sd + "/fx_ribbon.frag.spv");
     fx_volume_frag_module_ = vkpipe::load_shader_module(device_, sd + "/fx_volume.frag.spv");
@@ -1383,11 +1383,11 @@ void VulkanEngine::spawn_airstrike(glm::vec3 target, glm::vec3 dir, bool remote)
 }
 
 void VulkanEngine::tick_airstrike(float dt, bool fire_pressed) {
-    // Test hook: QLIKE_TEST_STRIKE=<metres>[,<frame>] equips the tablet and
+    // Test hook: VIBE_TEST_STRIKE=<metres>[,<frame>] equips the tablet and
     // marks the ground that far ahead of the camera at that frame (200).
     {
         static float dist = -1.0f; static int at = 200; static bool init = false;
-        if (!init) { init = true; if (const char* e = std::getenv("QLIKE_TEST_STRIKE")) std::sscanf(e, "%f,%d", &dist, &at); }
+        if (!init) { init = true; if (const char* e = std::getenv("VIBE_TEST_STRIKE")) std::sscanf(e, "%f,%d", &dist, &at); }
         if (dist > 0.0f && int(frame_number_) == at) {
             weapon_ = 1;
             glm::vec3 fw = player_.forward(); fw.y = 0.0f; fw = glm::normalize(fw + glm::vec3(1e-4f, 0.0f, 0.0f));
@@ -1421,4 +1421,4 @@ void VulkanEngine::tick_airstrike(float dt, bool fire_pressed) {
     }
 }
 
-} // namespace qlike
+} // namespace vibe

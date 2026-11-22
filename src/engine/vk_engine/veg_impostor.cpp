@@ -29,7 +29,7 @@
 #include <future>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr int   kViews = 8;
@@ -277,4 +277,4 @@ VegImpostorAtlas bake_veg_impostors(const std::vector<VegArchetype>& archs,
     return out;
 }
 
-} // namespace qlike
+} // namespace vibe

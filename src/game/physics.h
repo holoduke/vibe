@@ -2,7 +2,7 @@
 
 #include <glm/vec3.hpp>
 
-namespace qlike::physics {
+namespace vibe::physics {
 
 // Default tunings — Quake3-ish, Y-up. Distances are in "engine units" (~roughly inches).
 struct MoveParams {
@@ -39,4 +39,4 @@ glm::vec3 air_accelerate(glm::vec3 vel, glm::vec3 wishdir, float wishspeed,
 // Apply gravity to the y component (Y-up world).
 glm::vec3 apply_gravity(glm::vec3 vel, float gravity, float dt);
 
-} // namespace qlike::physics
+} // namespace vibe::physics

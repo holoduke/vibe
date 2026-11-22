@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike::game {
+namespace vibe::game {
 
 namespace {
 // World-space inflation applied to SPOM-wall brush AABBs to cover the
@@ -1234,5 +1234,5 @@ glm::vec3 append_lamp_post(Level& lv, glm::vec3 base, glm::vec3 arm_dir, uint32_
     return lb + up * (lh * 0.5f);
 }
 
-} // namespace qlike::game
+} // namespace vibe::game
 

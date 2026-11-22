@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-namespace qlike::log {
+namespace vibe::log {
 
 // Open the log file. Subsequent writes append to it. Idempotent — calling open
 // again replaces the previous file.
@@ -22,4 +22,4 @@ void infof(const char* fmt, ...);
 void warnf(const char* fmt, ...);
 void errorf(const char* fmt, ...);
 
-} // namespace qlike::log
+} // namespace vibe::log

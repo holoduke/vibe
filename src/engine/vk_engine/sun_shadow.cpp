@@ -11,10 +11,10 @@
 #include "engine/vk_pipelines.h"
 #include "engine/frustum.h"
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_sun_shadow_pipeline() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     sun_shadow_vert_module_ = vkpipe::load_shader_module(device_, sd + "/shadow.vert.spv");
 
     // Dedicated pipeline layout — no descriptor sets. Shadow.vert only
@@ -414,4 +414,4 @@ void VulkanEngine::render_sun_shadow_pass(VkCommandBuffer cmd) {
                                      VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
-} // namespace qlike
+} // namespace vibe

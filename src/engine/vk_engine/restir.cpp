@@ -26,7 +26,7 @@
 
 #include "engine/vk_engine/internal.h"
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 // Must match the GLSL Reservoir struct in cube.frag (std430).
@@ -127,4 +127,4 @@ void VulkanEngine::recreate_restir_buffers() {
     vkUpdateDescriptorSets(device_, 2, w, 0, nullptr);
 }
 
-} // namespace qlike
+} // namespace vibe

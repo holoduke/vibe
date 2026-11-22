@@ -14,7 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 
-using namespace qlike;
+using namespace vibe;
 
 int main(int argc, char** argv) {
     if (argc < 4) {

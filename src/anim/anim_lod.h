@@ -10,7 +10,7 @@
 // margin against flicker at a boundary. Someone the local player is fighting stays at 0.
 #include <algorithm>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 struct LodParams {
     float full_px = 110.0f;      // at least this tall on screen: level 0
@@ -49,4 +49,4 @@ inline int select_lod(const LodInput& in, const LodParams& p = {}) {
     return lod;
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

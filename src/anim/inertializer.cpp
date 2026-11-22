@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 namespace {
 constexpr float kMaxAngVel = 40.0f;     // rad/s: a rate above this is a pop in the source, not motion
@@ -86,4 +86,4 @@ void Inertializer::apply(std::span<const Transform> src, float dt, float halflif
     }
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

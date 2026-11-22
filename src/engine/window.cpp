@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 int g_glfw_refcount = 0;
@@ -354,4 +354,4 @@ InputFrame Window::consume_input(const InputBindings& b) {
     return f;
 }
 
-} // namespace qlike
+} // namespace vibe

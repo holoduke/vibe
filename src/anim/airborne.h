@@ -12,7 +12,7 @@
 // and is not asked to move; a landing into a run or another jump goes straight on.
 #include "anim/motion_db.h"
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 enum class AirPhase : uint8_t { Ground, Rise, Apex, Fall, Reach, Land };
 const char* air_phase_name(AirPhase p);
@@ -71,4 +71,4 @@ int find_jump(const MotionDatabase& db, glm::vec2 velocity_capture_scale, bool& 
 AirborneOutput update_airborne(const MotionDatabase& db, AirborneState& st, const AirborneInput& in, const AirborneParams& p,
                                float capture_speed_scale);
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

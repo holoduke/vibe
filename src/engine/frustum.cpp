@@ -2,7 +2,7 @@
 
 #include <glm/geometric.hpp>
 
-namespace qlike {
+namespace vibe {
 
 Frustum extract_frustum(const glm::mat4& vp) {
     glm::mat4 t = glm::transpose(vp);
@@ -31,4 +31,4 @@ bool aabb_visible(const Frustum& f, const glm::vec3& mn, const glm::vec3& mx) {
     return true;
 }
 
-} // namespace qlike
+} // namespace vibe

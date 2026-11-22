@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <limits>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::apply_player_pushes(glm::vec3 pre_velocity) {
     if (!physics_) return;
@@ -1102,4 +1102,4 @@ void VulkanEngine::update_particles(float dt) {
     }
 }
 
-} // namespace qlike
+} // namespace vibe

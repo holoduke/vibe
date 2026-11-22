@@ -28,7 +28,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace qlike::lsys {
+namespace vibe::lsys {
 
 struct Module {
     char  s = 'F';
@@ -150,4 +150,4 @@ inline Shape interpret(const Str& str, const TurtleParams& tp) {
     return out;
 }
 
-}  // namespace qlike::lsys
+}  // namespace vibe::lsys

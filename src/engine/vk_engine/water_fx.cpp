@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr float kG = 9.81f;
@@ -172,4 +172,4 @@ void VulkanEngine::tick_water_fx(float dt) {
     }
 }
 
-}  // namespace qlike
+}  // namespace vibe

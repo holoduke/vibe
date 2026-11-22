@@ -15,7 +15,7 @@
 #include <cmath>
 #include <cstdlib>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr float kRoundSpeed = 720.0f;    // m/s
@@ -261,8 +261,8 @@ void VulkanEngine::tick_aa(float dt) {
         // for the odd rounds (so 5 rounds = the recording's last 5 shots +
         // its natural tail) and replayed whole for every further 12.
         v.cooldown -= dt;
-        // Test hook: QLIKE_TEST_AAFIRE=1 keeps every gun firing, target or not.
-        static const bool kTestAaFire = std::getenv("QLIKE_TEST_AAFIRE") != nullptr;
+        // Test hook: VIBE_TEST_AAFIRE=1 keeps every gun firing, target or not.
+        static const bool kTestAaFire = std::getenv("VIBE_TEST_AAFIRE") != nullptr;
         if (kTestAaFire) v.cooldown = 0.0f;
         const bool on_target = kTestAaFire || (game_.aa_enabled && tgt && std::abs(dy) < 0.035f && std::abs(dp) < 0.035f);
         const float interval = 0.080f;     // 12.5 rds/s (alternating barrels)
@@ -385,8 +385,8 @@ void VulkanEngine::tick_sam(float dt) {
             if (v.reload_t <= 0.0f) v.rails = 0xFu;
         }
         v.cooldown -= dt;
-        // Test hook: QLIKE_TEST_SAM=1 makes the launchers fire as fast as they can lock.
-        static const bool kTestSam = std::getenv("QLIKE_TEST_SAM") != nullptr;
+        // Test hook: VIBE_TEST_SAM=1 makes the launchers fire as fast as they can lock.
+        static const bool kTestSam = std::getenv("VIBE_TEST_SAM") != nullptr;
         if (kTestSam) v.cooldown = std::min(v.cooldown, 0.5f);
         // Nearest live jet that no missile is already flying at.
         const SpacejetFlight* tgt = nullptr;
@@ -446,8 +446,8 @@ void VulkanEngine::tick_sam(float dt) {
     }
 
     // ---- Flares ----
-    // Test hook: QLIKE_TEST_FLARE=1 dumps a flare string ahead of the camera.
-    static const bool kTestFlare = std::getenv("QLIKE_TEST_FLARE") != nullptr;
+    // Test hook: VIBE_TEST_FLARE=1 dumps a flare string ahead of the camera.
+    static const bool kTestFlare = std::getenv("VIBE_TEST_FLARE") != nullptr;
     if (kTestFlare && flares_.empty()) {
         const glm::vec3 fw(std::sin(player_.yaw), 0.0f, -std::cos(player_.yaw));
         const glm::vec3 rt(-fw.z, 0.0f, fw.x);
@@ -622,4 +622,4 @@ void VulkanEngine::draw_aa(VkCommandBuffer cmd, const glm::mat4& vp, const glm::
     }
 }
 
-} // namespace qlike
+} // namespace vibe

@@ -5,7 +5,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 int Bvh::find(const std::string& name) const {
     for (size_t i = 0; i < joints.size(); ++i)
@@ -130,4 +130,4 @@ void bvh_fk(const Bvh& b, int frame, std::vector<glm::dmat3>& rot, std::vector<g
     }
 }
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline

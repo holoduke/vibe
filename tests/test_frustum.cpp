@@ -5,9 +5,9 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-using qlike::Frustum;
-using qlike::extract_frustum;
-using qlike::aabb_visible;
+using vibe::Frustum;
+using vibe::extract_frustum;
+using vibe::aabb_visible;
 using Catch::Approx;
 
 namespace {

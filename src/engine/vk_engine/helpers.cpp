@@ -9,7 +9,7 @@
 #include <cmath>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 // 240 bytes — past the Vulkan 128-byte minimum guarantee but well within the
 // 256-byte limit every modern desktop GPU exposes. If a target device caps
@@ -297,4 +297,4 @@ void write_scene_descriptors_once(
     vkUpdateDescriptorSets(device, 11, writes, 0, nullptr);
 }
 
-} // namespace qlike
+} // namespace vibe

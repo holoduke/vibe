@@ -7,8 +7,8 @@
 // Pulled in here (not in vk_engine.h) so the unique_ptr<voxel::VoxelWorld>
 // member's destructor can be generated in this TU where the type is
 // complete. Forward-declared in the header to keep its include surface tight.
-// Must be at file scope (NOT inside namespace qlike) so voxel_world.h's
-// `namespace qlike::voxel` resolves to the same fully-qualified name as
+// Must be at file scope (NOT inside namespace vibe) so voxel_world.h's
+// `namespace vibe::voxel` resolves to the same fully-qualified name as
 // the forward decl in vk_engine.h.
 #include "engine/voxel/voxel_world.h"
 
@@ -47,11 +47,11 @@
 #include <thread>
 #include <typeinfo>
 
-#ifndef QLIKE_SHADER_DIR
-#define QLIKE_SHADER_DIR "shaders"
+#ifndef VIBE_SHADER_DIR
+#define VIBE_SHADER_DIR "shaders"
 #endif
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::ensure_loader_bg_loaded_() {
     if (loader_bg_tried_) return;
@@ -179,7 +179,7 @@ void VulkanEngine::present_loader_frame(const char* label, float progress) {
 
     auto& frame = current_frame();
 
-    QLIKE_VK_CHECK(vkWaitForFences(device_, 1, &frame.render_fence,
+    VIBE_VK_CHECK(vkWaitForFences(device_, 1, &frame.render_fence,
                                     VK_TRUE, UINT64_MAX),
                    "loader: vkWaitForFences");
 
@@ -190,17 +190,17 @@ void VulkanEngine::present_loader_frame(const char* label, float progress) {
                                        VK_NULL_HANDLE, &img_idx);
     if (acq == VK_ERROR_OUT_OF_DATE_KHR) { resize_requested_ = true; return; }
     if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
-        QLIKE_VK_CHECK(acq, "loader: vkAcquireNextImageKHR");
+        VIBE_VK_CHECK(acq, "loader: vkAcquireNextImageKHR");
     }
 
-    QLIKE_VK_CHECK(vkResetFences(device_, 1, &frame.render_fence),
+    VIBE_VK_CHECK(vkResetFences(device_, 1, &frame.render_fence),
                    "loader: vkResetFences");
-    QLIKE_VK_CHECK(vkResetCommandBuffer(frame.command_buffer, 0),
+    VIBE_VK_CHECK(vkResetCommandBuffer(frame.command_buffer, 0),
                    "loader: vkResetCommandBuffer");
 
     auto bi = vkinit::command_buffer_begin_info(
         VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-    QLIKE_VK_CHECK(vkBeginCommandBuffer(frame.command_buffer, &bi),
+    VIBE_VK_CHECK(vkBeginCommandBuffer(frame.command_buffer, &bi),
                    "loader: vkBeginCommandBuffer");
 
     // Try to load the background image on the first call. Cached
@@ -436,7 +436,7 @@ void VulkanEngine::present_loader_frame(const char* label, float progress) {
                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                               VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
-    QLIKE_VK_CHECK(vkEndCommandBuffer(frame.command_buffer),
+    VIBE_VK_CHECK(vkEndCommandBuffer(frame.command_buffer),
                    "loader: vkEndCommandBuffer");
 
     auto wait = vkinit::semaphore_submit_info(
@@ -453,7 +453,7 @@ void VulkanEngine::present_loader_frame(const char* label, float progress) {
         .commandBufferInfoCount = 1, .pCommandBufferInfos = &cmd_info,
         .signalSemaphoreInfoCount = 1, .pSignalSemaphoreInfos = &signal,
     };
-    QLIKE_VK_CHECK(vkQueueSubmit2(graphics_queue_, 1, &submit,
+    VIBE_VK_CHECK(vkQueueSubmit2(graphics_queue_, 1, &submit,
                                    frame.render_fence),
                    "loader: vkQueueSubmit2");
 
@@ -462,11 +462,11 @@ void VulkanEngine::present_loader_frame(const char* label, float progress) {
     if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) {
         resize_requested_ = true;
     } else if (pres != VK_SUCCESS) {
-        QLIKE_VK_CHECK(pres, "loader: vkQueuePresentKHR");
+        VIBE_VK_CHECK(pres, "loader: vkQueuePresentKHR");
     }
 
     ++frame_number_;
 }
 
 
-} // namespace qlike
+} // namespace vibe

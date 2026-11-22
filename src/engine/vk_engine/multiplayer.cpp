@@ -22,7 +22,7 @@
 #include <cmath>
 #include <cstdlib>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr float kHitDamage = 20.0f;
@@ -43,9 +43,9 @@ bool seg_aabb(glm::vec3 a, glm::vec3 b, glm::vec3 mn, glm::vec3 mx, float& t_hit
 }  // namespace
 
 void VulkanEngine::mp_init() {
-    // Off for automated runs (--frames / screenshots) unless QLIKE_NET=1, and with QLIKE_NO_NET.
+    // Off for automated runs (--frames / screenshots) unless VIBE_NET=1, and with VIBE_NO_NET.
     const bool automated = opts_.max_frames > 0 || !opts_.screenshot_path.empty();
-    if (std::getenv("QLIKE_NO_NET") || (automated && !std::getenv("QLIKE_NET"))) return;
+    if (std::getenv("VIBE_NO_NET") || (automated && !std::getenv("VIBE_NET"))) return;
     const char* cn = std::getenv("COMPUTERNAME");
     net_ = new net::Session();
     if (!net_->start(cn && *cn ? cn : "player")) { delete net_; net_ = nullptr; return; }
@@ -94,13 +94,13 @@ void VulkanEngine::mp_update(float dt) {
     mp_feed_.erase(std::remove_if(mp_feed_.begin(), mp_feed_.end(), [](const MpFeed& f) { return f.ttl <= 0.0f; }), mp_feed_.end());
     mp_hurt_ = std::max(0.0f, mp_hurt_ - dt * 2.5f);
 
-    // QLIKE_TEST_WX=<seconds>:<type>: pick that weather type after that many seconds (sync tests).
-    if (static const char* tw = std::getenv("QLIKE_TEST_WX"); tw) {
+    // VIBE_TEST_WX=<seconds>:<type>: pick that weather type after that many seconds (sync tests).
+    if (static const char* tw = std::getenv("VIBE_TEST_WX"); tw) {
         static bool done = false;
         float at = 0.0f; int ty = 0, se = -1;
         if (!done && std::sscanf(tw, "%f:%d:%d", &at, &ty, &se) >= 2 && glfwGetTime() > double(at)) {
             done = true; rt_.weather_enabled = true; rt_.weather_preset = ty;
-            if (se >= 0) rt_.season = se;            // QLIKE_TEST_WX=<seconds>:<type>:<season>
+            if (se >= 0) rt_.season = se;            // VIBE_TEST_WX=<seconds>:<type>:<season>
         }
     }
     mp_sync_world(dt);
@@ -205,7 +205,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         // Killed: for a moment the body still stands where it was hit and buckles (they themselves
         // are at their spawn already); then it is the physics'. Until then it is posed from the
         // state it had, slowing down.
-        static const float kDying = std::getenv("QLIKE_DYING") ? float(std::atof(std::getenv("QLIKE_DYING"))) : 0.38f;
+        static const float kDying = std::getenv("VIBE_DYING") ? float(std::atof(std::getenv("VIBE_DYING"))) : 0.38f;
         if (a.die && a.dying_t < 0.0f && kDying > 0.0f && !a.fresh_pose) { a.die = false; a.dying_t = 0.0f; a.dying_st = a.st; }
         if (a.dying_t >= 0.0f) {
             a.dying_t += dt;
@@ -237,7 +237,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         }
         li.combat = a.combat_t < 4.0f;
         li.previous = a.lod;
-        static const int kForceLod = std::getenv("QLIKE_ANIM_LOD") ? std::atoi(std::getenv("QLIKE_ANIM_LOD")) : -1;
+        static const int kForceLod = std::getenv("VIBE_ANIM_LOD") ? std::atoi(std::getenv("VIBE_ANIM_LOD")) : -1;
         a.lod = kForceLod >= 0 ? glm::clamp(kForceLod, 0, 3) : anim::select_lod(li);
 
         in.dt = dt;
@@ -328,7 +328,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         a.mesh_lod = body_mesh_lod(eye, a.mesh_lod);
         a.drawn = a.lod < 3 && a.palette >= 0;
     }
-    if (std::getenv("QLIKE_ANIM_LOG") && frame_number_ % 20 == 0) {
+    if (std::getenv("VIBE_ANIM_LOG") && frame_number_ % 20 == 0) {
         // (what each remote animator is doing: the evidence for a two-instance run)
         for (const auto& a : mp_avatars_) {
             if (!a.id || !a.animator) continue;
@@ -338,7 +338,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
                        int(d.contact[0]), int(d.contact[1]), a.st.px, a.st.py, a.st.pz);
         }
     }
-    if (std::getenv("QLIKE_ANIM_LOG") && frame_number_ % 120 == 0) {
+    if (std::getenv("VIBE_ANIM_LOG") && frame_number_ % 120 == 0) {
         const net::Session::Stats& ns = net_->stats();
         log::infof("[anim] bodies: animation %.3f ms, skinning %.3f ms this frame; levels 0/1/2/3 = %d/%d/%d/%d; net tx %llu B rx %llu B, dup events %u",
                    anim_ms_, skin_ms_, anim_lod_count_[0], anim_lod_count_[1], anim_lod_count_[2], anim_lod_count_[3],
@@ -515,4 +515,4 @@ void VulkanEngine::mp_hud() {
     }
 }
 
-}  // namespace qlike
+}  // namespace vibe

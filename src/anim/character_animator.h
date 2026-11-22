@@ -24,7 +24,7 @@
 
 #include <memory>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 // Everything characters share: the runtime (skeleton + clips), the motion database, joint lookups.
 struct AnimationSet {
@@ -284,4 +284,4 @@ private:
     AnimDebug dbg_;
 };
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

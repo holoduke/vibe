@@ -12,8 +12,8 @@
 // What stays per pixel is only what no mesh LOD carries: cracks, pitting
 // and grain, as a small height field over the surface. Its gradient bends
 // the mesh normal, its cavity term darkens the cracks.
-#ifndef QLIKE_ROCK_GLSL
-#define QLIKE_ROCK_GLSL
+#ifndef VIBE_ROCK_GLSL
+#define VIBE_ROCK_GLSL
 
 // Object space of the formations: unit rock centred at kRockC, y up.
 const vec3 kRockC = vec3(0.0, 0.35, 0.0);

@@ -14,7 +14,7 @@
 
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr VkFormat kRrFormats[3] = {
@@ -92,7 +92,7 @@ void VulkanEngine::ensure_rr_guides() {
         plci.setLayoutCount = 1; plci.pSetLayouts = &rr_set_layout_;
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &rr_pipeline_layout_), "rr layout");
-        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/rr_guides.comp.spv");
+        VkShaderModule m = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/rr_guides.comp.spv");
         VkComputePipelineCreateInfo cci{};
         cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -183,4 +183,4 @@ void VulkanEngine::dispatch_rr_guides(VkCommandBuffer cmd) {
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
-} // namespace qlike
+} // namespace vibe

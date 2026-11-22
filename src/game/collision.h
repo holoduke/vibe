@@ -3,7 +3,7 @@
 #include <glm/vec3.hpp>
 #include <span>
 
-namespace qlike::collision {
+namespace vibe::collision {
 
 struct AABB {
     glm::vec3 min;
@@ -49,4 +49,4 @@ MoveResult slide_move(const AABB& player, glm::vec3 position, glm::vec3 velocity
                       int max_iterations = 4,
                       size_t static_count = static_cast<size_t>(-1));
 
-} // namespace qlike::collision
+} // namespace vibe::collision

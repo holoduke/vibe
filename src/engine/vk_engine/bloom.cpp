@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_bloom() {
     VkDescriptorSetLayoutBinding b{};
@@ -55,7 +55,7 @@ void VulkanEngine::init_bloom() {
     vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &bloom_pipeline_layout_),
              "bloom pipeline layout");
 
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     bloom_down_frag_ = vkpipe::load_shader_module(device_, sd + "/bloom_down.frag.spv");
     bloom_up_frag_   = vkpipe::load_shader_module(device_, sd + "/bloom_up.frag.spv");
 
@@ -433,4 +433,4 @@ void VulkanEngine::run_bloom_chain(VkCommandBuffer cmd) {
                                  0, 1);
 }
 
-} // namespace qlike
+} // namespace vibe

@@ -7,7 +7,7 @@
 
 #include <glm/glm.hpp>
 
-namespace qlike {
+namespace vibe {
 
 struct RtSettings {
         // Sun position via spherical angles (so a UI slider feels intuitive).
@@ -869,4 +869,4 @@ struct GameSettings {
         bool operator==(const GameSettings&) const = default;
 };
 
-} // namespace qlike
+} // namespace vibe

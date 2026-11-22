@@ -19,7 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr int kLevels = 3;
@@ -42,7 +42,7 @@ VkBuffer pg_buffer(VmaAllocator a, VkDeviceSize size, VkBufferUsageFlags usage, 
 // After build_scatter (also after a re-plant in the editor).
 void VulkanEngine::init_plant_gpu() {
     destroy_plant_gpu();
-    if (std::getenv("QLIKE_NO_PLANT_GPU") || !scatter_.plant_buffer) return;
+    if (std::getenv("VIBE_NO_PLANT_GPU") || !scatter_.plant_buffer) return;
     uint32_t total = 0;
     for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp) total += scatter_.plant_count[sp];
     if (total == 0) return;
@@ -126,7 +126,7 @@ void VulkanEngine::init_plant_gpu() {
     pli.setLayoutCount = 1; pli.pSetLayouts = &pg_set_layout_;
     pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
     vk_check(vkCreatePipelineLayout(device_, &pli, nullptr, &pg_layout_), "plant gpu layout");
-    const std::string sd = QLIKE_SHADER_DIR;
+    const std::string sd = VIBE_SHADER_DIR;
     pg_module_ = vkpipe::load_shader_module(device_, sd + "/plant_cull.comp.spv");
     VkComputePipelineCreateInfo cci{};
     cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -207,7 +207,7 @@ void VulkanEngine::cull_plants(VkCommandBuffer cmd) {
     for (int i = 0; i < 6; ++i) pc.planes[i] = fv.frustum.planes[i];
     const float ppr = float(swapchain_extent_.height) / (2.0f * std::tan(glm::radians(80.0f) * 0.5f));
     pc.cam = glm::vec4(fv.eye_pos, ppr);
-    const bool occl = veg_cull_hiz_on_ && !std::getenv("QLIKE_NO_PLANT_OCCL");
+    const bool occl = veg_cull_hiz_on_ && !std::getenv("VIBE_NO_PLANT_OCCL");
     pc.params = glm::vec4(float(pg_total_), float(ScatterSet::kPlantSpecies), occl ? 1.0f : 0.0f, ScatterSet::kPlantFarLod);
     pc.prev_vp = veg_cull_prev_vp_;
     pc.hiz = glm::vec4(float(veg_hiz_w_), float(veg_hiz_h_), float(veg_hiz_mips_), ScatterSet::kPlantFarLod2);
@@ -228,8 +228,8 @@ void VulkanEngine::cull_plants(VkCommandBuffer cmd) {
 // Returns false when the GPU list is not available this frame (CPU cells then).
 bool VulkanEngine::draw_plants_gpu(VkCommandBuffer cmd, int sp) {
     if (!pg_drawn_) return false;
-    // QLIKE_SKIP_SP=<bit mask>: leave species out (to see which plant is which).
-    { static const char* sk = std::getenv("QLIKE_SKIP_SP"); if (sk && ((std::atoi(sk) >> sp) & 1)) return true; }
+    // VIBE_SKIP_SP=<bit mask>: leave species out (to see which plant is which).
+    { static const char* sk = std::getenv("VIBE_SKIP_SP"); if (sk && ((std::atoi(sk) >> sp) & 1)) return true; }
     const Mesh* lods[kLevels] = { &scatter_.plant_mesh[sp], &scatter_.plant_mesh_far[sp], &scatter_.plant_mesh_far2[sp] };
     if (!lods[1]->vertex_buffer) lods[1] = lods[0];
     if (!lods[2]->vertex_buffer) lods[2] = lods[1];
@@ -244,4 +244,4 @@ bool VulkanEngine::draw_plants_gpu(VkCommandBuffer cmd, int sp) {
     return true;
 }
 
-}  // namespace qlike
+}  // namespace vibe

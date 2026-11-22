@@ -38,7 +38,7 @@ make_cfg() {   # $1 = file, rest = key=value
 run() {        # $1 = name, rest = key=value
     local name=$1; shift
     make_cfg "$OUT/$name.cfg" "$@"
-    QLIKE_CFG="$(cygpath -w "$OUT/$name.cfg")" QLIKE_TEST_HOLD=1 QLIKE_TEST_GROUND=1 QLIKE_NO_NET=1 QLIKE_TEST_SIZE=$SIZE \
+    VIBE_CFG="$(cygpath -w "$OUT/$name.cfg")" VIBE_TEST_HOLD=1 VIBE_TEST_GROUND=1 VIBE_NO_NET=1 VIBE_TEST_SIZE=$SIZE \
         "$EXE" --frames ${FRAMES:-400} --log "$(cygpath -w "$OUT/$name.log")" > /dev/null 2>&1
 }
 pass() { echo "$1" | grep -o "$2=[0-9.]*" | cut -d= -f2 | awk '{s+=$1} END {printf "%.2f", s+0}'; }

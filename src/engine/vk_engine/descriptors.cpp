@@ -14,7 +14,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_descriptors() {
     // Scene UBO buffer.
@@ -445,7 +445,7 @@ void VulkanEngine::update_scene_ubo() {
                         break;
                     }
                 }
-                static const bool kNoLampMap = std::getenv("QLIKE_NO_LAMP_SHADOWMAP") != nullptr;   // A/B test hook
+                static const bool kNoLampMap = std::getenv("VIBE_NO_LAMP_SHADOWMAP") != nullptr;   // A/B test hook
                 data.lamp_info = glm::vec4(kNoLampMap ? 0.0f : float(lamp_map_valid_), 0.0f, 0.0f, 0.0f);
             } else {
                 for (size_t k = 0; k < order.size() && k < 8; ++k)
@@ -900,8 +900,8 @@ void VulkanEngine::update_scene_ubo() {
         const globe::Chart& gc = globe::current();
         data.globe_frame = glm::mat4(glm::mat3(gc.F));
         data.globe_info = glm::vec4(gc.home ? 0.0f : 1.0f, float(gc.ox()), wv_nf_ok() ? 1.0f : 0.0f,
-                                    // QLIKE_RM_SKIP=<bits>: leave sections of the terrain shader out, to measure them (terrain_raymarch.frag RMDBG)
-                                    []{ static const char* e = std::getenv("QLIKE_RM_SKIP"); return e ? float(std::atoi(e)) : 0.0f; }());
+                                    // VIBE_RM_SKIP=<bits>: leave sections of the terrain shader out, to measure them (terrain_raymarch.frag RMDBG)
+                                    []{ static const char* e = std::getenv("VIBE_RM_SKIP"); return e ? float(std::atoi(e)) : 0.0f; }());
         int32_t cells[globe::kOctaves][4]; float fracs[globe::kOctaves][4];
         globe::lattice(gc.F[1] * globe::kR, cells, fracs);
         for (int i = 0; i < 12; ++i) {
@@ -920,7 +920,7 @@ void VulkanEngine::update_scene_ubo() {
                                    0.0f);
     // Hand flashlight.
     flash_vp_ = glm::mat4(0.0f);
-    static const bool kNoFlashMap = std::getenv("QLIKE_NO_FLASH_SHADOWMAP") != nullptr;   // A/B test hook
+    static const bool kNoFlashMap = std::getenv("VIBE_NO_FLASH_SHADOWMAP") != nullptr;   // A/B test hook
     if (flashlight_on_ && clutter_shadow_flash_view_ && scatter_.plant_buffer && !kNoFlashMap) {
         const glm::vec3 lens = flash_pos_ + flash_fwd_ * 0.118f;
         glm::mat4 proj = glm::perspective(glm::radians(46.0f), 1.0f, 0.15f, 60.0f);
@@ -1095,4 +1095,4 @@ void VulkanEngine::update_scene_ubo() {
     vmaFlushAllocation(allocator_, scene_ubo_alloc_, 0, sizeof(data));
 }
 
-} // namespace qlike
+} // namespace vibe

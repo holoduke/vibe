@@ -24,7 +24,7 @@ and is not claimed.
 
 ## 2. Measured
 
-Two instances on one machine (9800X3D), `QLIKE_ANIM_LOG=1`, 2026-11-21:
+Two instances on one machine (9800X3D), `VIBE_ANIM_LOG=1`, 2026-11-21:
 
 | | |
 |---|---|

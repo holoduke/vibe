@@ -6,22 +6,22 @@
 // Phase 3 = context lifecycle (init/destroy/recreate)
 // Phase 4 = per-frame dispatch + HR output image, compose toggle.
 //
-// All FSR2 calls are gated on QLIKE_HAVE_FSR2 so the engine still
+// All FSR2 calls are gated on VIBE_HAVE_FSR2 so the engine still
 // builds if the submodule wasn't initialized.
 
 #include "engine/vk_engine/internal.h"
 
 #include <algorithm>
 
-#ifdef QLIKE_HAVE_FSR2
+#ifdef VIBE_HAVE_FSR2
   #include "ffx_fsr2.h"
   #include "vk/ffx_fsr2_vk.h"
   #include <cstdlib>
 #endif
 
-namespace qlike {
+namespace vibe {
 
-#ifdef QLIKE_HAVE_FSR2
+#ifdef VIBE_HAVE_FSR2
 namespace {
 // Allocate the HR storage image FSR2 writes its upscaled output into.
 // Lives for the lifetime of the FSR2 context — recreated on swapchain
@@ -68,7 +68,7 @@ bool allocate_fsr2_output(VmaAllocator allocator, VkDevice device,
 #endif
 
 void VulkanEngine::init_fsr2() {
-#ifdef QLIKE_HAVE_FSR2
+#ifdef VIBE_HAVE_FSR2
     // Need the swapchain (= displaySize) before context creation. Using
     // displaySize as the worst-case render size lets the context handle
     // any render_scale ≤ 1.0 without recreate per scale change.
@@ -134,7 +134,7 @@ void VulkanEngine::init_fsr2() {
 }
 
 void VulkanEngine::destroy_fsr2() {
-#ifdef QLIKE_HAVE_FSR2
+#ifdef VIBE_HAVE_FSR2
     if (fsr2_context_valid_ && fsr2_context_) {
         // Defensive wait — recreate_fsr2_context can fire mid-session
         // when the user changes render scale; engine shutdown already
@@ -156,7 +156,7 @@ void VulkanEngine::destroy_fsr2() {
 }
 
 void VulkanEngine::recreate_fsr2_context() {
-#ifdef QLIKE_HAVE_FSR2
+#ifdef VIBE_HAVE_FSR2
     // FSR2 bakes maxRenderSize/displaySize and the output image dims
     // into its allocations, so any swapchain change requires a full
     // recreate. compose_uses_fsr2_ stays true if the toggle is on; the
@@ -169,7 +169,7 @@ void VulkanEngine::recreate_fsr2_context() {
 }
 
 void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
-#ifdef QLIKE_HAVE_FSR2
+#ifdef VIBE_HAVE_FSR2
     if (!fsr2_context_valid_ || !fsr2_output_image_) return;
 
     // Pre-dispatch: output → GENERAL so FSR2's compute writes succeed.
@@ -189,22 +189,22 @@ void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
     d.color = ffxGetTextureResourceVK(ctx,
         scene_color_image_, scene_color_view_,
         render_extent_.width, render_extent_.height,
-        scene_color_format_, L"qlike_scene_color",
+        scene_color_format_, L"vibe_scene_color",
         FFX_RESOURCE_STATE_COMPUTE_READ);
     d.depth = ffxGetTextureResourceVK(ctx,
         depth_image_, depth_view_,
         render_extent_.width, render_extent_.height,
-        depth_format_, L"qlike_depth",
+        depth_format_, L"vibe_depth",
         FFX_RESOURCE_STATE_COMPUTE_READ);
     d.motionVectors = ffxGetTextureResourceVK(ctx,
         motion_vec_image_, motion_vec_view_,
         render_extent_.width, render_extent_.height,
-        motion_vec_format_, L"qlike_motion",
+        motion_vec_format_, L"vibe_motion",
         FFX_RESOURCE_STATE_COMPUTE_READ);
     d.output = ffxGetTextureResourceVK(ctx,
         fsr2_output_image_, fsr2_output_view_,
         swapchain_extent_.width, swapchain_extent_.height,
-        fsr2_output_format_, L"qlike_fsr2_out",
+        fsr2_output_format_, L"vibe_fsr2_out",
         FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 
     // jitter conversion: world.cpp writes proj-matrix offset
@@ -259,7 +259,7 @@ void VulkanEngine::dispatch_fsr2(VkCommandBuffer cmd) {
 // at fsr2_output_view_ vs the TAA history. wait_idle is only paid on
 // the actual switch, not every frame.
 void VulkanEngine::rewrite_compose_for_fsr2() {
-#ifdef QLIKE_HAVE_FSR2
+#ifdef VIBE_HAVE_FSR2
     // Must equal rewrite_compose_image_bindings()' use_fsr2 exactly, or the
     // two disagree and this rebinds (with a device wait) every frame.
     const bool use_fsr3  = rt_.fsr2_enabled && rt_.fsr_backend == 1 &&
@@ -273,4 +273,4 @@ void VulkanEngine::rewrite_compose_for_fsr2() {
 #endif
 }
 
-} // namespace qlike
+} // namespace vibe

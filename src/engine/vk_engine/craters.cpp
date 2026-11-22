@@ -26,7 +26,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     TerrainData& td = terrain_data_;
@@ -238,9 +238,9 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
                tp[0], tp[1], tp[2], tp[3], tp[4], tp[5]);
 }
 
-} // namespace qlike
+} // namespace vibe
 
-namespace qlike {
+namespace vibe {
 // Records the GPU half of every crater made since the last frame: height
 // texture sub-rects, terrain vertex rows + BLAS refit, grass-mask sub-rect.
 // Runs right after the frame-start barrier, i.e. ordered after everything
@@ -400,4 +400,4 @@ void VulkanEngine::collect_retired_buffers(bool all) {
         }
     }
 }
-}  // namespace qlike
+}  // namespace vibe

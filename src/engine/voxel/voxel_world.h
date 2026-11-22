@@ -24,9 +24,9 @@
 #include <cstdint>
 #include <vector>
 
-namespace qlike::collision { struct AABB; }
+namespace vibe::collision { struct AABB; }
 
-namespace qlike::voxel {
+namespace vibe::voxel {
 
 constexpr int   kBrickDim    = 16;
 constexpr int   kBrickVoxels = kBrickDim * kBrickDim * kBrickDim;  // 4096
@@ -188,4 +188,4 @@ private:
     mutable std::vector<uint8_t> scratch_c_;
 };
 
-} // namespace qlike::voxel
+} // namespace vibe::voxel

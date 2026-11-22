@@ -18,7 +18,7 @@
 #include "../../../external/FidelityFX-SDK/framework/cauldron/framework/libs/stb/stb_image_write.h"
 #pragma warning(pop)
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::capture_screenshot(VkCommandBuffer cmd, VkImage src,
                                       VkExtent2D extent, VkImageLayout pre_layout) {
@@ -124,4 +124,4 @@ void VulkanEngine::write_ppm(const std::string& path, uint32_t w, uint32_t h) {
                projectiles_.size(), particles_.size());
 }
 
-} // namespace qlike
+} // namespace vibe

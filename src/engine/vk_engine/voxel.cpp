@@ -25,7 +25,7 @@
 #include <cstring>
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -329,7 +329,7 @@ void VulkanEngine::init_voxel() {
 
     // ---- Pipeline ----
     {
-        std::string sd = QLIKE_SHADER_DIR;
+        std::string sd = VIBE_SHADER_DIR;
         voxel_vert_module_ = vkpipe::load_shader_module(device_, sd + "/voxel.vert.spv");
         voxel_frag_module_ = vkpipe::load_shader_module(device_, sd + "/voxel.frag.spv");
 
@@ -1008,4 +1008,4 @@ void VulkanEngine::render_voxels(VkCommandBuffer cmd) {
     }
 }
 
-} // namespace qlike
+} // namespace vibe

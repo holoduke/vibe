@@ -37,7 +37,7 @@
 #include <cstring>
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 // ---- UBO layouts -----------------------------------------------------------
 // Kept in this TU so the C++ side and the GLSL declarations stay in
@@ -70,7 +70,7 @@ static_assert(sizeof(SvgfAtrousUBO) <= kSvgfAtrousUBOStride,
 // ============================================================================
 
 void VulkanEngine::init_svgf_passes() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     svgf_moments_frag_module_ = vkpipe::load_shader_module(
         device_, sd + "/svgf_moments.frag.spv");
     svgf_atrous_frag_module_  = vkpipe::load_shader_module(
@@ -735,4 +735,4 @@ void VulkanEngine::write_svgf_ubos() {
         }
     }
 }
-} // namespace qlike
+} // namespace vibe

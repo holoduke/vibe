@@ -29,7 +29,7 @@
 #include <cstdlib>
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 struct SsdmPC {
@@ -73,7 +73,7 @@ void VulkanEngine::destroy_ssdm() {
 bool VulkanEngine::init_ssdm() {
     if (ssdm_ready_) return true;
     if (ssdm_failed_ || !taa_vert_module_ || !pipeline_layout_) return false;
-    const std::string sd = QLIKE_SHADER_DIR;
+    const std::string sd = VIBE_SHADER_DIR;
     ssdm_mesh_vert_    = vkpipe::load_shader_module(device_, sd + "/ssdm_mesh.vert.spv");
     ssdm_mesh_frag_    = vkpipe::load_shader_module(device_, sd + "/ssdm_mesh.frag.spv");
     ssdm_gbuffer_frag_ = vkpipe::load_shader_module(device_, sd + "/ssdm_gbuffer.frag.spv");
@@ -227,7 +227,7 @@ void VulkanEngine::create_ssdm_targets() {
 // its work on the pass's attachments, begins the pass again (loading them) and returns true -
 // the caller then binds its own pipeline / set / buffers again.
 bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
-    static const bool off = std::getenv("QLIKE_NO_SSDM") != nullptr;
+    static const bool off = std::getenv("VIBE_NO_SSDM") != nullptr;
     if (off || castle_meshes_.empty() || !deferred_lighting_active_) return false;
     const FrameView& fv = current_frame_view_;
     bool any = false;
@@ -324,8 +324,8 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
     vkinit::transition_image(cmd, ssdm_hitz_.image, CA, RO);
     vkinit::transition_image_aspect(cmd, ssdm_shell_z_.image, DA, RO, DEPTH);
 
-    // QLIKE_SSDM_MODE=1: the plain ray march instead of the default bent (NCS) one.
-    static const int ssdm_mode = (std::getenv("QLIKE_SSDM_MODE") && std::atoi(std::getenv("QLIKE_SSDM_MODE")) == 1) ? 1 : 2;
+    // VIBE_SSDM_MODE=1: the plain ray march instead of the default bent (NCS) one.
+    static const int ssdm_mode = (std::getenv("VIBE_SSDM_MODE") && std::atoi(std::getenv("VIBE_SSDM_MODE")) == 1) ? 1 : 2;
     SsdmPC pc{};
     {
         const glm::dmat4 inv = glm::inverse(glm::dmat4(fv.vp));
@@ -346,7 +346,7 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
         pc.cam   = glm::vec4(fv.eye_pos, float(ssdm_mode));
         pc.march = glm::vec4(64.0f, 32.0f, 4.0f, 0.0f);
         pc.guard = glm::vec4(0.5f, 0.0f, 0.01f, 0.0f);
-        pc.misc  = glm::vec4(1.0f, 1.0f, 0.0f, std::getenv("QLIKE_SSDM_DEBUG") ? -1.0f : float(frame_number_ % 8));
+        pc.misc  = glm::vec4(1.0f, 1.0f, 0.0f, std::getenv("VIBE_SSDM_DEBUG") ? -1.0f : float(frame_number_ % 8));
         pc.mv    = glm::vec4(0.5f, 0.5f, rw, rh);
     }
     auto fullscreen = [&](VkPipeline p) {
@@ -402,4 +402,4 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
     return true;
 }
 
-}  // namespace qlike
+}  // namespace vibe

@@ -17,7 +17,7 @@
 #include <glm/vec3.hpp>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 struct AaModel {
     enum Part { kHull = 0, kTurret, kGuns, kRadar, kPartCount };
@@ -35,4 +35,4 @@ struct AaModel {
 AaModel build_aa_model();
 AaModel build_sam_model();
 
-} // namespace qlike
+} // namespace vibe

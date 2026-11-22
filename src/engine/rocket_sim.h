@@ -12,7 +12,7 @@
 // rocket leaves toward +x. The step is fixed (kDt), so a copy of the state run ahead of
 // time predicts the flight exactly - that is how the retrograde burn is timed.
 
-namespace qlike {
+namespace vibe {
 
 struct RocketSim {
     static constexpr double kPlanetR = 6360000.0;        // m (the atmosphere model's planet)
@@ -54,4 +54,4 @@ private:
     double td_swept_ = 0.0;          // swept angle at touch-down (the planner reads it)
 };
 
-}  // namespace qlike
+}  // namespace vibe

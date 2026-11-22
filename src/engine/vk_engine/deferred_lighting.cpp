@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 // Mirrors the layout of the shader's PC block (std430 packed under push
 // constant rules). Total 192 B — under the 256 B threshold all desktop
@@ -177,7 +177,7 @@ void VulkanEngine::init_deferred_lighting() {
 
     // Pipeline.
     {
-        std::string sd = QLIKE_SHADER_DIR;
+        std::string sd = VIBE_SHADER_DIR;
         deferred_lighting_vert_ = vkpipe::load_shader_module(
             device_, sd + "/deferred_lighting.vert.spv");
         deferred_lighting_frag_ = vkpipe::load_shader_module(
@@ -496,4 +496,4 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 }
 
-} // namespace qlike
+} // namespace vibe

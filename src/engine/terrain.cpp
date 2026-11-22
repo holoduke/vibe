@@ -20,7 +20,7 @@
 #  undef min
 #endif
 
-namespace qlike {
+namespace vibe {
 
 float Heightmap::sample_world(float x, float z) const {
     float fx = (x - origin_x) / cell;
@@ -795,9 +795,9 @@ void rebuild_chunk_vertices(VkDevice device, VmaAllocator alloc, VkQueue queue,
     vmaDestroyBuffer(alloc, stage, stage_alloc);
 }
 
-} // namespace qlike
+} // namespace vibe
 
-namespace qlike {
+namespace vibe {
 float road_edge_jitter(float x, float z) {
     // = terrain_raymarch.frag road weights: jit (keep in sync).
     glm::vec2 d;
@@ -818,4 +818,4 @@ float raymarch_ground_relief(float x, float z, float h, float water_level) {
     d += sand * 0.03f * (0.5f + 0.5f * std::sin(glm::dot(wp, glm::vec2(9.0f, 3.5f)) + 6.0f * wn));
     return d;
 }
-}  // namespace qlike
+}  // namespace vibe

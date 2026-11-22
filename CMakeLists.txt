@@ -219,7 +219,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/external/FidelityFX-FSR2/src/ffx-fsr2-api/CMakeLi
 
     # Satisfy FSR2's platform check (FATAL_ERROR on non-x64) — we use
     # Ninja so CMAKE_GENERATOR_PLATFORM is unset; spoof via linker flag.
-    set(_qlike_orig_exe_linker_flags "${CMAKE_EXE_LINKER_FLAGS}")
+    set(_vibe_orig_exe_linker_flags "${CMAKE_EXE_LINKER_FLAGS}")
     if(NOT CMAKE_GENERATOR_PLATFORM)
         set(CMAKE_EXE_LINKER_FLAGS "/machine:x64")
     endif()
@@ -228,7 +228,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/external/FidelityFX-FSR2/src/ffx-fsr2-api/CMakeLi
 
     # Restore — the FSR2 CMake only reads CMAKE_EXE_LINKER_FLAGS at
     # configure-time inside its top-level if() block.
-    set(CMAKE_EXE_LINKER_FLAGS "${_qlike_orig_exe_linker_flags}")
+    set(CMAKE_EXE_LINKER_FLAGS "${_vibe_orig_exe_linker_flags}")
 else()
     message(STATUS "FidelityFX-FSR2 submodule not present — run "
                    "`git submodule update --init --recursive` to enable.")
@@ -280,17 +280,17 @@ target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}/backends)
 target_link_libraries(imgui PUBLIC Vulkan::Vulkan glfw)
 
-# qlike_core: pure logic with no Vulkan/GLFW deps. Tests link this directly.
-add_library(qlike_core STATIC
+# vibe_core: pure logic with no Vulkan/GLFW deps. Tests link this directly.
+add_library(vibe_core STATIC
     src/game/physics.cpp
     src/game/collision.cpp
     src/game/level.cpp
     src/game/player.cpp
     src/engine/frustum.cpp
 )
-target_include_directories(qlike_core PUBLIC src)
-target_link_libraries(qlike_core PUBLIC glm::glm)
-target_compile_definitions(qlike_core PUBLIC
+target_include_directories(vibe_core PUBLIC src)
+target_link_libraries(vibe_core PUBLIC glm::glm)
+target_compile_definitions(vibe_core PUBLIC
     GLM_FORCE_RADIANS
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     GLM_ENABLE_EXPERIMENTAL
@@ -302,9 +302,9 @@ target_compile_definitions(qlike_core PUBLIC
     # by the compiler anyway.
 )
 
-# qlike_anim: character animation (skeleton + clip runtime on ozz, motion matching, layers, IK).
+# vibe_anim: character animation (skeleton + clip runtime on ozz, motion matching, layers, IK).
 # No Vulkan, no engine headers; tests and the cook tool link it directly.
-add_library(qlike_anim STATIC
+add_library(vibe_anim STATIC
     src/anim/types.cpp
     src/anim/skeleton_def.cpp
     src/anim/asset.cpp
@@ -316,27 +316,27 @@ add_library(qlike_anim STATIC
     src/anim/airborne.cpp
     src/anim/character_animator.cpp
 )
-target_link_libraries(qlike_anim PUBLIC qlike_core PRIVATE ozz_animation ozz_base)
+target_link_libraries(vibe_anim PUBLIC vibe_core PRIVATE ozz_animation ozz_base)
 
 # Offline half: importers, retargeting, cooking (never linked into the game).
-add_library(qlike_anim_offline STATIC
+add_library(vibe_anim_offline STATIC
     src/anim/offline/bvh.cpp
     src/anim/offline/raw_clip.cpp
     src/anim/offline/retarget.cpp
     src/anim/offline/cook.cpp
     src/anim/offline/motion_build.cpp
 )
-target_link_libraries(qlike_anim_offline PUBLIC qlike_anim PRIVATE ozz_animation_offline ozz_animation ozz_base)
+target_link_libraries(vibe_anim_offline PUBLIC vibe_anim PRIVATE ozz_animation_offline ozz_animation ozz_base)
 
 add_executable(vibe_animcook tools/anim/cook_main.cpp)
-target_link_libraries(vibe_animcook PRIVATE qlike_anim_offline)
+target_link_libraries(vibe_animcook PRIVATE vibe_anim_offline)
 
 # What animation costs for 1 .. 1000 characters on this machine (docs/animation/performance.md).
 add_executable(vibe_animbench tools/anim/bench_main.cpp)
-target_link_libraries(vibe_animbench PRIVATE qlike_anim)
+target_link_libraries(vibe_animbench PRIVATE vibe_anim)
 
-# qlike_engine: rendering, windowing, Vulkan. Depends on qlike_core.
-add_library(qlike_engine STATIC
+# vibe_engine: rendering, windowing, Vulkan. Depends on vibe_core.
+add_library(vibe_engine STATIC
     src/engine/window.cpp
     src/engine/vk_initializers.cpp
     src/engine/vk_engine.cpp
@@ -424,15 +424,15 @@ add_library(qlike_engine STATIC
     src/engine/rocket_sim.cpp
     src/engine/globe.cpp
 )
-target_include_directories(qlike_engine PUBLIC src)
-target_include_directories(qlike_engine PRIVATE
+target_include_directories(vibe_engine PUBLIC src)
+target_include_directories(vibe_engine PRIVATE
     ${tinygltf_SOURCE_DIR}
     ${tinyexr_SOURCE_DIR}
     ${miniaudio_SOURCE_DIR}
     ${fastnoiselite_SOURCE_DIR}/Cpp)
-target_link_libraries(qlike_engine PUBLIC
-    qlike_core
-    qlike_anim
+target_link_libraries(vibe_engine PUBLIC
+    vibe_core
+    vibe_anim
     Vulkan::Vulkan
     glfw
     vk-bootstrap::vk-bootstrap
@@ -446,18 +446,18 @@ target_link_libraries(qlike_engine PUBLIC
     winmm
     iphlpapi
 )
-target_include_directories(qlike_engine PRIVATE ${enet_SOURCE_DIR}/include)
-target_include_directories(qlike_engine PRIVATE ${meshoptimizer_SOURCE_DIR}/demo)   # clusterlod.h
+target_include_directories(vibe_engine PRIVATE ${enet_SOURCE_DIR}/include)
+target_include_directories(vibe_engine PRIVATE ${meshoptimizer_SOURCE_DIR}/demo)   # clusterlod.h
 
 # FSR2 — link only if the submodule was processed above.
 if(TARGET ffx_fsr2_api_x64)
-    target_link_libraries(qlike_engine PUBLIC ffx_fsr2_api_x64)
-    target_include_directories(qlike_engine PRIVATE
+    target_link_libraries(vibe_engine PUBLIC ffx_fsr2_api_x64)
+    target_include_directories(vibe_engine PRIVATE
         ${CMAKE_SOURCE_DIR}/external/FidelityFX-FSR2/src/ffx-fsr2-api)
-    target_compile_definitions(qlike_engine PUBLIC QLIKE_HAVE_FSR2=1)
+    target_compile_definitions(vibe_engine PUBLIC VIBE_HAVE_FSR2=1)
 endif()
 if(TARGET ffx_fsr2_api_vk_x64)
-    target_link_libraries(qlike_engine PUBLIC ffx_fsr2_api_vk_x64)
+    target_link_libraries(vibe_engine PUBLIC ffx_fsr2_api_vk_x64)
 endif()
 if(TARGET ffx_sdk_vk)
     # Runtime LoadLibrary path — the SDK's headers hardcode FFX_API_ENTRY
@@ -466,9 +466,9 @@ if(TARGET ffx_sdk_vk)
     # consumer integration is ffx_api_loader.h + GetProcAddress at
     # runtime. So we DON'T link the .lib here, only pull in the headers
     # and rely on the staged DLL alongside the exe.
-    target_include_directories(qlike_engine PUBLIC
+    target_include_directories(vibe_engine PUBLIC
         $<TARGET_PROPERTY:ffx_sdk_vk,INTERFACE_INCLUDE_DIRECTORIES>)
-    target_compile_definitions(qlike_engine PUBLIC QLIKE_HAVE_FSR3=1)
+    target_compile_definitions(vibe_engine PUBLIC VIBE_HAVE_FSR3=1)
     # Compile fsr3.cpp with /EHa so __try/__except can catch hardware
     # AVs (NULL function calls, bad ptr derefs) coming back from the
     # SDK DLL. /EHsc (the project default) only catches synchronous
@@ -484,33 +484,33 @@ endif()
 # to the regular Vulkan loader.
 set(SL_ROOT "${CMAKE_SOURCE_DIR}/external/streamline")
 if(WIN32 AND EXISTS "${SL_ROOT}/lib/x64/sl.interposer.lib")
-    target_include_directories(qlike_engine PUBLIC "${SL_ROOT}/include")
-    target_compile_definitions(qlike_engine PUBLIC QLIKE_HAVE_STREAMLINE=1)
+    target_include_directories(vibe_engine PUBLIC "${SL_ROOT}/include")
+    target_compile_definitions(vibe_engine PUBLIC VIBE_HAVE_STREAMLINE=1)
     # vulkan-1.lib again right before the interposer: libraries linked
     # after the first vulkan-1.lib (the FSR2 Vulkan backend) would otherwise
     # resolve vk* imports to sl.interposer.dll's stubs, which crash when
     # Streamline is not initialised (non-NVIDIA GPUs).
     # (CMake de-duplicates the same path, hence a renamed copy.)
     configure_file("${Vulkan_LIBRARY}" "${CMAKE_BINARY_DIR}/vulkan-1-before-sl.lib" COPYONLY)
-    target_link_libraries(qlike_engine PUBLIC "${CMAKE_BINARY_DIR}/vulkan-1-before-sl.lib" "${SL_ROOT}/lib/x64/sl.interposer.lib")
-    set(QLIKE_HAVE_SL ON)
+    target_link_libraries(vibe_engine PUBLIC "${CMAKE_BINARY_DIR}/vulkan-1-before-sl.lib" "${SL_ROOT}/lib/x64/sl.interposer.lib")
+    set(VIBE_HAVE_SL ON)
     message(STATUS "NVIDIA Streamline SDK found - DLSS available (fsr_backend = 2)")
 else()
     message(STATUS "NVIDIA Streamline SDK not present (run scripts/fetch_streamline.ps1) - DLSS disabled")
 endif()
 if(WIN32)
-    target_compile_definitions(qlike_engine PUBLIC VK_USE_PLATFORM_WIN32_KHR)
+    target_compile_definitions(vibe_engine PUBLIC VK_USE_PLATFORM_WIN32_KHR)
 elseif(APPLE)
-    target_compile_definitions(qlike_engine PUBLIC VK_USE_PLATFORM_METAL_EXT)
+    target_compile_definitions(vibe_engine PUBLIC VK_USE_PLATFORM_METAL_EXT)
 elseif(UNIX)
-    target_compile_definitions(qlike_engine PUBLIC VK_USE_PLATFORM_XLIB_KHR)
+    target_compile_definitions(vibe_engine PUBLIC VK_USE_PLATFORM_XLIB_KHR)
 endif()
 
 add_executable(vibe src/main.cpp)
-target_link_libraries(vibe PRIVATE qlike_engine)
+target_link_libraries(vibe PRIVATE vibe_engine)
 
 # Stage the FSR3 DLL next to vibe.exe so it loads at process start.
-# Must be on the exe target (not qlike_engine, which is a static lib —
+# Must be on the exe target (not vibe_engine, which is a static lib —
 # its POST_BUILD doesn't carry over to the exe's output dir).
 if(TARGET ffx_sdk_vk)
     add_custom_command(TARGET vibe POST_BUILD
@@ -519,7 +519,7 @@ if(TARGET ffx_sdk_vk)
             "$<TARGET_FILE_DIR:vibe>/amd_fidelityfx_vk.dll"
         COMMENT "Staging amd_fidelityfx_vk.dll alongside vibe.exe")
 endif()
-if(QLIKE_HAVE_SL)
+if(VIBE_HAVE_SL)
     foreach(dll sl.interposer.dll sl.common.dll sl.dlss.dll nvngx_dlss.dll sl.dlss_d.dll nvngx_dlssd.dll NvLowLatencyVk.dll
                 sl.dlss_g.dll nvngx_dlssg.dll sl.reflex.dll sl.pcl.dll)
         add_custom_command(TARGET vibe POST_BUILD
@@ -528,8 +528,8 @@ if(QLIKE_HAVE_SL)
             COMMENT "Staging ${dll} (Streamline / DLSS)")
     endforeach()
 endif()
-target_compile_definitions(qlike_engine PRIVATE
-    QLIKE_SHADER_DIR="${CMAKE_BINARY_DIR}/shaders"
+target_compile_definitions(vibe_engine PRIVATE
+    VIBE_SHADER_DIR="${CMAKE_BINARY_DIR}/shaders"
 )
 
 # --- Shader compilation ---
@@ -571,7 +571,7 @@ set(CUBE_GBUF_SPV "${SHADER_OUTPUT_DIR}/cube_gbuf.frag.spv")
 add_custom_command(
     OUTPUT ${CUBE_GBUF_SPV}
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DQLIKE_GBUFFER_ONLY=1 -fshader-stage=frag
+            -DVIBE_GBUFFER_ONLY=1 -fshader-stage=frag
             ${CMAKE_SOURCE_DIR}/shaders/cube.frag -o ${CUBE_GBUF_SPV}
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cube.frag ${SHADER_INCLUDES}
     COMMENT "Compiling shader cube_gbuf.frag (G-buffer-only variant)"
@@ -585,7 +585,7 @@ set(CUBE_GBUF_TERRAIN_SPV "${SHADER_OUTPUT_DIR}/cube_gbuf_terrain.frag.spv")
 add_custom_command(
     OUTPUT ${CUBE_GBUF_TERRAIN_SPV}
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DQLIKE_GBUFFER_ONLY=1 -DQLIKE_TERRAIN_ONLY=1 -fshader-stage=frag
+            -DVIBE_GBUFFER_ONLY=1 -DVIBE_TERRAIN_ONLY=1 -fshader-stage=frag
             ${CMAKE_SOURCE_DIR}/shaders/cube.frag -o ${CUBE_GBUF_TERRAIN_SPV}
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cube.frag ${SHADER_INCLUDES}
     COMMENT "Compiling shader cube_gbuf_terrain.frag (terrain-only G-buffer variant)"
@@ -677,12 +677,12 @@ add_custom_command(
 list(APPEND COMPILED_SHADERS ${SKY_FILL_SPV})
 
 # Ray-marched terrain without the winter code (snow layer, footprints, ice):
-# what is bound whenever there is no snow. The same source with QLIKE_SUMMER.
+# what is bound whenever there is no snow. The same source with VIBE_SUMMER.
 set(TR_SUMMER_SPV "${SHADER_OUTPUT_DIR}/terrain_raymarch_summer.frag.spv")
 add_custom_command(
     OUTPUT ${TR_SUMMER_SPV}
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DQLIKE_SUMMER=1 -fshader-stage=frag
+            -DVIBE_SUMMER=1 -fshader-stage=frag
             ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_SUMMER_SPV}
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
     COMMENT "Compiling shader terrain_raymarch_summer.frag (no winter code)"
@@ -691,25 +691,25 @@ list(APPEND COMPILED_SHADERS ${TR_SUMMER_SPV})
 
 # Water surface pass: same source as the ray-marched terrain, water branch.
 # The "first start" build of the terrain shader: small, compiled by the driver in a moment; the
-# game runs on it while the full shader compiles in the background (see QLIKE_LITE in the shader).
+# game runs on it while the full shader compiles in the background (see VIBE_LITE in the shader).
 set(TR_LITE_SPV "${SHADER_OUTPUT_DIR}/terrain_raymarch_lite.frag.spv")
 add_custom_command(
     OUTPUT ${TR_LITE_SPV}
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DQLIKE_LITE=1 -DQLIKE_LITE_MASK=65023 -fshader-stage=frag
+            -DVIBE_LITE=1 -DVIBE_LITE_MASK=65023 -fshader-stage=frag
             ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_LITE_SPV}
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
     COMMENT "Compiling shader terrain_raymarch_lite.frag (first-start variant)"
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${TR_LITE_SPV})
 
-# The low-resolution march of the terrain (QLIKE_MARCH_ONLY in the shader): the same source,
+# The low-resolution march of the terrain (VIBE_MARCH_ONLY in the shader): the same source,
 # cut down to "how far can a ray go before the ground comes near" - one value per block of pixels.
 set(TR_MARCH_SPV "${SHADER_OUTPUT_DIR}/terrain_march_lo.frag.spv")
 add_custom_command(
     OUTPUT ${TR_MARCH_SPV}
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DQLIKE_MARCH_ONLY=1 -fshader-stage=frag
+            -DVIBE_MARCH_ONLY=1 -fshader-stage=frag
             ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_MARCH_SPV}
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
     COMMENT "Compiling shader terrain_march_lo.frag (low-resolution march variant)"
@@ -720,7 +720,7 @@ set(WATER_SPV "${SHADER_OUTPUT_DIR}/water.frag.spv")
 add_custom_command(
     OUTPUT ${WATER_SPV}
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DQLIKE_WATER=1 -fshader-stage=frag
+            -DVIBE_WATER=1 -fshader-stage=frag
             ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${WATER_SPV}
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
     COMMENT "Compiling shader water.frag (terrain_raymarch water variant)"

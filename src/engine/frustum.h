@@ -4,7 +4,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
-namespace qlike {
+namespace vibe {
 
 struct Frustum {
     glm::vec4 planes[6];  // ax + by + cz + d ≥ 0 means "inside"
@@ -18,4 +18,4 @@ Frustum extract_frustum(const glm::mat4& view_proj);
 // fully-outside side of any single plane.
 bool aabb_visible(const Frustum& f, const glm::vec3& mn, const glm::vec3& mx);
 
-} // namespace qlike
+} // namespace vibe

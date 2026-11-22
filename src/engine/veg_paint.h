@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 struct PaintPreset {
     char    name[32] = "preset";
@@ -60,4 +60,4 @@ struct PaintMap {
     }
 };
 
-}  // namespace qlike
+}  // namespace vibe

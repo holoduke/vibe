@@ -22,7 +22,7 @@
 #include <thread>
 #include <vector>
 
-using namespace qlike;
+using namespace vibe;
 
 static std::atomic<long long> g_allocs{0};
 static std::atomic<bool> g_count{false};

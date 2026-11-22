@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 struct Skybox {
     VkImage       image  = VK_NULL_HANDLE;
@@ -37,4 +37,4 @@ Skybox load_skybox(VkDevice device, VmaAllocator alloc, VkQueue queue,
 
 void destroy_skybox(VkDevice device, VmaAllocator alloc, Skybox& sb);
 
-} // namespace qlike
+} // namespace vibe

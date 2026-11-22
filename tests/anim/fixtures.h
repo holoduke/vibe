@@ -11,8 +11,8 @@
 
 namespace fx {
 
-using namespace qlike::anim;
-using namespace qlike::anim::offline;
+using namespace vibe::anim;
+using namespace vibe::anim::offline;
 
 inline SkeletonDef make_skeleton() {
     SkeletonDef s;

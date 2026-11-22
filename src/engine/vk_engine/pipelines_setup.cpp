@@ -22,10 +22,10 @@
 #include <string>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_pipeline() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     vert_module_ = vkpipe::load_shader_module(device_, sd + "/cube.vert.spv");
     frag_module_ = vkpipe::load_shader_module(device_, sd + "/cube.frag.spv");
 
@@ -126,7 +126,7 @@ void VulkanEngine::init_pipeline() {
     // cube.frag's heavy inline-RT body executes. Particles, projectiles and
     // the viewmodel skip the prepass (sparse / screen-space).
     {
-        std::string sd2 = QLIKE_SHADER_DIR;
+        std::string sd2 = VIBE_SHADER_DIR;
         depth_frag_module_ = vkpipe::load_shader_module(device_, sd2 + "/cube_depth.frag.spv");
         depth_vert_module_ = vkpipe::load_shader_module(device_, sd2 + "/cube_depth.vert.spv");
     }
@@ -155,7 +155,7 @@ void VulkanEngine::init_pipeline() {
 }
 
 void VulkanEngine::init_terrain_pipelines() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     terrain_vert_module_ = vkpipe::load_shader_module(device_, sd + "/terrain.vert.spv");
     terrain_shadow_vert_module_ =
         vkpipe::load_shader_module(device_, sd + "/terrain_shadow.vert.spv");
@@ -201,7 +201,7 @@ void VulkanEngine::init_terrain_pipelines() {
             // Terrain-only G-buffer variant (falls back to the generic one).
             if (!frag_gbuf_terrain_module_)
                 frag_gbuf_terrain_module_ = vkpipe::load_shader_module(
-                    device_, std::string(QLIKE_SHADER_DIR) + "/cube_gbuf_terrain.frag.spv");
+                    device_, std::string(VIBE_SHADER_DIR) + "/cube_gbuf_terrain.frag.spv");
             vkpipe::GraphicsPipelineConfig gcfg = cfg;
             gcfg.frag = frag_gbuf_terrain_module_ ? frag_gbuf_terrain_module_ : frag_gbuf_module_;
             terrain_gbuf_pipeline_ = vkpipe::build_graphics_pipeline(device_, gcfg);
@@ -269,7 +269,7 @@ void VulkanEngine::destroy_terrain_pipelines() {
 }
 
 void VulkanEngine::init_terrain_raymarch_pipeline() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     terrain_raymarch_vert_module_ = vkpipe::load_shader_module(
         device_, sd + "/terrain_raymarch.vert.spv");
     terrain_raymarch_frag_module_ = vkpipe::load_shader_module(
@@ -463,7 +463,7 @@ void VulkanEngine::init_terrain_water_pipeline() {
         verts.data(), static_cast<uint32_t>(verts.size()),
         indices.data(), static_cast<uint32_t>(indices.size()));
 
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     water_vert_module_ = vkpipe::load_shader_module(
         device_, sd + "/water.vert.spv");
     water_frag_module_ = vkpipe::load_shader_module(
@@ -1375,7 +1375,7 @@ void VulkanEngine::recreate_svgf_targets() {
 }
 
 void VulkanEngine::init_terrain_raymarch_compose_pipeline() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     tr_compose_frag_module_ = vkpipe::load_shader_module(
         device_, sd + "/terrain_raymarch_compose.frag.spv");
 
@@ -1413,7 +1413,7 @@ void VulkanEngine::destroy_terrain_raymarch_compose_pipeline() {
 // vk_engine/sun_shadow.cpp.
 
 void VulkanEngine::init_grass_pipeline() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     grass_vert_module_ = vkpipe::load_shader_module(device_, sd + "/grass.vert.spv");
     grass_frag_module_ = vkpipe::load_shader_module(device_, sd + "/grass.frag.spv");
 
@@ -1471,7 +1471,7 @@ void VulkanEngine::init_grass_pipeline() {
 // shared cube layout, 4 colour attachments, per-vertex mesh at binding 0
 // + per-instance ScatterInstance (2 vec4) at binding 1.
 void VulkanEngine::init_scatter_pipeline() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     scatter_vert_module_ = vkpipe::load_shader_module(device_, sd + "/scatter.vert.spv");
     scatter_frag_module_ = vkpipe::load_shader_module(device_, sd + "/scatter.frag.spv");
 
@@ -1533,7 +1533,7 @@ void VulkanEngine::destroy_scatter_pipeline() {
 }
 
 void VulkanEngine::init_grass_raymarch_pipeline() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     grass_rm_frag_module_ = vkpipe::load_shader_module(device_,
                                 sd + "/grass_raymarch.frag.spv");
     vkpipe::GraphicsPipelineConfig cfg{};
@@ -1618,7 +1618,7 @@ void VulkanEngine::destroy_pipeline() {
 // — accepts a small amount of overdraw to avoid plumbing a half-res
 // depth buffer for Phase 2), and the trivial shadow_lr.frag.
 void VulkanEngine::init_shadow_lr_pipeline() {
-    std::string sd = QLIKE_SHADER_DIR;
+    std::string sd = VIBE_SHADER_DIR;
     shadow_lr_frag_module_ = vkpipe::load_shader_module(
         device_, sd + "/shadow_lr.frag.spv");
 
@@ -1724,4 +1724,4 @@ void VulkanEngine::destroy_pipeline_cache() {
 }
 
 
-} // namespace qlike
+} // namespace vibe

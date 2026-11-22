@@ -2,7 +2,7 @@
 
 #include <vector>
 
-namespace qlike::vkinit {
+namespace vibe::vkinit {
 
 VkCommandPoolCreateInfo command_pool_create_info(uint32_t queue_family,
                                                  VkCommandPoolCreateFlags flags) {
@@ -341,4 +341,4 @@ void transition_images_batch(VkCommandBuffer cmd,
     vkCmdPipelineBarrier2(cmd, &dep);
 }
 
-} // namespace qlike::vkinit
+} // namespace vibe::vkinit

@@ -34,7 +34,7 @@
 #include <thread>
 #include <unordered_map>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -382,8 +382,8 @@ void VulkanEngine::wv_nf_poll() {
     if (S.nf_active || !want) return;
     const glm::vec2 e2(eye.x, eye.z);
     if (S.nf_chart != &globe::current()) S.nf_valid = false;
-    // QLIKE_TEST_NF_REBAKE=1: bake again every few seconds (the in-frame upload path, without having to move).
-    { static const bool rb = std::getenv("QLIKE_TEST_NF_REBAKE") != nullptr; if (rb && frame_number_ % 200 == 0) S.nf_valid = false; }
+    // VIBE_TEST_NF_REBAKE=1: bake again every few seconds (the in-frame upload path, without having to move).
+    { static const bool rb = std::getenv("VIBE_TEST_NF_REBAKE") != nullptr; if (rb && frame_number_ % 200 == 0) S.nf_valid = false; }
     if (S.nf_valid && glm::distance(e2, S.nf_center) < 72.0f) return;
     const glm::vec2 c = glm::round(e2 / 64.0f) * 64.0f;
     S.nf_job_center = c;
@@ -417,7 +417,7 @@ void VulkanEngine::wv_nf_poll() {
 
 void VulkanEngine::wv_update(glm::vec3 eye) {
     if (veg_world_first_ == UINT32_MAX || !veg_inst_mapped_ || veg_arch_.empty()) return;
-    static const bool off = std::getenv("QLIKE_NO_WORLD_VEG") != nullptr;
+    static const bool off = std::getenv("VIBE_NO_WORLD_VEG") != nullptr;
     if (off) return;
     if (!wv_) {
         wv_ = new WvState();
@@ -639,4 +639,4 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
     }
 }
 
-}  // namespace qlike
+}  // namespace vibe

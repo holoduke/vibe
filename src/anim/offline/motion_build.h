@@ -6,7 +6,7 @@
 
 #include <functional>
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 struct MotionBuildParams {
     float horizons[MotionSchema::kHorizons] = { 1.0f / 3.0f, 2.0f / 3.0f, 1.0f };   // seconds ahead
@@ -25,4 +25,4 @@ bool build_motion_database(const SkeletonDef& skel, const std::vector<RawClip>& 
                            std::vector<uint8_t>& blob, const std::function<void(const std::string&)>& log,
                            std::string* why = nullptr);
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline

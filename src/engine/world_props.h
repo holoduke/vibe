@@ -17,7 +17,7 @@
 
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 struct Heightmap;
 struct Road;
@@ -104,4 +104,4 @@ WorldPropStats build_world_props(const Heightmap& hm, const Road* road,
                                  std::vector<game::LevelMesh>& out_meshes,
                                  std::vector<collision::AABB>& out_colliders);
 
-} // namespace qlike
+} // namespace vibe

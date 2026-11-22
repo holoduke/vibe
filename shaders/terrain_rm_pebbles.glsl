@@ -137,7 +137,7 @@ float rm_pebbles_march(vec2 wp, float t) {
 
 // Depth (m) of the deepest footprint at world xz `p` (scene.footprints):
 // a sole - the ball of the foot and a heel - pressed up to 12 cm into the snow.
-#ifdef QLIKE_SUMMER
+#ifdef VIBE_SUMMER
 #define g_snow 0.0
 #else
 float g_snow = 0.0;              // snow amount 0..1, read once per pixel (foot_bounds_init, first thing in main)
@@ -145,7 +145,7 @@ float g_snow = 0.0;              // snow amount 0..1, read once per pixel (foot_
 vec2  g_foot_c = vec2(0.0);      // bounding circle of all prints (foot_bounds_init)
 float g_foot_r2 = -1.0;          // < 0: no prints
 void foot_bounds_init() {
-#ifndef QLIKE_SUMMER
+#ifndef VIBE_SUMMER
     g_snow = scene_snow();
 #endif
     g_foot_r2 = -1.0;

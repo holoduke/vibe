@@ -34,7 +34,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr float kMountTop = 20.0f;                       // the mount's table above the terrace (make_rocket.py MZ)
@@ -193,8 +193,8 @@ void VulkanEngine::init_rocket_meshes() {
     }
     log::infof("[rocket] vehicle: %zu mesh parts, %zu tris", rocket_parts_.size(), tris);
 
-    // QLIKE_ROCKET_SIMTEST=1: fly the whole mission now, in numbers (the log).
-    if (std::getenv("QLIKE_ROCKET_SIMTEST")) {
+    // VIBE_ROCKET_SIMTEST=1: fly the whole mission now, in numbers (the log).
+    if (std::getenv("VIBE_ROCKET_SIMTEST")) {
         RocketSim s = rocket_.sim;
         s.liftoff();
         int last = -1; double next = 0.0;
@@ -325,11 +325,11 @@ void VulkanEngine::tick_rocket(float dt) {
     RocketSim& S = R.sim;
     const float now = static_cast<float>(glfwGetTime());
 
-    // QLIKE_TEST_ROCKET=<s>: press the button after that many seconds (captures).
-    if (static const char* tr = std::getenv("QLIKE_TEST_ROCKET"); tr && R.stage == 0 && !R.test_done && now > float(std::atof(tr))) {
+    // VIBE_TEST_ROCKET=<s>: press the button after that many seconds (captures).
+    if (static const char* tr = std::getenv("VIBE_TEST_ROCKET"); tr && R.stage == 0 && !R.test_done && now > float(std::atof(tr))) {
         R.test_done = true;
         R.stage = 1; R.countdown = 10.0f; R.beep_at = 10;
-        if (const char* skip = std::getenv("QLIKE_TEST_ROCKET_T")) R.test_skip = std::atof(skip);
+        if (const char* skip = std::getenv("VIBE_TEST_ROCKET_T")) R.test_skip = std::atof(skip);
     }
 
     if (R.stage == 1) {                                   // the count
@@ -346,7 +346,7 @@ void VulkanEngine::tick_rocket(float dt) {
             R.px = S.x; R.py = S.y; R.pux = S.ux; R.puy = S.uy;
             R.trail.clear();
             log::info("[rocket] lift-off");
-            if (std::getenv("QLIKE_TEST_ROCKET_CAM") && !R.cam) rocket_toggle_camera();
+            if (std::getenv("VIBE_TEST_ROCKET_CAM") && !R.cam) rocket_toggle_camera();
             if (R.test_skip > 0.0) { while (S.t < R.test_skip && S.phase != RocketSim::Landed && S.phase != RocketSim::Crashed) S.step(); R.px = S.x; R.py = S.y; R.pux = S.ux; R.puy = S.uy; R.test_skip = 0.0; }
         }
     } else if (R.stage == 2) {
@@ -814,4 +814,4 @@ void VulkanEngine::draw_rocket_hud() {
         centred(fs, 19.0f * s, (x0 + x1) * 0.5f, y1 - 30.0f * s, kDim, R.cam ? "C   BACK TO THE GROUND" : "C   ROCKET CAMERA");
 }
 
-}  // namespace qlike
+}  // namespace vibe

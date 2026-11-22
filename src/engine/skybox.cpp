@@ -24,7 +24,7 @@
 #include <future>
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 
@@ -505,4 +505,4 @@ void destroy_skybox(VkDevice device, VmaAllocator alloc, Skybox& sb) {
     sb = {};
 }
 
-} // namespace qlike
+} // namespace vibe

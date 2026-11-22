@@ -1,5 +1,5 @@
 #pragma once
-// Character animation library (qlike_anim): shared small types.
+// Character animation library (vibe_anim): shared small types.
 //
 // Conventions (the engine's): right-handed, +Y up, metres, radians. Character model space is
 // +X right, +Y up, -Z forward, feet at the origin. The soldier's joints have NO rest rotation:
@@ -17,7 +17,7 @@
 #include <string_view>
 #include <vector>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 struct Transform {
     glm::vec3 t{0.0f};
@@ -66,4 +66,4 @@ bool is_finite(const glm::vec3& v);
 bool is_finite(const glm::quat& q);
 bool is_finite(const glm::mat4& m);
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

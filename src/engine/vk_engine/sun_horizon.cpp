@@ -28,7 +28,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 constexpr int   kHzDim = 1024;            // 2 m cells over the 2048 m map
@@ -248,4 +248,4 @@ float VulkanEngine::sun_horizon_visibility(glm::vec3 p) const {
     return glm::smoothstep(-1.0f, 1.0f, p.y - sun_horizon_s_[size_t(j) * kHzDim + i]);
 }
 
-}  // namespace qlike
+}  // namespace vibe

@@ -19,7 +19,7 @@
 
 #include <string>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::init_radiance_cache() {
     const VkDeviceSize n = kRadianceCacheEntries;
@@ -76,7 +76,7 @@ void VulkanEngine::init_radiance_cache() {
     plci.setLayoutCount = 1; plci.pSetLayouts = &rc_set_layout_;
     plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
     vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &rc_pipeline_layout_), "rc layout");
-    VkShaderModule m = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/rc_resolve.comp.spv");
+    VkShaderModule m = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/rc_resolve.comp.spv");
     VkComputePipelineCreateInfo cci{};
     cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     cci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -150,4 +150,4 @@ void VulkanEngine::dispatch_radiance_cache(VkCommandBuffer cmd) {
     vkCmdPipelineBarrier2(cmd, &di);
 }
 
-} // namespace qlike
+} // namespace vibe

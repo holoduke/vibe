@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 // GPU layout (std430, 64 bytes) - keep in sync with cluster_cull.comp.
 struct ClusterGpu {
@@ -49,4 +49,4 @@ ClusterMesh build_cluster_mesh(const Vertex* verts, size_t vertex_count, const u
 ClusterMesh build_cluster_mesh_cached(const Vertex* verts, size_t vertex_count, const uint32_t* indices, size_t index_count,
                                       float uv_weight = 0.0f);
 
-}  // namespace qlike
+}  // namespace vibe

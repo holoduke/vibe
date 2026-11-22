@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike::anim::offline {
+namespace vibe::anim::offline {
 
 namespace {
 
@@ -244,4 +244,4 @@ bool retarget_bvh(const Bvh& bvh, int first, int end,
     return true;
 }
 
-}  // namespace qlike::anim::offline
+}  // namespace vibe::anim::offline

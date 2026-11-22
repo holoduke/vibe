@@ -21,7 +21,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 namespace {
 
@@ -381,4 +381,4 @@ bool pose_is_valid(std::span<const glm::mat4> pose) {
     return true;
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

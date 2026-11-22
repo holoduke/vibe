@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike::physics {
+namespace vibe::physics {
 
 glm::vec3 apply_friction(glm::vec3 vel, float friction, float stop_speed, float dt,
                          float snap_threshold) {
@@ -45,4 +45,4 @@ glm::vec3 apply_gravity(glm::vec3 vel, float gravity, float dt) {
     return glm::vec3(vel.x, vel.y - gravity * dt, vel.z);
 }
 
-} // namespace qlike::physics
+} // namespace vibe::physics

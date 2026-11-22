@@ -24,18 +24,18 @@
 #include <cstring>
 #include <string>
 
-#ifndef QLIKE_SHADER_DIR
-#define QLIKE_SHADER_DIR "shaders"
+#ifndef VIBE_SHADER_DIR
+#define VIBE_SHADER_DIR "shaders"
 #endif
 
-namespace qlike {
+namespace vibe {
 
 namespace {
 const float kRange = 40.0f;         // metres from the camera
 }
 
 void VulkanEngine::init_body_rt() {
-    static const bool kOff = std::getenv("QLIKE_NO_BODY_RT") != nullptr;
+    static const bool kOff = std::getenv("VIBE_NO_BODY_RT") != nullptr;
     if (kOff || !rt_initialized_ || body_rt_idx_.empty() || !body_palette_buf_) {
         if (!kOff && rt_initialized_) log::info("[body] no level 2 meshes: the soldiers are not in the ray-traced scene");
         return;
@@ -165,7 +165,7 @@ void VulkanEngine::init_body_rt() {
     pli.pushConstantRangeCount = 1;
     pli.pPushConstantRanges = &pcr;
     vk_check(vkCreatePipelineLayout(device_, &pli, nullptr, &body_rt_layout_), "body rt layout");
-    body_rt_module_ = vkpipe::load_shader_module(device_, std::string(QLIKE_SHADER_DIR) + "/skin_rt.comp.spv");
+    body_rt_module_ = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/skin_rt.comp.spv");
     if (!body_rt_module_) { log::warn("[body] skin_rt.comp.spv missing: the soldiers are not in the ray-traced scene"); return; }
     VkComputePipelineCreateInfo cci{};
     cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -229,8 +229,8 @@ void VulkanEngine::record_body_rt(VkCommandBuffer cmd) {
             if (a.id && a.drawn) add(a.model, a.prev_model, a.palette);
     for (const Corpse& c : corpses_)
         if (c.rag && c.av.drawn) add(c.av.model, c.av.model, c.av.palette);
-    // Test hook: QLIKE_BODY_RT_TEST=<n> adds n copies of the nearest soldier, a metre apart (the cost of n more).
-    static const int kTest = std::getenv("QLIKE_BODY_RT_TEST") ? std::atoi(std::getenv("QLIKE_BODY_RT_TEST")) : 0;
+    // Test hook: VIBE_BODY_RT_TEST=<n> adds n copies of the nearest soldier, a metre apart (the cost of n more).
+    static const int kTest = std::getenv("VIBE_BODY_RT_TEST") ? std::atoi(std::getenv("VIBE_BODY_RT_TEST")) : 0;
     for (int i = 0; i < kTest && nc > 0 && nc < int(std::size(cand)); ++i) {
         cand[nc] = cand[0];
         cand[nc].model[3].x += float(i + 1);
@@ -242,7 +242,7 @@ void VulkanEngine::record_body_rt(VkCommandBuffer cmd) {
     std::sort(cand, cand + nc, [](const Cand& a, const Cand& b) { return a.d2 < b.d2; });
     const uint32_t n = uint32_t(std::min(nc, int(kRtBodies)));
     const uint32_t slot = frame_number_ % kFrameOverlap;
-    static const float kInset = std::getenv("QLIKE_BODY_RT_INSET") ? float(std::atof(std::getenv("QLIKE_BODY_RT_INSET"))) : 0.012f;
+    static const float kInset = std::getenv("VIBE_BODY_RT_INSET") ? float(std::atof(std::getenv("VIBE_BODY_RT_INSET"))) : 0.012f;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, body_rt_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, body_rt_layout_, 0, 1, &body_rt_set_[slot], 0, nullptr);
@@ -296,4 +296,4 @@ void VulkanEngine::record_body_rt(VkCommandBuffer cmd) {
     // (rebuild_tlas follows with the barrier between these builds and the TLAS build)
 }
 
-} // namespace qlike
+} // namespace vibe

@@ -9,8 +9,8 @@
 // Pulled in here (not in vk_engine.h) so the unique_ptr<voxel::VoxelWorld>
 // member's destructor can be generated in this TU where the type is
 // complete. Forward-declared in the header to keep its include surface tight.
-// Must be at file scope (NOT inside namespace qlike) so voxel_world.h's
-// `namespace qlike::voxel` resolves to the same fully-qualified name as
+// Must be at file scope (NOT inside namespace vibe) so voxel_world.h's
+// `namespace vibe::voxel` resolves to the same fully-qualified name as
 // the forward decl in vk_engine.h.
 #include "engine/voxel/voxel_world.h"
 
@@ -50,11 +50,11 @@
 #include <thread>
 #include <typeinfo>
 
-#ifndef QLIKE_SHADER_DIR
-#define QLIKE_SHADER_DIR "shaders"
+#ifndef VIBE_SHADER_DIR
+#define VIBE_SHADER_DIR "shaders"
 #endif
 
-namespace qlike {
+namespace vibe {
 // Compose push constants (compose.frag + its -DSKY_FILL variant).
 struct ComposePC {
     glm::vec4 viewport;
@@ -100,9 +100,9 @@ void VulkanEngine::draw(uint32_t img_index) {
     // and the TLAS rebuild waits on the GPU for the previous graphics
     // submit (gfx_timeline_). See UploadRing in vk_engine.h.
     dz_mark();
-    // QLIKE_SERIAL_FRAMES=1: old behaviour (CPU waits for the previous frame)
+    // VIBE_SERIAL_FRAMES=1: old behaviour (CPU waits for the previous frame)
     // - A/B switch for the frames-in-flight path.
-    static const bool serial_frames = std::getenv("QLIKE_SERIAL_FRAMES") != nullptr;
+    static const bool serial_frames = std::getenv("VIBE_SERIAL_FRAMES") != nullptr;
     if (serial_frames) wait_gpu_frames_idle();
     begin_frame_uploads();
     hitch_draw_[0] = dz_mark();
@@ -120,7 +120,7 @@ void VulkanEngine::draw(uint32_t img_index) {
     { CPU_SCOPE("rec-shadow");  record_shadow_passes(frame); }                   // sun shadow, depth pre-pass, half-rate shadow
     { CPU_SCOPE("rec-world");   record_terrain_and_world(frame); }               // low-res raymarch terrain + world G-buffer
     { CPU_SCOPE("rec-light");   record_lighting_and_upscale(frame); }            // deferred, SVGF, TAA, sky fill, DLSS/FSR/TAAU
-    static const bool kNoHud = std::getenv("QLIKE_SHOT_NO_HUD") != nullptr;   // clean captures from the command line
+    static const bool kNoHud = std::getenv("VIBE_SHOT_NO_HUD") != nullptr;   // clean captures from the command line
     hide_ui_this_frame_ = kNoHud || !pending_screenshot_path_.empty();   // F12 photo: no HUD / crosshair / debug boxes
     { CPU_SCOPE("rec-compose"); record_compose_and_ui(frame, img_index); }       // bloom, compose, ImGui -> swapchain
 
@@ -1089,7 +1089,7 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
     }
     sun_shafts_prepass_ran_ = false;
     if (rt_.fsr2_enabled && sun_shafts_pipeline_ != VK_NULL_HANDLE && rt_.sun_shaft_intensity > 0.001f &&
-        !std::getenv("QLIKE_SHAFTS_LATE")) {
+        !std::getenv("VIBE_SHAFTS_LATE")) {
         const float pitch = glm::radians(rt_.sun_pitch_deg), yaw = glm::radians(rt_.sun_yaw_deg);
         const glm::vec3 sun = glm::normalize(glm::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)));
         const glm::vec4 sun_clip = current_frame_view_.vp * glm::vec4(sun, 0.0f);
@@ -1553,4 +1553,4 @@ void VulkanEngine::write_pass_ubos() {
     write_svgf_ubos();
     update_voxel_camera_ubo();
 }
-} // namespace qlike
+} // namespace vibe

@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::destroy_terrain_shadow_texture() {
     deferred_desc_sig_ = 0;   // handles may be recreated (even at the same address)
@@ -516,4 +516,4 @@ float VulkanEngine::sample_terrain_height(float x, float z) const {
 // visibility from an 8-direction horizon scan (macro AO for valleys).
 // CPU bake, multi-threaded; ~100 ms at load.
 
-} // namespace qlike
+} // namespace vibe

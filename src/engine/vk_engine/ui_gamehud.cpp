@@ -12,7 +12,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace qlike {
+namespace vibe {
 
 void VulkanEngine::draw_game_hud() {
     ImGuiIO& io = ImGui::GetIO();
@@ -197,4 +197,4 @@ void VulkanEngine::draw_game_hud() {
     }
 }
 
-}  // namespace qlike
+}  // namespace vibe

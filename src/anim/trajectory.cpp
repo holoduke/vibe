@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace qlike::anim {
+namespace vibe::anim {
 
 glm::vec2 world_to_facing(glm::vec2 w, float yaw) {
     const float s = std::sin(yaw), c = std::cos(yaw);
@@ -60,4 +60,4 @@ Trajectory predict_trajectory(const TrajectoryInput& in, const physics::MovePara
     return out;
 }
 
-}  // namespace qlike::anim
+}  // namespace vibe::anim

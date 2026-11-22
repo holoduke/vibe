@@ -6,11 +6,11 @@
 
 #include <fstream>
 
-using namespace qlike::anim;
+using namespace vibe::anim;
 using Catch::Matchers::WithinAbs;
 
 namespace {
-const char* kSoldier = QLIKE_SOURCE_DIR "/assets/character/soldier_fp.qchar";
+const char* kSoldier = VIBE_SOURCE_DIR "/assets/character/soldier_fp.qchar";
 }
 
 TEST_CASE("anim: the soldier's skeleton loads and is a valid rig", "[anim][skeleton]") {
@@ -91,7 +91,7 @@ TEST_CASE("anim: invalid skeletons are refused", "[anim][skeleton]") {
     bad.rest_pos[1].x = std::nanf("");
     CHECK_FALSE(bad.validate(&why));
     SkeletonDef out;
-    CHECK_FALSE(load_qchar_skeleton(QLIKE_SOURCE_DIR "/CMakeLists.txt", out, &why));
+    CHECK_FALSE(load_qchar_skeleton(VIBE_SOURCE_DIR "/CMakeLists.txt", out, &why));
     CHECK(out.size() == 0);
 }
 

@@ -18,7 +18,7 @@
 
 #include <cstdint>
 
-namespace qlike {
+namespace vibe {
 
 struct EzTreeOptions {
     uint32_t seed = 0;
@@ -72,4 +72,4 @@ constexpr float kVegDetail[4] = { 1.0f, 0.5f, 0.22f, 0.09f };
 //                   v = 7 for atlas cell 0, 8 + cell otherwise (9 spruce, 10 birch, 11 pine)
 void build_ez_tree(game::LevelMesh& m, const EzTreeOptions& o, float max_detail, float target_height);
 
-}  // namespace qlike
+}  // namespace vibe
