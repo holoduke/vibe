@@ -478,6 +478,84 @@ void VulkanEngine::build_menu_ui() {
         }
         ImGui::TextDisabled("0.5× = half-res (huge speedup), 1.5×+ = SSAA");
 
+        // Upscaler: next to the render scale, since the two belong together (the game is
+        // rendered at the render scale and the upscaler brings it up to the screen size).
+        ImGui::SeparatorText("Upscaler (DLSS / FSR)");
+        {
+        ImGui::TextDisabled("Rendering %u x %u, shown at %u x %u", render_extent_.width, render_extent_.height, swapchain_extent_.width, swapchain_extent_.height);
+            static const char* kVendor[] = { "unknown", "NVIDIA", "AMD", "Intel", "other" };
+            ImGui::Text("GPU: %s (%s)", gpu_name_.c_str(), kVendor[int(gpu_vendor_)]);
+        ImGui::Checkbox("Upscaling on (render at the render scale, upscale to the screen size)",
+                        &rt_.fsr2_enabled);
+        const char* fsr_backends[] = { "FSR2 (legacy static)", "FSR3 (ffx-api DLL)", "DLSS (NVIDIA Streamline)" };
+        ImGui::Combo("Upscaler backend", &rt_.fsr_backend, fsr_backends,
+                     IM_ARRAYSIZE(fsr_backends));
+        // DLSS needs a render scale of at least 0.50 (apply_render_scale clamps).
+        if (rt_.fsr_backend == 2 && rt_.fsr2_enabled && dlss_->supported && rt_.render_scale < 0.5f) apply_render_scale();
+        if (rt_.fsr_backend == 2) {
+            ImGui::BeginDisabled(!dlss_->rr_supported);
+            ImGui::Checkbox("Ray Reconstruction (DLSS-RR)", &rt_.dlss_rr);
+            ImGui::Checkbox("RR: 1-sample ray tracing", &rt_.dlss_rr_low_samples);
+            ImGui::EndDisabled();
+            ImGui::TextDisabled("%s", dlss_->rr_supported
+                ? "AI denoiser + upscaler for the ray-traced lighting.\nReplaces DLSS Super Resolution while on."
+                : "DLSS Ray Reconstruction is not available on this GPU / driver.");
+            // DLSS Frame Generation: 1-3 AI frames between rendered ones.
+            {
+                const char* fg_modes[] = { "Off", "2x (1 generated frame)", "3x (2 generated)", "4x (3 generated)" };
+                const int max_mode = dlssg_loaded_ ? std::min(3, int(dlssg_max_frames_)) : 3;
+                int m = std::clamp(rt_.dlss_fg, 0, 3);
+                if (ImGui::BeginCombo("DLSS Frame Generation", fg_modes[m])) {
+                    for (int i = 0; i <= 3; ++i) {
+                        ImGui::BeginDisabled(dlssg_loaded_ && i > max_mode);
+                        if (ImGui::Selectable(fg_modes[i], m == i)) rt_.dlss_fg = i;
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::EndCombo();
+                }
+                if (dlssg_loaded_) {
+                    ImGui::TextDisabled("%s", dlss_fg_active()
+                        ? "Frame Generation running (Reflex low latency on, VSync off)."
+                        : "Loaded - turns on in gameplay with DLSS active.");
+                } else if (rt_.dlss_fg > 0) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Restart the game to load Frame Generation.");
+                } else {
+                    ImGui::TextDisabled("Doubles+ the displayed frame rate. Needs an RTX 40/50 GPU; loads at start-up.");
+                }
+            }
+        }
+        if (fsr3_->fatal) {
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                "FSR3 unavailable on this device (CreateContext AVed in SDK DLL "
+                "— see vibe.log). Backend auto-reverted to FSR2.");
+        }
+        // FSR3 Frame Generation. Only meaningful when FSR3 backend is
+        // active. Session 3 dispatches FG to a private image that
+        // isn't presented yet — toggle visibly costs GPU time but
+        // produces no perceptible delta. Session 4 wires the present
+        // chain so this becomes the FPS-doubling switch.
+        if (rt_.fsr_backend == 1 && !fsr3_->fatal) {
+            ImGui::Checkbox("FSR3 Frame Generation (perceived FPS ×2)",
+                            &rt_.fg_enabled);
+            if (fsr3_->fg_fatal) {
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                    "FG unavailable (init failed) — see vibe.log");
+            } else if (rt_.fg_enabled && fg_runtime_disabled_) {
+                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                    "FG auto-disabled (render < 50 fps base — interpolation "
+                    "judder dominates below this; will re-enable above 60).");
+            } else if (rt_.fg_enabled && fsr3_->swapchain_active) {
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f),
+                    "FG active — SDK pacing real + generated frames");
+            }
+        }
+            ImGui::Checkbox("Auto-pick upscaler for this GPU (at start-up)", &rt_.upscaler_auto);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("NVIDIA: DLSS + Ray Reconstruction + DLSS Frame Generation + Reflex.\nAMD / Intel: FSR 3.1 + FSR Frame Generation (+ AMD Anti-Lag 2).");
+            if (ImGui::SliderFloat("FSR: least render scale", &rt_.fsr_min_render_scale, 0.5f, 1.0f, "%.2f") && rt_.fsr_backend == 1)
+                apply_render_scale();
+            if (anti_lag_supported_) ImGui::Checkbox("AMD Anti-Lag 2", &rt_.anti_lag);
+        }
+
         // Upscale presets — combine render_scale + TAAU + sharpening
         // into a single click. Each one mirrors the way a vendor
         // upscaler exposes Quality / Balanced / Performance modes.
@@ -689,97 +767,15 @@ void VulkanEngine::build_menu_ui() {
                              "render_scale < 1.0 — renders at LR, reconstructs\n"
                              "at native via motion-vector reproject + variance\n"
                              "clamp. ~1.5x perf gain at render_scale=0.67.");
-        // FSR2 — phased rollout. Phase 1 (foundation) is shipped:
-        // Halton(2,3) jitter with sample-count-aware phase, FrameView
-        // jitter capture. Phases 2-5 (compute passes for prepare /
-        // depth-clip / reconstruct-prev-depth / lock / accumulate /
-        // RCAS) are pending. Toggle currently only switches the
-        // jitter sequence; the actual upscale path falls back to
-        // FSR1 EASU+RCAS in compose.frag until Phase 5 lands.
-        ImGui::Checkbox("FSR upscale (renders at render_scale, upscales to native)",
-                        &rt_.fsr2_enabled);
-        // Backend select — only meaningful when FSR upscale is on. FSR3
-        // uses the new ffx-api ABI through the prebuilt vendored DLL;
-        // FSR2 uses the legacy static-lib path. Frame generation (FSR3
-        // sessions 3-6) is NOT yet wired — this only swaps the upscaler.
         {
-            static const char* kVendor[] = { "unknown", "NVIDIA", "AMD", "Intel", "other" };
-            ImGui::Text("GPU: %s (%s)", gpu_name_.c_str(), kVendor[int(gpu_vendor_)]);
             ImGui::SliderFloat("Trees: draw distance (m)", &rt_.tree_draw_distance, 200.0f, 3800.0f, "%.0f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Trees and bushes beyond this are not drawn. 3800: as far as the view distance allows.");
             ImGui::SliderFloat("Trees: card below this size (px)", &rt_.tree_impostor_px, 7.0f, 64.0f, "%.0f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Far trees are drawn as one baked picture of themselves instead of their mesh.\nHigher: more trees are cards (faster). 7: only the very far ones, as before.");
-            ImGui::Checkbox("Auto-pick upscaler for this GPU (at start-up)", &rt_.upscaler_auto);
             {
                 const char* fr_labels[] = { "Exact (slow in forests)", "Exact sun shadows nearby (default)", "Solid leaf cards for all rays (fastest)" };
                 ImGui::Combo("Foliage rays", &rt_.foliage_ray_mode, fr_labels, 3);
                 ImGui::Checkbox("Lighter bounce light on leaves", &rt_.gi_leaf_lite);
-            }
-            if (ImGui::SliderFloat("FSR: least render scale", &rt_.fsr_min_render_scale, 0.5f, 1.0f, "%.2f") && rt_.fsr_backend == 1)
-                apply_render_scale();
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("NVIDIA: DLSS + Ray Reconstruction + DLSS Frame Generation + Reflex.\nAMD / Intel: FSR 3.1 + FSR Frame Generation (+ AMD Anti-Lag 2).");
-            if (anti_lag_supported_) ImGui::Checkbox("AMD Anti-Lag 2", &rt_.anti_lag);
-        }
-        const char* fsr_backends[] = { "FSR2 (legacy static)", "FSR3 (ffx-api DLL)", "DLSS (NVIDIA Streamline)" };
-        ImGui::Combo("Upscaler backend", &rt_.fsr_backend, fsr_backends,
-                     IM_ARRAYSIZE(fsr_backends));
-        // DLSS needs a render scale of at least 0.50 (apply_render_scale clamps).
-        if (rt_.fsr_backend == 2 && rt_.fsr2_enabled && dlss_->supported && rt_.render_scale < 0.5f) apply_render_scale();
-        if (rt_.fsr_backend == 2) {
-            ImGui::BeginDisabled(!dlss_->rr_supported);
-            ImGui::Checkbox("Ray Reconstruction (DLSS-RR)", &rt_.dlss_rr);
-            ImGui::Checkbox("RR: 1-sample ray tracing", &rt_.dlss_rr_low_samples);
-            ImGui::EndDisabled();
-            ImGui::TextDisabled("%s", dlss_->rr_supported
-                ? "AI denoiser + upscaler for the ray-traced lighting.\nReplaces DLSS Super Resolution while on."
-                : "DLSS Ray Reconstruction is not available on this GPU / driver.");
-            // DLSS Frame Generation: 1-3 AI frames between rendered ones.
-            {
-                const char* fg_modes[] = { "Off", "2x (1 generated frame)", "3x (2 generated)", "4x (3 generated)" };
-                const int max_mode = dlssg_loaded_ ? std::min(3, int(dlssg_max_frames_)) : 3;
-                int m = std::clamp(rt_.dlss_fg, 0, 3);
-                if (ImGui::BeginCombo("DLSS Frame Generation", fg_modes[m])) {
-                    for (int i = 0; i <= 3; ++i) {
-                        ImGui::BeginDisabled(dlssg_loaded_ && i > max_mode);
-                        if (ImGui::Selectable(fg_modes[i], m == i)) rt_.dlss_fg = i;
-                        ImGui::EndDisabled();
-                    }
-                    ImGui::EndCombo();
-                }
-                if (dlssg_loaded_) {
-                    ImGui::TextDisabled("%s", dlss_fg_active()
-                        ? "Frame Generation running (Reflex low latency on, VSync off)."
-                        : "Loaded - turns on in gameplay with DLSS active.");
-                } else if (rt_.dlss_fg > 0) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Restart the game to load Frame Generation.");
-                } else {
-                    ImGui::TextDisabled("Doubles+ the displayed frame rate. Needs an RTX 40/50 GPU; loads at start-up.");
-                }
-            }
-        }
-        if (fsr3_->fatal) {
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                "FSR3 unavailable on this device (CreateContext AVed in SDK DLL "
-                "— see vibe.log). Backend auto-reverted to FSR2.");
-        }
-        // FSR3 Frame Generation. Only meaningful when FSR3 backend is
-        // active. Session 3 dispatches FG to a private image that
-        // isn't presented yet — toggle visibly costs GPU time but
-        // produces no perceptible delta. Session 4 wires the present
-        // chain so this becomes the FPS-doubling switch.
-        if (rt_.fsr_backend == 1 && !fsr3_->fatal) {
-            ImGui::Checkbox("FSR3 Frame Generation (perceived FPS ×2)",
-                            &rt_.fg_enabled);
-            if (fsr3_->fg_fatal) {
-                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                    "FG unavailable (init failed) — see vibe.log");
-            } else if (rt_.fg_enabled && fg_runtime_disabled_) {
-                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
-                    "FG auto-disabled (render < 50 fps base — interpolation "
-                    "judder dominates below this; will re-enable above 60).");
-            } else if (rt_.fg_enabled && fsr3_->swapchain_active) {
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f),
-                    "FG active — SDK pacing real + generated frames");
             }
         }
         ImGui::TextDisabled("Phase 1/5 — Halton(2,3) jitter active.\n"
