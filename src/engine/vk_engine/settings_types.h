@@ -705,6 +705,11 @@ struct RtSettings {
         // With RR active, trace shadows / AO / GI at ~1 sample per pixel
         // and let RR resolve the noise (the speed side of RR).
         bool  dlss_rr_low_samples = true;
+        // Which Ray Reconstruction model: 0 = the SDK's latest (preset F), 1 = the earlier
+        // transformer (preset D): 0.5 ms a frame less at 3440 x 1440 on an RTX 4080 (2.4 against
+        // 2.9 ms), a little crisper and less smoothed in stills. Preset E is as fast as D but
+        // leaves a stipple on the ground. (graphics quality row 'Denoiser model')
+        int   dlss_rr_model = 0;
         // Rays through foliage (deferred_lighting.frag g_rq_leaf_solid): 0 = every ray tests the
         // leaf texture on every card it crosses (exact, very slow in a forest), 1 = only the
         // sun's shadow near the camera does; bounce light, ambient occlusion, the blocker

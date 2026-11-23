@@ -449,6 +449,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("fsr_backend", s.rt_.fsr_backend);
     f("dlss_rr", s.rt_.dlss_rr);
     f("dlss_rr_low_samples", s.rt_.dlss_rr_low_samples);
+    f("dlss_rr_model", s.rt_.dlss_rr_model);
     f("fg_enabled", s.rt_.fg_enabled);
     f("dlss_fg", s.rt_.dlss_fg);
     f("upscaler_auto", s.rt_.upscaler_auto);

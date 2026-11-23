@@ -394,6 +394,15 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
         d.worldToCameraView = to_sl(fv.view);
         d.cameraViewToWorld = to_sl(fv.inv_view);
         d.alphaUpscalingEnabled = sl::Boolean::eTrue;   // sky transmittance, as for SR
+        // The model (settings: dlss_rr_model; VIBE_DLSS_RR_PRESET=D|E|F overrides, for measuring).
+        {
+            static const char* pe = std::getenv("VIBE_DLSS_RR_PRESET");
+            sl::DLSSDPreset p = rt_.dlss_rr_model == 1 ? sl::DLSSDPreset::ePresetD : sl::DLSSDPreset::eDefault;
+            if (pe && pe[0] >= 'D' && pe[0] <= 'F') p = sl::DLSSDPreset(4 + (pe[0] - 'D'));
+            d.dlaaPreset = d.qualityPreset = d.balancedPreset = d.performancePreset = d.ultraPerformancePreset = d.ultraQualityPreset = p;
+            static int last_model = -1;
+            if (last_model != int(p)) { if (last_model >= 0) dlss_->reset = true; last_model = int(p); }      // (another model: its history starts again)
+        }
         slDLSSDSetOptions(viewport, d);
     }
 

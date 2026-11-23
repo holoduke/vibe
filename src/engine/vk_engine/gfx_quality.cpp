@@ -64,6 +64,8 @@ const std::vector<VulkanEngine::GfxRow>& VulkanEngine::gfx_rows() {
           [](E& e, int l) { e.rt_.shadow_samples = pick(l, 2, 6, 19, 28, 40); } },
         { "leaf_shadows", "Shadows through leaves", "Whether a ray through a tree tests every leaf or takes a leaf card as solid.\nLow: solid cards (fast, heavier shade). Insane: every ray tests every leaf.",
           [](E& e, int l) { e.rt_.foliage_ray_mode = pick(l, 2, 1, 1, 1, 0); e.rt_.gi_leaf_lite = l < 4; } },
+        { "rr_model", "Denoiser model", "Which DLSS Ray Reconstruction model cleans up the ray-traced light.\nLow and medium: the earlier one (about half a millisecond a frame faster). From high: the latest.",
+          [](E& e, int l) { e.rt_.dlss_rr_model = l < 2 ? 1 : 0; } },
         { "ambient_occlusion", "Ambient occlusion", "The soft darkening in corners and under things. Low and medium: from the picture only; from high: ray traced.",
           [](E& e, int l) { e.rt_.ao_mode = pick(l, 0, 1, 1, 2, 2); e.rt_.ao_samples = pick(l, 1, 2, 4, 4, 8); } },
         { "bounce_light", "Bounce light", "Light that reaches a place by way of other surfaces: rays per pixel and bounces.",
