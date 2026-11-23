@@ -109,12 +109,20 @@ vec3 calcNormal(vec3 pos, float t) {
         // there (most of the terrain).
         if (pw > 0.01) pw *= 1.0 - smoothstep(0.55, 0.80, lawn >= 0.0 ? lawn : grassEligibility(pos.xz, pos.y));
         if (pw > 0.01) {
-            float pe = max(0.0015, 1.5 * t * 2.0 * scene.viewport.w);
-            float pR = rm_pebbles(pos.xz + vec2(pe, 0.0), t);
-            float pU = rm_pebbles(pos.xz + vec2(0.0, pe), t);
-            float pC = rm_pebbles(pos.xz, t);          // last: its stone id / rim stay in the globals
-            g_pebN_h = pC; g_pebN_id = g_peb_id; g_pebN_k = g_peb_k; g_pebN_sz = g_peb_sz;
-            gN.xz += vec2(pC - pR, pC - pU) / pe * pw;
+            if (RMDBG(4096)) {      // profiling / comparison: the three look-ups this replaced
+                float pe = max(0.0015, 1.5 * t * 2.0 * scene.viewport.w);
+                float pR = rm_pebbles(pos.xz + vec2(pe, 0.0), t);
+                float pU = rm_pebbles(pos.xz + vec2(0.0, pe), t);
+                float pC = rm_pebbles(pos.xz, t);          // last: its stone id / rim stay in the globals
+                g_pebN_h = pC; g_pebN_id = g_peb_id; g_pebN_k = g_peb_k; g_pebN_sz = g_peb_sz;
+                gN.xz += vec2(pC - pR, pC - pU) / pe * pw;
+            } else {
+                // (one look-up: the stone's slope comes from its formula - rm_pebbles_g)
+                vec2 pg;
+                float pC = rm_pebbles_g(pos.xz, t, pg);
+                g_pebN_h = pC; g_pebN_id = g_peb_id; g_pebN_k = g_peb_k; g_pebN_sz = g_peb_sz;
+                gN.xz -= pg * pw;
+            }
         }
     }
     vec3 N = normalize(gN);

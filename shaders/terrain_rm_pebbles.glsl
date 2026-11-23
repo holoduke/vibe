@@ -133,6 +133,69 @@ float rm_pebbles(vec2 wp, float t) {
     }
     return h;
 }
+// peb_layer with the slope of the stone it returns (d height / d p): the stone's shape is a
+// formula, so its slope is too. The normal used three whole look-ups of every layer to get it.
+float peb_layer_g(vec2 p, float cell, float dens, float layer_id, float hf, inout float best, out vec2 grad) {
+    float pn = max(round(kTile / cell), 1.0);
+    vec2 q  = p * (pn / kTile);
+    vec2 ip = floor(q), fq = fract(q);
+    float h = 0.0;
+    grad = vec2(0.0);
+    vec2 gb = step(vec2(0.5), fq) - 1.0;
+    for (int j = 0; j <= 1; ++j)
+    for (int i = 0; i <= 1; ++i) {
+        vec2 g = gb + vec2(float(i), float(j));
+        vec3 r3 = peb_h3(tile_wrap(ip + g, pn) + layer_id * 71.3);
+        if (r3.z > dens) continue;
+        vec2  o  = g + 0.5 + (r3.xy - 0.5) * 0.55 - fq;
+        float rr = mix(0.27, 0.50, fract(r3.z * 17.3));
+        if (dot(o, o) > 1.55 * rr * rr) continue;
+        float a  = r3.x * 6.2832;
+        float ca = cos(a), sa = sin(a), sy = mix(1.0, 1.75, r3.y);
+        vec2  d  = vec2(ca * o.x + sa * o.y, (-sa * o.x + ca * o.y) * sy);
+        vec2  d2 = d * d;
+        float bx = fract(r3.z * 29.1) * fract(r3.x * 3.3 + 0.37);
+        float k  = 1.0 - mix(d2.x + d2.y, max(d2.x, d2.y) * 1.3, bx) / (rr * rr);
+        if (k <= 0.0) continue;
+        float amp = hf * cell * rr * mix(0.55, 1.05, fract(r3.x * 7.7));
+        float hh = amp * k * (1.75 - 0.75 * k);
+        if (hh > h) {
+            h = hh;
+            float mx = step(d2.y, d2.x);
+            vec2 dk = -mix(2.0 * d, 2.6 * d * vec2(mx, 1.0 - mx), bx) / (rr * rr);        // dk / dd
+            vec2 ko = vec2(ca * dk.x - sa * sy * dk.y, sa * dk.x + ca * sy * dk.y);          // dk / do
+            grad = ko * (-(pn / kTile) * amp * (1.75 - 1.5 * k));                             // (o moves against p)
+        }
+        if (hh > best) { best = hh; g_peb_id = fract(r3.y * 13.7 + r3.x); g_peb_k = k; g_peb_sz = layer_id; }
+    }
+    return h;
+}
+// rm_pebbles as the shading sees it (mode 0), with the slope of the stones' surface.
+float rm_pebbles_g(vec2 wp, float t, out vec2 grad) {
+    g_peb_k = 0.0; g_peb_sz = 0.0;
+    grad = vec2(0.0);
+    if (t > 26.0) return 0.0;
+    float fp = max(t, 0.05) * 2.0 * scene.viewport.w;
+    float wA = smoothstep(2.5, 6.0, 0.110 / fp);
+    float wB = smoothstep(2.5, 6.0, 0.034 / fp);
+    float wC = smoothstep(2.5, 6.0, 0.010 / fp);
+    float best = 0.0, h = 0.0;
+    vec2 g;
+    if (wA + wB + wC > 0.0) {
+        float dens = smoothstep(0.30, 0.75, peb_vnoise(wp, 0.45, vec2(7.1)));
+        if (wA > 0.0) { float l = wA * peb_layer_g(wp, 0.110, 0.10 + 0.55 * dens, 1.0, 1.0, best, g); if (l > h) { h = l; grad = wA * g; } }
+        if (wB > 0.0) { float l = wB * peb_layer_g(wp + 3.7, 0.034, 0.15 + 0.60 * dens, 2.0, 1.0, best, g); if (l > h) { h = l; grad = wB * g; } }
+        if (wC > 0.0) { float l = wC * peb_layer_g(wp + 9.1, 0.010, 0.45 + 0.40 * dens, 3.0, 1.0, best, g); if (l > h) { h = l; grad = wC * g; } }
+    }
+    {
+        float d2 = 0.03 + 0.30 * smoothstep(0.45, 0.80, peb_vnoise(wp, 0.30, vec2(31.7)));
+        float sid = g_peb_id, sk = g_peb_k, ssz = g_peb_sz, bb = 0.0;
+        float hb = peb_layer_g(wp + 17.3, 0.420, d2, 4.0, 0.5, bb, g);
+        if (hb > h) { h = hb; grad = g; }
+        else { g_peb_id = sid; g_peb_k = sk; g_peb_sz = ssz; }
+    }
+    return h;
+}
 float rm_pebbles_march(vec2 wp, float t) {
     if (t > 6.0 || g_peb_mode < 0) return 0.0;
     int m = g_peb_mode;
