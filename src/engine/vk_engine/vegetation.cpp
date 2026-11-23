@@ -370,7 +370,7 @@ void VulkanEngine::cull_vegetation(VkCommandBuffer cmd) {
         veg_prev_fwd_ = fwd;
     }
     pc.prev_vp = veg_prev_vp_;
-    pc.hiz = glm::vec4(float(veg_hiz_w_), float(veg_hiz_h_), float(veg_hiz_mips_), glm::clamp(rt_.tree_impostor_px, 7.0f, 40.0f));   // .w: the size at which a tree becomes its card
+    pc.hiz = glm::vec4(float(veg_hiz_w_), float(veg_hiz_h_), float(veg_hiz_mips_), glm::clamp(rt_.tree_impostor_px, 7.0f, 64.0f) * pc.params.z);   // .w: the size at which a tree becomes its card - in pixels of the OUTPUT, whatever the detail setting (the shader's measure carries that factor)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, veg_cull_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, veg_cull_layout_, 1, 1, &veg_set_, 0, nullptr);
     vkCmdPushConstants(cmd, veg_cull_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
@@ -597,7 +597,7 @@ void VulkanEngine::collect_veg_rt_instances(glm::vec3 eye, uint32_t cap,
         const float px = r / std::max(glm::distance(cc, eye), 0.1f) * ppr * dither;
         uint32_t lvl = px > 85.0f ? 0u : px > 40.0f ? 1u : px > 16.0f ? 2u : 3u;
         if (a < veg_arch_.size() && veg_arch_[a].species <= 2) {     // trees / bushes: same detail curve as veg_cull.comp
-            const float detail = std::clamp(std::pow(px / (veg_arch_[a].species == 2 ? 25.0f : 60.0f), 0.8f), 0.03f, 1.0f);
+            const float detail = std::clamp(std::pow(px / (veg_arch_[a].species == 2 ? 25.0f : 60.0f), 1.4f), 0.03f, 1.0f);
             lvl = detail > 0.5f ? 0u : detail > 0.22f ? 1u : detail > 0.09f ? 2u : 3u;
         }
         out.push_back(c.second | (lvl << 30));

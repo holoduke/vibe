@@ -78,7 +78,7 @@ const std::vector<VulkanEngine::GfxRow>& VulkanEngine::gfx_rows() {
                             if (e.rt_.forest_density != f || e.rt_.bush_density != b) e.veg_replant_request_ = true;
                             e.rt_.forest_density = f; e.rt_.bush_density = b; } },
         { "tree_detail", "Tree detail", "How far out a tree keeps all its branches and leaves before a simpler one stands in.",
-          [](E& e, int l) { e.rt_.veg_lod_bias = pick(l, 0.6f, 0.85f, 1.25f, 1.75f, 3.0f); e.rt_.tree_impostor_px = pick(l, 40.0f, 40.0f, 32.0f, 20.0f, 10.0f); } },
+          [](E& e, int l) { e.rt_.veg_lod_bias = pick(l, 0.45f, 0.6f, 0.8f, 1.0f, 1.5f); e.rt_.tree_impostor_px = pick(l, 64.0f, 56.0f, 44.0f, 36.0f, 24.0f); } },
         { "tree_distance", "Tree draw distance", "How far away trees are drawn at all.",
           [](E& e, int l) { e.rt_.tree_draw_distance = pick(l, 900.0f, 1600.0f, 2600.0f, 3800.0f, 3800.0f); } },
         { "plants", "Small plants", "Flowers, ferns, weeds and reeds: how many, and how far they are drawn.",
@@ -238,8 +238,8 @@ void VulkanEngine::prof_sweep_tick() {
         { "render scale 0.59", 0, [](R& r) { r.render_scale = 0.59f; } },
         { "render scale 0.67", 0, [](R& r) { r.render_scale = 0.67f; } },
         // -- what grows --
-        { "trees: detail near only (lod 0.6)", 0, [](R& r) { r.veg_lod_bias = 0.6f; } },
-        { "trees: detail far (lod 3)", 0, [](R& r) { r.veg_lod_bias = 3.0f; } },
+        { "trees: detail near only (lod 0.45)", 0, [](R& r) { r.veg_lod_bias = 0.45f; } },
+        { "trees: detail far (lod 1.5)", 0, [](R& r) { r.veg_lod_bias = 1.5f; } },
         { "trees: impostors late (10 px)", 0, [](R& r) { r.tree_impostor_px = 10.0f; } },
         { "trees: draw distance 900", 0, [](R& r) { r.tree_draw_distance = 900.0f; } },
         { "plants: draw distance 20", 0, [](R& r) { r.flower_draw_distance = 20.0f; r.ground_draw_distance = 20.0f; r.reed_draw_distance = 40.0f; } },

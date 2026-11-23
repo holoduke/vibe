@@ -95,7 +95,7 @@ void VulkanEngine::apply_foliage_quality(int level) {
     rt_.foliage_quality = level;
     rt_.forest_density = l.forest; rt_.bush_density = l.bush;
     rt_.flower_density = l.flower; rt_.ground_density = l.ground;
-    rt_.veg_lod_bias = l.lod;
+    rt_.veg_lod_bias = std::min(l.lod, 1.5f);
     rt_.flower_draw_distance = l.flower_m; rt_.ground_draw_distance = l.ground_m; rt_.reed_draw_distance = l.reed_m;
     rt_.grass_raymarch_distance = l.grass_m; rt_.grass_density = l.grass; rt_.grass_near_boost = l.near_boost;
     if (replant) veg_replant_request_ = true;          // (the forest is planted again: about a second)
@@ -818,7 +818,8 @@ void VulkanEngine::load_settings() {
     if (const char* e = std::getenv("VIBE_TEST_FOLIAGE")) apply_foliage_quality(std::atoi(e));
     if (const char* e = std::getenv("VIBE_TEST_SHADOWS")) apply_shadow_quality(std::atoi(e));
     gfx_test_hook();                    // (VIBE_TEST_GFX: gfx_quality.cpp)
-    clampf(rt_.tree_impostor_px, 7.0f, 40.0f);
+    clampf(rt_.tree_impostor_px, 7.0f, 64.0f);
+    clampf(rt_.veg_lod_bias, 0.4f, 1.5f);          // (was up to 4: above ~1 the picture no longer changed, the cost did)
     clampf(rt_.tree_draw_distance, 200.0f, 3800.0f);
     clampf(rt_.fov_deg, 55.0f, 100.0f);
     clampf(rt_.mouse_sens, 0.2f, 4.0f);

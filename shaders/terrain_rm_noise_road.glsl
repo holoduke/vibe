@@ -50,6 +50,31 @@ vec3 rm_noised_i(vec2 p, int oct) {
     return vec3(value, deriv);
 }
 
+// rm_noised_i with the second derivatives as well (hxx, hyy, hxy): what the landscape's slope
+// needs to be worked out in the same pass as its height (terrainB_slope).
+vec3 rm_noised_h(vec2 p, int oct, out vec3 hess) {
+    vec2 i;
+    if (scene.ring_info.x < 0.5) i = floor(p);
+    else {
+        vec4 lc = scene.ring_cell[min(oct, 23)];
+        p += lc.xy;
+        i = floor(p) + lc.zw;
+        i -= 8388608.0 * floor(i / 8388608.0 + 0.5);
+    }
+    vec2 f = fract(p);
+    vec2 u   = f * f * (3.0 - 2.0 * f);
+    vec2 du  = 6.0 * f * (1.0 - f);
+    vec2 ddu = 6.0 - 12.0 * f;
+    float a = hash21(i + vec2(0.0, 0.0));
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    float k = a - b - c + d;
+    vec2 lin = vec2(b - a, c - a) + k * u.yx;
+    hess = vec3(ddu * lin, du.x * du.y * k);
+    return vec3(a + (b - a) * u.x + (c - a) * u.y + k * u.x * u.y, du * lin);
+}
+
 // Per-octave ~37° rotation breaks axis-aligned banding. Unit
 // determinant = pure rotation, no scaling.
 const mat2 m2 = mat2(0.8, -0.6, 0.6, 0.8);

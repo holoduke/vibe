@@ -285,6 +285,53 @@ float terrainB_lod_pw(vec2 p, float ray_t, float tpl) {
     h += sampleHeightDelta(wp);   // (reverted 80 m gate — no near/far seam)
     return h;
 }
+// terrainB_lod_pw at wp and at wp + (e, 0) and wp + (0, e) - the three heights the normal is made
+// from - with the landscape formula worked out ONCE. The formula's slope comes out of the same
+// pass as its value: each octave's noise gives its gradient and second derivatives from the four
+// lattice values it has already looked up, and the damping term 1 / (1 + |d|^2) is carried along
+// with its own derivative (the term the earlier analytic attempts left out - without it the
+// ridges and the rocks in snow went soft). What follows the formula (the world's shape, the
+// road's shelf, sculpting) is still evaluated at the three points, with the formula's value
+// stepped along its slope. Was three passes of up to 20 octaves a pixel: the largest single
+// item of the shading (docs/ARCHITECTURE.md, where the frame goes).
+float terrainB_slope(vec2 wp, float ray_t, float tpl, float e, out float bR, out float bU) {
+    vec2 p = rm_flat_p0(wp);
+    int oct_full = int(pc.tex_params.w);
+    int oct_min  = max(2, min(oct_full, int(pc.emissive.w)));
+    float lod_f  = smoothstep(pc.emissive.y, pc.emissive.z, ray_t);
+    float oct_f  = float(oct_full) - lod_f * float(oct_full - oct_min);
+    if (scene.rm_perf.w > 0.0) {
+        float fp = max(ray_t, 1.0) * 1.68 * scene.viewport.w;
+        oct_f = min(oct_f, max(log2(333.333 / (scene.rm_perf.w * fp)) + 1.0, float(oct_min)));
+    }
+    int   oct    = int(ceil(oct_f));
+    float frac   = 1.0 - (float(oct) - oct_f);
+    float a = 0.0, b = 1.0;
+    vec2 d = vec2(0.0);
+    // J: how the octave's position moves with the world position; dD: how d does; ga: how a does.
+    mat2 J = rm_far_chart() ? mat2(scene.ring_j.x, scene.ring_j.z, scene.ring_j.y, scene.ring_j.w) * 0.003 : mat2(0.003);
+    mat2 dD = mat2(0.0);
+    vec2 ga = vec2(0.0);
+    const int kMaxOct = 32;
+    for (int i = 0; i < kMaxOct; i++) {
+        if (i >= oct || !rm_flat_on()) break;
+        vec3 hs;
+        vec3 n = rm_noised_h(p, i, hs);
+        float w = (i == oct - 1) ? frac : 1.0;
+        d += n.yz * w;
+        dD += (mat2(hs.x, hs.z, hs.z, hs.y) * J) * w;
+        float q = 1.0 / (1.0 + dot(d, d));
+        a += b * n.x * w * q;
+        ga += (b * w * q) * ((n.yz * J) - (2.0 * n.x * q) * (d * dD));
+        b *= 0.5;
+        p = m2 * p * 2.0;
+        J = (m2 * J) * 2.0;
+    }
+    vec2 wr = wp + vec2(e, 0.0), wu = wp + vec2(0.0, e);
+    bR = mix(rm_world_h(rm_shape(a + ga.x * e, wr, oct_f), wr), pc.color.w, tpl) + sampleHeightDelta(wr);
+    bU = mix(rm_world_h(rm_shape(a + ga.y * e, wu, oct_f), wu), pc.color.w, tpl) + sampleHeightDelta(wu);
+    return mix(rm_world_h(rm_shape(a, wp, oct_f), wp), pc.color.w, tpl) + sampleHeightDelta(wp);
+}
 float terrainH_lod_pw(vec2 p, float ray_t, float tpl) {
     float h = terrainB_lod_pw(p, ray_t, tpl);
     return h + rm_ground_detail(p, ray_t, h) * (1.0 - tpl);

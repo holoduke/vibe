@@ -707,7 +707,7 @@ void VulkanEngine::build_menu_ui() {
             ImGui::Text("GPU: %s (%s)", gpu_name_.c_str(), kVendor[int(gpu_vendor_)]);
             ImGui::SliderFloat("Trees: draw distance (m)", &rt_.tree_draw_distance, 200.0f, 3800.0f, "%.0f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Trees and bushes beyond this are not drawn. 3800: as far as the view distance allows.");
-            ImGui::SliderFloat("Trees: card below this size (px)", &rt_.tree_impostor_px, 7.0f, 40.0f, "%.0f");
+            ImGui::SliderFloat("Trees: card below this size (px)", &rt_.tree_impostor_px, 7.0f, 64.0f, "%.0f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Far trees are drawn as one baked picture of themselves instead of their mesh.\nHigher: more trees are cards (faster). 7: only the very far ones, as before.");
             ImGui::Checkbox("Auto-pick upscaler for this GPU (at start-up)", &rt_.upscaler_auto);
             {
@@ -1272,7 +1272,7 @@ void VulkanEngine::build_menu_ui() {
             ImGui::SliderFloat("grass edge softness", &rt_.grass_edge_softness, 0.0f, 1.0f, "%.2f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("How gradually grass thins out and shortens at the border of a patch.");
             ImGui::SeparatorText("Tree detail");
-            ImGui::SliderFloat("tree / bush detail", &rt_.veg_lod_bias, 0.5f, 4.0f, "%.2fx");
+            ImGui::SliderFloat("tree / bush detail", &rt_.veg_lod_bias, 0.4f, 1.5f, "%.2fx");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far out trees and bushes keep their full branches and leaves.\n1 = default, 2 = full detail twice as far (more triangles), <1 = faster.");
             ImGui::SeparatorText("Plant draw distance");
             ImGui::SliderFloat("flowers + ferns (m)", &rt_.flower_draw_distance, 10.0f, 200.0f, "%.0f");

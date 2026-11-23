@@ -566,6 +566,8 @@ Measured on the RTX 4080 at 3440x1440 with Ray Reconstruction (GPU ms a frame, b
 | river valley | 9.9 | 11.1 | 19.4 | 28.5 | 41.7 |
 | close ground at home | 11.2 | 15.0 | 22.7 | 40.9 | 61.2 |
 
+Measured again after the trees' triangle rule and with the ground's shape out of the rows (2026-11-23, later): open ground 9.5 / 11.2 / 17.7 / 28.6 / 42.9; river 10.0 / 11.2 / 18.5 / 28.2 / 41.1; close 12.7 / 14.8 / 21.1 / 37.5 / 57.8.
+
 What the levels are made of follows the sweep above: the terrain's resolution (half size at low and medium, three quarters at high), coarser shading toward the screen's edges, the relief kept out of the march at low and medium, the trees' detail distance, and the render scale above the upscaler's floor for ultra and insane. The other rows are worth under a millisecond each and are there for the picture.
 
 Rules learnt making them:
@@ -575,5 +577,13 @@ Rules learnt making them:
 - Changing the terrain target's size before the targets exist (settings being loaded) crashes: `apply_gfx_row` only resizes once they do.
 
 **Eye-in-ground test** (`terrain_rm_heightfield.glsl`, both marches, 2026-11-23): it evaluated the full height function at the camera for every pixel - the same answer each time, at the price of a march step. It now asks the baked height first (one fetch; the full surface is never more than about a metre above it) and only evaluates for an eye within 1.5 m of the bake. Close view at home: terrain pass 16.1 -> 15.0 ms, frame 32.1 -> 30.7. Nothing outside the home tile (the test is not made there).
+
+**Trees: triangles per pixel** (`veg_cull.comp`, `vegetation.cpp`, 2026-11-23). In the open view by the course the trees filled 3 % of the screen and cost 9 ms (depth pass 3.7 + colour 5.3). The cause was geometry, not pixels: a tree line 200-400 m off was drawn as full meshes - about 20 000 triangles a tree on a crown 40 pixels across - and the occlusion pyramid cannot cull a forest's inside (leaves have holes). Two rules now:
+- **The hand-over to the baked card is in pixels of the output** (`tree_impostor_px`, 7-64; the card's tile is 128 px, so it is as sharp as the mesh up to there). It used to be multiplied by the detail setting, so "more detail" also meant "cards later" and the two settings fought.
+- **The thinning curve is `(px / 60)^1.4`** (was 0.8): half the size draws 38 % of the tree; the leaves that stay are drawn larger (`veg.vert`), so the crown keeps its cover. `veg_lod_bias` is limited to 0.4-1.5: above about 0.9 the picture did not change, the cost did (same view, hand-over 40 px: 0.6 -> 1.5 ms, 0.9 -> 2.7, the old 2.6 -> 7.2).
+
+Same view after both: frame 28.1 -> 21.9 ms; close view at home 30.7 -> 28.8. The copy of the curve in `vegetation.cpp` (which shape a shadow ray meets) must stay the same as the shader's.
+
+**The normal's three landscape heights in one pass** (`terrainB_slope`, 2026-11-23): the formula's slope is carried through the octave loop (gradient, second derivatives, and the damping term's own derivative), so the formula runs once instead of three times. Same picture. It saved only 0.1-0.45 ms: the formula was NOT where the normal's 5-6 ms goes (the `512` switch also turns off what hangs on the normal - the relief's taps, the stones' three taps at 2 ms, the sand's and snow's slopes). `RMDBG` 2048 brings the three passes back for comparison.
 
 **Candidates not yet done** (from reading the shader; estimates, to be measured with the sweep): the ground under dense grass is fully lit - two bounce rays, object shadow rays, the blade-shadow march - and then covered by the blades (1-2 ms in a meadow); the 29-fetch cavity occlusion could be a baked texture (0.3-0.6); the two walks along the sun ray over the baked height could be one (0.2-0.4); the three normal taps share lattice cells and could hash once (0.4-0.6); outside the home tile the continent's 21-29 noises are added to every height evaluation (a texture round the camera would halve those steps - but its gradient shapes the coast's slope, so the normal cannot simply reuse one value).

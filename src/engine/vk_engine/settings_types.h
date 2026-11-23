@@ -196,7 +196,7 @@ struct RtSettings {
         float reed_draw_distance   = 120.0f;   // shore reeds (tall: seen from afar)
         float ground_density       = 1.0f;   // ground cover: clover, weeds, nettles, fungi (0..3, restart)
         // Vegetation LOD bias: >1 keeps higher LODs further out.
-        float veg_lod_bias         = 1.75f;   // fuller crowns at medium range (UI: tree / bush detail)
+        float veg_lod_bias         = 1.0f;    // fuller crowns at medium range (UI: tree / bush detail)
         // Per-blade Y multiplier (0.3..2.0). 1.0 = built-in 0.55 m blades.
         float grass_height_scale   = 1.0f;
         // Far-distance opacity drop for the raymarched grass.
@@ -774,7 +774,7 @@ struct RtSettings {
         // across on a 16:9 screen) and the mouse's speed as a multiple of the built-in one.
         // Trees: below this size on screen (bounding radius, pixels) a tree is drawn as its
         // baked card instead of its mesh (veg_impostor.cpp). 7 = the old hand-over point.
-        float tree_impostor_px = 20.0f;
+        float tree_impostor_px = 40.0f;
         // How far trees and bushes are drawn (m). The view distance still caps it; 3800 = as far as that goes.
         float tree_draw_distance = 3800.0f;
         bool  site_labels = true;        // the sites' names on screen when seen from high up (sites.cpp)

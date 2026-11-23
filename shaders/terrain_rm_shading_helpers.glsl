@@ -87,9 +87,14 @@ vec3 calcNormal(vec3 pos, float t) {
     g_pebN_h = -1.0; g_pebN_k = 0.0;   // -1: no stones looked up for this pixel
     g_peb_mode = -1;
     // (the landscape and the relief on it apart: see terrainB_lod_pw)
-    float bC = terrainB_lod_pw(pos.xz, t, tpl);
-    float bR = terrainB_lod_pw(pos.xz + vec2(eps, 0.0), t, tpl);
-    float bU = terrainB_lod_pw(pos.xz + vec2(0.0, eps), t, tpl);
+    float bC, bR, bU;
+    if (RMDBG(2048)) {         // profiling / comparison: the three passes this replaced
+        bC = terrainB_lod_pw(pos.xz, t, tpl);
+        bR = terrainB_lod_pw(pos.xz + vec2(eps, 0.0), t, tpl);
+        bU = terrainB_lod_pw(pos.xz + vec2(0.0, eps), t, tpl);
+    } else {
+        bC = terrainB_slope(pos.xz, t, tpl, eps, bR, bU);
+    }
     g_nb = vec2(bC - bR, bC - bU) / eps; g_nb_h = bC; g_nb_ok = true;
     float hC = bC + rm_ground_detail(pos.xz, t, bC) * (1.0 - tpl);
     float hR = bR + rm_ground_detail(pos.xz + vec2(eps, 0.0), t, bR) * (1.0 - tpl);

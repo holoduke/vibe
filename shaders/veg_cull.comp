@@ -101,10 +101,11 @@ void main() {
         // bucket k holds the elements with priority <= kDetail[k].
         // Full detail from 60 px of bounding radius for trees, 25 px for the
         // (much smaller) bushes.
-        // (exponent 0.8, was 1.2: crowns keep far more of their branches and
-        // leaves at medium range - half size on screen now draws 57 % of the
-        // tree instead of 43 %, a quarter 33 % instead of 19 %.)
-        float detail = clamp(pow(px / (ai.w > 1.5 ? 25.0 : 60.0), 0.8), 0.03, 1.0);
+        // (exponent 1.4: half the size on screen draws 38 % of the tree, a quarter 14 %. The
+        // leaves that stay are drawn larger - veg.vert - so the crown keeps its cover. Measured
+        // 2026-11-23: with 0.8 a tree line 300 m off was drawn with ~20 triangles per pixel and
+        // cost 7 ms; with a third of them the picture is the same. docs/ARCHITECTURE.md.)
+        float detail = clamp(pow(px / (ai.w > 1.5 ? 25.0 : 60.0), 1.4), 0.03, 1.0);
         uint lod = detail > 0.5 ? 0u : (detail > 0.22 ? 1u : (detail > 0.09 ? 2u : 3u));
         // Far away the mesh hands over to the billboard with a dithered blend.
         // (was a fixed 7 px: the card was a painted outline then. Baked from the tree itself -
