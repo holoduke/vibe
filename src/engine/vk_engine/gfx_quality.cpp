@@ -193,6 +193,8 @@ namespace vibe {
 // a line from the first one ("base") says what that thing costs in this view. One run does
 // what took an hour of restarts. (Run it on a COPY of the settings: VIBE_CFG.)
 void VulkanEngine::prof_sweep_tick() {
+    // VIBE_PROF_ALWAYS=1: the GPU pass times once a second in every state (the menu too).
+    { static const bool always = std::getenv("VIBE_PROF_ALWAYS") != nullptr; if (always && frame_number_ % 60 == 0) prof_log(); }
     // VIBE_TEST_GFX_SEQ="400:4,1000:3,1600:2": at those frames, every row to that level - what the
     // panel's "Everything" buttons do, while the game runs (resize, replant and all).
     {
