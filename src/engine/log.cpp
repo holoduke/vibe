@@ -1,4 +1,6 @@
 #include "engine/log.h"
+#include <filesystem>
+#include <system_error>
 
 #include <chrono>
 #include <cstdarg>
@@ -68,6 +70,14 @@ std::string vformat(const char* fmt, std::va_list ap) {
 void open(const std::string& path) {
     std::lock_guard<std::mutex> lk(g_mu);
     if (g_file.is_open()) g_file.close();
+    // Keep the last two runs' logs (<name>.prev, <name>.prev2): the log of a crash must survive
+    // the restart that follows it. (2026-11-23: a device-lost report was lost that way.)
+    {
+        std::error_code ec;
+        std::filesystem::rename(path + ".prev", path + ".prev2", ec);
+        ec.clear();
+        std::filesystem::rename(path, path + ".prev", ec);
+    }
     g_file.open(path, std::ios::out | std::ios::trunc);
 }
 
