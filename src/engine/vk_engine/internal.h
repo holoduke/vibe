@@ -411,6 +411,8 @@ struct SceneUBO {
     glm::vec4  ring_cell[24];
     glm::vec4  grass_cam;        // the grass's blade lattice at the camera (grass_raymarch.frag map)
     glm::mat4  ray_mat;          // screen -> view ray, camera at the origin (scene_ubo.glsl scene_ray)
+    glm::vec4  wm_cache;         // the world's slow fields as textures, near and far (wm_cache.cpp; shaders: rm_world_vr)
+    glm::vec4  wm_cache1;
 };
 
 // ---- KHR ray tracing entry points ----

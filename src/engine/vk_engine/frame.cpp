@@ -578,6 +578,7 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     clear_color.color = { { 0.55f, 0.72f, 0.95f, 1.0f } };  // sky color matches UBO
     VkClearValue clear_depth{};
     clear_depth.depthStencil.depth = 1.0f;
+    wm_cache_bake(frame.command_buffer);        // the world's slow fields, when the camera has moved on (wm_cache.cpp)
     // ---------- Pass 0.5: low-res raymarch terrain (when scale < 1) ----------
     // Renders the FBM raymarch into tr_lr_* attachments at a fraction of
     // the main resolution. Compose pass at the start of the world color

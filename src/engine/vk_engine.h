@@ -2187,6 +2187,22 @@ private:
     void init_grass_raymarch_pipeline();
     void destroy_grass_raymarch_pipeline();
     void render_grass_raymarch(VkCommandBuffer cmd);
+    // The world's slow fields (land / sea, ranges) round the camera as a texture, for the
+    // terrain shader (vk_engine/wm_cache.cpp).
+    VkImage          wm_cache_image_[2] = {};       // [0] near (4 m a texel), [1] far (160 m)
+    VmaAllocation    wm_cache_alloc_[2] = {};
+    VkImageView      wm_cache_view_[2]  = {};
+    VkSampler        wm_cache_sampler_  = VK_NULL_HANDLE;
+    VkPipeline       wm_cache_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule   wm_cache_frag_     = VK_NULL_HANDLE;
+    glm::vec2        wm_cache_org_[2] = { glm::vec2(0.0f), glm::vec2(0.0f) };
+    bool             wm_cache_valid_ = false;
+    bool             wm_cache_dirty_[2] = { false, false };
+    float            wm_cache_key_[32] = {};
+    void init_wm_cache();
+    void destroy_wm_cache();
+    void wm_cache_plan(struct SceneUBO& data);
+    void wm_cache_bake(VkCommandBuffer cmd);
 
     // Heightmap raw heights as an R32_SFLOAT texture. Used by the
     // procedural raymarched terrain shader (binding 8) so the

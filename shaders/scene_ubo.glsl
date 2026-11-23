@@ -137,6 +137,11 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     // Screen to view ray, with the camera at the origin: inverse(projection x the view's
     // rotation), worked out in doubles (scene_ray below).
     mat4   ray_mat;
+    // The world's slow fields round the camera as a texture (vk_engine/wm_cache.cpp;
+    // terrain_rm_noise_road.glsl rm_world_vr): xy = the chart position of texel (0, 0)'s centre,
+    // z = texels a metre, w = texels a side. wm_cache: the near picture, wm_cache1: the far one.
+    vec4   wm_cache;
+    vec4   wm_cache1;
 } scene;
 
 // The view ray through a point of the screen (ndc: -1 .. 1), unit length. Use this - never

@@ -382,6 +382,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/sun_horizon.cpp
     src/engine/vk_engine/veg_zones.cpp
     src/engine/vk_engine/veg_stream.cpp
+    src/engine/vk_engine/wm_cache.cpp
     src/engine/vk_engine/ssdm.cpp
     src/engine/vk_engine/flashlight.cpp
     src/engine/vk_engine/player_body.cpp

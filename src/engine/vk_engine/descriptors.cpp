@@ -74,7 +74,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 23 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
+            kTextureCount * 2 + 25 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -94,7 +94,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[39]{};
+    VkDescriptorSetLayoutBinding bindings[41]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -358,11 +358,16 @@ void VulkanEngine::init_descriptors() {
     // Binding 38: a copy of the lit frame, for the glass (glass.frag).
     bindings[38] = bindings[29];
     bindings[38].binding = 38;
+    // Bindings 39, 40: the world's slow fields round the camera, near and far (RG32F; wm_cache.cpp).
+    bindings[39] = bindings[31];
+    bindings[39].binding = 39;
+    bindings[40] = bindings[31];
+    bindings[40].binding = 40;
 
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 39, .pBindings = bindings,
+        .bindingCount = 41, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -1178,6 +1183,7 @@ void VulkanEngine::update_scene_ubo() {
 
     VmaAllocationInfo ai{};
     vmaGetAllocationInfo(allocator_, scene_ubo_alloc_, &ai);
+    wm_cache_plan(data);
     upload(scene_ubo_buffer_, 0, &data, sizeof(data), ai.pMappedData);   // staged while a frame is in flight
     // Defensive flush — no-op on coherent host memory but required by spec
     // for non-coherent allocations (e.g. some non-NVIDIA drivers).

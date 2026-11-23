@@ -179,17 +179,56 @@ float rm_highway(float h, vec2 wp) {
     float fall = 0.02 * min(ad, 5.5) + 0.05 * clamp(ad - 5.5, 0.0, 2.5);
     return w <= 0.0 ? h : mix(h, dh.y - fall, w);
 }
+// Land or sea (.x, wm_continent's value) and the ranges (.y) at a chart position, as the
+// height formula reads them - from the formula itself.
+vec2 rm_world_vr_f(vec2 wp) {
+    if (!rm_far_chart()) return vec2(wm_continent(wp * 0.001), wm_ranges(wp * 0.001));
+    vec3 G = rm_planet_G(wp);
+    vec2 mk = (rm_ring() ? rm_ring_hp(wp) : wm_az(G)) * 0.001;
+    return vec2(wm_continent_globe(mk, G), wm_ranges_globe(mk, G));
+}
+// The same from the two pictures drawn round the camera (vk_engine/wm_cache.cpp: 4 m a texel
+// out to 4 km, 160 m a texel out to 82 km, both made by rm_world_vr_f). Both fields change
+// over hundreds of metres; the formula is 23 to 31 noise look-ups, and it was paid at every
+// step of the march and three times for the normal. This shader no longer holds it.
+// The four texels are summed here, not by the sampler: a filtered read moves in 1/256 steps
+// of a texel, and the normal takes its slope over 2 cm.
+#ifdef WM_CACHE_BAKE
+vec2 rm_world_vr(vec2 wp) { return rm_world_vr_f(wp); }
+#else
+layout(set = 0, binding = 39) uniform sampler2D u_wm_cache;
+layout(set = 0, binding = 40) uniform sampler2D u_wm_cache1;
+vec2 rm_wm_tex(sampler2D s, vec4 c, vec2 wp) {
+    vec2  q = clamp((wp - c.xy) * c.z, vec2(0.0), vec2(c.w - 1.001));
+    ivec2 i = ivec2(q);
+    vec2  f = q - vec2(i);
+    vec2 a = texelFetch(s, i, 0).rg, b = texelFetch(s, i + ivec2(1, 0), 0).rg;
+    vec2 d = texelFetch(s, i + ivec2(0, 1), 0).rg, e = texelFetch(s, i + ivec2(1, 1), 0).rg;
+    return mix(mix(a, b, f.x), mix(d, e, f.x), f.y);
+}
+vec2 rm_world_vr(vec2 wp) {
+    // (how many texels inside the near picture's edge; over its last 64 - 256 m - the far
+    // picture is blended in, so the two meet without a step)
+    vec2  q = (wp - scene.wm_cache.xy) * scene.wm_cache.z;
+    float edge = min(min(q.x, q.y), scene.wm_cache.w - 1.0 - max(q.x, q.y));
+    if (edge > 65.0) return rm_wm_tex(u_wm_cache, scene.wm_cache, wp);
+    vec2 far = rm_wm_tex(u_wm_cache1, scene.wm_cache1, wp);
+    if (edge <= 1.0) return far;
+    return mix(far, rm_wm_tex(u_wm_cache, scene.wm_cache, wp), (edge - 1.0) / 64.0);
+}
+#endif
+// (wm_height and wm_height_globe of world_map.glsl, with the two slow fields from rm_world_vr)
 float rm_world_h(float a, vec2 wp) {
-    if (!rm_far_chart()) return rm_highway(wm_height(a, wp, RM_WATER_LEVEL), wp);
-    vec3 G = rm_planet_G(wp);
-    return rm_site_ground(rm_highway(wm_height_globe(a, rm_ring() ? rm_ring_hp(wp) : wm_az(G), G, RM_WATER_LEVEL), wp), wp);
+    if (!rm_far_chart()) {
+        float h = a * 120.0;
+        float w = smoothstep(1450.0, 1900.0, length(wp));     // (as wm_height_land: home's own formula within)
+        if (w > 0.0) { vec2 vr = rm_world_vr(wp); h = wm_height_core(h, a, w, vr.y, vr.x, RM_WATER_LEVEL); }
+        return rm_highway(wm_river(wm_pad(h, wp), wp, RM_WATER_LEVEL), wp);
+    }
+    vec2 vr = rm_world_vr(wp);
+    return rm_site_ground(rm_highway(wm_height_core(a * 120.0, a, 1.0, vr.y, vr.x, RM_WATER_LEVEL), wp), wp);
 }
-float rm_continent(vec2 wp) {
-    if (!rm_far_chart()) return wm_continent(wp * 0.001);
-    if (rm_ring()) return wm_continent(rm_ring_hp(wp) * 0.001);
-    vec3 G = rm_planet_G(wp);
-    return wm_continent_globe(wm_az(G) * 0.001, G);
-}
+float rm_continent(vec2 wp) { return rm_world_vr(wp).x; }
 float rm_forest(vec2 wp, float h, float ny, float wl) {
     bool far = rm_far_chart();
     if (far && scene.site_ground.z > 0.5 && distance(wp, scene.site_ground.xy) < scene.site_shape.w) return 0.0;   // (a site's own ground: no woods)

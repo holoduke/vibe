@@ -304,6 +304,7 @@ void VulkanEngine::init() {
     // Must run AFTER init_taa() — grass raymarch reuses taa_->vert_module
     // as its fullscreen-triangle vertex shader.
     init_grass_raymarch_pipeline();
+    init_wm_cache();              // (after init_taa: the same full-screen triangle)
     init_viewmodel();
     init_spacejet();
     init_fx();
@@ -713,6 +714,9 @@ void VulkanEngine::run(const RunOptions& opts) {
             ++frame_number_;
             cpuprof::end_frame();
             anim_time_ = static_cast<float>(std::fmod(glfwGetTime(), 3600.0));
+            // VIBE_TEST_ANIM_TIME=<seconds>: the animation clock stands still at that time (water,
+            // wind, clouds the same in every capture: pictures of two builds can be compared).
+            { static const char* at = std::getenv("VIBE_TEST_ANIM_TIME"); if (at) anim_time_ = static_cast<float>(std::atof(at)); }
             {
                 static bool first_logged = false;
                 if (!first_logged) {
@@ -877,6 +881,7 @@ void VulkanEngine::shutdown() {
     guarded("destroy_fog_wisp_texture",   [&]{ destroy_fog_wisp_texture(); });
     guarded("destroy_textures", [&]{ destroy_textures(); });
     guarded("destroy_grass_raymarch_pipeline", [&]{ destroy_grass_raymarch_pipeline(); });
+    guarded("destroy_wm_cache", [&]{ destroy_wm_cache(); });
     guarded("destroy_grass_pipeline", [&]{ destroy_grass_pipeline(); });
     guarded("destroy_scatter_pipeline", [&]{ destroy_scatter_pipeline(); });
     guarded("destroy_terrain_height_texture", [&]{ destroy_terrain_height_texture(); });
