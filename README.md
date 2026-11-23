@@ -6,14 +6,15 @@ planet, motion-matched characters and LAN multiplayer.
 
 Important: This engine was written by AI for humans. No code was (and never will be) seen by humans in development. 
 
-![Vibe game engine: a castle on a lake in an open world (Vulkan, C++)](docs/screenshots/valley.png)
+![Vibe game engine: a castle on a lake in an open world (Vulkan, C++)](docs/screenshots/castle_lake.jpg)
 
 | | |
 |---|---|
-| ![Another player, a soldier, in daylight](docs/screenshots/soldier_day.png) | ![The same soldier at night under a lamp](docs/screenshots/soldier_night.png) |
-| ![A lake between the hills, seen from the stone wall](docs/screenshots/lake.png) | ![A paved road at dusk with a street lamp](docs/screenshots/road_dusk.png) |
-| ![The home valley among snow mountains, from high up](docs/screenshots/high.png) | ![The procedural planet from orbit](docs/screenshots/planet.png) |
-| ![The rocket on its launch tower](docs/screenshots/rocket.png) | |
+| ![A sports car on the coast highway, snow mountains behind](docs/screenshots/car_bend.jpg) | ![The sports car from the side, head lights on](docs/screenshots/car_side.jpg) |
+| ![The highway running toward the mountains, the car seen from above](docs/screenshots/car_road.jpg) | ![Inside the launch pavilion: glass walls, the rocket outside](docs/screenshots/pavilion.jpg) |
+| ![A river valley at dusk, the launch tower on the horizon](docs/screenshots/valley_dusk.jpg) | ![The home valley and the launch pad from high up](docs/screenshots/high.jpg) |
+| ![The rocket lifting off, seen from the air](docs/screenshots/launch.jpg) | ![The coast from the edge of space](docs/screenshots/coast.jpg) |
+| ![The procedural planet from orbit](docs/screenshots/planet.jpg) | |
 
 ## The technology
 
