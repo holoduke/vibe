@@ -210,7 +210,7 @@ void VulkanEngine::prof_sweep_tick() {
         { "terrain: grass blade shadows off (8)", 8, [](R&) {} },
         { "terrain: plant shadow map off (16)", 16, [](R&) {} },
         { "terrain: ray-traced object shadows off (32)", 32, [](R&) {} },
-        { "terrain: far section off (512)", 512, [](R&) {} },
+        { "terrain: screen-space normal (512)", 512, [](R&) {} },
         { "terrain: all shadows off (4+8+16+32)", 60, [](R&) {} },
         // -- the terrain shader: settings --
         { "terrain: no first pass", 0, [](R& r) { r.terrain_rm_prepass = false; } },
