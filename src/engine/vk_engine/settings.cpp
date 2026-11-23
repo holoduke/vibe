@@ -609,6 +609,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
         }
     }
     f("render_scale", s.rt_.render_scale);
+    f("auto_fps", s.rt_.auto_fps);
     f("fsr_min_render_scale", s.rt_.fsr_min_render_scale);
     f("quality_preset", s.rt_.quality_preset);
     f("gfx_all", s.rt_.gfx_all);

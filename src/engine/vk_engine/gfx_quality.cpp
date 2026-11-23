@@ -158,6 +158,16 @@ void VulkanEngine::gfx_quality_ui() {
         if (ImGui::RadioButton((std::string(kLevel[l]) + "##gfx_all").c_str(), rt_.gfx_all == l)) apply_gfx_all(l);
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sets every row below to this level. High is what the game is tuned for.");
+    {
+        static const int   kFps[]     = { 0, 45, 60, 75, 90, 120 };
+        static const char* kFpsName[] = { "Off", "45", "60", "75", "90", "120" };
+        int cur = 0;
+        for (int i = 0; i < 6; ++i) if (kFps[i] == rt_.auto_fps) cur = i;
+        ImGui::SetNextItemWidth(110.0f);
+        if (ImGui::Combo("Hold frame rate", &cur, kFpsName, 6)) rt_.auto_fps = kFps[cur];
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rendered frames a second to hold (before frame generation doubles them).\nThe render resolution then follows the load: lower in heavy places, higher where there is room,\nin steps between 50 %% and 100 %%. Each step is a short hitch, so it waits a few seconds before it moves.");
+        if (rt_.auto_fps > 0) { ImGui::SameLine(); ImGui::Text("render resolution now %.0f %%", rt_.render_scale * 100.0f); }
+    }
     if (ImGui::TreeNodeEx("Each one by itself", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::BeginTable("##gfx_rows", 2, ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("what", ImGuiTableColumnFlags_WidthStretch, 0.55f);
@@ -188,6 +198,55 @@ void VulkanEngine::gfx_quality_ui() {
 }  // namespace vibe
 
 namespace vibe {
+
+// ---- Settings 'hold frame rate': the render scale follows the GPU's load ----
+// The whole frame costs by the pixel (a tenth of render scale is 3 - 6 ms at 3440 x 1440), so
+// the scale is the one lever that holds a frame rate everywhere. It moves in steps: every
+// change rebuilds the render targets (a hitch of a tenth of a second, the upscaler's history
+// starts again), so it steps down only after 1.5 s over the budget, up only after 4 s with
+// room for the next step, and then waits 6 s. The load is the profiler's sum of the GPU
+// passes plus frame generation (which has no mark: about 4 ms at 3440 x 1440) - not the frame
+// time, which a frame-rate cap or v-sync holds up whatever the load is.
+// VIBE_TEST_AUTO_FPS=<n> turns it on for a test run.
+void VulkanEngine::auto_scale_tick() {
+    static const int test_fps = [] { const char* e = std::getenv("VIBE_TEST_AUTO_FPS"); return e ? std::atoi(e) : 0; }();
+    const int target = test_fps > 0 ? test_fps : rt_.auto_fps;
+    static double over_t = 0.0, under_t = 0.0, cool_t = 0.0;
+    if (target <= 0 || state_ != State::Playing || prof_ema_count_ == 0) { over_t = under_t = 0.0; return; }
+    static const float kScale[] = { 0.50f, 0.55f, 0.60f, 0.67f, 0.75f, 0.85f, 1.00f };
+    const int kN = 7;
+    const double dt = std::clamp(double(last_frame_dt_), 0.0, 0.1);
+    if (cool_t > 0.0) { cool_t -= dt; over_t = under_t = 0.0; return; }
+    float gpu = 0.0f;
+    for (uint32_t k = 0; k < prof_ema_count_; ++k) gpu += prof_ema_[k].ms;
+    if (dlssg_tagged_this_frame_)
+        gpu += 4.0f * float(swapchain_extent_.width) * float(swapchain_extent_.height) / (3440.0f * 1440.0f);
+    const float budget = 1000.0f / float(target);
+    int cur = 0;
+    for (int i = 1; i < kN; ++i)
+        if (std::abs(kScale[i] - rt_.render_scale) < std::abs(kScale[cur] - rt_.render_scale)) cur = i;
+    // (what the next step up would cost: three quarters of the frame grow with the pixel count)
+    float up_ms = gpu;
+    if (cur + 1 < kN) { const float r = kScale[cur + 1] / kScale[cur]; up_ms = gpu * (1.0f + 0.75f * (r * r - 1.0f)); }
+    over_t  = gpu > budget * 1.06f ? over_t + dt : 0.0;
+    under_t = (cur + 1 < kN && up_ms < budget * 0.92f) ? under_t + dt : 0.0;
+    int next = cur;
+    if (over_t > 1.5 && cur > 0) {
+        // (straight to the highest step that should fit, not one step at a time: far over the
+        // budget that took four hitches and half a minute)
+        next = 0;
+        for (int i = cur - 1; i > 0; --i) {
+            const float r = kScale[i] / kScale[cur];
+            if (gpu * (1.0f + 0.75f * (r * r - 1.0f)) <= budget) { next = i; break; }
+        }
+    }
+    else if (under_t > 4.0) next = cur + 1;
+    if (next == cur) return;
+    log::infof("[auto-scale] %.1f ms against %.1f (%d fps): render scale %.2f -> %.2f", gpu, budget, target, rt_.render_scale, kScale[next]);
+    rt_.render_scale = kScale[next];
+    apply_render_scale();
+    cool_t = 6.0; over_t = under_t = 0.0;
+}
 
 // VIBE_PROF_SWEEP=<frames per step>: with the camera held, the game steps through a list of
 // experiments - each turns one thing off or down from the settings it started with - and logs

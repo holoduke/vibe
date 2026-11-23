@@ -831,6 +831,9 @@ struct RtSettings {
         // Reapplying requires re-creating render targets (recreate_swapchain
         // does that automatically; the UI's Apply button forces it).
         float render_scale = 1.0f;
+        // Hold this many rendered frames a second (0 = off): the render scale then follows the
+        // GPU's load in steps between 50 % and 100 % (gfx_quality.cpp auto_scale_tick).
+        int   auto_fps = 0;
 
         // Quality preset selector. -1 = custom (sliders won the last edit);
         // 0..3 = Low / Medium / High / Ultra. Switching to a non-custom

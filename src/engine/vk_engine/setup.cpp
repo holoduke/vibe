@@ -802,6 +802,9 @@ void VulkanEngine::prof_read_slot(uint32_t slot) {
     if (vkGetQueryPoolResults(device_, prof_pool_, slot * kProfMaxMarks, n,
                               sizeof(ts), ts, sizeof(uint64_t),
                               VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) return;
+    // A pass that did not run this frame counts as 0 for it (it used to keep its last value
+    // for ever: a pass run once stayed in the sum, one run every other frame counted double).
+    bool seen[kProfMaxMarks] = {};
     for (uint32_t i = 1; i < n; ++i) {
         const char* nm = prof_names_[slot][i];
         float ms = (ts[i] > ts[i - 1])
@@ -813,11 +816,16 @@ void VulkanEngine::prof_read_slot(uint32_t slot) {
             if (std::strcmp(prof_ema_[k].name, nm) == 0) break;
         if (k == prof_ema_count_) {
             if (prof_ema_count_ >= kProfMaxMarks) continue;
+            seen[prof_ema_count_] = true;
             prof_ema_[prof_ema_count_++] = { nm, ms };
         } else {
-            prof_ema_[k].ms = prof_ema_[k].ms * 0.9f + ms * 0.1f;
+            // (a mark used twice in a frame adds up)
+            prof_ema_[k].ms = seen[k] ? prof_ema_[k].ms + ms * 0.1f : prof_ema_[k].ms * 0.9f + ms * 0.1f;
+            seen[k] = true;
         }
     }
+    for (uint32_t k = 0; k < prof_ema_count_; ++k)
+        if (!seen[k]) prof_ema_[k].ms *= 0.9f;
 }
 
 void VulkanEngine::prof_log() {

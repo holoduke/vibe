@@ -131,6 +131,7 @@ private:
     void apply_gfx_all(int level);
     void gfx_test_hook();
     void gfx_quality_ui();
+    void auto_scale_tick();                     // settings 'hold frame rate': the render scale follows the load
     void prof_sweep_tick();                     // VIBE_PROF_SWEEP: a list of experiments in one run
     int  prof_rm_skip_ = 0;                     // the terrain shader's sections to leave out (the sweep)
     bool gfx_scale_changed_ = false, gfx_terrain_scale_changed_ = false;
