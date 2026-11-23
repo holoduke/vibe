@@ -935,6 +935,8 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SeparatorText("Strategies to try");
         ImGui::Checkbox("Start each pixel at the low-resolution hit (needs the march first)", &rt_.terrain_rm_start_at_hit);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The low-resolution march goes on to the ground itself; where its blocks agree,\na pixel starts just short of that and has only the last steps to do.\nSame picture; the low-resolution pass costs more, the main pass less.");
+        ImGui::Checkbox("Let the upscaler rebuild the low-resolution ground (Raymarch scale below 100 %)", &rt_.terrain_rm_lr_full_jitter);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The low-resolution ground is sampled at a different place in each of its pixels every frame,\nso DLSS / FSR / TAA average its blocks away instead of seeing the same ones each frame.\nNot used together with the temporal reconstruction below.");
         if (ImGui::Checkbox("Temporal reconstruction (with Raymarch scale below 100 %)", &rt_.terrain_rm_temporal))
             recreate_terrain_raymarch_lowres();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The low-resolution terrain is offset by half a pixel from frame to frame\nand each frame is put together with the one before (checkerboard):\ntwice the detail of the scale alone when the view is still or moves slowly.");

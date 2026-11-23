@@ -326,7 +326,7 @@ void VulkanEngine::dispatch_dlss(VkCommandBuffer cmd) {
     }
     const sl::ViewportHandle viewport{ 0 };
     const bool use_rr = dlss_rr_active() && rr_->image[0] != VK_NULL_HANDLE;
-    if (use_rr) dispatch_rr_guides(cmd);
+    if (use_rr) { dispatch_rr_guides(cmd); prof_mark(cmd, "rr_guides"); }
 
     // Constants: unjittered matrices, jitter in pixels, motion vectors.
     const FrameView& fv = current_frame_view_;

@@ -597,6 +597,19 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         tr_->lr_jit_prev = tr_->lr_jit;
         tr_->lr_jit = tb ? glm::vec2(0.25f / float(tr_->lr_extent.width), 0.25f / float(tr_->lr_extent.height)) * (tr_->lr_cur_b ? 1.0f : -1.0f)
                          : glm::vec2(0.0f);
+        // Under a temporal upscaler (DLSS, FSR, TAA) the camera's sub-pixel offset covers one
+        // pixel of the main picture over its sequence - of this smaller picture that is only a
+        // part of a pixel (a quarter of its area at 50 %), so the upscaler kept seeing the same
+        // blocks and their flicker and could not average them away. The low-resolution picture
+        // is offset further, by the same sequence stretched to its own pixel; the compose pass
+        // samples it back in place, so every main pixel still shows the scene where the
+        // upscaler expects it - through a grid of samples that now moves over the whole block.
+        if (!tb && rt_.terrain_rm_lr_full_jitter && current_frame_view_.jitter != glm::vec2(0.0f)) {
+            const glm::vec2 stretch(float(render_extent_.width) / float(std::max(1u, tr_->lr_extent.width)),
+                                    float(render_extent_.height) / float(std::max(1u, tr_->lr_extent.height)));
+            // (the projection's offset j shows, at uv, the scene at uv + j / 2)
+            tr_->lr_jit = 0.5f * current_frame_view_.jitter * (stretch - 1.0f);
+        }
         const VkImage     lr_ci = tr_->lr_cur_b ? tr_->lrb_color_image : tr_->lr_color_image;
         const VkImageView lr_cv = tr_->lr_cur_b ? tr_->lrb_color_view  : tr_->lr_color_view;
         const VkImage     lr_di = tr_->lr_cur_b ? tr_->lrb_depth_image : tr_->lr_depth_image;
@@ -1122,6 +1135,7 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
     sun_->shafts_prepass_ran = false;
+    prof_mark(frame.command_buffer, "clouds_over");
     if (rt_.fsr2_enabled && sun_->shafts_pipeline != VK_NULL_HANDLE && rt_.sun_shaft_intensity > 0.001f &&
         !std::getenv("VIBE_SHAFTS_LATE")) {
         const float pitch = glm::radians(rt_.sun_pitch_deg), yaw = glm::radians(rt_.sun_yaw_deg);
@@ -1164,6 +1178,7 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
         }
     }
 
+    prof_mark(frame.command_buffer, "sun_shafts");
     // ---------- Pass 2.2: FSR2 dispatch (optional, replaces TAAU) ----------
     // When FSR2 is on, the SDK does its own temporal accumulation +
     // upscale from raw scene_color/depth/motion (NOT from the TAA history,

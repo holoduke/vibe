@@ -61,6 +61,11 @@
         // believably dark instead of glowing from a too-bright fill.
         vec3 sky_fill = scene.sky_color.rgb * 0.05;
 
+        // Bounce rays and the sun ray from where they land take leaf cards as solid cards
+        // (settings 'foliage rays' below 'every leaf', and not in the leafless season - as the
+        // far shadow ray does): in a wood each of them asked the leaf texture at every card it
+        // crossed (0.7 ms of the 7.8 ms terrain pass there; the picture: 0.09 grey levels).
+        bool gi_solid = scene.season.w <= 0.02 && ((scene.rt_flags.x >> 2) & 3) >= 1;
         int strata = int(ceil(sqrt(float(N_gi))));
         float inv_strata = 1.0 / float(strata);
         int  taken = 0;
@@ -92,9 +97,10 @@
                     float t_hit;
                     int   inst_id;
                     int   prim_id;
-                    if (!closest_hit_material_no_terrain(ray_origin, ray_dir,
-                                                          gi_radius,
-                                                          t_hit, inst_id, prim_id)) {
+                    g_rq_leaf_solid = gi_solid;
+                    bool gi_hit = closest_hit_material_no_terrain(ray_origin, ray_dir, gi_radius, t_hit, inst_id, prim_id);
+                    g_rq_leaf_solid = false;
+                    if (!gi_hit) {
                         // BLAS miss → sky in this direction. Bound by
                         // the halo's pow(8) so no fireflies. Terrain
                         // self-occlusion is intentionally NOT checked
@@ -122,9 +128,10 @@
                     if (b < gi_shadow_max) {
                         float n_dot_sun = dot(hit_n, scene.sun_direction.xyz);
                         if (n_dot_sun > 0.0) {
-                            if (!any_hit_shadow_caster(
-                                    hit_pos + hit_n * 0.01,
-                                    scene.sun_direction.xyz, 200.0)) {
+                            g_rq_leaf_solid = gi_solid;
+                            bool gi_sh = any_hit_shadow_caster(hit_pos + hit_n * 0.01, scene.sun_direction.xyz, 200.0);
+                            g_rq_leaf_solid = false;
+                            if (!gi_sh) {
                                 hit_light += scene.sun_color.rgb *
                                              scene.sun_color.a * n_dot_sun;
                             }

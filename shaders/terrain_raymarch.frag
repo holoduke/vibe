@@ -263,7 +263,7 @@ bool closest_hit_material_no_terrain(vec3 origin, vec3 dir, float t_max,
                                      out int out_inst,
                                      out int out_prim) {
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT,
+    rayQueryInitializeEXT(rq, topLevelAS, g_rq_leaf_solid ? gl_RayFlagsOpaqueEXT : gl_RayFlagsNoneEXT,
                           0x02, origin, 0.001, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
@@ -288,7 +288,7 @@ bool closest_hit_material_no_terrain(vec3 origin, vec3 dir, float t_max,
 bool any_hit_shadow_caster(vec3 origin, vec3 dir, float t_max) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topLevelAS,
-                          gl_RayFlagsTerminateOnFirstHitEXT,
+                          gl_RayFlagsTerminateOnFirstHitEXT | (g_rq_leaf_solid ? gl_RayFlagsOpaqueEXT : 0u),
                           0x01, origin, 0.001, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&

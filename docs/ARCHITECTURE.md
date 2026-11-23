@@ -605,4 +605,22 @@ Same view after both: frame 28.1 -> 21.9 ms; close view at home 30.7 -> 28.8. Th
 Measured (High, 3440 x 1440, frame / terrain pass): river view 17.8 / 11.0 -> 11.3 / 4.6 ms, open view 17.4 / 9.6 -> 11.3 / 3.4; inside the home tile nothing changes (20.3, 20.7). Checked: with the formula still in the shader as a fall-back (the first version) the land in the open and river views was the same picture, mean difference 1.5 grey levels against 1.1 between two runs; the remaining difference was the water and the leaves, whose clock is real time - `VIBE_TEST_ANIM_TIME=<s>` now stops it for such comparisons. A near chart, a site's chart and two views from the air (2.5 and 9 km) were looked at with the final version: trees on the ground, coast continuous to the horizon, no seam at 4 km. Not compared picture for picture against the old build in those four.
 
 
+**Everything that is not the terrain** (2026-11-23, High, after the two changes above; `pt.sh`-style averages over a run with `VIBE_TEST_ANIM_TIME`, which brings the run-to-run noise of the sweep from 0.5 down to about 0.15 ms). Open / river / close / woodland, frame 11.6 / 11.4 / 20.6 / 19.9 ms:
+
+| pass | open | river | close | wood |
+|---|---|---|---|---|
+| terrain | 3.7 | 4.5 | 10.2 | 7.0 |
+| DLSS Ray Reconstruction (`fsr_taau`) | 2.9 | 2.7 | 2.6 | 2.6 |
+| grass | 1.0 | 1.4 | 2.5 | 3.2-3.4 |
+| trees, depth + colour (`d_veg`, `w_veg`) | 1.35 | 0.3 | 1.55 | 2.7 |
+| lighting pass | 0.3 | 0.4 | 0.7 | 1.8 |
+| compose (output resolution) | 0.44 | 0.44 | 0.44 | 0.44 |
+| the rest together (sky fill, clouds, small plants' shadow map, depth copy, terrain upsample, scatter) | 1.4 | 1.4 | 1.9 | 1.6 |
+
+- `fsr_taau` is NVIDIA's network and nothing else (cloud layer, sun shafts and RR's guide pass have marks of their own now and stay under the profiler's threshold). Plain DLSS is 1.4 ms instead of 2.9 - but without Ray Reconstruction every ray budget doubles: the open view gains 1.1 ms, the woodland loses 8 (lighting pass 1.8 -> 9.0). RR stays.
+- Volumetric fog 0.1-0.4, clouds 0.1-0.4, bloom, water, reflections, radiance cache, ambient occlusion: each within the noise.
+- Done: the terrain's bounce rays and the sun ray from where they land take leaf cards as solid cards (as the far shadow ray did; not at 'every leaf', not in the leafless season). Woodland terrain pass 7.75 -> 7.05 ms, close view -0.2; picture 0.09 grey levels from the exact one.
+- Tried and not kept: the grass's nine-cell zone from 1.2 m instead of 2.5 m (-0.4 ms in the wood): a few dozen near blades lose pieces, visible in the difference picture.
+- What remains in grass and trees is their density and detail settings.
+
 **Candidates not yet done** (from reading the shader; estimates, to be measured with the sweep): the ground under dense grass is fully lit - two bounce rays, object shadow rays, the blade-shadow march - and then covered by the blades (1-2 ms in a meadow); the 29-fetch cavity occlusion could be a baked texture (0.3-0.6); the two walks along the sun ray over the baked height could be one (0.2-0.4); the three normal taps share lattice cells and could hash once (0.4-0.6); outside the home tile the continent's 21-29 noises are added to every height evaluation (a texture round the camera would halve those steps - but its gradient shapes the coast's slope, so the normal cannot simply reuse one value).

@@ -572,6 +572,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_rm_shade_lo", s.rt_.terrain_rm_shade_lo);
     f("terrain_rm_start_at_hit", s.rt_.terrain_rm_start_at_hit);
     f("terrain_rm_temporal", s.rt_.terrain_rm_temporal);
+    f("terrain_rm_lr_full_jitter", s.rt_.terrain_rm_lr_full_jitter);
     f("terrain_vrs", s.rt_.terrain_vrs);
     f("foliage_ray_mode", s.rt_.foliage_ray_mode);
     f("gi_leaf_lite", s.rt_.gi_leaf_lite);

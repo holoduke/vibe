@@ -18,6 +18,8 @@
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outMotion;
+layout(location = 2) out vec4 outGBuffer0;
+layout(location = 3) out vec4 outGBuffer1;
 
 #include "scene_ubo.glsl"
 
@@ -227,6 +229,12 @@ void main() {
             }
         }
     }
+    // The G-buffer, as the full-resolution terrain writes it (terrain_raymarch.frag): material 8
+    // = already lit, a flat placeholder normal. This pass draws into all four attachments; left
+    // unwritten the two were undefined - what deferred lighting and the Ray Reconstruction
+    // guides (rr_guides.comp) read for every ground pixel.
+    outGBuffer0  = vec4(clamp(c, vec3(0.0), vec3(1.0)), 8.0 / 255.0);
+    outGBuffer1  = vec4(0.5, 0.5, 0.6, 0.0);       // (.b 0.6 marks "upscaled from the low-resolution picture": rr_guides.comp)
     outColor     = vec4(c, 1.0);
     outMotion    = edge_motion.z > 0.5 ? edge_motion.xy : texture(u_lr_motion, uv).rg;
     gl_FragDepth = lr_depth;
