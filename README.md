@@ -11,9 +11,9 @@ Important: This engine was written by AI for humans. No code was (and never will
 | | |
 |---|---|
 | ![A sports car on the coast highway, snow mountains behind](docs/screenshots/car_bend.jpg) | ![The highway running toward the mountains, the car seen from above](docs/screenshots/car_road.jpg) |
-| ![A river valley at dusk, the launch tower on the horizon](docs/screenshots/valley_dusk.jpg) | ![The home valley and the launch pad from high up](docs/screenshots/high.jpg) |
-| ![The rocket lifting off, seen from the air](docs/screenshots/launch.jpg) | ![The coast from the edge of space](docs/screenshots/coast.jpg) |
-| ![The procedural planet from orbit](docs/screenshots/planet.jpg) | |
+| ![Inside the launch pavilion: glass walls, the rocket outside](docs/screenshots/pavilion.jpg) | ![A river valley at dusk, the launch tower on the horizon](docs/screenshots/valley_dusk.jpg) |
+| ![The home valley and the launch pad from high up](docs/screenshots/high.jpg) | ![The rocket lifting off, seen from the air](docs/screenshots/launch.jpg) |
+| ![The coast from the edge of space](docs/screenshots/coast.jpg) | ![The procedural planet from orbit](docs/screenshots/planet.jpg) |
 
 ## The technology
 
