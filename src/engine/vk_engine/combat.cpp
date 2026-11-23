@@ -482,6 +482,51 @@ void VulkanEngine::update_projectiles(float dt) {
                         }
                     }
                 }
+                // The trees beyond the home tile (veg_stream.cpp wv_cols_: the trunks near the
+                // player) and what stands along the road (the guard rail, the street lamps'
+                // poles: highway_furniture.cpp). The physics has the trunks only in the set
+                // near the player and the road's objects not at all, and a bolt covers
+                // metres a step: its way since the last step against each box, as for the
+                // aircraft above. (VIBE_LOG_BOLT=1 says what stopped a bolt.)
+                if (!drop) {
+                    const glm::vec3 seg = bp - b_prev;
+                    float t_best = 2.0f;
+                    const char* what = nullptr;
+                    auto seg_box = [](glm::vec3 a, glm::vec3 d, glm::vec3 mn, glm::vec3 mx) {
+                        float t0 = 0.0f, t1 = 1.0f;
+                        for (int ax = 0; ax < 3; ++ax) {
+                            if (std::abs(d[ax]) < 1e-6f) { if (a[ax] < mn[ax] || a[ax] > mx[ax]) return 2.0f; continue; }
+                            float u0 = (mn[ax] - a[ax]) / d[ax], u1 = (mx[ax] - a[ax]) / d[ax];
+                            if (u0 > u1) std::swap(u0, u1);
+                            t0 = std::max(t0, u0); t1 = std::min(t1, u1);
+                            if (t0 > t1) return 2.0f;
+                        }
+                        return t0;
+                    };
+                    const float reach = glm::length(seg) + 2.0f;
+                    for (const auto& c : wv_cols_) {
+                        if (std::abs(0.5f * (c.min.x + c.max.x) - bp.x) > reach || std::abs(0.5f * (c.min.z + c.max.z) - bp.z) > reach) continue;
+                        const float t = seg_box(b_prev, seg, c.min, c.max);
+                        if (t < t_best) { t_best = t; what = "a tree beyond the home tile"; }
+                    }
+                    static std::vector<PhysicsWorld::OrientedBox> road;
+                    road.clear();
+                    hw_rail_boxes(bp, reach + 6.0f, road);
+                    hw_pole_boxes(bp, reach + 6.0f, road);
+                    for (const auto& o : road) {
+                        // (into the box's own frame: turned by -yaw about the vertical)
+                        const float cs = std::cos(o.yaw), sn = std::sin(o.yaw);
+                        auto loc = [&](glm::vec3 w) { return glm::vec3(w.x * cs - w.z * sn, w.y, w.x * sn + w.z * cs); };
+                        const float t = seg_box(loc(b_prev - o.center), loc(seg), -o.half_extents, o.half_extents);
+                        if (t < t_best) { t_best = t; what = "the road's rail or a lamp post"; }
+                    }
+                    if (t_best <= 1.0f) {
+                        drop = true; was_impact = true;
+                        hit_pos = b_prev + seg * t_best;
+                        if (static const bool lg = std::getenv("VIBE_LOG_BOLT") != nullptr; lg)
+                            log::infof("[bolt] stopped by %s at (%.1f, %.1f, %.1f)", what, double(hit_pos.x), double(hit_pos.y), double(hit_pos.z));
+                    }
+                }
                 // Impact detection (terrain / castle / crates). Skipped when
                 // a spacejet or voxel hit already claimed the bullet. After
                 // Jolt's step the bullet's velocity tells us what happened:

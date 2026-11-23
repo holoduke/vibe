@@ -67,10 +67,17 @@ void finish(game::LevelMesh& m, int tex, glm::vec3 tint) {
 struct St { glm::vec3 p; glm::vec3 dir; glm::vec3 sea; };
 std::vector<St> g_st;
 bool g_st_made = false;
+// Street lamps: along the road for 2 km either way from the launch site ("starbase"), one every
+// 40 m on the landward side. `g_lamp[i]`: station i has one; `g_lamp_light`: where their lights
+// are (home coordinates) - the scene's lamp lights take the nearest of them (hw_lamps_near).
+std::vector<uint8_t> g_lamp;
+std::vector<glm::vec3> g_lamp_light;
+const float kLampSide = 7.5f, kLampHigh = 8.0f, kLampArm = 2.4f;
 
-void make_stations() {
+void make_stations(glm::vec3 base) {
     g_st_made = true;
     g_st.clear();
+    g_lamp.clear(); g_lamp_light.clear();
     if (highway::line_count() == 0) return;
     const std::vector<glm::vec3>& P = highway::line_points(0);
     if (P.size() < 4) return;
@@ -108,6 +115,23 @@ void make_stations() {
         sea[i] = vote >= 0.0f ? n : -n;
     }
     for (size_t i = 0; i < g_st.size(); ++i) g_st[i].sea = sea[i];
+    // The lamps: the station nearest the launch site, and 500 stations (2 km) either way along
+    // the road (the course is a ring: counted round it).
+    g_lamp.assign(g_st.size(), 0);
+    if (g_st.size() > 20) {
+        size_t k0 = 0; float bd = 1e30f;
+        for (size_t i = 0; i < g_st.size(); ++i) {
+            const float d = glm::distance(glm::vec2(g_st[i].p.x, g_st[i].p.z), glm::vec2(base.x, base.z));
+            if (d < bd) { bd = d; k0 = i; }
+        }
+        const size_t n = g_st.size();
+        for (size_t i = 5; i < n; i += 10) {
+            const size_t d = i > k0 ? i - k0 : k0 - i;
+            if (std::min(d, n - d) > 500) continue;
+            g_lamp[i] = 1;
+            g_lamp_light.push_back(g_st[i].p - g_st[i].sea * (kLampSide - kLampArm) + glm::vec3(0.0f, kLampHigh - 0.25f, 0.0f));
+        }
+    }
 }
 
 size_t stretch_count() { return g_st.size() < 3 ? 0 : (g_st.size() - 2) / kStretch + 1; }
@@ -136,7 +160,7 @@ void build_stretch(size_t c, std::vector<game::LevelMesh>& out, const globe::Rin
     const glm::vec3 up(0.0f, 1.0f, 0.0f);
     // The beam in section (toward the road, up): a W.
     const float prof[5][2] = { { 0.0f, 0.40f }, { 0.045f, 0.47f }, { 0.0f, 0.555f }, { 0.045f, 0.64f }, { 0.0f, 0.71f } };
-    game::LevelMesh steel, white, black, amber;
+    game::LevelMesh steel, white, black, amber, pole, lamp;
     for (size_t i = c0; i < c1; ++i) {
         const St& s = st[i];
         // -- the post of the guard rail: a steel channel behind the beam --
@@ -156,6 +180,21 @@ void build_stretch(size_t c, std::vector<game::LevelMesh>& out, const globe::Rin
                 quad(steel, a, b, cc, d, -n0, -n1, -n1, -n0);
             }
         }
+        // -- a street lamp on the landward side (near the launch site only: g_lamp) --
+        if (i < g_lamp.size() && g_lamp[i]) {
+            const glm::vec3 b = s.p - s.sea * kLampSide;
+            post(pole, b, s.dir, s.sea, 0.07f, 0.07f, -0.3f, kLampHigh);
+            // the arm, out over the road: a flat bar, seen from above and below
+            const glm::vec3 a0 = b + up * kLampHigh, a1 = a0 + s.sea * kLampArm;
+            for (float sg : { 1.0f, -1.0f })
+                quad(pole, a0 - s.dir * 0.05f + up * (0.04f * sg), a1 - s.dir * 0.05f + up * (0.04f * sg), a1 + s.dir * 0.05f + up * (0.04f * sg), a0 + s.dir * 0.05f + up * (0.04f * sg), up * sg);
+            for (float sg : { 1.0f, -1.0f })
+                quad(pole, a0 + s.dir * (0.05f * sg) - up * 0.04f, a1 + s.dir * (0.05f * sg) - up * 0.04f, a1 + s.dir * (0.05f * sg) + up * 0.04f, a0 + s.dir * (0.05f * sg) + up * 0.04f, s.dir * sg);
+            // the lamp's head at the end of it: a lit panel facing down, a housing over it
+            const glm::vec3 h = a1 - up * 0.06f;
+            quad(lamp, h - s.sea * 0.55f - s.dir * 0.16f, h - s.sea * 0.55f + s.dir * 0.16f, h + s.sea * 0.10f + s.dir * 0.16f, h + s.sea * 0.10f - s.dir * 0.16f, -up);
+            quad(pole, h - s.sea * 0.58f - s.dir * 0.19f + up * 0.10f, h + s.sea * 0.13f - s.dir * 0.19f + up * 0.10f, h + s.sea * 0.13f + s.dir * 0.19f + up * 0.10f, h - s.sea * 0.58f + s.dir * 0.19f + up * 0.10f, up);
+        }
         // -- a reflector post on the landward side, every 48 m --
         if (i % 12 == 6) {
             const glm::vec3 b = s.p - s.sea * 6.7f;
@@ -172,6 +211,12 @@ void build_stretch(size_t c, std::vector<game::LevelMesh>& out, const globe::Rin
     if (!white.idx.empty()) { finish(white, -1, glm::vec3(0.80f, 0.80f, 0.78f)); out.push_back(std::move(white)); }
     if (!black.idx.empty()) { finish(black, -1, glm::vec3(0.02f, 0.02f, 0.022f)); out.push_back(std::move(black)); }
     if (!amber.idx.empty()) { finish(amber, -1, glm::vec3(0.95f, 0.50f, 0.06f)); out.push_back(std::move(amber)); }
+    if (!pole.idx.empty()) { finish(pole, -5, glm::vec3(0.34f, 0.36f, 0.38f)); out.push_back(std::move(pole)); }
+    if (!lamp.idx.empty()) {
+        finish(lamp, -1, glm::vec3(1.0f, 0.96f, 0.86f));
+        lamp.emissive = glm::vec3(3.4f, 3.2f, 2.7f); lamp.full_emissive = true;
+        out.push_back(std::move(lamp));
+    }
 }
 
 }  // namespace
@@ -204,7 +249,10 @@ void VulkanEngine::hw_objects_poll() {
         it = hw_retired_.erase(it);
     }
     if (!highway::ready() || !scene_desc_set_) return;
-    if (!g_st_made) make_stations();
+    if (!g_st_made) {
+        if (!launch_site_placed_) return;            // (the lamps stand by the launch site: it has to be there)
+        make_stations(launch_pad_);
+    }
     // VIBE_TEST_HIGHWAY_RIDE=<m/s>: carries the player along the coast road (tests the streaming).
     {
         static const char* ride = std::getenv("VIBE_TEST_HIGHWAY_RIDE");
@@ -298,6 +346,24 @@ void VulkanEngine::hw_rail_boxes(glm::vec3 at, float reach, std::vector<PhysicsW
         const glm::vec3 out_dir = glm::normalize(s.sea + e.sea);
         out.push_back({ 0.5f * (a + b) + glm::vec3(0.0f, 0.50f, 0.0f) + out_dir * 0.14f, glm::vec3(0.20f, 0.46f, 0.5f * len + 0.10f), std::atan2(d.x, d.z) });
     }
+}
+
+// The street lamps' poles near `at`, as boxes (for bolts: combat.cpp).
+void VulkanEngine::hw_pole_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const {
+    if (!globe::current().home) return;
+    for (size_t i = 0; i < g_lamp.size() && i < g_st.size(); ++i) {
+        if (!g_lamp[i]) continue;
+        const glm::vec3 b = g_st[i].p - g_st[i].sea * kLampSide;
+        if (std::abs(b.x - at.x) > reach || std::abs(b.z - at.z) > reach) continue;
+        out.push_back({ b + glm::vec3(0.0f, 0.5f * kLampHigh, 0.0f), glm::vec3(0.09f, 0.5f * kLampHigh, 0.09f), 0.0f });
+    }
+}
+
+// The road's street lamps within `reach` of the eye, for the scene's lamp lights (descriptors.cpp).
+void VulkanEngine::hw_lamps_near(glm::vec3 eye, float reach, std::vector<glm::vec3>& out) const {
+    if (!globe::current().home) return;
+    for (const glm::vec3& l : g_lamp_light)
+        if (std::abs(l.x - eye.x) < reach && std::abs(l.z - eye.z) < reach) out.push_back(l);
 }
 
 void VulkanEngine::hw_objects_destroy() {

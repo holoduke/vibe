@@ -629,7 +629,7 @@ private:
     bool tr_use_lowres() const;
     // Pass entry-points for the LR raymarch + the upscale composite.
     void render_terrain_raymarch_lr(VkCommandBuffer cmd);
-    void render_terrain_raymarch_compose(VkCommandBuffer cmd);
+    void render_terrain_raymarch_compose(VkCommandBuffer cmd, bool resolve = false);      // resolve: the temporal upscaler's pass (terrain_rm_resolve.frag)
     VkShaderModule depth_frag_module_ = VK_NULL_HANDLE;
     // Minimal vertex shader bound to the depth-prepass pipeline.
     // Replaces cube.vert in that pipeline so the prepass doesn't pay
@@ -1275,6 +1275,7 @@ private:
         bool          present = false;                 // has a current state: can be hit, whether drawn or not
         glm::vec3     foot_last{1e9f};                 // footprints in the snow
         bool          seated = false;                  // at the wheel of a car this frame (nothing in the hands)
+        int           ride = 0;                        // riding beside the driver of car (ride - 1); 0 = not
         bool          corpse = false;                  // drawn as a body on the ground: head, no weapon
         bool          die = false;                     // killed: the body buckles where it stands, then is a ragdoll (ragdoll.cpp)
         float         dying_t = -1.0f;                 // seconds since the kill while the body still stands (-1: alive)
@@ -2030,6 +2031,12 @@ private:
     void      jeep_feed_world();
     bool      jeep_use();
     bool      jeep_driving() const;
+    // Riding beside the driver of a car another player drives (jeep.cpp): which car, -1 = none.
+    int       jeep_ride_ = -1;
+    void      jeep_ride_place();
+    bool      jeep_passenger_seat(int car, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;
+    void      hw_lamps_near(glm::vec3 eye, float reach, std::vector<glm::vec3>& out) const;      // the road's street lamps (highway_furniture.cpp)
+    void      hw_pole_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const;
     void      jeep_grass_press(glm::vec4 out[4]) const;     // the cars the grass lies down under (scene UBO car_press)
     // Multiplayer: the cars this machine simulates are told to the others; theirs are drawn from what they tell (jeep.cpp).
     void      jeep_net_send(float dt);

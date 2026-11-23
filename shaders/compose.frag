@@ -385,6 +385,7 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
         float haz = 0.0;
         if (dot(dir.xz, dir.xz) > 1e-8 && dot(hs.xz, hs.xz) > 1e-8)
             haz = acos(clamp(dot(normalize(dir.xz), normalize(hs.xz)), -1.0, 1.0));
+        haz = max(haz, 0.70);            // (as ground_haze.glsl: not the glow round the sun)
         hazed = textureLod(u_atmo_sky, skyview_uv(0.03, haz), 0.0).rgb * atmo_sun_illum();
     }
     float tm = t * 1000.0 * min(1.0, 2.5 / max(alt, 0.001));         // the part of the ray in the hazy air near the ground

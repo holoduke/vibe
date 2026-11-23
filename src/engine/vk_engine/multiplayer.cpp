@@ -85,7 +85,9 @@ void VulkanEngine::mp_update(float dt) {
     ls.flags = uint8_t((player_.on_ground ? net::kFlagGround : 0) | (player_swimming_ ? net::kFlagSwim : 0) | (flashlight_on_ ? net::kFlagTorch : 0) |
                        (body_reload_left_ > 0.0f ? net::kFlagReload : 0) | (body_aim_ ? net::kFlagAim : 0) | (jumped ? net::kFlagTeleport : 0));
     ls.health = uint8_t(glm::clamp(mp_->health, 0.0f, 100.0f));
-    ls.weapon = uint8_t(weapon_);
+    // (the two low bits: what is held. Above them: the car this player rides in beside its
+    //  driver, + 1 - so the others seat them there. No room of its own in the packed state.)
+    ls.weapon = uint8_t((weapon_ & 3) | ((jeep_ride_ >= 0 ? jeep_ride_ + 1 : 0) << 2));
     // The movement keys: what this player wants, so others can predict starts, stops and turns as the controller will make them.
     ls.move = net::move_bits(last_pin_);
     ls.shot_seq = uint16_t(body_shot_seq_);
@@ -179,6 +181,8 @@ void VulkanEngine::mp_update(float dt) {
             mp_feed(net_->name_of(p.id) + " joined");
         }
         av->st = p.state;
+        av->ride = av->st.weapon >> 2;
+        av->st.weapon &= 3;
         av->teleported = av->teleported || p.teleported;
     }
 
@@ -234,7 +238,8 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         // driver and the car cannot come apart; what is sent as this player's position while
         // driving is their camera, behind the car, and is not used.
         a.seated = false;
-        if (glm::mat4 hip; !dying && jeep_seat_of(a.id, hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs)) {
+        if (glm::mat4 hip; !dying && (jeep_seat_of(a.id, hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs) ||
+                                     (a.ride > 0 && jeep_passenger_seat(a.ride - 1, hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs)))) {
             const anim::IAnimationRuntime& art = *anim_set_.runtime;
             const int hj = art.rig()[anim::Role::Hips];
             const glm::vec3 rest = hj >= 0 ? art.skeleton().rest_pos[size_t(hj)] : glm::vec3(0.0f, 0.95f, 0.0f);

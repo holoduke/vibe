@@ -28,6 +28,13 @@ vec3 ground_haze_air(vec3 rd, vec3 sun_dir) {
         float az = 0.0;
         if (dot(rd.xz, rd.xz) > 1e-8 && dot(sun_dir.xz, sun_dir.xz) > 1e-8)
             az = acos(clamp(dot(normalize(rd.xz), normalize(sun_dir.xz)), -1.0, 1.0));
+        // Not the glow round the sun itself. That glow is light scattered in the air in FRONT
+        // of the sun - and a mountain that stands between the eye and a low sun has the sun
+        // behind it: the air on this side of it lies in its shadow. With the sky's colour taken
+        // straight toward the sun, an evening mountain was washed orange as if the sun shone
+        // through it. So the haze on things takes the sky no nearer than 40 degrees round from
+        // the sun: the glow stays in the sky, above and beside the mountain.
+        az = max(az, 0.70);
         // (the LUT's own mapping, atmosphere.glsl skyview_uv: x = angle from the sun round the
         //  horizon, y = elevation with the horizon stretched)
         float v = elev / 1.5707963;

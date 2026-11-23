@@ -276,7 +276,7 @@ void VulkanEngine::render_terrain_vrs_rate(VkCommandBuffer cmd) {
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
-void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd) {
+void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd, bool resolve) {
     // Fullscreen-tri compose pass — sits at the START of the main
     // world color pass. Samples LR raymarch outputs and writes
     // upscaled color/motion + gl_FragDepth. The pipeline's depth_test
@@ -284,7 +284,7 @@ void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd) {
     // afterwards by the rest of render_world() correctly occlude the
     // terrain where they're closer.
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                       tr_->compose_pipeline);
+                       resolve ? tr_->resolve_pipeline : tr_->compose_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                              pipeline_layout_, 0, 1, &scene_desc_set_,
                              0, nullptr);
@@ -299,8 +299,8 @@ void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd) {
                          0.0f);
     // The "temporal" strategy: where this frame's picture and last frame's are offset to (uv),
     // which of the two targets is this frame's, and whether last frame's can be used.
-    pc.emissive = glm::vec4(tr_->lr_jit, tr_->lr_jit_prev);
-    pc.tex_params = glm::vec4(tr_->lrb_color_view ? 1.0f : 0.0f, tr_->lr_cur_b ? 1.0f : 0.0f,
+    pc.emissive = glm::vec4(tr_->lr_jit, tr_->lr_phase);      // (zw: the temporal upscaler's sample offset in the still picture)
+    pc.tex_params = glm::vec4((tr_->lrb_color_view && tr_->resolve_pipeline) ? 1.0f : 0.0f, tr_->lr_cur_b ? 1.0f : 0.0f,
                               (tr_->lr_hist_ok && prev_view_proj_valid_) ? 1.0f : 0.0f, 0.0f);
     vkCmdPushConstants(cmd, pipeline_layout_,
                        kPushConstantStages,

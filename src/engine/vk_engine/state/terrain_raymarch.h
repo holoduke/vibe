@@ -39,6 +39,7 @@ struct VulkanEngine::TerrainRaymarchState {
     bool            lr_hist_ok      = false;        // last frame's picture is there to be used
     uint64_t        lr_frame        = ~uint64_t(0); // the frame the low-resolution terrain was last drawn in
     glm::vec2       lr_jit{0.0f}, lr_jit_prev{0.0f};   // the offsets (in uv) of this frame's picture and last frame's
+    glm::vec2       lr_phase{0.0f};                 // the temporal upscaler: this frame's sample offset in the STILL picture (uv), without the camera's sub-pixel offset
     VkSampler       lr_sampler      = VK_NULL_HANDLE;
     // NEAREST sampler dedicated to u_lr_depth (binding 11). Bilinear on
     // depth values bleeds terrain↔sky across silhouettes — at low
@@ -71,6 +72,11 @@ struct VulkanEngine::TerrainRaymarchState {
     // upscaled color/motion + gl_FragDepth into scene_color/depth with
     // depth-test enabled (so closer rasterised geometry survives).
     VkPipeline      compose_pipeline     = VK_NULL_HANDLE;
+    // The terrain's temporal upscaler (terrain_rm_resolve.frag): with rt_.terrain_rm_temporal the
+    // lrb_color_* / lrb_depth_* images above are its two full-resolution pictures (RGBA16F,
+    // written in turn - lr_cur_b: this frame's is the second), not low-resolution targets.
+    VkPipeline      resolve_pipeline     = VK_NULL_HANDLE;
+    VkShaderModule  resolve_frag_module  = VK_NULL_HANDLE;
     VkShaderModule  compose_frag_module  = VK_NULL_HANDLE;
 };
 

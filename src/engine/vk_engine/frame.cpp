@@ -595,8 +595,19 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         tr_->lr_frame = fn;
         tr_->lr_cur_b = tb && (fn & 1) != 0;
         tr_->lr_jit_prev = tr_->lr_jit;
-        tr_->lr_jit = tb ? glm::vec2(0.25f / float(tr_->lr_extent.width), 0.25f / float(tr_->lr_extent.height)) * (tr_->lr_cur_b ? 1.0f : -1.0f)
-                         : glm::vec2(0.0f);
+        // (the temporal upscaler: the low-resolution picture offset by a quarter of its pixel
+        //  to four places in turn - at half size, the four full-resolution pixels of each of
+        //  its own. lr_cur_b: which of the two full-resolution terrain pictures is this frame's.)
+        static const glm::vec2 kPhase[4] = { { -1.0f, -1.0f }, { 1.0f, 1.0f }, { 1.0f, -1.0f }, { -1.0f, 1.0f } };
+        // The terrain's full-resolution picture is kept in the STILL picture's pixels: the
+        // main upscaler (DLSS, FSR) moves the camera by part of a pixel every frame, and a
+        // history that followed it was sampled between its pixels again every frame - blurred
+        // a little more each time, so nothing was gained. So the low-resolution terrain takes
+        // that offset out again (the projection's offset j shows, at uv, the scene at uv + j / 2)
+        // and adds its own four places: lr_phase. The compose pass reads the kept picture
+        // where its (moved) pixel lies in the still one.
+        tr_->lr_phase = tb ? glm::vec2(0.25f / float(tr_->lr_extent.width), 0.25f / float(tr_->lr_extent.height)) * kPhase[fn & 3u] : glm::vec2(0.0f);
+        tr_->lr_jit = tb ? tr_->lr_phase - 0.5f * current_frame_view_.jitter : glm::vec2(0.0f);
         // Under a temporal upscaler (DLSS, FSR, TAA) the camera's sub-pixel offset covers one
         // pixel of the main picture over its sequence - of this smaller picture that is only a
         // part of a pixel (a quarter of its area at 50 %), so the upscaler kept seeing the same
@@ -610,10 +621,10 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
             // (the projection's offset j shows, at uv, the scene at uv + j / 2)
             tr_->lr_jit = 0.5f * current_frame_view_.jitter * (stretch - 1.0f);
         }
-        const VkImage     lr_ci = tr_->lr_cur_b ? tr_->lrb_color_image : tr_->lr_color_image;
-        const VkImageView lr_cv = tr_->lr_cur_b ? tr_->lrb_color_view  : tr_->lr_color_view;
-        const VkImage     lr_di = tr_->lr_cur_b ? tr_->lrb_depth_image : tr_->lr_depth_image;
-        const VkImageView lr_dv = tr_->lr_cur_b ? tr_->lrb_depth_view  : tr_->lr_depth_view;
+        const VkImage     lr_ci = tr_->lr_color_image;
+        const VkImageView lr_cv = tr_->lr_color_view;
+        const VkImage     lr_di = tr_->lr_depth_image;
+        const VkImageView lr_dv = tr_->lr_depth_view;
         vkinit::transition_image(frame.command_buffer, lr_ci,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -700,6 +711,39 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
                                         VK_IMAGE_ASPECT_DEPTH_BIT);
     }
     prof_mark(frame.command_buffer, "terrain_raymarch_lr");
+
+    // ---------- Pass 0.55: the terrain's temporal upscaler ----------
+    // (terrain_rm_resolve.frag: this frame's low-resolution terrain and the full-resolution
+    //  terrain picture of the frame before, into this frame's - which the compose pass in the
+    //  world pass then takes its colour from.)
+    if (tr_use_lowres() && tr_->lrb_color_view && tr_->lrb_depth_view && tr_->resolve_pipeline &&
+        (terrain_raymarch_pipeline_ || terrain_raymarch_lite_lr_pipeline_)) {
+        VkCommandBuffer c = frame.command_buffer;
+        const VkImage     h_img  = tr_->lr_cur_b ? tr_->lrb_depth_image : tr_->lrb_color_image;
+        const VkImageView h_view = tr_->lr_cur_b ? tr_->lrb_depth_view  : tr_->lrb_color_view;
+        vkinit::transition_image(c, h_img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkClearValue zc{};
+        VkRenderingAttachmentInfo h_att = vkinit::color_attachment_info(h_view, &zc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingInfo h_ri{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr, .flags = 0,
+            .renderArea = { {0, 0}, render_extent_ },
+            .layerCount = 1, .viewMask = 0,
+            .colorAttachmentCount = 1, .pColorAttachments = &h_att,
+            .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
+        };
+        vkCmdBeginRendering(c, &h_ri);
+        VkViewport hvp{};
+        hvp.width = float(render_extent_.width); hvp.height = float(render_extent_.height);
+        hvp.minDepth = 0.0f; hvp.maxDepth = 1.0f;
+        vkCmdSetViewport(c, 0, 1, &hvp);
+        VkRect2D hsc{ {0, 0}, render_extent_ };
+        vkCmdSetScissor(c, 0, 1, &hsc);
+        render_terrain_raymarch_compose(c, true);
+        vkCmdEndRendering(c);
+        vkinit::transition_image(c, h_img, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        prof_mark(c, "terrain_resolve");
+    }
 
     // ---------- Pass 0.6: the terrain's low-resolution march ("march pre-pass") ----------
     // One ray per block of pixels finds how far it can go before the ground comes near;

@@ -54,6 +54,10 @@ struct VulkanEngine::JeepState {
     float puff_acc = 0.0f;
     float test_t = 0.0f;
     float tc = 1.0f;                   // traction control: the share of the throttle let through
+    // Turbo boost (Sprint, while on the throttle): a tank of 3.2 s of extra push. It fills again by
+    // itself once the boost has been off for a moment; run dry, it has to come back to a quarter first.
+    float turbo = 1.0f, turbo_idle = 0.0f;
+    bool  turbo_dry = false, boosting = false;
     // Lights: head lights on / off (L), brake lights by the pedal. Where they are (the car's
     // frame), and which drawn parts are lamps (1 head, 2 tail).
     bool      lights_on = false, prev_l = false, prev_mm = false;
@@ -61,7 +65,7 @@ struct VulkanEngine::JeepState {
     glm::vec3 head[2]{ { -0.4f, 0.85f, -1.8f }, { 0.4f, 0.85f, -1.8f } }, tail[2]{ { -0.6f, 0.6f, 1.8f }, { 0.6f, 0.6f, 1.8f } };
     std::vector<uint8_t> kind;
     int       cam_mode = 1;            // the view: 0 near, 1 medium, 2 far (middle mouse button)
-    float     cam_h = 1.55f;
+    float     cam_h = 1.45f;
     // The driver: where his hips are (the car's frame), how far his legs are stretched
     // (0 an upright seat .. 1), and the steering wheel's rim radius.
     glm::vec3 hip{-0.4f, 0.76f, 0.42f};
@@ -84,7 +88,7 @@ struct VulkanEngine::JeepState {
     float     steer = 0.0f, steer_wheel = 0.0f;
     float     upside_t = 0.0f;
     // The camera.
-    float     cam_dist = 6.4f, look_idle = 10.0f;
+    float     cam_dist = 4.6f, look_idle = 10.0f;
     float     cam_yaw = 0.0f, orbit_yaw = 0.0f, orbit_pitch = 0.0f;      // the view: behind the jeep, + where the driver looks
     bool      look_held = false;
     glm::vec3 cam_pos{0.0f};
@@ -454,6 +458,30 @@ void VulkanEngine::jeep_feed_world() {
 // Use at the jeep: in, or out. True when the key was taken.
 bool VulkanEngine::jeep_use() {
     if (!jeep_ || !jeep_->spawned) return false;
+    // Riding beside another player's driver: Use gets out, on the passenger's side.
+    if (jeep_ride_ >= 0) {
+        if (size_t(jeep_ride_) < jeep_all_.size()) {
+            const JeepState& R = *jeep_all_[size_t(jeep_ride_)];
+            glm::vec3 out = glm::vec3(R.st.body * glm::vec4(R.exit_right, 1.0f));
+            out.y = std::max(out.y, sample_terrain_height(out.x, out.z)) + 1.0f;
+            player_.position = out;
+            player_.velocity = glm::vec3(0.0f);
+            prev_player_position_ = player_.position;
+        }
+        jeep_ride_ = -1;
+        return true;
+    }
+    // A car another player is driving, within reach: in beside them.
+    if (!jeep_->driving) {
+        int best_i = -1; float bd = 3.6f;
+        for (size_t i = 0; i < jeep_all_.size(); ++i) {
+            const JeepState* c = jeep_all_[i];
+            if (!c->posed || !(c->net_owner && c->net_driven)) continue;
+            const float dd = glm::distance(player_.eye_position(), glm::vec3(c->st.body[3]) + glm::vec3(0.0f, 1.0f, 0.0f));
+            if (dd < bd) { bd = dd; best_i = int(i); }
+        }
+        if (best_i >= 0) { jeep_ride_ = best_i; fly_mode_ = false; return true; }
+    }
     if (!jeep_->driving) {
         // The nearest car within reach. One that is not the simulated one becomes it; the
         // other stays where it stands.
@@ -509,6 +537,14 @@ bool VulkanEngine::jeep_use() {
 // Before the physics ticks: the driver's controls to the vehicle.
 void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
     if (!jeep_ || !jeep_->loaded || !physics_) return;
+    // (VIBE_TEST_RIDE=1: gets in beside the first driver another machine tells of - tests)
+    if (static const bool tr = std::getenv("VIBE_TEST_RIDE") != nullptr; tr && jeep_ride_ < 0)
+        for (size_t i = 0; i < jeep_all_.size(); ++i)
+            if (jeep_all_[i]->posed && jeep_all_[i]->net_owner && jeep_all_[i]->net_driven) { jeep_ride_ = int(i); break; }
+    if (jeep_ride_ >= 0) {                  // (a passenger: looks round and may shoot, does not walk)
+        in.fwd = in.back = in.left = in.right = in.jump = in.sprint = in.crawl = false;
+        in.move_x = in.move_y = 0.0f;
+    }
     JeepState& J = *jeep_;
     if (!J.posed) {
         // Parked outside the pavilion: on the concrete in front of its terrace, in a row.
@@ -626,11 +662,21 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
     // turns LESS - or, on a tall car, trips it over. (A stick or a wheel would need none of
     // this; a key is all or nothing.)
     const float wheelbase = std::abs(J.tune.wheel_pos[2].z - J.tune.wheel_pos[0].z);
-    const float a_grip = 9.81f * J.tune.grip * 1.05f + J.tune.downforce * speed * speed / std::max(J.tune.mass, 1.0f);
-    const float lock = std::atan(wheelbase * a_grip / std::max(speed * speed, 1.0f)) + 0.085f;
-    const float limit = glm::clamp(lock / std::max(J.tune.max_steer, 0.1f), 0.06f, 1.0f);
+    // (2026-11-23: a held key asks for four fifths of what the tyres can give, not all of it
+    //  and a little more - at speed every touch of the key put the front tyres at their
+    //  limit and the car slid at once. Holding the key for over half a second goes on to the
+    //  full grip: a long hold is a driver who means it. And the wheel turns more slowly the
+    //  faster the car goes - half the rate at 90 km/h - and comes back to the middle twice as
+    //  fast as it goes out, so letting go of the key straightens the car.)
+    static float held = 0.0f;
+    held = std::abs(steer_in) > 0.5f ? held + dt : 0.0f;
+    const float ask = glm::mix(0.80f, 1.02f, glm::smoothstep(0.55f, 1.4f, held));
+    const float a_grip = (9.81f * J.tune.grip + J.tune.downforce * speed * speed / std::max(J.tune.mass, 1.0f)) * ask;
+    const float lock = std::atan(wheelbase * a_grip / std::max(speed * speed, 1.0f)) + glm::mix(0.035f, 0.085f, glm::smoothstep(0.55f, 1.4f, held));
+    const float limit = glm::clamp(lock / std::max(J.tune.max_steer, 0.1f), 0.05f, 1.0f);
     const float want = steer_in * limit;
-    J.steer += glm::clamp(want - J.steer, -dt * 2.6f, dt * 2.6f);
+    const float rate = 2.6f / (1.0f + speed / 25.0f) * (std::abs(want) < std::abs(J.steer) ? 2.0f : 1.0f);
+    J.steer += glm::clamp(want - J.steer, -dt * rate, dt * rate);
     // Traction control, as every such car has: when a driven wheel spins (its slip past where
     // a tyre grips best) the throttle is eased until it bites again. Without it full throttle
     // in a low gear spun the rear wheels, and a spinning tyre holds nothing sideways: the
@@ -642,6 +688,27 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
         const float cut = (hand > 0.5f || speed < 4.0f) ? 1.0f : glm::clamp(1.0f - (slip - 0.22f) * 2.2f, 0.40f, 1.0f);      // (from a standstill the wheels may spin: that is how it gets away)
         J.tc += (cut - J.tc) * std::min(1.0f, dt * (cut < J.tc ? 30.0f : 6.0f));
         if (forward > 0.0f) forward *= J.tc;
+    }
+    {   // The turbo boost: a push along the car while Sprint is held and the throttle is down.
+        int down = 0;
+        for (int w = 0; w < 4; ++w) down += J.st.wheel_contact[w] ? 1 : 0;
+        static const bool kTestTurbo = std::getenv("VIBE_TEST_JEEP_TURBO") != nullptr;      // (tests: held all the time)
+        const bool want_boost = (in.sprint || kTestTurbo) && throttle > 0.05f && !J.turbo_dry && J.turbo > 0.0f;
+        J.boosting = want_boost;
+        if (want_boost) {
+            J.turbo = std::max(0.0f, J.turbo - dt / 3.2f);
+            J.turbo_idle = 0.0f;
+            if (J.turbo <= 0.0f) J.turbo_dry = true;
+            if (down >= 2) {
+                const glm::vec3 com(J.st.body * glm::vec4(0.0f, J.tune.com_height, 0.0f, 1.0f));
+                physics_->vehicle_impulse(fwd * (J.tune.mass * 7.5f * dt), com);
+            }
+            forward = std::max(forward, throttle);      // (no traction control in the way)
+        } else {
+            J.turbo_idle += dt;
+            if (J.turbo_idle > 0.8f) J.turbo = std::min(1.0f, J.turbo + dt / 9.0f);
+            if (J.turbo >= 0.25f) J.turbo_dry = false;
+        }
     }
     physics_->vehicle_input(forward, J.steer, brake, hand);
     J.brake_in = std::max(brake, hand);
@@ -696,6 +763,7 @@ void VulkanEngine::jeep_place(JeepState& J, const PhysicsWorld::VehicleState& pr
 
 // After the physics ticks: where everything is now - the parts, the driver, the camera.
 void VulkanEngine::jeep_after_sim(float dt) {
+    jeep_ride_place();
     if (!jeep_ || !jeep_->spawned || !physics_) return;
     JeepState& J = *jeep_;
     J.body_prev = J.st.body;
@@ -774,10 +842,11 @@ void VulkanEngine::jeep_after_sim(float dt) {
     player_.pitch = kPitch + J.orbit_pitch;
     last_yaw = player_.yaw; last_pitch = player_.pitch;
     const glm::vec3 look(std::sin(player_.yaw) * std::cos(player_.pitch), std::sin(player_.pitch), -std::cos(player_.yaw) * std::cos(player_.pitch));
-    static const float kDist[3] = { 4.3f, 6.4f, 10.5f }, kHigh[3] = { 1.35f, 1.55f, 1.95f };
+    // (2026-11-23: nearer than the first 4.3 / 6.4 / 10.5; 2.7 / 3.3 / 4.0 was too near)
+    static const float kDist[3] = { 3.6f, 4.6f, 5.8f }, kHigh[3] = { 1.30f, 1.45f, 1.65f };
     if (!std::getenv("VIBE_TEST_JEEP_ORBIT")) J.cam_dist += (kDist[J.cam_mode] - J.cam_dist) * std::min(1.0f, dt * 6.0f);
     J.cam_h += (kHigh[J.cam_mode] - J.cam_h) * std::min(1.0f, dt * 6.0f);
-    const float dist = J.cam_dist + std::min(speed * 0.05f, 2.0f);                  // (it drops back a little at speed)
+    const float dist = J.cam_dist + std::min(speed * 0.03f, 1.2f);                  // (it drops back a little at speed)
     const glm::vec3 pivot = pos + glm::vec3(0.0f, J.cam_h, 0.0f);
     glm::vec3 want = pivot - look * dist;
     // (not under the ground, and not through a hill between it and the jeep)
@@ -806,15 +875,62 @@ void VulkanEngine::jeep_hud() {
     const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float s = ds.y / 1080.0f;
     if (J.driving) {
+        // The speedometer: a dial with a needle, the speed in figures, the gear, the engine's
+        // revs as a thin inner arc, and round the outside the turbo's tank.
         char buf[64];
         const float kmh = glm::length(J.st.velocity) * 3.6f;
-        std::snprintf(buf, sizeof buf, "%3.0f km/h", double(kmh));
-        dl->AddText(fs, 44.0f * s, ImVec2(ds.x - 300.0f * s, ds.y - 150.0f * s), IM_COL32(255, 255, 255, 235), buf);
-        const char* gears[] = { "R", "N", "1", "2", "3", "4", "5" };
-        std::snprintf(buf, sizeof buf, "%s   %4.0f rpm", gears[std::clamp(J.st.gear + 1, 0, 6)], double(J.st.rpm));
-        dl->AddText(fs, 24.0f * s, ImVec2(ds.x - 300.0f * s, ds.y - 100.0f * s), IM_COL32(255, 255, 255, 200), buf);
-        const std::string k = bind_label(Action::Use) + "  get out   L  lights   MMB  view";
-        dl->AddText(fs, 20.0f * s, ImVec2(ds.x - 300.0f * s, ds.y - 68.0f * s), IM_COL32(255, 255, 255, 150), k.c_str());
+        const ImVec2 c(ds.x - 175.0f * s, ds.y - 310.0f * s);       // (above the weapon panel)
+        const float R = 118.0f * s;
+        const float a0 = 0.75f * 3.14159265f, a1 = 2.25f * 3.14159265f;      // (270 degrees, open at the bottom)
+        const float vmax = J.tune.engine_max_rpm > 7000.0f ? 320.0f : 240.0f;
+        auto arc = [&](float r, float f0, float f1, ImU32 col, float w) {
+            if (f1 <= f0) return;
+            dl->PathArcTo(c, r, a0 + (a1 - a0) * f0, a0 + (a1 - a0) * f1, 48);
+            dl->PathStroke(col, 0, w);
+        };
+        dl->AddCircleFilled(c, R + 22.0f * s, IM_COL32(8, 11, 15, 170), 64);
+        arc(R, 0.0f, 1.0f, IM_COL32(255, 255, 255, 60), 3.0f * s);
+        for (int v = 0; v <= int(vmax); v += 20) {
+            const float a = a0 + (a1 - a0) * float(v) / vmax;
+            const ImVec2 d(std::cos(a), std::sin(a));
+            const bool big = v % 40 == 0;
+            dl->AddLine(ImVec2(c.x + d.x * (R - (big ? 13.0f : 7.0f) * s), c.y + d.y * (R - (big ? 13.0f : 7.0f) * s)),
+                        ImVec2(c.x + d.x * R, c.y + d.y * R), IM_COL32(255, 255, 255, big ? 230 : 130), (big ? 2.5f : 1.5f) * s);
+            if (big) {
+                std::snprintf(buf, sizeof buf, "%d", v);
+                const ImVec2 ts = fs->CalcTextSizeA(15.0f * s, 1e9f, 0.0f, buf);
+                dl->AddText(fs, 15.0f * s, ImVec2(c.x + d.x * (R - 30.0f * s) - ts.x * 0.5f, c.y + d.y * (R - 30.0f * s) - ts.y * 0.5f), IM_COL32(255, 255, 255, 190), buf);
+            }
+        }
+        // revs (inner arc, red near the limit)
+        const float rv = glm::clamp(J.st.rpm / std::max(J.tune.engine_max_rpm, 1.0f), 0.0f, 1.0f);
+        arc(R - 48.0f * s, 0.0f, 1.0f, IM_COL32(255, 255, 255, 30), 4.0f * s);
+        arc(R - 48.0f * s, 0.0f, rv, rv > 0.9f ? IM_COL32(255, 80, 60, 230) : IM_COL32(255, 190, 90, 210), 4.0f * s);
+        // the turbo's tank (outer arc): blue, orange while it is in use, grey while it has run dry
+        arc(R + 13.0f * s, 0.0f, 1.0f, IM_COL32(255, 255, 255, 35), 7.0f * s);
+        arc(R + 13.0f * s, 0.0f, J.turbo, J.turbo_dry ? IM_COL32(150, 150, 150, 200) : (J.boosting ? IM_COL32(255, 170, 40, 255) : IM_COL32(70, 170, 255, 235)), 7.0f * s);
+        // the needle
+        {
+            const float a = a0 + (a1 - a0) * glm::clamp(kmh / vmax, 0.0f, 1.0f);
+            const ImVec2 d(std::cos(a), std::sin(a));
+            dl->AddLine(ImVec2(c.x - d.x * 14.0f * s, c.y - d.y * 14.0f * s), ImVec2(c.x + d.x * (R - 16.0f * s), c.y + d.y * (R - 16.0f * s)), IM_COL32(255, 70, 50, 255), 3.5f * s);
+            dl->AddCircleFilled(c, 7.0f * s, IM_COL32(230, 230, 230, 255), 20);
+        }
+        std::snprintf(buf, sizeof buf, "%.0f", double(kmh));
+        ImVec2 ts = fs->CalcTextSizeA(40.0f * s, 1e9f, 0.0f, buf);
+        dl->AddText(fs, 40.0f * s, ImVec2(c.x - ts.x * 0.5f, c.y + 26.0f * s), IM_COL32(255, 255, 255, 245), buf);
+        ts = fs->CalcTextSizeA(15.0f * s, 1e9f, 0.0f, "km/h");
+        dl->AddText(fs, 15.0f * s, ImVec2(c.x - ts.x * 0.5f, c.y + 66.0f * s), IM_COL32(255, 255, 255, 150), "km/h");
+        const char* gears[] = { "R", "N", "1", "2", "3", "4", "5", "6" };
+        const char* g = gears[std::clamp(J.st.gear + 1, 0, 7)];
+        ts = fs->CalcTextSizeA(26.0f * s, 1e9f, 0.0f, g);
+        dl->AddText(fs, 26.0f * s, ImVec2(c.x - ts.x * 0.5f, c.y - 62.0f * s), IM_COL32(255, 220, 140, 235), g);
+        const char* tl = J.turbo_dry ? "TURBO  recharging" : "TURBO";
+        ts = fs->CalcTextSizeA(14.0f * s, 1e9f, 0.0f, tl);
+        dl->AddText(fs, 14.0f * s, ImVec2(c.x - ts.x * 0.5f, c.y + R + 26.0f * s), J.boosting ? IM_COL32(255, 180, 60, 255) : IM_COL32(120, 190, 255, 220), tl);
+        const std::string k = bind_label(Action::Use) + " out   Shift turbo   L lights   MMB view";
+        ts = fs->CalcTextSizeA(16.0f * s, 1e9f, 0.0f, k.c_str());
+        dl->AddText(fs, 15.0f * s, ImVec2(c.x - ts.x * 0.47f, c.y + R + 46.0f * s), IM_COL32(255, 255, 255, 140), k.c_str());
         return;
     }
     if (!globe::current().home) return;
@@ -856,7 +972,11 @@ void VulkanEngine::jeep_marks(JeepState& J, float dt) {
         const float v_lat = std::abs(glm::dot(v, axle)), v_long = std::abs(glm::dot(v, fw));
         const float slip = std::abs(std::abs(J.st.wheel_spin[w]) * J.wheel_radius - v_long);
         float k = 0.0f;
-        if (J.st.wheel_contact[w]) k = std::max(glm::smoothstep(1.6f, 5.0f, v_lat), glm::smoothstep(2.2f, 7.0f, slip));
+        // (sideways: by the tyre's slip ANGLE - past where it grips best, 8 degrees - and not
+        //  by sideways speed alone: at 100 km/h a tyre cornering well inside its grip already
+        //  moves 2 - 3 m/s sideways, and every turn of the wheel at speed drew marks and smoke)
+        const float ang = std::atan2(v_lat, std::max(v_long, 2.5f));
+        if (J.st.wheel_contact[w]) k = std::max(glm::smoothstep(0.19f, 0.34f, ang) * glm::smoothstep(1.2f, 2.5f, v_lat), glm::smoothstep(2.2f, 7.0f, slip));
         const glm::vec3 g = c - up * (J.wheel_radius - 0.035f);
         const bool hard = highway::distance(g.x, g.z) < 5.7f || g.y > world_ground_height(g.x, g.z, rt_.water_level, 9) + 0.15f;
         auto& M = J.marks[w];
@@ -929,6 +1049,7 @@ void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puff
             const bool braking = c->braking();
             for (int s = 0; s < 2; ++s) {
                 if (c->lights_on) flare(glm::vec3(B * glm::vec4(c->head[s], 1.0f)) + f * 0.05f, f, 0.42f, glm::vec3(1.0f, 0.95f, 0.85f) * 2.4f);
+                if (c->boosting) flare(glm::vec3(B * glm::vec4(c->tail[s], 1.0f)) - f * 0.08f, -f, 0.36f, glm::vec3(0.35f, 0.65f, 1.0f) * 3.2f);
                 if (c->lights_on || braking)
                     flare(glm::vec3(B * glm::vec4(c->tail[s], 1.0f)) - f * 0.05f, -f, braking ? 0.30f : 0.20f, glm::vec3(1.0f, 0.06f, 0.04f) * (braking ? 2.6f : 0.9f));
             }
@@ -1102,6 +1223,32 @@ void VulkanEngine::jeep_net_receive(float dt) {
             }
         }
     }
+}
+
+// The seat beside the driver: the driver's, mirrored to the other side. The hands lie on the knees.
+bool VulkanEngine::jeep_passenger_seat(int car, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const {
+    if (car < 0 || size_t(car) >= jeep_all_.size() || !jeep_all_[size_t(car)]->posed) return false;
+    const JeepState& J = *jeep_all_[size_t(car)];
+    const glm::vec3 seat(-J.hip.x, J.hip.y, J.hip.z);
+    hip = J.st.body * glm::translate(glm::mat4(1.0f), seat);
+    hand_l = glm::vec3(J.st.body * glm::vec4(seat + glm::vec3(-0.17f, 0.14f, -0.36f), 1.0f));
+    hand_r = glm::vec3(J.st.body * glm::vec4(seat + glm::vec3( 0.17f, 0.14f, -0.36f), 1.0f));
+    legs = J.legs;
+    return true;
+}
+
+// The local player riding beside another player's driver: carried with the car, eye at the
+// seat's head height. (Called after the simulation, so the walk's own step - gravity - does
+// not show: the place is the seat's, every frame.)
+void VulkanEngine::jeep_ride_place() {
+    if (jeep_ride_ < 0) return;
+    if (size_t(jeep_ride_) >= jeep_all_.size() || !jeep_all_[size_t(jeep_ride_)]->posed) { jeep_ride_ = -1; return; }
+    const JeepState& J = *jeep_all_[size_t(jeep_ride_)];
+    const glm::vec3 eye(J.st.body * glm::vec4(-J.hip.x, J.hip.y + 0.74f, J.hip.z, 1.0f));
+    player_.position = eye - (player_.eye_position() - player_.position);
+    player_.velocity = J.st.velocity;
+    player_.on_ground = true;
+    prev_player_position_ = player_.position;
 }
 
 // The seat of the car a player drives (another player's: multiplayer.cpp poses them in it).
