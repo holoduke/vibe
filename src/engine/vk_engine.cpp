@@ -387,6 +387,11 @@ void VulkanEngine::dump_device_fault() {
 }
 
 void VulkanEngine::run(const RunOptions& opts) {
+    {   // a lost device anywhere (not only in the frame's try block below): dump the GPU's fault
+        static VulkanEngine* self = nullptr;
+        self = this;
+        g_device_lost_hook = [] { if (self) { self->device_lost_ = true; self->dump_device_fault(); } };
+    }
     opts_ = opts;
     if (opts_.deferred >= 0) deferred_lighting_active_ = (opts_.deferred != 0);
     log::infof("run(): max_frames=%d screenshot='%s' after=%d",

@@ -193,6 +193,19 @@ namespace vibe {
 // a line from the first one ("base") says what that thing costs in this view. One run does
 // what took an hour of restarts. (Run it on a COPY of the settings: VIBE_CFG.)
 void VulkanEngine::prof_sweep_tick() {
+    // VIBE_TEST_GFX_SEQ="400:4,1000:3,1600:2": at those frames, every row to that level - what the
+    // panel's "Everything" buttons do, while the game runs (resize, replant and all).
+    {
+        static const char* seq = std::getenv("VIBE_TEST_GFX_SEQ");
+        if (seq) {
+            for (const char* p = seq; *p; ) {
+                int fr = 0, lv = 0;
+                if (std::sscanf(p, "%d:%d", &fr, &lv) == 2 && uint64_t(fr) == uint64_t(frame_number_)) apply_gfx_all(lv);
+                while (*p && *p != ',') ++p;
+                if (*p == ',') ++p;
+            }
+        }
+    }
     static const char* on = std::getenv("VIBE_PROF_SWEEP");
     if (!on) return;
     using R = RtSettings;

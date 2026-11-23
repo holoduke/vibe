@@ -14,8 +14,18 @@ namespace vibe {
 // object's storage gets corrupted later (we've seen 0xDD freed-heap poison
 // in `e.what()` at the outer catch). Use the FILE/LINE-aware macro form when
 // possible so the logged line points at the caller, not at this header.
+// Called once when any checked call reports a lost device, before the throw: the engine
+// hangs its GPU fault dump here (vk_engine.cpp run), so a loss met outside the frame's own
+// try block - a rebuild started from the menu, a replant - is recorded too.
+inline void (*g_device_lost_hook)() = nullptr;
 inline void vk_check_loc(VkResult r, const char* what,
                          const char* file, int line) {
+    if (r == VK_ERROR_DEVICE_LOST && g_device_lost_hook) {
+        void (*h)() = g_device_lost_hook;
+        g_device_lost_hook = nullptr;
+        vibe::log::errorf("[vk_check] device lost in %s", what);
+        h();
+    }
     if (r != VK_SUCCESS) {
         vibe::log::errorf("[vk_check] %s failed: VkResult=%d at %s:%d",
                            what, static_cast<int>(r), file, line);
