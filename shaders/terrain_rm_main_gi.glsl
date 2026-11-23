@@ -38,6 +38,9 @@
     int N_gi = (N_gi_full > 0 && do_rt)
                 ? max(1, int(ceil(float(N_gi_full) * rt_lod_t)))
                 : 0;
+    // Under DLSS Ray Reconstruction (rt_flags.x bit 1) the seed changes every frame and the
+    // denoiser averages over time: half the rays a frame, as for the sun's shadow rays.
+    if ((scene.rt_flags.x & 2) != 0) N_gi = (N_gi + 1) / 2;
     // Same pattern as the PCSS gate: gi_indirect is multiplied by
     // scene.rt_params2.x (the GI strength slider) at line ~2313 so
     // strength=0 makes the whole loop's output zero. Bail before the

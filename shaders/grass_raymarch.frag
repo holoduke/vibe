@@ -352,8 +352,26 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
         float hmesh = terrainH_mesh(p.xz);
         float hm = p.y - hmesh;
         if (pc.emissive.x < 0.5 && hm > 3.0) return 0.5 * (hm - 2.0);
-        terrainY = hmesh + ((hm > 1.6) ? ((pc.emissive.x > 0.5) ? 0.0 : 0.30 * (1.0 - smoothstep(10.0, 26.0, ray_t)))
-                                       : grass_ground_relief(p.xz, ray_t, hmesh));
+        // The close relief (three noise look-ups) only where a blade can be. Not while the ray
+        // is above the tallest blade standing on the HIGHEST the relief can be:
+        float relief_ub = (pc.emissive.x > 0.5) ? 0.0 : 0.30 * (1.0 - smoothstep(10.0, 26.0, ray_t));
+        const float top_ub = 1.2 * clamp(pc.grass_params.w, 0.05, 3.0) * 0.36 * kGsMaxH + 0.10 + 0.3;
+        if (hm - relief_ub + 0.09 > top_ub) {
+            float above = hm - relief_ub + 0.09 - (top_ub - 0.3);
+            g_above_top = above;
+            return 0.5 * above;
+        }
+        // And not over ground that carries no grass (road, sand, rock - the mask at this place,
+        // before the gusts bend the lattice): there the ray only has to find the ground and be
+        // thrown away. The baked height without relief lies under the drawn ground, so nothing
+        // that could be seen is cut off. (A road through a meadow is half the screen: its rays
+        // paid three noises a step all the way down, for nothing.)
+        if (pc.emissive.x < 0.5 && max(abs(p.x), abs(p.z)) < kHeightmapSide * 0.5 - 1.0) {
+            vec2 mg0 = textureLod(u_grass_mask, p.xz / kHeightmapSide + vec2(0.5), 0.0).rg;
+            float e0 = mg0.r * (1.0 - smoothstep(ctx.slope_max * 0.7, ctx.slope_max * 1.2, mg0.g * 2.0));
+            if (e0 + 0.175 * scene.grass_side_lit_params.w * smoothstep(0.04, 0.30, e0) < 0.07) return 0.5 * (hm + 0.09);
+        }
+        terrainY = hmesh + grass_ground_relief(p.xz, ray_t, hmesh);
     }
 #else
     if (pc.emissive.x < 0.5) {
@@ -783,7 +801,7 @@ void main() {
         // Past 50 m blades are sub-pixel and the cone-safety overhead
         // is pure cost — extend the ramp to 2.0 by 120 m so distant
         // rays cover 3× the ground per iteration.
-        float step_f = mix(0.82, 0.95, smoothstep(15.0, 50.0, t));   // was 0.70: the blade field is close to a true distance
+        float step_f = 0.95;   // (was 0.70, then 0.82 near the camera: the blade field is close to a true distance - same picture, a tenth fewer steps)
         step_f = mix(step_f, 2.0, smoothstep(50.0, 120.0, t));
         float adv = d * step_f;
         // Above the blades the bound is the HEIGHT over their tops - for a ray that skims the
