@@ -492,8 +492,19 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
             glm::vec3 p(office_pos_.x + 15.0f - 9.0f * float(i), 0.0f, office_pos_.z + 25.0f);
             float yaw = 1.5708f;
             if (!parking_bays_.empty()) {
-                // (spread over the bays, the same every run)
-                const glm::vec4 b = parking_bays_[(3 + i * 7) % parking_bays_.size()];
+                // (spread over the bays, the same every run. Each car its own bay: with 42
+                //  bays a step of 7 came round after six cars, and the seventh and eighth
+                //  stood inside the first and second - so a taken bay is passed over)
+                size_t bay = (3 + i * 7) % parking_bays_.size();
+                for (size_t tries = 0; tries < parking_bays_.size(); ++tries) {
+                    bool taken = false;
+                    for (size_t j = 0; j < i && !taken; ++j)
+                        taken = glm::distance(glm::vec3(jeep_all_[j]->st.body[3]) * glm::vec3(1.0f, 0.0f, 1.0f),
+                                              glm::vec3(parking_bays_[bay].x, 0.0f, parking_bays_[bay].z)) < 1.0f;
+                    if (!taken) break;
+                    bay = (bay + 1) % parking_bays_.size();
+                }
+                const glm::vec4 b = parking_bays_[bay];
                 p = glm::vec3(b.x, 0.0f, b.z); yaw = b.w;
             }
             if (const char* at = std::getenv("VIBE_TEST_JEEP_AT"); at && jeep_all_[i] == jeep_)      // "<x>,<z>[,<yaw>]": somewhere else (tests)
