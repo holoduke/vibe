@@ -2924,6 +2924,12 @@ private:
     // RT scene size.
     uint32_t last_tlas_n_ = 0;
     bool resize_requested_ = false;
+    // Render targets are only rebuilt at the start of a frame (run loop), never in the middle of
+    // one: a change made from the menu rebuilt them between the frame's "ensure" step and its
+    // drawing, and the frame then read G-buffer views that no longer existed (device lost,
+    // 2026-11-23: three crashes on changing the render scale or the quality level in the menu).
+    bool in_frame_ = false;
+    bool tr_lowres_recreate_pending_ = false;
 
     RunOptions opts_{};
     bool screenshot_taken_ = false;

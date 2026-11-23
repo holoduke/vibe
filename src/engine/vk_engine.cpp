@@ -453,7 +453,10 @@ void VulkanEngine::run(const RunOptions& opts) {
 
     while (!window_->should_close()) {
         { CPU_SCOPE("poll-events"); window_->poll_events(); }
-        if (resize_requested_) recreate_swapchain();
+        in_frame_ = false;
+        if (resize_requested_) { recreate_swapchain(); tr_lowres_recreate_pending_ = false; }      // (rebuilds the low-resolution terrain targets too)
+        if (tr_lowres_recreate_pending_) { tr_lowres_recreate_pending_ = false; recreate_terrain_raymarch_lowres(); }
+        in_frame_ = true;
 
         // Frame-rate cap (see frame_pacer.h). Skipped in headless mode
         // (max_frames / screenshot) so test runs are not throttled.
@@ -636,6 +639,25 @@ void VulkanEngine::run(const RunOptions& opts) {
                 dl->AddText(p0, IM_COL32(255, 255, 255, 230), msg);
             }
             build_menu_ui();
+            // VIBE_TEST_SCALE_UI="300:0.72,600:0.5": the render scale changed at those frames from
+            // here, where the menu changes it (in the middle of a frame). With
+            // VIBE_TEST_SCALE_UI_OLD=1 the targets are rebuilt on the spot, as they were before
+            // 2026-11-23 - that loses the device (the test that the cause was found).
+            {
+                static const char* seq = std::getenv("VIBE_TEST_SCALE_UI");
+                static const bool old_way = std::getenv("VIBE_TEST_SCALE_UI_OLD") != nullptr;
+                for (const char* p = seq; p && *p; ) {
+                    int fr = 0; float sc = 0.0f;
+                    if (std::sscanf(p, "%d:%f", &fr, &sc) == 2 && uint64_t(fr) == uint64_t(frame_number_)) {
+                        rt_.render_scale = sc;
+                        if (old_way) in_frame_ = false;
+                        apply_render_scale();
+                        in_frame_ = true;
+                    }
+                    while (*p && *p != ',') ++p;
+                    if (*p == ',') ++p;
+                }
+            }
             ImGui::Render();
         }
 

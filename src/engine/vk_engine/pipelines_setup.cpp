@@ -1047,6 +1047,8 @@ void VulkanEngine::destroy_terrain_raymarch_lowres() {
 }
 
 void VulkanEngine::recreate_terrain_raymarch_lowres() {
+    // (asked for from inside a frame: done at the start of the next one - vk_engine.cpp run)
+    if (in_frame_) { tr_lowres_recreate_pending_ = true; return; }
     vkDeviceWaitIdle(device_);
     destroy_terrain_raymarch_lowres();
     init_terrain_raymarch_lowres();

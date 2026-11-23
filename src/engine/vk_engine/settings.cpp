@@ -236,6 +236,9 @@ void VulkanEngine::apply_render_scale() {
         log::infof("render_scale %.2f is below the DLSS minimum - using 0.50", rt_.render_scale);
         rt_.render_scale = 0.5f;
     }
+    // From inside a frame (the menu, a quality level): at the start of the next one - see
+    // in_frame_ in vk_engine.h.
+    if (in_frame_) { log::infof("render_scale → %.2f, targets re-allocated at the next frame", rt_.render_scale); resize_requested_ = true; return; }
     log::infof("render_scale → %.2f, re-allocating targets", rt_.render_scale);
     recreate_swapchain();
 }
