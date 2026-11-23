@@ -886,9 +886,7 @@
         float sd2 = sundotW * sundotW;
         float sd4 = sd2 * sd2;
         float sd8 = sd4 * sd4;
-        vec3 fogColW = scene.crater_info.w * mix(vec3(0.55, 0.55, 0.58),
-                           vec3(1.0, 0.7, 0.3),
-                           0.3 * sd8);
+        vec3 fogColW = ground_haze_air(rd, sunDirW);       // (ground_haze.glsl: the colour of the sky behind it)
         col_w = col_w * ext_w + fogColW * (1.0 - ext_w);
 
 #ifndef VIBE_WATER

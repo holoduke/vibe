@@ -474,6 +474,7 @@ void VulkanEngine::run(const RunOptions& opts) {
         anti_lag_mark(false);   // AMD Anti-Lag 2: input stage
 
         auto now = std::chrono::steady_clock::now();
+        frame_clock_s_ = glfwGetTime();        // (the moment this frame's time step is measured to: what the network stamps and samples with)
         float frame_dt = std::chrono::duration<float>(now - last).count();
         // Hitch diagnostics: section timings, logged for any slow frame.
         auto hz_mark = [](std::chrono::steady_clock::time_point& t) {
@@ -517,6 +518,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             }
         }
         last = now;
+        const float real_dt = std::min(frame_dt, 2.0f);
         if (frame_dt > 1.0f / 15.0f) frame_dt = 1.0f / 15.0f;
         if (frame_dt < 1e-6f)        frame_dt = 1.0f / 240.0f;
         // Headless captures (--frames N --screenshot) need bit-stable physics
@@ -524,8 +526,13 @@ void VulkanEngine::run(const RunOptions& opts) {
         // run-to-run depending on shader compile, GPU contention, etc. Pin
         // it to a fixed 60 Hz step so crate spawns + Jolt integration land
         // at the same place every time and SAD comparisons are meaningful.
-        if (opts_.max_frames > 0 || !opts_.screenshot_path.empty()) {
+        // (VIBE_TEST_REALTIME=1: the clock's time all the same - tests of what must be even in real
+        //  time: the cars' motion, the network)
+        static const bool kRealTime = std::getenv("VIBE_TEST_REALTIME") != nullptr;
+        if ((opts_.max_frames > 0 || !opts_.screenshot_path.empty()) && !kRealTime) {
             frame_dt = 1.0f / 60.0f;
+        } else if (state_ == State::Playing) {
+            sim_debt_s_ += std::max(0.0f, real_dt - frame_dt);      // (see sim_debt_s_)
         }
         last_frame_dt_ = frame_dt;
         ema_fps_ = ema_fps_ == 0.0f
@@ -580,6 +587,7 @@ void VulkanEngine::run(const RunOptions& opts) {
 
         loop_simulate(in, frame_dt);
         jeep_after_sim(frame_dt);
+        jeep_net_send(frame_dt);           // (multiplayer: the cars simulated here, as they are now)
 
         loop_upkeep(in, frame_dt);
         hz_ms[0] = hz_mark(hz_t);

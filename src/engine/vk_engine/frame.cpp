@@ -735,6 +735,35 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         prof_mark(c, "terrain_march_lo");
     }
 
+    // ---------- Pass 0.65: the ground's shading rate, from that march ----------
+    // (terrain_vrs.frag: one number per tile of pixels - 2 x 2 where all the ground in the
+    //  tile is near, every pixel elsewhere. Without the march there are no distances to go
+    //  by, and the rate image is not used: every pixel.)
+    const bool world_vrs_on = rt_.terrain_vrs > 0 && tr_vrs_near_m() > 0.5f && vrs_supported_ && vrs_view_ && !tr_use_lowres() &&
+                              tr_march_prepass_on() && tr_->vrs_pipeline != VK_NULL_HANDLE &&
+                              vrs_extent_.width * vrs_texel_size_.width >= render_extent_.width &&
+                              vrs_extent_.height * vrs_texel_size_.height >= render_extent_.height;
+    if (world_vrs_on) {
+        VkCommandBuffer c = frame.command_buffer;
+        vkinit::transition_image(c, vrs_image_, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkClearValue zc{};
+        VkRenderingAttachmentInfo r_att = vkinit::color_attachment_info(vrs_view_, &zc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkRenderingInfo r_ri{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr, .flags = 0,
+            .renderArea = { {0, 0}, vrs_extent_ },
+            .layerCount = 1, .viewMask = 0,
+            .colorAttachmentCount = 1, .pColorAttachments = &r_att,
+            .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
+        };
+        vkCmdBeginRendering(c, &r_ri);
+        render_terrain_vrs_rate(c);
+        vkCmdEndRendering(c);
+        vkinit::transition_image(c, vrs_image_, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR);
+        prof_mark(c, "terrain_rate");
+    }
+
     auto color_att = vkinit::color_attachment_info(scene_color_view_,
                                                    &clear_color,
                                                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -784,9 +813,6 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     // is attached to the world pass; only the terrain pipeline listens to it (the others
     // have no shading-rate state: 1x1, attachment ignored).
     VkRenderingFragmentShadingRateAttachmentInfoKHR world_vrs{};
-    const bool world_vrs_on = rt_.terrain_vrs > 0 && vrs_supported_ && vrs_view_ && !tr_use_lowres() &&
-                              vrs_extent_.width * vrs_texel_size_.width >= render_extent_.width &&
-                              vrs_extent_.height * vrs_texel_size_.height >= render_extent_.height;
     if (world_vrs_on) {
         world_vrs.sType = VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR;
         world_vrs.imageView = vrs_view_;

@@ -89,7 +89,13 @@ void VulkanEngine::mp_update(float dt) {
     // The movement keys: what this player wants, so others can predict starts, stops and turns as the controller will make them.
     ls.move = net::move_bits(last_pin_);
     ls.shot_seq = uint16_t(body_shot_seq_);
-    net_->update(glfwGetTime(), ls);
+// The clock is the one the frame's time step was measured with, read at the same moment -
+    // not the time it happens to be when this line runs. What is sent is where things are
+    // at the frame's time, and others are drawn where they were at a time that advances by
+    // exactly this frame's step: a few milliseconds of difference, changing from frame to
+    // frame, moved a car at 100 km/h back and forth by 6 - 13 cm on the other screen.
+    net_->update(frame_clock_s_ > 0.0 ? frame_clock_s_ : glfwGetTime(), ls);
+    jeep_net_receive(dt);              // (and the others' are put where they are now)
 
     for (auto& f : mp_->feed) f.ttl -= dt;
     mp_->feed.erase(std::remove_if(mp_->feed.begin(), mp_->feed.end(), [](const MpFeed& f) { return f.ttl <= 0.0f; }), mp_->feed.end());
@@ -221,8 +227,29 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         const bool dying = a.dying_t >= 0.0f;
         const net::PlayerState& s = dying ? a.dying_st : a.st;
         anim::CharacterAnimationInput in;
-        const net::RemoteFrame rf = net::remote_animation_input(s, in);
+        net::RemoteFrame rf = net::remote_animation_input(s, in);
         if (dying) in.dying = glm::clamp(a.dying_t / std::max(kDying, 1e-3f), 0.0f, 1.0f);
+        // At the wheel of a car: in its seat, hands on the wheel, as the local driver is posed
+        // (player_body.cpp). The car is where its own states put it (jeep_net_receive), so the
+        // driver and the car cannot come apart; what is sent as this player's position while
+        // driving is their camera, behind the car, and is not used.
+        a.seated = false;
+        if (glm::mat4 hip; !dying && jeep_seat_of(a.id, hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs)) {
+            const anim::IAnimationRuntime& art = *anim_set_.runtime;
+            const int hj = art.rig()[anim::Role::Hips];
+            const glm::vec3 rest = hj >= 0 ? art.skeleton().rest_pos[size_t(hj)] : glm::vec3(0.0f, 0.95f, 0.0f);
+            rf.model = hip * glm::translate(glm::mat4(1.0f), -rest);
+            const glm::mat4 inv = glm::inverse(rf.model);
+            in.seat_hand_l = glm::vec3(inv * glm::vec4(in.seat_hand_l, 1.0f));
+            in.seat_hand_r = glm::vec3(inv * glm::vec4(in.seat_hand_r, 1.0f));
+            in.seated = true;
+            rf.eye = glm::vec3(hip * glm::vec4(0.0f, 0.62f, 0.0f, 1.0f));
+            rf.view_inv = hip; rf.view_inv[3] = glm::vec4(rf.eye, 1.0f);
+            a.seated = true;
+            // (where a shot finds them: in the seat)
+            const glm::vec3 mid(hip * glm::vec4(0.0f, 0.25f, 0.0f, 1.0f));
+            a.st.px = mid.x; a.st.py = mid.y; a.st.pz = mid.z;
+        }
         const glm::vec3 eye = rf.eye;
         const glm::mat4 model = rf.model;
 
@@ -263,6 +290,7 @@ void VulkanEngine::mp_pose_avatars(float dt) {
             in.hit_dir.z = -in.hit_dir.z;
         }
         in.teleported = (a.teleported || a.fresh_pose) && !dying;        // (the respawn is not this body's)
+        if (a.seated) in.teleported = false;
         a.teleported = false;
         in.lod = a.lod;
 

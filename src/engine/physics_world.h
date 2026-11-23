@@ -219,6 +219,8 @@ public:
     bool     vehicle_exists() const;
     void     vehicle_input(float forward, float right, float brake, float handbrake);
     bool     vehicle_state(VehicleState& out) const;
+    bool     vehicle_state_prev(VehicleState& out) const;      // before the last step (for drawing between two steps)
+    void     vehicle_keep_prev();                             // (step() calls it)
     void     vehicle_teleport(glm::vec3 position, float yaw);
     void     vehicle_shift(glm::vec3 delta);
     void     vehicle_impulse(glm::vec3 impulse, glm::vec3 at);

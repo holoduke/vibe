@@ -285,6 +285,7 @@ void PhysicsWorld::finish_async() {
 void PhysicsWorld::step(float dt) {
     finish_async();
     if (dt <= 0.0f) return;
+    vehicle_keep_prev();
     constexpr float kFixed = 1.0f / 60.0f;
     int collision_steps = 1;
     int subdivisions = std::max(1, static_cast<int>(std::ceil(dt / kFixed)));
@@ -1053,6 +1054,10 @@ struct PhysicsWorld::VehicleImpl {
             bi.AddForce(body, -(q * JPH::Vec3(0, 1, 0)) * (down * vf * vf) - v * (drag * sp));
         }
     };
+    // Where it was before the last physics step: the picture is drawn between the two
+    // (vehicle_state_prev). Not valid across a teleport.
+    PhysicsWorld::VehicleState prev{};
+    bool prev_valid = false;
     Aero aero;
     JPH::BodyID body;
     JPH::Ref<JPH::VehicleConstraint> constraint;
@@ -1060,6 +1065,16 @@ struct PhysicsWorld::VehicleImpl {
     JPH::Ref<JPH::VehicleCollisionTester> tester;
     JPH::BodyID patch;                 // the ground under it, outside the home tile's heightfield
     JPH::BodyID obstacles;             // what stands near it (trees, rails, buildings)
+    // The wheels' ground: everything but the obstacles. A wheel is a cylinder swept down its
+    // suspension; beside a guard rail or a wall it found the rail's side as "ground" - a
+    // contact on a vertical face, with the tyre's whole grip pushing into it. The car hung on
+    // the rail it was sliding along. What stands beside the road is for the body to hit.
+    struct WheelGround : JPH::BodyFilter {
+        JPH::BodyID skip, self;       // (self: the car's own body - the tester's own filter, which this one replaces, left it out)
+        bool ShouldCollide(const JPH::BodyID& id) const override { return id != skip && id != self; }
+        bool ShouldCollideLocked(const JPH::Body& b) const override { return b.GetID() != skip && b.GetID() != self; }
+    };
+    WheelGround wheel_ground;
     std::vector<float> patch_samples;  // (Jolt keeps a pointer for the shape's life only: kept anyway)
 };
 
@@ -1097,6 +1112,9 @@ uint32_t PhysicsWorld::vehicle_create(const VehicleDesc& d) {
     bcs.mLinearDamping = 0.02f; bcs.mAngularDamping = 0.10f;
     bcs.mFriction = 0.6f; bcs.mRestitution = 0.12f;
     bcs.mMotionQuality = JPH::EMotionQuality::LinearCast;
+    // (a rail is a row of boxes end to end, the body a set of boxes too: without this a corner
+    //  catches on the joint between two of them as if it were a step)
+    bcs.mEnhancedInternalEdgeRemoval = true;
     bcs.mAllowSleeping = true;
     // The game's gravity is 25 m/s2 (for the feel of the player's jumps). A vehicle built from
     // real numbers - mass, springs, tyres, engine - only behaves like one under the Earth's:
@@ -1230,6 +1248,8 @@ uint32_t PhysicsWorld::vehicle_create(const VehicleDesc& d) {
     vehicle_->aero.down = d.downforce; vehicle_->aero.drag = d.drag;
     impl_->system.AddStepListener(&vehicle_->aero);
     vehicle_->tester = new JPH::VehicleCollisionTesterCastCylinder(Layers::MOVING, 0.08f);
+    vehicle_->wheel_ground.self = body->GetID();
+    vehicle_->tester->SetBodyFilter(&vehicle_->wheel_ground);
 
     vehicle_->constraint->SetVehicleCollisionTester(vehicle_->tester);
     impl_->system.AddConstraint(vehicle_->constraint);
@@ -1258,6 +1278,18 @@ void PhysicsWorld::vehicle_input(float forward, float right, float brake, float 
     c->SetDriverInput(forward, right, brake, handbrake);
     if (forward != 0.0f || right != 0.0f || brake != 0.0f || handbrake != 0.0f)
         impl_->system.GetBodyInterface().ActivateBody(vehicle_->body);
+}
+
+void PhysicsWorld::vehicle_keep_prev() {
+    if (vehicle_exists()) vehicle_->prev_valid = vehicle_state(vehicle_->prev);
+}
+
+// The state before the last step(): with vehicle_state() the two ends between which a frame
+// that falls between two physics steps is drawn. false: there is none (just made, or moved by hand).
+bool PhysicsWorld::vehicle_state_prev(VehicleState& s) const {
+    if (!vehicle_exists() || !vehicle_->prev_valid) return false;
+    s = vehicle_->prev;
+    return true;
 }
 
 bool PhysicsWorld::vehicle_state(VehicleState& s) const {
@@ -1295,6 +1327,7 @@ bool PhysicsWorld::vehicle_state(VehicleState& s) const {
 
 void PhysicsWorld::vehicle_teleport(glm::vec3 position, float yaw) {
     if (!vehicle_exists()) return;
+    vehicle_->prev_valid = false;
     JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
     bi.SetPositionAndRotation(vehicle_->body, JPH::RVec3(position.x, position.y, position.z),
                               JPH::Quat::sRotation(JPH::Vec3::sAxisY(), yaw), JPH::EActivation::Activate);
@@ -1303,6 +1336,7 @@ void PhysicsWorld::vehicle_teleport(glm::vec3 position, float yaw) {
 
 void PhysicsWorld::vehicle_shift(glm::vec3 delta) {
     if (!vehicle_exists()) return;
+    vehicle_->prev_valid = false;
     JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
     const JPH::RVec3 p = bi.GetPosition(vehicle_->body);
     bi.SetPosition(vehicle_->body, p + JPH::RVec3(delta.x, delta.y, delta.z), JPH::EActivation::DontActivate);
@@ -1350,8 +1384,13 @@ void PhysicsWorld::vehicle_set_obstacles(const OrientedBox* boxes, size_t count)
     JPH::ShapeSettings::ShapeResult sr = cs.Create();
     if (sr.HasError()) { log::errorf("[jolt] vehicle obstacles: %s", sr.GetError().c_str()); return; }
     JPH::BodyCreationSettings bcs(sr.Get(), JPH::RVec3(0.0f, 0.0f, 0.0f), JPH::Quat::sIdentity(), JPH::EMotionType::Static, Layers::NON_MOVING);
-    bcs.mFriction = 0.5f;
+    // Nearly no friction: a car's flank slides along a rail or a wall. With 0.5 (against the
+    // body's 0.6) the rail held the corner that touched it - the car turned into the rail and
+    // crawled along it at 10 - 20 km/h on full throttle.
+    bcs.mFriction = 0.03f;
+    bcs.mRestitution = 0.10f;
     vehicle_->obstacles = bi.CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+    vehicle_->wheel_ground.skip = vehicle_->obstacles;
 }
 
 } // namespace vibe

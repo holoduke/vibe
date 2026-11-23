@@ -1029,7 +1029,7 @@ void VulkanEngine::tick_jet_audio(float dt) {
 
 void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world,
                                   const glm::mat4& view_inv_world) {
-    const bool at_wheel = !mp_->draw && jeep_driving();      // (the driver: his body in the seat, nothing in his hands)
+    const bool at_wheel = mp_->draw ? mp_->draw->seated : jeep_driving();      // (the driver: his body in the seat, nothing in his hands)
     // Drawn relative to the camera: the weapon sits 30 cm from an eye that can be
     // hundreds of km from the world's origin, where a float is centimetres coarse -
     // "world position x view-projection" made it flicker and jump from about 50 km

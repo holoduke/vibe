@@ -666,7 +666,10 @@ float rm_self_shadow_base(vec3 pos, vec3 nor, vec3 sunDir) {
     {
         float lit_g = 1.0;
 #ifndef VIBE_WATER
-        if (distance(pos, scene.camera_pos.xyz) < 220.0) {
+        // (at home calcShadow walks the same baked heights itself now - this walk only for
+        //  receivers outside it whose ray crosses the home tile, and for the comparison bit)
+        if (distance(pos, scene.camera_pos.xyz) < 220.0 &&
+            (RMDBG(16384) || any(greaterThan(abs(pos.xz), vec2(kHeightmapSide * 0.5 - 2.0))))) {
             float tg = 0.10;
             float g_top = terrainMaxHeight();
             for (int i = 0; i < 30; ++i) {

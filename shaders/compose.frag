@@ -377,7 +377,16 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     vec4 ap = atmo_aerial(uvh, min(t, 1.2));
     // (the haze colour of terrain_raymarch.frag: grey by day, dark at night)
     // (pc.sun_dir is the moon at night: go by how much light there is)
-    vec3 hazed = vec3(0.55, 0.55, 0.58) * mix(0.03, 1.0, smoothstep(0.05, 1.5, dot(atmo_sun_illum(), vec3(0.2126, 0.7152, 0.0722))));
+    // (2026-11-23: the sky just over the horizon that way, as ground_haze.glsl has it now -
+    //  it was a fixed grey, lighter than the sky at night)
+    vec3 hazed;
+    {
+        vec3 hs = normalize(pc.sun_dir.xyz);
+        float haz = 0.0;
+        if (dot(dir.xz, dir.xz) > 1e-8 && dot(hs.xz, hs.xz) > 1e-8)
+            haz = acos(clamp(dot(normalize(dir.xz), normalize(hs.xz)), -1.0, 1.0));
+        hazed = textureLod(u_atmo_sky, skyview_uv(0.03, haz), 0.0).rgb * atmo_sun_illum();
+    }
     float tm = t * 1000.0 * min(1.0, 2.5 / max(alt, 0.001));         // the part of the ray in the hazy air near the ground
     vec3 ext = exp(-((tm > 1500.0) ? 1500.0 + (tm - 1500.0) * 0.004 : tm) * 0.00025 * vec3(1.0, 1.3, 2.0));
     ext = mix(ext, vec3(1.0), smoothstep(20.0, 80.0, alt));          // from space: the veil in atmo_sky is the air

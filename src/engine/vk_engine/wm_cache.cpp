@@ -133,6 +133,7 @@ void VulkanEngine::wm_cache_plan(SceneUBO& data) {
     }
     data.wm_cache  = glm::vec4(wm_cache_org_[0].x, wm_cache_org_[0].y, 1.0f / kWmTexel[0], float(kWmN[0]));
     data.wm_cache1 = glm::vec4(wm_cache_org_[1].x, wm_cache_org_[1].y, 1.0f / kWmTexel[1], float(kWmN[1]));
+    jeep_grass_press(data.car_press);
 }
 
 void VulkanEngine::wm_cache_bake(VkCommandBuffer cmd) {

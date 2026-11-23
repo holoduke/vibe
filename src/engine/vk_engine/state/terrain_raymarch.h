@@ -62,6 +62,10 @@ struct VulkanEngine::TerrainRaymarchState {
     int             march_div   = 2;
     VkShaderModule  march_module   = VK_NULL_HANDLE;
     VkPipeline      march_pipeline = VK_NULL_HANDLE;
+    // The ground's shading rate from that march's distances (terrain_vrs.frag): drawn into the
+    // rate image every frame, after the march (frame.cpp).
+    VkShaderModule  vrs_module   = VK_NULL_HANDLE;
+    VkPipeline      vrs_pipeline = VK_NULL_HANDLE;
     VkExtent2D      lr_extent{};
     // Compose pipeline that samples the low-res raymarch and writes
     // upscaled color/motion + gl_FragDepth into scene_color/depth with

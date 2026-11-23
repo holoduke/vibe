@@ -413,6 +413,7 @@ struct SceneUBO {
     glm::mat4  ray_mat;          // screen -> view ray, camera at the origin (scene_ubo.glsl scene_ray)
     glm::vec4  wm_cache;         // the world's slow fields as textures, near and far (wm_cache.cpp; shaders: rm_world_vr)
     glm::vec4  wm_cache1;
+    glm::vec4  car_press[4];     // cars pressing the grass down (scene_ubo.glsl car_press)
 };
 
 // ---- KHR ray tracing entry points ----

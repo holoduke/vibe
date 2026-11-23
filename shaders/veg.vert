@@ -71,6 +71,10 @@ void main() {
         // moment as winter comes in (and they come back the same way).
         if (arch[uint(I.rot_arch_phase.y + 0.5)].w > 0.5 && arch[uint(I.rot_arch_phase.y + 0.5)].w < 1.5)
             g *= 1.0 - smoothstep(tone * 0.6, tone * 0.6 + 0.4, scene.season.w);
+        // A leaf the tree's detail leaves out (or that has fallen): its four corners all get
+        // g = 0, so the card is a point. Out of the view at once - the wind, the crown's
+        // normal and the colours below were worked out for nothing, in both passes.
+        if (g <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
         Pl = origin + inNormal * (g * comp);
         card_uvk = vec3(mod(corner, 2.0), floor(corner * 0.5 + 0.01), (matRaw == 7 ? 0.0 : float(matRaw - 8)) + 0.05 + 0.9 * tone);   // z = atlas cell + tone
         Nl = vec3(0.0, 1.0, 0.0);

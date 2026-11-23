@@ -324,6 +324,18 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
         mo.enable_vrs = false;
         tr_->march_pipeline = vkpipe::build_graphics_pipeline(device_, mo);
     }
+    // The ground's shading rate (terrain_vrs.frag): one R8 number per tile, from the march's picture.
+    tr_->vrs_module = vrs_supported_ ? vkpipe::load_shader_module(device_, sd + "/terrain_vrs.frag.spv") : VK_NULL_HANDLE;
+    if (tr_->vrs_module) {
+        vkpipe::GraphicsPipelineConfig vr = cfg;
+        vr.frag = tr_->vrs_module;
+        vr.color_formats = { VK_FORMAT_R8_UINT };
+        vr.depth_format = VK_FORMAT_UNDEFINED;
+        vr.depth_test = false;
+        vr.depth_write = false;
+        vr.enable_vrs = false;
+        tr_->vrs_pipeline = vkpipe::build_graphics_pipeline(device_, vr);
+    }
     // Three builds, each on a thread of its own (see the header): collected by
     // finish_terrain_raymarch_pipeline().
     const VkDevice dev = device_;
@@ -394,6 +406,10 @@ void VulkanEngine::destroy_terrain_raymarch_pipeline() {
     if (tr_->march_module)   vkDestroyShaderModule(device_, tr_->march_module, nullptr);
     tr_->march_pipeline = VK_NULL_HANDLE;
     tr_->march_module = VK_NULL_HANDLE;
+    if (tr_->vrs_pipeline) vkDestroyPipeline(device_, tr_->vrs_pipeline, nullptr);
+    if (tr_->vrs_module)   vkDestroyShaderModule(device_, tr_->vrs_module, nullptr);
+    tr_->vrs_pipeline = VK_NULL_HANDLE;
+    tr_->vrs_module = VK_NULL_HANDLE;
     terrain_raymarch_lite_pipeline_ = terrain_raymarch_lite_lr_pipeline_ = VK_NULL_HANDLE;
     terrain_raymarch_lite_module_ = VK_NULL_HANDLE;
     if (terrain_raymarch_lr_pipeline_) {
@@ -867,7 +883,9 @@ void VulkanEngine::init_vrs_attachment() {
         .mipLevels = 1, .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
+        // (COLOR_ATTACHMENT: the rate is drawn into it every frame - render_terrain_vrs_rate)
         .usage = VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR |
+                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                  VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 0, .pQueueFamilyIndices = nullptr,
@@ -891,36 +909,13 @@ void VulkanEngine::init_vrs_attachment() {
     };
     vk_check(vkCreateImageView(device_, &vci, nullptr, &vrs_view_), "vrs view");
 
-    // Build the per-texel rate pattern on CPU, then upload via a staging
-    // buffer + one-time submit. Pattern is a center→edge vignette:
-    //   - inside 60% radius: rate 0  (1×1, full)
-    //   - 60–85%:             rate 5 (2×2)
-    //   - outside 85%:        rate 10 (4×4)
-    // Encoding: `(width_log2 << 2) | height_log2`. Center-priority makes
-    // sense because the player's attention is mid-screen and the FBM
-    // raymarch detail beyond ~600 m is already LOD'd to a few octaves
-    // (so 2×2 / 4×4 shading is invisible).
+    // What it holds at first: full rate everywhere. The rate itself is drawn into it every
+    // frame from the terrain's low-resolution march (terrain_vrs.frag: coarse only where all
+    // the ground in a tile is near). It used to be a fixed pattern made here - coarse toward
+    // the screen's edges, whatever was there: far mountains at the sides came out in steps.
     const size_t n = static_cast<size_t>(vrs_extent_.width) *
                      static_cast<size_t>(vrs_extent_.height);
     std::vector<uint8_t> rates(n, 0);
-    const float cx = (vrs_extent_.width  - 1) * 0.5f;
-    const float cy = (vrs_extent_.height - 1) * 0.5f;
-    const float r_max = std::sqrt(cx * cx + cy * cy);
-    for (uint32_t y = 0; y < vrs_extent_.height; ++y) {
-        for (uint32_t x = 0; x < vrs_extent_.width; ++x) {
-            float dx = static_cast<float>(x) - cx;
-            float dy = static_cast<float>(y) - cy;
-            float r = std::sqrt(dx * dx + dy * dy) / std::max(r_max, 1.0f);
-            uint8_t rate;
-            // (rt_.terrain_vrs 1: the middle 70 % of the way out at full rate, 2x2 beyond and no
-            // 4x4 - the mild setting for the full-resolution ground; otherwise the pattern above)
-            const float r1 = rt_.terrain_vrs == 1 ? 0.70f : 0.60f, r2 = rt_.terrain_vrs == 1 ? 2.0f : 0.85f;
-            if      (r < r1) rate = 0;                // 1x1
-            else if (r < r2) rate = (1u << 2) | 1u;   // 2x2 = 5
-            else             rate = (2u << 2) | 2u;   // 4x4 = 10
-            rates[static_cast<size_t>(y) * vrs_extent_.width + x] = rate;
-        }
-    }
 
     // Stage + copy + final transition to FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL.
     VkBuffer staging = VK_NULL_HANDLE;

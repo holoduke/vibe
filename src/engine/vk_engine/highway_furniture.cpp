@@ -289,8 +289,14 @@ void VulkanEngine::hw_rail_boxes(glm::vec3 at, float reach, std::vector<PhysicsW
         const glm::vec3 d = b - a;
         const float len = glm::length(glm::vec2(d.x, d.z));
         if (len < 0.5f || len > 6.0f) continue;
-        // (a box's own z axis along the rail: turned about the vertical by atan2(dx, dz))
-        out.push_back({ 0.5f * (a + b) + glm::vec3(0.0f, 0.40f, 0.0f), glm::vec3(0.06f, 0.36f, 0.5f * len + 0.05f), std::atan2(d.x, d.z) });
+        // (a box's own z axis along the rail: turned about the vertical by atan2(dx, dz).
+        //  For a car it is 40 cm thick, grown away from the road - the face toward the road is
+        //  where the rail's is: a sheet of 12 cm let a fast car's corner through between two
+        //  physics steps, and what got through was held. And a little higher than the rail, so
+        //  a body leaning over it meets a face, not the top edge. Each box runs a hand's width
+        //  into the next: no gap at a bend.)
+        const glm::vec3 out_dir = glm::normalize(s.sea + e.sea);
+        out.push_back({ 0.5f * (a + b) + glm::vec3(0.0f, 0.50f, 0.0f) + out_dir * 0.14f, glm::vec3(0.20f, 0.46f, 0.5f * len + 0.10f), std::atan2(d.x, d.z) });
     }
 }
 

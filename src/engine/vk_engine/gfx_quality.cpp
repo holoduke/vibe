@@ -52,7 +52,7 @@ const std::vector<VulkanEngine::GfxRow>& VulkanEngine::gfx_rows() {
                             } },
         { "terrain_first_pass", "Terrain first pass", "The ground is found first in a coarse picture, then refined. Coarser: faster, a little less exact at silhouettes.",
           [](E& e, int l) { e.rt_.terrain_rm_prepass = true; e.rt_.terrain_rm_prepass_div = pick(l, 4, 3, 2, 2, 2); e.rt_.terrain_rm_converge = pick(l, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f); } },
-        { "terrain_edges", "Terrain shading at screen edges", "Shades the ground more coarsely toward the edges of the screen, where the eye does not look.",
+        { "terrain_edges", "Terrain shading at speed", "Shades the ground close to the camera once per 2 x 2 pixels while it rushes past (driving, flying low);\nfar ground and every outline keep every pixel, and so does everything while you stand or walk.\nLow: also the nearest 8 m at any speed. Ultra and insane: every pixel, always.",
           [](E& e, int l) { e.rt_.terrain_vrs = pick(l, 2, 1, 1, 0, 0); } },
         { "terrain_relief", "Surface relief", "The fine depth of the ground close by: stones, ripples in sand, small bumps.\nLow and medium: in the light and shade only, not in the ground's outline (low also without the loose stones).\nFrom high: all of it.",
           [](E& e, int l) { e.rt_.terrain_rm_skip = pick(l, 128 | 32768, 128, 0, 0, 0); e.rt_.terrain_rm_relief_lite = l < 4;

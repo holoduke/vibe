@@ -14,7 +14,7 @@
 
 namespace vibe::net {
 
-constexpr uint8_t  kProtocolVersion = 2;       // 2: packed state with weapon / input / shot counter, stamped events
+constexpr uint8_t  kProtocolVersion = 3;       // 2: packed state with weapon / input / shot counter, stamped events. 3: cars
 constexpr uint32_t kInterpDelayMs = 100;       // remote players are shown at least this far in the past
 constexpr uint32_t kMaxInterpDelayMs = 500;    // ... and at most this far, however slow the link
 constexpr uint32_t kMaxExtrapolateMs = 250;    // nothing newer: carry on along the last velocity this long at most
@@ -228,6 +228,195 @@ private:
     struct Last { uint32_t from; uint8_t kind; uint16_t seq; };
     std::vector<Last>  last_;
     std::vector<Event> queue_;
+};
+
+// ---------------------------------------------------------------------------------------------
+// Cars. A car is simulated on ONE machine: its driver's (and, once the driver has got out,
+// still theirs, until somebody else gets in). That machine sends where the car is; everybody
+// else draws it from those states, a moment in the past, as they draw the players. Nothing is
+// predicted and nothing is corrected: the driver's own car answers at once, and what others
+// see is what happened.
+//
+// A car is named by its number in the list every machine builds the same way at start-up.
+constexpr int kMaxCars = 32;
+struct CarState {
+    uint8_t car = 0;
+    uint8_t flags = 0;                         // kCar*
+    float p[3]{ 0, 0, 0 };                     // the body's origin
+    float q[4]{ 0, 0, 0, 1 };                  // ... and how it is turned (x y z w)
+    float v[3]{ 0, 0, 0 }, w[3]{ 0, 0, 0 };    // moving and turning (world; m/s, rad/s)
+    float steer = 0;                           // the front wheels' angle (rad)
+    float susp[4]{ 0, 0, 0, 0 };               // each wheel: how far above its place at rest (m)
+    float spin[4]{ 0, 0, 0, 0 };               // each wheel: how fast it turns (rad/s)
+};
+// kCarDriven: the sender sits at its wheel (otherwise it stands, or rolls on, where it was left).
+// Bits 4..7: wheel 0..3 touches the ground.
+enum : uint8_t { kCarDriven = 1, kCarLights = 2, kCarBrake = 4, kCarTeleport = 8, kCarContact0 = 16 };
+
+#pragma pack(push, 1)
+struct PackedCar {
+    uint8_t  car, flags;
+    float    p[3];
+    int16_t  q[4];             // x 32767
+    int16_t  v[3];             // cm/s (+-327 m/s)
+    int16_t  w[3];             // mrad/s
+    int8_t   steer;            // 1/100 rad
+    int8_t   susp[4];          // 4 mm
+    int16_t  spin[4];          // 1/100 rad/s (+-327: a 0.35 m wheel at 400 km/h)
+};
+#pragma pack(pop)
+static_assert(sizeof(PackedCar) == 47, "wire size of a car state");
+
+inline PackedCar pack_car(const CarState& s) {
+    auto i16 = [](float f, float k) { return int16_t(std::lround(std::clamp(f * k, -32767.0f, 32767.0f))); };
+    auto i8 = [](float f, float k) { return int8_t(std::lround(std::clamp(f * k, -127.0f, 127.0f))); };
+    PackedCar o{};
+    o.car = s.car; o.flags = s.flags;
+    for (int i = 0; i < 3; ++i) { o.p[i] = s.p[i]; o.v[i] = i16(s.v[i], 100.0f); o.w[i] = i16(s.w[i], 1000.0f); }
+    for (int i = 0; i < 4; ++i) { o.q[i] = i16(s.q[i], 32767.0f); o.susp[i] = i8(s.susp[i], 250.0f); o.spin[i] = i16(s.spin[i], 100.0f); }
+    o.steer = i8(s.steer, 100.0f);
+    return o;
+}
+
+inline CarState unpack_car(const PackedCar& p) {
+    CarState s;
+    s.car = p.car; s.flags = p.flags;
+    for (int i = 0; i < 3; ++i) { s.p[i] = p.p[i]; s.v[i] = float(p.v[i]) / 100.0f; s.w[i] = float(p.w[i]) / 1000.0f; }
+    float n = 0.0f;
+    for (int i = 0; i < 4; ++i) { s.q[i] = float(p.q[i]) / 32767.0f; n += s.q[i] * s.q[i]; s.susp[i] = float(p.susp[i]) / 250.0f; s.spin[i] = float(p.spin[i]) / 100.0f; }
+    n = std::sqrt(n);
+    if (n > 0.5f) { for (float& f : s.q) f /= n; } else { s.q[0] = s.q[1] = s.q[2] = 0.0f; s.q[3] = 1.0f; }
+    s.steer = float(p.steer) / 100.0f;
+    return s;
+}
+
+inline bool car_is_sane(const CarState& s) {
+    for (float f : { s.p[0], s.p[1], s.p[2] })
+        if (!std::isfinite(f) || std::abs(f) > 2.0e6f) return false;
+    return s.car < kMaxCars;
+}
+
+// Between two states `gap` seconds apart. With a gap the place follows the curve that leaves a
+// with a's velocity and arrives at b with b's (a straight line between states 33 ms apart shows
+// as a car going round a bend in short straight pieces); gap 0: a straight line. The turn goes
+// the short way.
+inline CarState mix_car(const CarState& a, const CarState& b, float t, float gap) {
+    CarState o = t < 0.5f ? a : b;
+    const float t2 = t * t, t3 = t2 * t;
+    const float h00 = 2.0f * t3 - 3.0f * t2 + 1.0f, h10 = t3 - 2.0f * t2 + t, h01 = -2.0f * t3 + 3.0f * t2, h11 = t3 - t2;
+    for (int i = 0; i < 3; ++i) {
+        o.p[i] = gap > 0.0f ? h00 * a.p[i] + h10 * gap * a.v[i] + h01 * b.p[i] + h11 * gap * b.v[i]
+                            : a.p[i] + (b.p[i] - a.p[i]) * t;
+        o.v[i] = a.v[i] + (b.v[i] - a.v[i]) * t;
+        o.w[i] = a.w[i] + (b.w[i] - a.w[i]) * t;
+    }
+    float d = 0.0f, n = 0.0f;
+    for (int i = 0; i < 4; ++i) d += a.q[i] * b.q[i];
+    for (int i = 0; i < 4; ++i) { o.q[i] = a.q[i] * (1.0f - t) + (d < 0.0f ? -b.q[i] : b.q[i]) * t; n += o.q[i] * o.q[i]; }
+    n = std::sqrt(std::max(n, 1e-12f));
+    for (float& f : o.q) f /= n;
+    o.steer = a.steer + (b.steer - a.steer) * t;
+    for (int i = 0; i < 4; ++i) { o.susp[i] = a.susp[i] + (b.susp[i] - a.susp[i]) * t; o.spin[i] = a.spin[i] + (b.spin[i] - a.spin[i]) * t; }
+    return o;
+}
+
+// The host's clock as a client knows it: host time - local time, from the time stamps of the
+// host's snapshots. A stamp is only ever seen LATE (the network, and the frame in which the
+// packet is noticed), never early - so each sample is the true offset or less, and the
+// largest of the last few seconds is the best there is. The estimate moves toward that at a
+// limited rate (half a millisecond a second): everything a client stamps and everything it
+// draws from others' stamps runs on this clock, and a clock that follows every sample's
+// noise moves a fast car back and forth on the other screens.
+struct ClockOffset {
+    double value = 0.0;
+    bool   valid = false;
+    void reset() { valid = false; n_ = 0; }
+    // `sample`: host stamp + half the round trip - local time at arrival (ms). `dt_ms`: since the last one.
+    void add(double sample, double dt_ms) {
+        ring_[n_++ % kWindow] = sample;
+        double best = -1e300;
+        for (int i = 0; i < std::min(n_, kWindow); ++i) best = std::max(best, ring_[i]);
+        if (!valid || std::abs(best - value) > 250.0) { value = best; valid = true; return; }
+        const double step = 0.0005 * std::clamp(dt_ms, 0.0, 200.0);
+        value += std::clamp(best - value, -step, step);
+    }
+private:
+    static constexpr int kWindow = 180;        // 3 s of snapshots
+    double ring_[kWindow]{};
+    int    n_ = 0;
+};
+
+// The states received for one car, in time order (the players' SnapBuffer, for a car).
+// Times are session milliseconds WITH their fraction: at 100 km/h a whole millisecond is 3 cm,
+// and a car stamped and sampled in whole milliseconds moved unevenly by that much every frame.
+struct CarBuffer {
+    struct Snap { double t; CarState s; };
+    std::deque<Snap> snaps;
+    uint32_t dropped = 0;
+    float    lag_ms = 0.0f;
+
+    double delay_ms() const { return std::clamp(double(lag_ms) + 50.0, double(kInterpDelayMs), double(kMaxInterpDelayMs)); }
+    // The delay in use: it follows delay_ms() at 1 % of the time that passes, so a late packet
+    // makes the car run 1 % slow for a moment instead of jumping back (and forward again later).
+    double delay_now = double(kInterpDelayMs);
+    double advance_delay(double passed_ms) {
+        const double step = 0.01 * std::clamp(passed_ms, 0.0, 200.0);
+        delay_now += std::clamp(delay_ms() - delay_now, -step, step);
+        return delay_now;
+    }
+
+    bool add(double t, const CarState& s, double now) {
+        if (!car_is_sane(s)) { ++dropped; return false; }
+        {
+            const float lag = float(std::clamp(now - t, 0.0, 2000.0));
+            lag_ms = lag > lag_ms ? lag : lag_ms + (lag - lag_ms) * 0.01f;
+        }
+        if (!snaps.empty()) {
+            const double last = snaps.back().t;
+            if (t <= last) {
+                if (last - t < 5000.0) { ++dropped; return false; }
+                snaps.clear();
+            }
+        }
+        snaps.push_back({ t, s });
+        while (snaps.size() > 64) snaps.pop_front();
+        return true;
+    }
+
+    struct Sample { CarState s; bool teleported = false; bool extrapolated = false; bool valid = false; };
+    Sample sample(double rt) const {
+        Sample o;
+        if (snaps.empty()) return o;
+        o.valid = true;
+        if (rt <= snaps.front().t) { o.s = snaps.front().s; return o; }
+        if (rt >= snaps.back().t) {
+            // Nothing newer: on along its velocity for a quarter of a second at most, then it stands.
+            // (a parked car is told once a second: it has no velocity, so it simply stays)
+            const float dt = float(std::min(rt - snaps.back().t, double(kMaxExtrapolateMs))) * 0.001f;
+            o.s = snaps.back().s;
+            for (int i = 0; i < 3; ++i) o.s.p[i] += o.s.v[i] * dt;
+            o.extrapolated = rt > snaps.back().t;
+            if (rt - snaps.back().t > kMaxExtrapolateMs) { for (int i = 0; i < 3; ++i) o.s.v[i] = o.s.w[i] = 0.0f; for (float& f : o.s.spin) f = 0.0f; }
+            return o;
+        }
+        for (size_t i = snaps.size() - 1; i > 0; --i) {
+            if (snaps[i - 1].t > rt) continue;
+            const Snap& a = snaps[i - 1];
+            const Snap& b = snaps[i];
+            const float gap = float(b.t - a.t) * 0.001f;
+            float d2 = 0.0f, sp2 = 0.0f;
+            for (int k = 0; k < 3; ++k) { const float d = b.s.p[k] - a.s.p[k]; d2 += d * d; sp2 += std::max(a.s.v[k] * a.s.v[k], b.s.v[k] * b.s.v[k]); }
+            const float allow = kTeleportDistance + 1.5f * std::sqrt(sp2) * gap;
+            if ((b.s.flags & kCarTeleport) || d2 > allow * allow) { o.s = b.s; o.teleported = true; return o; }
+            const float t = float((rt - a.t) / std::max(b.t - a.t, 1e-3));
+            // (states far apart in time - a parked car's, a second apart - are joined by a straight
+            //  line: the curve through two velocities is only right while they describe the way between)
+            o.s = mix_car(a.s, b.s, t, gap < 0.25f ? gap : 0.0f);
+            return o;
+        }
+        o.s = snaps.back().s;
+        return o;
+    }
 };
 
 }  // namespace vibe::net

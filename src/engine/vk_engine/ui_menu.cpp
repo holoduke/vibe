@@ -938,7 +938,7 @@ void VulkanEngine::build_menu_ui() {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The low-resolution terrain is offset by half a pixel from frame to frame\nand each frame is put together with the one before (checkerboard):\ntwice the detail of the scale alone when the view is still or moves slowly.");
         ImGui::TextDisabled("Full resolution: scale 100 %%.  Low resolution, sharpened: scale below 100 %%.");
         {
-            const char* vrs_labels[] = { "Every pixel", "2x2 toward the screen edges", "2x2 edges, 4x4 corners" };
+            const char* vrs_labels[] = { "Every pixel", "Near ground 2x2 while moving fast", "Near ground 2x2: 8 m always, further at speed" };
             if (ImGui::Combo("Ground shading rate", &rt_.terrain_vrs, vrs_labels, 3)) recreate_vrs_attachment();
         }
         ImGui::TextDisabled("%s",

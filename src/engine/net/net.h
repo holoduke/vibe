@@ -67,6 +67,22 @@ struct RemotePlayer {
     double last_rx = 0.0;
 };
 
+// A car somebody else tells us about (net_state.h, "Cars").
+struct RemoteCar {
+    uint8_t   car = 0;
+    uint32_t  sender = 0;          // who simulates it (the last player to send a state for it)
+    CarState  state{};             // at the render time
+    bool      fresh = false;       // has a state
+    bool      teleported = false;  // this frame's state is a jump from the last
+    double    age = 0.0;           // seconds since a state for it last arrived
+    double    shown_ms = 0.0;      // the session time it is shown at (diagnostics)
+    bool      extrapolated = false; // ... which is past its newest state
+    // internal
+    CarBuffer buf;
+    double    last_rx = 0.0;
+    double    last_now_ms = 0.0;
+};
+
 enum class Role { Off, Solo, Connecting, Client, Host };
 
 class Session {
@@ -90,6 +106,11 @@ public:
     struct Stats { uint64_t tx_bytes = 0, rx_bytes = 0, tx_packets = 0, rx_packets = 0; uint32_t duplicate_events = 0, dropped_states = 0; };
     const Stats& stats() const { return stats_; }
     uint32_t render_time_ms() const { return render_t_; }   // the session time remote players are shown at
+    // A car this machine simulates, as it is at `now` (the same clock update() is given): sent
+    // with the next update(), stamped with that moment - not with the moment it is sent.
+    // The caller decides how often (30 times a second while it moves, once a second parked).
+    void queue_car(const CarState& c, double now);
+    const std::vector<RemoteCar>& cars() const { return cars_; }
     void send_world(const WorldState& w);     // host: to all clients; client: request to the host
     bool take_world(WorldState& out);         // the newest world state received since the last call
 
@@ -107,6 +128,10 @@ private:
     Role role_ = Role::Off;
     std::string name_;
     std::vector<RemotePlayer> players_;
+    std::vector<RemoteCar> cars_;
+    struct QueuedCar { CarState s; double t_ms; };
+    std::vector<QueuedCar> car_queue_;
+    void add_car(uint32_t sender, double t, const CarState& s, double now);
     EventGate gate_;
     Stats stats_{};
     uint32_t render_t_ = 0;
@@ -117,7 +142,7 @@ private:
     RemotePlayer& player(uint32_t id);
     void remove_player(uint32_t id);
     void add_snap(uint32_t id, uint32_t t, const PlayerState& s, double now);
-    void interpolate(uint32_t session_now, double now);
+    void interpolate(double session_now, double now);
     void to_solo(const char* why);
 };
 

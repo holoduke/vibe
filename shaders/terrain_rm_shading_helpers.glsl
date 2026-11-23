@@ -202,10 +202,31 @@ float calcShadow(vec3 pos, vec3 sunDir) {
         float n0 = nf_height(pos.xz);
         if (n0 > -1e8) { nf_recv = true; nf_d0 = pos.y - n0; }
     }
+    // At home the baked ground casts, as the ground baked round the camera does beyond it
+    // (below). The formula was asked for every step within 2.5 m of the bake - the first five
+    // or so of every lit pixel, 40 octaves, as much as the normal - to shadow by a landscape
+    // the bake already holds (it has one octave more than the march; the stones and the small
+    // relief were never in this march). The ray starts as far above the bake as the receiver
+    // stands. RMDBG 16384: the formula again (comparison).
+    bool  hm_recv = false;
+    float hm_d0 = 0.0;
+#ifndef VIBE_WATER
+    if (!nf_recv && !RMDBG(16384) && all(lessThan(abs(pos.xz), vec2(kHeightmapSide * 0.5 - 2.0)))) {
+        hm_recv = true; hm_d0 = pos.y - meshHeight(pos.xz);
+    }
+#endif
     for (int i = 0; i < 96; ++i) {
         vec3 p = pos + t * sunDir;
         if (p.y > maxH_sh) break;                         // above every summit: nothing left to hit
         if (all(lessThan(abs(p.xz), vec2(kHeightmapSide * 0.5 - 2.0)))) {
+            if (hm_recv) {
+                float hn = p.y - hm_d0 - meshHeight(p.xz);
+                if (hn < 0.001) { res = 0.0; break; }
+                res = min(res, k * hn / t);
+                t += clamp(hn, min_step, 100.0);
+                if (t > 800.0 || res < 0.001) break;
+                continue;
+            }
             float hb = p.y - meshHeight(p.xz) - 2.0;
             if (hb > 0.5 && k * hb >= t) {
                 t += clamp(hb, min_step, 100.0);

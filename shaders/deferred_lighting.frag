@@ -27,6 +27,7 @@ layout(set = 0, binding = 23) uniform sampler2D u_cloud_shadow;   // sunlight th
 #define CLOUD_SHADOW_MAP u_cloud_shadow
 #include "scene_ubo.glsl"
 #include "sun_horizon.glsl"
+layout(set = 0, binding = 24) uniform sampler2D u_skyview;       // the sky-view LUT (ground_haze.glsl: what the haze fades into)
 #include "ground_haze.glsl"
 layout(set = 0, binding = 20) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
 layout(set = 0, binding = 21) uniform sampler2D u_lawn_height;   // baked terrain height (blade roots)

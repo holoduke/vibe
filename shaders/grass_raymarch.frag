@@ -61,6 +61,29 @@ layout(set = 0, binding = 27) uniform sampler2D u_prepass_depth;
 // blade's height of the ground. This pass starts its march there.
 layout(set = 0, binding = 34) uniform sampler2D u_march_lo;
 
+// How far a blade at world xz is pressed down by a car: 1 under it, falling to 0 behind it
+// over the stretch it has just driven (the grass comes up again), 0 elsewhere. The cars are
+// in the scene block (car_press: two of them). Under the car the blades would otherwise
+// stand up through its floor; behind it they rise again in the order it passed over them.
+float car_press(vec2 xz) {
+    float k = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        vec4 c = scene.car_press[2 * i], e = scene.car_press[2 * i + 1];
+        if (e.w < 0.5) continue;
+        vec2 d = xz - c.xy;
+        d -= 6400.0 * round(d / 6400.0);                 // (the blade lattice repeats every 6.4 km)
+        float along  = dot(d, c.zw);                     // + toward its front
+        float across = abs(dot(d, vec2(-c.w, c.z)));
+        float side = 1.0 - smoothstep(e.x, e.x + 0.30, across);
+        if (side <= 0.0) continue;
+        float front = 1.0 - smoothstep(e.y, e.y + 0.35, along);
+        // behind: fully down at its tail, up again at the end of the stretch
+        float back = (along > -e.y) ? 1.0 : 1.0 - smoothstep(0.0, max(e.z, 0.5), -e.y - along);
+        k = max(k, side * front * back);
+    }
+    return k;
+}
+
 layout(push_constant) uniform PC {
     mat4 mvp;          // view_proj — for gl_FragDepth at the hit
     mat4 model;        // inverse(view_proj) — for world-ray reconstruction
@@ -578,6 +601,9 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
             np.xz = rotate2d(r.z * kPi2) * np.xz;
             np.xz += (r.xy - 0.5) * kPeriod;
             float bh = bh0 * mix(0.45, 1.0, edge_k);
+            // Under a car, and behind it where it has just been: the blade lies down (car_press).
+            float press = car_press(cw);
+            bh *= 1.0 - 0.90 * press;
             // The blade's own size: 0.3 .. 1 of its type's height (the short
             // ones fill the base of the lawn), narrower when shorter but not
             // in proportion, so a short blade is still a leaf and not a hair.
@@ -600,6 +626,8 @@ float map(vec3 p, float ray_t, MapCtx ctx, out bool out_blade_hit) {
             // splay out), bending with height.
             float wind_t = pc.color.z + r.w * kPi2;
             float bend   = sin(wind_t * 1.4) * pc.color.y * 0.025 * (0.4 + 0.6 * s);
+            // (coming up again behind the car it springs to and fro, most when half way up)
+            bend += press * (1.0 - press) * 0.22 * sin(pc.color.z * 9.0 + r.w * 40.0);
             float lean   = (fract(r.w * 13.7 + r.z * 5.3) - 0.5) * 0.30 * tp.z * s;
             np.x += (bend + lean * bh) * smoothstep(0.0, 1.5 * hs, np.y);
             // Height and width scale separately: the distance is then a lower
@@ -728,8 +756,6 @@ void main() {
             // at 14 m (blade tips on ridges further back may be skipped -
             // sub-pixel at those angles). Was the bulk of the march cost:
             // ~all steps were spent sphere-tracing through air.
-            vec3  ps = sp.xyz / sp.w;
-            float yS = sampleHeight_lod(ps.xz, t_surf);
             // NOT when the prepass surface is under water: the depth there
             // is the lake BED (water isn't in the prepass), far behind the
             // shore blades that silhouette against the water - starting
@@ -742,6 +768,10 @@ void main() {
             // the march then started out at the object and skipped every blade
             // on the hill in front, punching the object's outline through the
             // grass.
+            // (the height under the object is asked only with the mesh terrain: with the
+            //  raymarched one it was a fetch and three noises for every pixel under a tree)
+            vec3  ps = sp.xyz / sp.w;
+            float yS = (pc.emissive.x > 0.5) ? sampleHeight_lod(ps.xz, t_surf) : 1e9;
             if (pc.emissive.x > 0.5 &&
                 abs(ps.y - yS) < 0.6 && ps.y > scene.water_params.y + 0.05) {
                 vec3  Ns   = calcTerrainNormalApprox(ps.xz, yS, t_surf);

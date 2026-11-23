@@ -508,6 +508,7 @@ void VulkanEngine::loop_simulate(InputFrame& in, float frame_dt) {
     if (state_ == State::Playing) {
         physics_accumulator_ += frame_dt;
         if (physics_accumulator_ > kFixedDt * (kMaxTicksPerFrame + 1)) {
+            sim_debt_s_ += physics_accumulator_ - kFixedDt * kMaxTicksPerFrame;      // (time that will not be simulated)
             physics_accumulator_ = kFixedDt * kMaxTicksPerFrame;  // anti-spiral
         }
         while (physics_accumulator_ >= kFixedDt &&

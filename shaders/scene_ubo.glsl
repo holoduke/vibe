@@ -142,6 +142,11 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     // z = texels a metre, w = texels a side. wm_cache: the near picture, wm_cache1: the far one.
     vec4   wm_cache;
     vec4   wm_cache1;
+    // Cars pressing the grass down (jeep.cpp jeep_grass_press; grass_raymarch.frag car_press):
+    // two cars, two vec4 each. [0]: xy = the car's middle (world xz), zw = the way it faces (xz,
+    // unit). [1]: x = half its width, y = half its length, z = how far behind it the grass is
+    // still coming up (m), w = 1 when there is a car.
+    vec4   car_press[4];
 } scene;
 
 // The view ray through a point of the screen (ndc: -1 .. 1), unit length. Use this - never

@@ -51,11 +51,13 @@
         vec2 luv = lc.xy * 0.5 + 0.5;
         if (all(greaterThan(luv, vec2(0.002))) && all(lessThan(luv, vec2(0.998))) &&
             lc.z > 0.0 && lc.z < 1.0) {
-            float occ = clutterOcc(luv, 0, lc.z - 0.0004);
             // Near cascade (layer 1): same centre, 4x finer (0.8 cm texels
             // over 16 m) for crisp stem / petal shadows close by.
+            // (the wide layer only where it shows: inside the near one its weight is 0, and its
+            //  sixteen fetches were thrown away)
             vec2 nndc = lc.xy * 4.0;
             float nr = max(abs(nndc.x), abs(nndc.y));
+            float occ = (nr > 0.80) ? clutterOcc(luv, 0, lc.z - 0.0004) : 0.0;
             if (nr < 0.97)
                 occ = mix(clutterOcc(nndc * 0.5 + 0.5, 1, lc.z - 0.00025), occ, smoothstep(0.80, 0.97, nr));
             float edge = min(min(luv.x, luv.y), min(1.0 - luv.x, 1.0 - luv.y));
@@ -251,7 +253,9 @@
     // below - the height layers put grass at the water level, which ran straight into the sea.
     {
         float sea_k = smoothstep(1350.0, 1750.0, rm_home_dist(pos.xz));
-        if (sea_k > 0.0 && scene.water_params.x > 0.5) {
+        // (only as high as the sand can reach - 2.45 m over the water: above that its weight
+        //  is 0, and its four noises were worked out for every pixel of the wider world)
+        if (sea_k > 0.0 && scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 2.5) {
             float wl = scene.water_params.y;
             float edge = wl + 0.5 + 1.0 * tile_noise2(pos.xz, 0.045, vec2(0.0)) + 0.35 * tile_noise2(pos.xz, 0.31, vec2(0.0));
             float sand = sea_k * (1.0 - smoothstep(edge - 0.5, edge + 0.6, pos.y));
@@ -260,14 +264,6 @@
             vec3 sandc = vec3(0.29, 0.245, 0.17) * (0.90 + 0.20 * tile_noise2(pos.xz, 0.35, vec2(0.0))) * (0.94 + 0.12 * tile_noise2(pos.xz, 3.1, vec2(0.0))) *
                          mix(1.0, 0.72, smoothstep(wl + 0.25, wl - 0.15, pos.y));          // wet at the water's edge
             mate = mix(mate, sandc, sand);
-            // Above the beach: grass. Out here there are no blades and no meadow mask, and the
-            // soil under them is a grey gravel - from eye height the whole country was that.
-            float turf = 0.0;   // (below, with the edge of the home tile's grass)
-            float tn = tile_noise2(pos.xz, 0.031, vec2(0.0)) * 0.6 + tile_noise2(pos.xz, 0.21, vec2(4.0)) * 0.4;
-            vec3 turfc = mix(vec3(0.150, 0.118, 0.066), vec3(0.070, 0.112, 0.036), smoothstep(0.30, 0.52, tn)) *
-                         (1.0 + 0.40 * (tile_noise2(pos.xz, 1.9, vec2(0.0)) - 0.5) * (1.0 - smoothstep(120.0, 400.0, t))) *
-                         (1.0 + 0.16 * (tile_noise2(pos.xz, 11.0, vec2(0.0)) - 0.5) * (1.0 - smoothstep(18.0, 60.0, t)));   // (grain only while a pixel resolves it: finer than a pixel it turned into ruled lines)
-            mate = mix(mate, turfc, turf * 0.85);
         }
     }
     // Turf where the home tile's grass thins out and beyond (grass_raymarch.frag fades its blades

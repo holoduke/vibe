@@ -29,9 +29,10 @@ struct SnapEntry  { uint32_t id; uint32_t t; PackedState s; };
 struct MsgEvent   { uint8_t type; Event e; };
 struct MsgHello   { uint8_t type; uint32_t id; char name[16]; };
 struct MsgWorld   { uint8_t type; WorldState w; };
+struct MsgCar     { uint8_t type; uint32_t id; uint32_t t; uint8_t t_frac; PackedCar c; };      // (t_frac: 1/256 ms)
 #pragma pack(pop)
 
-enum : uint8_t { kMsgState = 1, kMsgSnap = 2, kMsgEvent = 3, kMsgHello = 4, kMsgWorld = 5 };
+enum : uint8_t { kMsgState = 1, kMsgSnap = 2, kMsgEvent = 3, kMsgHello = 4, kMsgWorld = 5, kMsgCar = 6 };
 constexpr uint8_t kVersion = kProtocolVersion;
 
 // VIBE_NET_PORT=<n>: another discovery port (game ports follow it), so test instances on a
@@ -51,8 +52,10 @@ struct Session::Impl {
     ENetPeer* server = nullptr;            // client / connecting: the host
     bool      enet_ok = false;
     double    t0 = -1.0;                   // local origin of the millisecond clock
-    double    offset_ms = 0.0;             // client: host clock - local clock
+    double    offset_ms = 0.0;             // client: host clock - local clock (ClockOffset::value)
     bool      have_offset = false;
+    ClockOffset clock;
+    double    clock_last_ms = 0.0;
     double    next_send = 0.0, next_snap = 0.0, next_beacon = 0.0, next_addr = 0.0;
     double    connect_deadline = 0.0, retry_after = 0.0;
     std::vector<uint32_t> bcast;           // broadcast addresses (network order)
@@ -169,7 +172,7 @@ void Session::stop() {
     if (d_->disc != INVALID_SOCKET) { closesocket(d_->disc); d_->disc = INVALID_SOCKET; }
     if (d_->enet_ok) { enet_deinitialize(); d_->enet_ok = false; }
     d_->server = nullptr; d_->peers.clear(); d_->seen.clear();
-    players_.clear(); gate_.clear();
+    players_.clear(); gate_.clear(); cars_.clear(); car_queue_.clear();
     role_ = Role::Off;
 }
 
@@ -192,7 +195,44 @@ void Session::add_snap(uint32_t id, uint32_t t, const PlayerState& s, double now
     if (!p.buf.add(t, s, uint32_t(std::max(0.0, d_->server_now_ms)))) ++stats_.dropped_states;
 }
 
-void Session::interpolate(uint32_t session_now, double now) {
+void Session::add_car(uint32_t sender, double t, const CarState& s, double now) {
+    if (sender == 0 || sender == id_ || s.car >= kMaxCars) return;
+    RemoteCar* rc = nullptr;
+    for (auto& c : cars_) if (c.car == s.car) rc = &c;
+    if (!rc) { cars_.emplace_back(); rc = &cars_.back(); rc->car = s.car; }
+    // Another machine has taken the car over: its states are stamped by the same clock, but
+    // nothing of the old sender's is to be blended into them.
+    if (rc->sender != sender) { rc->buf.snaps.clear(); rc->sender = sender; }
+    // VIBE_LOG_NET_CAR=1: is each state where the last one, its time stamp and the two velocities
+    // say it should be? (the evidence when a car moves unevenly on another screen)
+    if (static const bool lg = std::getenv("VIBE_LOG_NET_CAR") != nullptr; lg && !rc->buf.snaps.empty()) {
+        const CarBuffer::Snap& a = rc->buf.snaps.back();
+        const double gap = (t - a.t) * 0.001;
+        double d2 = 0.0, va = 0.0, vb = 0.0;
+        for (int k = 0; k < 3; ++k) { d2 += double(s.p[k] - a.s.p[k]) * double(s.p[k] - a.s.p[k]); va += double(a.s.v[k]) * a.s.v[k]; vb += double(s.v[k]) * s.v[k]; }
+        const double off = std::sqrt(d2) - 0.5 * (std::sqrt(va) + std::sqrt(vb)) * gap;
+        if (std::abs(off) > 0.01) log::infof("[net] car %d: state %.2f ms after the last is %.3f m off its velocity (%.2f ms at this speed)", int(s.car), gap * 1000.0, off, off / std::max(std::sqrt(vb), 0.1) * 1000.0);
+    }
+    if (static const char* lv = std::getenv("VIBE_LOG_NET_CAR"); lv && lv[0] == '2')
+        log::infof("[net] RX %.3f %.4f %.4f %.4f %.3f %.3f %.3f", t, double(s.p[0]), double(s.p[1]), double(s.p[2]), double(s.v[0]), double(s.v[1]), double(s.v[2]));
+    if (rc->buf.add(t, s, std::max(0.0, d_->server_now_ms))) rc->last_rx = now;
+    else ++stats_.dropped_states;
+}
+
+void Session::interpolate(double session_now_ms, double now) {
+    const uint32_t session_now = uint32_t(std::max(0.0, session_now_ms));
+    for (auto& c : cars_) {
+        c.fresh = !c.buf.snaps.empty();
+        c.age = now - c.last_rx;
+        const double passed = c.last_now_ms > 0.0 ? session_now_ms - c.last_now_ms : 0.0;
+        c.last_now_ms = session_now_ms;
+        c.shown_ms = std::max(0.0, session_now_ms - c.buf.advance_delay(passed));
+        const CarBuffer::Sample s = c.buf.sample(c.shown_ms);
+        c.extrapolated = s.extrapolated;
+        if (!s.valid) continue;
+        c.state = s.s;
+        c.teleported = s.teleported;
+    }
     for (auto& p : players_) {
         p.fresh = !p.buf.snaps.empty() && (now - p.last_rx) < 2.0;
         const uint32_t delay = p.buf.delay_ms();
@@ -219,6 +259,13 @@ void Session::send_event(Event e) {
     MsgEvent m{ kMsgEvent, e };
     if (role_ == Role::Host) d_->send_all(&m, sizeof(m), true);
     else if (role_ == Role::Client) d_->send(d_->server, &m, sizeof(m), true);
+}
+
+void Session::queue_car(const CarState& c, double now) {
+    if (!d_->host || d_->t0 < 0.0) return;
+    if (role_ == Role::Client && !d_->have_offset) return;
+    const double local_ms = (now - d_->t0) * 1000.0;
+    car_queue_.push_back({ c, std::max(0.0, role_ == Role::Client ? local_ms + d_->offset_ms : local_ms) });
 }
 
 void Session::send_world(const WorldState& w) {
@@ -297,13 +344,24 @@ void Session::update(double now, const PlayerState& local) {
                 MsgSnapHdr h; std::memcpy(&h, data, sizeof(h));
                 if (len == sizeof(h) + size_t(h.n) * sizeof(SnapEntry)) {
                     const double cand = double(h.server_t) + 0.5 * double(ev.peer->roundTripTime) - local_ms;
-                    if (!d_->have_offset || std::abs(cand - d_->offset_ms) > 250.0) d_->offset_ms = cand;
-                    else d_->offset_ms += (cand - d_->offset_ms) * 0.02;
+                    if (!d_->have_offset) d_->clock.reset();
+                    d_->clock.add(cand, d_->have_offset ? local_ms - d_->clock_last_ms : 0.0);      // (net_state.h ClockOffset: why not a running average)
+                    d_->clock_last_ms = local_ms;
+                    d_->offset_ms = d_->clock.value;
                     d_->have_offset = true;
                     for (uint8_t i = 0; i < h.n; ++i) {
                         SnapEntry e; std::memcpy(&e, data + sizeof(h) + size_t(i) * sizeof(e), sizeof(e));
                         add_snap(e.id, e.t, unpack_state(e.s), now);
                     }
+                }
+            } else if (type == kMsgCar && len == sizeof(MsgCar)) {
+                MsgCar m; std::memcpy(&m, data, sizeof(m));
+                if (role_ == Role::Host) {
+                    // from a client, about a car it simulates: taken, and passed on to the others at once
+                    for (auto& pi : d_->peers)
+                        if (pi.peer == ev.peer && pi.id == m.id) { add_car(m.id, double(m.t) + double(m.t_frac) / 256.0, unpack_car(m.c), now); d_->send_all(&m, sizeof(m), false, ev.peer); }
+                } else if (ev.peer == d_->server) {
+                    add_car(m.id, double(m.t) + double(m.t_frac) / 256.0, unpack_car(m.c), now);
                 }
             } else if (type == kMsgEvent && len == sizeof(MsgEvent)) {
                 MsgEvent m; std::memcpy(&m, data, sizeof(m));
@@ -414,6 +472,16 @@ void Session::update(double now, const PlayerState& local) {
         MsgState m{ kMsgState, id_, uint32_t(std::max(0.0, local_ms + d_->offset_ms)), pack_state(local) };
         d_->send(d_->server, &m, sizeof(m), false);
     }
+    // The cars this machine simulates (queue_car).
+    if ((role_ == Role::Client && d_->have_offset) || role_ == Role::Host) {
+        for (const QueuedCar& qc : car_queue_) {
+            const double ts = qc.t_ms;
+            MsgCar m{ kMsgCar, id_, uint32_t(ts), uint8_t((ts - std::floor(ts)) * 256.0), pack_car(qc.s) };
+            if (role_ == Role::Host) d_->send_all(&m, sizeof(m), false);
+            else d_->send(d_->server, &m, sizeof(m), false);
+        }
+    }
+    car_queue_.clear();
     if (role_ == Role::Host && now >= d_->next_snap) {
         d_->next_snap = std::max(d_->next_snap + 1.0 / 60.0, now - 1.0 / 60.0);
         uint8_t buf[sizeof(MsgSnapHdr) + (kMaxPlayers + 1) * sizeof(SnapEntry)];
@@ -438,7 +506,7 @@ void Session::update(double now, const PlayerState& local) {
     const double server_now = role_ == Role::Client ? local_ms + d_->offset_ms : local_ms;
     d_->server_now_ms = server_now;
     render_t_ = uint32_t(std::max(0.0, server_now - double(kInterpDelayMs)));
-    interpolate(uint32_t(std::max(0.0, server_now)), now);
+    interpolate(std::max(0.0, server_now), now);
 }
 
 }  // namespace vibe::net

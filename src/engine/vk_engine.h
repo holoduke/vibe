@@ -566,6 +566,8 @@ private:
 
     bool tr_march_prepass_on() const;
     void render_terrain_march_prepass(VkCommandBuffer cmd);
+    void render_terrain_vrs_rate(VkCommandBuffer cmd);      // the ground's shading rate, from the march's distances
+    float tr_vrs_near_m() const;                            // how far out the ground is shaded 2 x 2 this frame (0: nowhere)
 
     // --- Attachment-based Variable Rate Shading (VK_KHR_fragment_shading_rate) ---
     // Small R8_UINT image sized at (render_extent + tile - 1) / tile. Each
@@ -1272,6 +1274,7 @@ private:
         bool          drawn = false, fresh_pose = true;
         bool          present = false;                 // has a current state: can be hit, whether drawn or not
         glm::vec3     foot_last{1e9f};                 // footprints in the snow
+        bool          seated = false;                  // at the wheel of a car this frame (nothing in the hands)
         bool          corpse = false;                  // drawn as a body on the ground: head, no weapon
         bool          die = false;                     // killed: the body buckles where it stands, then is a ragdoll (ragdoll.cpp)
         float         dying_t = -1.0f;                 // seconds since the kill while the body still stands (-1: alive)
@@ -1642,6 +1645,12 @@ private:
     glm::vec3 prev_player_position_{};
     int last_physics_ticks_ = 0;
     float last_frame_dt_ = 0.0f;
+    double frame_clock_s_ = 0.0;                 // glfwGetTime() where the frame's dt is measured
+    // Time the clock has moved on and the simulation has not (a frame longer than it may
+    // simulate: the 1/15 s limit, the limit on physics steps). The cars' network time stamps
+    // are behind the clock by this much, so they stay the times of what was simulated; it
+    // drains at 1 % of the time that passes (jeep_net_send).
+    float  sim_debt_s_ = 0.0f;
     float ema_fps_ = 0.0f;
     // Rolling history for the Three.js-style HUD panels. Each frame
     // appends to the head; PlotLines reads the whole array.
@@ -2021,6 +2030,13 @@ private:
     void      jeep_feed_world();
     bool      jeep_use();
     bool      jeep_driving() const;
+    void      jeep_grass_press(glm::vec4 out[4]) const;     // the cars the grass lies down under (scene UBO car_press)
+    // Multiplayer: the cars this machine simulates are told to the others; theirs are drawn from what they tell (jeep.cpp).
+    void      jeep_net_send(float dt);
+    void      jeep_net_receive(float dt);
+    bool      jeep_seat_of(uint32_t player, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;     // the seat of the car that player drives
+    static void      jeep_seat(const JeepState& J, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs);
+    static glm::mat4 jeep_wheel_from(const JeepState& J, const glm::mat4& body, int w, float steer, float susp, float roll);
     void      jeep_tick(InputFrame& in, float dt);
     void      jeep_after_sim(float dt);
     void      jeep_hud();

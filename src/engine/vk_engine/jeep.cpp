@@ -21,6 +21,7 @@
 // and ray traced like everything else. Home's chart only (the course lies within it).
 #include "engine/vk_engine/internal.h"
 #include "engine/highway.h"
+#include "engine/net/net.h"
 #include "engine/terrain.h"
 #include "engine/globe.h"
 
@@ -91,6 +92,13 @@ struct VulkanEngine::JeepState {
     // The ground patch and the obstacles.
     struct Patch { std::vector<float> h; glm::vec2 org{0.0f}; glm::vec2 centre{0.0f}; };
     std::future<Patch> patch_job;
+    // Multiplayer (jeep_net_*): who simulates it. net_mine: this machine, and it tells the
+    // others. net_owner: another player's machine (their id) - it is drawn from their states.
+    bool      net_mine = false, net_driven = false;      // (net_driven: its owner sits at the wheel)
+    uint32_t  net_owner = 0;
+    float     net_roll[4]{ 0.0f, 0.0f, 0.0f, 0.0f };     // the wheels' turn, carried on from their speed
+    float     net_send = 0.0f;                           // seconds until its next state goes out
+    bool      braking() const { return (driving || net_owner != 0) && brake_in > 0.05f; }
     bool      patch_busy = false, patch_valid = false;
     glm::vec2 patch_centre{1e9f};
     glm::vec2 obst_centre{1e9f};
@@ -170,6 +178,15 @@ glm::vec3 v3(const std::vector<float>& v, size_t at, glm::vec3 def) { return v.s
 
 float hash_f(float v) { return std::floor(v * 4.0f); }
 float rnd01() { static uint32_t s = 0x9E3779B9u; s = s * 1664525u + 1013904223u; return float(s >> 8) / 16777216.0f; }
+
+// A place between two places (rigid: turned the short way, moved in a straight line).
+glm::mat4 mix_pose(const glm::mat4& a, const glm::mat4& b, float t) {
+    const glm::mat3 ra(a), rb(b);
+    if (glm::determinant(ra) <= 0.0f || glm::determinant(rb) <= 0.0f) return t < 0.5f ? a : b;
+    glm::mat4 m = glm::mat4_cast(glm::slerp(glm::quat_cast(ra), glm::quat_cast(rb), t));
+    m[3] = glm::vec4(glm::mix(glm::vec3(a[3]), glm::vec3(b[3]), t), 1.0f);
+    return m;
+}
 
 }  // namespace
 
@@ -442,7 +459,7 @@ bool VulkanEngine::jeep_use() {
         // other stays where it stands.
         JeepState* best = nullptr; float bd = 3.6f;
         for (JeepState* c : jeep_all_) {
-            if (!c->posed) continue;
+            if (!c->posed || (c->net_owner && c->net_driven)) continue;      // (not one somebody else is driving)
             const float dd = glm::distance(player_.eye_position(), glm::vec3(c->st.body[3]) + glm::vec3(0.0f, 1.0f, 0.0f));
             if (dd < bd) { bd = dd; best = c; }
         }
@@ -453,6 +470,13 @@ bool VulkanEngine::jeep_use() {
             physics_->vehicle_remove();
             jeep_->spawned = false;
             jeep_ = best;
+            jeep_spawn();
+            if (!jeep_->spawned) return false;
+            jeep_feed_world();
+        }
+        // (one that another machine simulated: it is made here, where it stands, and is ours)
+        jeep_->net_owner = 0; jeep_->net_driven = false;
+        if (!jeep_->spawned) {
             jeep_spawn();
             if (!jeep_->spawned) return false;
             jeep_feed_world();
@@ -475,6 +499,7 @@ bool VulkanEngine::jeep_use() {
     }
     if (glm::distance(player_.eye_position(), pos + glm::vec3(0.0f, 1.0f, 0.0f)) > 3.6f) return false;
     J.driving = true;
+    J.net_mine = true;
     J.cam_init = false;
     J.look_idle = 10.0f;
     fly_mode_ = false;
@@ -515,7 +540,7 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
             jeep_park(*jeep_all_[i], p, yaw);
         }
     }
-    if (!J.spawned) { jeep_spawn(); if (!J.spawned) return; }
+    if (!J.spawned) { if (J.net_owner) return; jeep_spawn(); if (!J.spawned) return; }      // (another player's machine simulates it: jeep_net_receive)
     if (!globe::current().home) return;                    // (another part of the planet: it waits where it was left)
     jeep_feed_world();
     if (state_ != State::Playing) return;
@@ -524,7 +549,7 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
         static const char* test = std::getenv("VIBE_TEST_JEEP");
         if (test) {
             float th = 0.0f, stv = 0.0f; std::sscanf(test, "%f,%f", &th, &stv);
-            if (frame_number_ > 90) { J.driving = true; J.cam_init = false; }
+            if (frame_number_ > 90) { J.driving = true; J.net_mine = true; J.cam_init = false; }
             (void)th; (void)stv;
         }
         physics_->vehicle_input(0.0f, 0.0f, 0.0f, 1.0f);
@@ -638,7 +663,7 @@ void VulkanEngine::jeep_place(JeepState& J, const PhysicsWorld::VehicleState& pr
         const uint8_t kd = J.kind[i - J.draw_first];
         if (kd == 1) g.emissive = J.lights_on ? glm::vec4(2.8f, 2.7f, 2.3f, 2.0f) : glm::vec4(0.0f);
         if (kd == 2) {
-            const float s = (J.driving && J.brake_in > 0.05f) ? 3.2f : (J.lights_on ? 0.75f : 0.0f);
+            const float s = J.braking() ? 3.2f : (J.lights_on ? 0.75f : 0.0f);
             g.emissive = glm::vec4(s, s * 0.04f, s * 0.03f, s > 0.0f ? 2.0f : 0.0f);
         }
         glm::vec3 lo(1e9f), hi(-1e9f);
@@ -675,7 +700,22 @@ void VulkanEngine::jeep_after_sim(float dt) {
     JeepState& J = *jeep_;
     J.body_prev = J.st.body;
     PhysicsWorld::VehicleState prev = J.st;
-    physics_->vehicle_state(J.st);
+    // The physics moves in steps of 1 / 120 s and a frame holds one of them, or two, or none:
+    // drawn where the last step left it, the car moved by a different amount every frame
+    // (at 100 km/h a step is 23 cm) - it shook against the road and the camera. So it is
+    // drawn between the last two steps, as far along as the time not yet simulated
+    // (the player is drawn the same way: world_render.cpp, render_pos).
+    {
+        PhysicsWorld::VehicleState cur, old;
+        physics_->vehicle_state(cur);
+        J.st = cur;
+        static const bool kRaw = std::getenv("VIBE_TEST_JEEP_RAW") != nullptr;      // (tests: as it was, the last step's place)
+        if (!kRaw && physics_->vehicle_state_prev(old)) {
+            const float a = glm::clamp(physics_accumulator_ * 120.0f, 0.0f, 1.0f);
+            J.st.body = mix_pose(old.body, cur.body, a);
+            for (int w = 0; w < 4; ++w) J.st.wheel[w] = mix_pose(old.wheel[w], cur.wheel[w], a);
+        }
+    }
     const glm::mat4& B = J.st.body;
     jeep_place(J, prev, dt);
     jeep_marks(J, dt);
@@ -692,6 +732,13 @@ void VulkanEngine::jeep_after_sim(float dt) {
         }
     } else J.upside_t = 0.0f;
 
+    // (how evenly it moves in the picture: the most a frame's step differed from speed x time)
+    static float uneven = 0.0f;
+    if (dt > 0.0f) uneven = std::max(uneven, std::abs(glm::length(glm::vec3(B[3]) - glm::vec3(J.body_prev[3])) - glm::length(J.st.velocity) * dt));
+    if (static const bool lg2 = std::getenv("VIBE_LOG_JEEP") != nullptr; lg2 && frame_number_ % 60 == 0) {
+        log::infof("[jeep] uneven by %.3f m at most over the last 60 frames (frame %.1f ms)", double(uneven), double(dt) * 1000.0);
+        uneven = 0.0f;
+    }
     if (static const bool lg = std::getenv("VIBE_LOG_JEEP") != nullptr; lg && frame_number_ % 60 == 0)
         log::infof("[jeep] pos (%.1f, %.2f, %.1f) speed %.1f km/h gear %d rpm %.0f contact %d%d%d%d up %.2f driving %d | springs %.2f %.2f %.2f %.2f ground %.2f",
                    double(B[3].x), double(B[3].y), double(B[3].z), double(glm::length(J.st.velocity) * 3.6f), J.st.gear, double(J.st.rpm),
@@ -739,8 +786,12 @@ void VulkanEngine::jeep_after_sim(float dt) {
         if (want.y < g) want.y = g;
     }
     if (!J.cam_init) { J.cam_pos = want; J.cam_init = true; }
-    // (the position follows stiffly: a lagging camera on a bumpy road makes one seasick)
-    J.cam_pos += (want - J.cam_pos) * std::min(1.0f, dt * 14.0f);
+    // (the position follows stiffly: a lagging camera on a bumpy road makes one seasick.
+    //  It first goes along with the car, then closes what is left: following alone it hung
+    //  back by speed x a time that depends on the frame's length, so with uneven frames
+    //  the car moved back and forth in the picture)
+    J.cam_pos += J.st.velocity * dt;
+    J.cam_pos += (want - J.cam_pos) * (1.0f - std::exp(-dt * 14.0f));
     player_.position = J.cam_pos - (player_.eye_position() - player_.position);
     player_.velocity = J.st.velocity;
     player_.on_ground = true;
@@ -875,7 +926,7 @@ void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puff
         if (c->posed) {
             const glm::mat4& B = c->st.body;
             const glm::vec3 f = -glm::normalize(glm::vec3(B[2]));
-            const bool braking = c->driving && c->brake_in > 0.05f;
+            const bool braking = c->braking();
             for (int s = 0; s < 2; ++s) {
                 if (c->lights_on) flare(glm::vec3(B * glm::vec4(c->head[s], 1.0f)) + f * 0.05f, f, 0.42f, glm::vec3(1.0f, 0.95f, 0.85f) * 2.4f);
                 if (c->lights_on || braking)
@@ -904,9 +955,163 @@ void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puff
     }
 }
 
-bool VulkanEngine::jeep_driver(glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const {
-    if (!jeep_ || !jeep_->driving || !jeep_->spawned) return false;
-    const JeepState& J = *jeep_;
+// ---- Multiplayer: cars (net_state.h "Cars") ---------------------------------------------------
+// A car is simulated where its driver sits, and stays that machine's after the driver has got
+// out, until somebody else gets in. That machine sends its state (30 times a second while it
+// moves, once a second standing - so a player who joins later sees it where it is); every
+// other machine draws it from those states and does not simulate it.
+
+// After the simulation (vk_engine.cpp, behind jeep_after_sim): the states of the cars this
+// machine simulates, as they are in this frame, stamped with this frame's time. (The session's
+// update runs earlier in the frame, before the physics: sent from there, a state was last
+// frame's with this frame's time on it - off by one frame's travel, a different amount every
+// frame, which other machines saw as a car that jerks.)
+void VulkanEngine::jeep_net_send(float dt) {
+    // The time these states are of: the frame's, less what the simulation is behind the clock
+    // (sim_debt_s_). After a long frame the car has moved less than the clock: stamped with
+    // the clock it reached others as a car that slowed down and sped up again. The debt
+    // drains at 1 % of the time passing (the car looks 1 % slow meanwhile); too much to make
+    // up (the game stood still for a moment) is told as a jump.
+    sim_debt_s_ = std::max(0.0f, sim_debt_s_ - 0.01f * dt);
+    const bool stood = sim_debt_s_ > 0.4f;
+    if (stood) sim_debt_s_ = 0.0f;
+    if (!net_) return;
+    for (size_t i = 0; i < jeep_all_.size() && i < size_t(net::kMaxCars); ++i) {
+        JeepState& J = *jeep_all_[i];
+        if (!J.net_mine || !J.posed) continue;
+        const bool live = &J == jeep_ && J.spawned && (J.driving || glm::length(J.st.velocity) > 0.15f);
+        J.net_send -= dt;
+        if (live) J.net_send = std::min(J.net_send, 1.0f / 30.0f);
+        if (J.net_send > 0.0f) continue;
+        J.net_send = std::max(0.0f, J.net_send + (live ? 1.0f / 30.0f : 1.0f));
+        net::CarState c;
+        c.car = uint8_t(i);
+        const glm::mat4& B = J.st.body;
+        const glm::quat q = glm::normalize(glm::quat_cast(glm::mat3(B)));
+        const glm::mat4 inv = glm::inverse(B);
+        for (int k = 0; k < 3; ++k) { c.p[k] = B[3][k]; c.v[k] = J.st.velocity[k]; c.w[k] = J.st.angular_velocity[k]; }
+        c.q[0] = q.x; c.q[1] = q.y; c.q[2] = q.z; c.q[3] = q.w;
+        c.steer = J.st.steer;
+        c.flags = uint8_t((J.driving ? net::kCarDriven : 0) | (J.lights_on ? net::kCarLights : 0) | (J.braking() ? net::kCarBrake : 0));
+        for (int w = 0; w < 4; ++w) {
+            c.susp[w] = (inv * J.st.wheel[w][3]).y - J.wheel_pos[w].y;
+            c.spin[w] = live ? J.st.wheel_spin[w] : 0.0f;
+            if (J.st.wheel_contact[w]) c.flags |= uint8_t(net::kCarContact0 << w);
+        }
+        if (stood) c.flags |= net::kCarTeleport;
+        net_->queue_car(c, frame_clock_s_ - double(sim_debt_s_));
+        // VIBE_TEST_CAR_ECHO=1: what a receiver makes of this state against what is drawn here
+        // (the wheels' places and axles, and which way they roll) - once a second.
+        if (static const bool echo = std::getenv("VIBE_TEST_CAR_ECHO") != nullptr; echo && live) {
+            static float roll_prev[4] = { 0, 0, 0, 0 };
+            const net::CarState r = net::unpack_car(net::pack_car(c));
+            float worst_p = 0.0f, worst_ax = 0.0f, rate[4];
+            for (int w = 0; w < 4; ++w) {
+                const glm::mat4 m = jeep_wheel_from(J, B, w, r.steer, r.susp[w], 0.0f);
+                worst_p = std::max(worst_p, glm::distance(glm::vec3(m[3]), glm::vec3(J.st.wheel[w][3])));
+                worst_ax = std::max(worst_ax, glm::distance(glm::vec3(m[0]), glm::vec3(J.st.wheel[w][0])));
+                // the drawn wheel's roll: its y axis in the frame of the steered, unrolled wheel
+                const glm::vec3 y = glm::vec3(glm::inverse(m) * J.st.wheel[w][1]);
+                const float roll = std::atan2(y.z, y.y);
+                rate[w] = std::remainder(roll - roll_prev[w], 6.2831853f);
+                roll_prev[w] = roll;
+            }
+            if (frame_number_ % 30 == 0)
+                log::infof("[jeep] echo: wheel place off by %.3f m, axle by %.3f; steer %.2f; roll step %.3f (spin x dt %.3f)",
+                           double(worst_p), double(worst_ax), double(c.steer), double(rate[2]), double(c.spin[2] / 30.0f));
+        }
+    }
+}
+
+// A car's wheel from what is sent about it: its place under the body, steered, turned.
+// (Jolt's wheel frame with the axle along +x: steering is a turn about y, rolling about x.)
+glm::mat4 VulkanEngine::jeep_wheel_from(const JeepState& J, const glm::mat4& body, int w, float steer, float susp, float roll) {
+    return body * glm::translate(glm::mat4(1.0f), J.wheel_pos[w] + glm::vec3(0.0f, susp, 0.0f)) *
+           glm::rotate(glm::mat4(1.0f), w < 2 ? steer : 0.0f, glm::vec3(0.0f, 1.0f, 0.0f)) *
+           glm::rotate(glm::mat4(1.0f), roll, glm::vec3(1.0f, 0.0f, 0.0f));
+}
+
+// After the session's update: the cars other machines simulate, where their states put them.
+void VulkanEngine::jeep_net_receive(float dt) {
+    if (!net_) return;
+    for (const net::RemoteCar& rc : net_->cars()) {
+        if (!rc.fresh || size_t(rc.car) >= jeep_all_.size()) continue;
+        JeepState& J = *jeep_all_[rc.car];
+        const net::CarState& s = rc.state;
+        const bool driven = (s.flags & net::kCarDriven) != 0 && rc.age < 3.0;
+        if (J.net_mine) {
+            // Two machines with the same car. Old news (it was theirs before it became ours) is
+            // passed over. Otherwise whoever sits in it has it; both sitting in it (they got in
+            // in the same moment): the lower id, the same answer on both machines.
+            if (rc.age > 3.0) continue;
+            if (J.driving && (!driven || net_->id() < rc.sender)) continue;
+            J.net_mine = false;
+            if (J.driving && &J == jeep_) jeep_use();                  // (out of it)
+        }
+        if (&J == jeep_ && J.spawned) {                                // (no longer simulated here)
+            if (J.patch_busy && J.patch_job.valid()) J.patch_job.wait();
+            J.patch_busy = false;
+            physics_->vehicle_remove();
+            J.spawned = false;
+        }
+        const bool jump = rc.teleported || J.net_owner != rc.sender || !J.posed;
+        J.net_owner = rc.sender;
+        J.net_driven = driven;
+        const PhysicsWorld::VehicleState prev = J.st;
+        glm::mat4 B = glm::mat4_cast(glm::quat(s.q[3], s.q[0], s.q[1], s.q[2]));
+        B[3] = glm::vec4(s.p[0], s.p[1], s.p[2], 1.0f);
+        J.st.body = B;
+        J.st.velocity = glm::vec3(s.v[0], s.v[1], s.v[2]);
+        J.st.angular_velocity = glm::vec3(s.w[0], s.w[1], s.w[2]);
+        J.st.steer = s.steer;
+        for (int w = 0; w < 4; ++w) {
+            J.st.wheel_contact[w] = (s.flags & (net::kCarContact0 << w)) != 0;
+            J.st.wheel_spin[w] = s.spin[w];
+            // (the wheels' turn is carried on here from their speed: a wheel goes round several
+            //  times between two states, so its angle cannot be sent and blended)
+            J.net_roll[w] = std::remainder(J.net_roll[w] - s.spin[w] * dt, 6.2831853f);       // (the mesh's frame turns the other way to Jolt's wheel angle)
+            J.st.wheel[w] = jeep_wheel_from(J, B, w, s.steer, s.susp[w], J.net_roll[w]);
+        }
+        J.lights_on = (s.flags & net::kCarLights) != 0;
+        J.brake_in = (s.flags & net::kCarBrake) ? 1.0f : 0.0f;
+        J.body_prev = jump ? B : prev.body;
+        J.posed = true;
+        jeep_place(J, jump ? J.st : prev, dt);
+        jeep_marks(J, dt);
+        if (static const bool lg = std::getenv("VIBE_LOG_JEEP") != nullptr; lg) {
+            // (how evenly it moves here. A frame's step against speed x time: `off`. A steady
+            //  difference is a car shown a per cent slow or fast while the delay or the sender's
+            //  clock is brought in line - nobody sees that. What is seen as a jerk is that
+            //  difference CHANGING from one frame to the next: `worst`.)
+            static float worst = 0.0f, off_last = 0.0f;
+            static double shown_last = 0.0;
+            const float off = glm::length(glm::vec3(B[3]) - glm::vec3(prev.body[3])) - glm::length(J.st.velocity) * dt;
+            const float err = std::abs(off - off_last);
+            off_last = off;
+            if (!jump) worst = std::max(worst, err);
+            if (static const char* lv = std::getenv("VIBE_LOG_JEEP_NET"); lv && lv[0] == '2')
+                log::infof("[jeep] SH %.3f %.4f %.4f %.4f %.3f %.3f %.3f %.3f", rc.shown_ms, double(s.p[0]), double(s.p[1]), double(s.p[2]), double(s.v[0]), double(s.v[1]), double(s.v[2]), double(dt) * 1000.0);
+            if (!jump && err > 0.01f && std::getenv("VIBE_LOG_JEEP_NET"))
+                log::infof("[jeep] net step off by %.3f m: frame %.2f ms, shown time moved %.2f ms, extrapolated %d, newest state %.1f ms ahead, %zu states",
+                           double(err), double(dt) * 1000.0, rc.shown_ms - shown_last, int(rc.extrapolated), rc.buf.snaps.empty() ? 0.0 : rc.buf.snaps.back().t - rc.shown_ms, rc.buf.snaps.size());
+            shown_last = rc.shown_ms;
+            if (frame_number_ % 60 == 0) {
+                log::infof("[jeep] remote car %d from %08X: pos (%.1f, %.2f, %.1f) %.1f km/h driven %d, a frame's step changed by %.3f m at most",
+                           int(rc.car), rc.sender, double(B[3].x), double(B[3].y), double(B[3].z), double(glm::length(J.st.velocity) * 3.6f), int(driven), double(worst));
+                worst = 0.0f;
+            }
+        }
+    }
+}
+
+// The seat of the car a player drives (another player's: multiplayer.cpp poses them in it).
+bool VulkanEngine::jeep_seat_of(uint32_t player, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const {
+    for (const JeepState* c : jeep_all_)
+        if (c->posed && c->net_owner == player && c->net_driven) { jeep_seat(*c, hip, hand_l, hand_r, legs); return true; }
+    return false;
+}
+
+void VulkanEngine::jeep_seat(const JeepState& J, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) {
     const glm::mat4& B = J.st.body;
     hip = B * glm::translate(glm::mat4(1.0f), J.hip);
     // The wheel's own frame: +z along the column toward the driver. The hands hold the rim at
@@ -921,7 +1126,51 @@ bool VulkanEngine::jeep_driver(glm::mat4& hip, glm::vec3& hand_l, glm::vec3& han
     hand_l = at(160.0f);
     hand_r = at(20.0f);
     legs = J.legs;
+}
+
+bool VulkanEngine::jeep_driver(glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const {
+    if (!jeep_ || !jeep_->driving || !jeep_->spawned) return false;
+    jeep_seat(*jeep_, hip, hand_l, hand_r, legs);
     return true;
+}
+
+
+// The cars the grass lies down under (scene UBO car_press, grass_raymarch.frag): the one driven
+// here and the nearest other that moves or was just left. Behind a car the grass is still down
+// over the stretch it drove in the last second and a half (25 m at most): a straight stretch
+// behind where it faces now - in a bend the far end of it lies a little beside the real track.
+void VulkanEngine::jeep_grass_press(glm::vec4 out[4]) const {
+    for (int i = 0; i < 4; ++i) out[i] = glm::vec4(0.0f);
+    if (!globe::current().home) return;                        // (cars stand in home's chart)
+    const glm::vec3 eye = player_.eye_position();
+    const JeepState* pick[2] = { nullptr, nullptr };
+    float best[2] = { 1e9f, 1e9f };
+    for (const JeepState* c : jeep_all_) {
+        if (!c->posed) continue;
+        const float d = glm::distance(glm::vec3(c->st.body[3]), eye);
+        if (d > 250.0f) continue;
+        for (int k = 0; k < 2; ++k)
+            if (d < best[k]) {
+                if (k == 0) { best[1] = best[0]; pick[1] = pick[0]; }
+                best[k] = d; pick[k] = c;
+                break;
+            }
+    }
+    for (int k = 0; k < 2; ++k) {
+        const JeepState* c = pick[k];
+        if (!c) continue;
+        const glm::mat4& B = c->st.body;
+        glm::vec2 f(-B[2].x, -B[2].z);
+        const float fl = glm::length(f);
+        if (fl < 1e-3f || B[1].y < 0.3f) continue;             // (on its side or roof: nothing under it)
+        f /= fl;
+        const float half_w = 0.5f * std::abs(c->wheel_pos[1].x - c->wheel_pos[0].x) + 0.5f * c->wheel_width + 0.12f;
+        const float half_l = 0.5f * std::abs(c->wheel_pos[2].z - c->wheel_pos[0].z) + c->wheel_radius + 0.35f;
+        const glm::vec3 mid(B * glm::vec4(0.0f, 0.0f, 0.5f * (c->wheel_pos[0].z + c->wheel_pos[2].z), 1.0f));
+        const float along = glm::dot(glm::vec2(c->st.velocity.x, c->st.velocity.z), f);      // (reversing: no stretch behind)
+        out[2 * k]     = glm::vec4(mid.x, mid.z, f.x, f.y);
+        out[2 * k + 1] = glm::vec4(half_w, half_l, glm::clamp(along * 1.5f, 0.0f, 25.0f), 1.0f);
+    }
 }
 
 }  // namespace vibe

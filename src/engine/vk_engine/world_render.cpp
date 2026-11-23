@@ -238,6 +238,44 @@ void VulkanEngine::render_terrain_march_prepass(VkCommandBuffer cmd) {
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
+// How far from the camera the ground is shaded once per 2 x 2 pixels (rt_.terrain_vrs).
+//
+// A coarse rate on ground that stands still in the picture shows: blocks of 2 x 2 rendered
+// pixels - 4 x 4 on the screen after the upscaler, which cannot rebuild what was never
+// sampled (measured 2026-11-23, close view: terrain pass 12.6 -> 5.9 ms, and the paving a
+// mosaic). Ground that crosses the screen quickly is another matter: at 100 km/h the road
+// 30 m ahead moves ten to twenty pixels a frame, and nothing that fine is seen on it. So:
+//   1  only while moving fast: nothing up to about 20 km/h, then 1.2 m further for every m/s
+//      (29 m at 108 km/h). Standing or walking: every pixel.
+//   2  the same, and 8 m around the camera whatever the speed (for the slowest machines).
+// Far ground and outlines never: terrain_vrs.frag.
+float VulkanEngine::tr_vrs_near_m() const {
+    if (static const char* e = std::getenv("VIBE_TEST_VRS_NEAR")) return float(std::atof(e));      // (tests: the distance itself)
+    const float speed = glm::length(player_.velocity);
+    if (rt_.terrain_vrs >= 2) return std::min(8.0f + 1.6f * speed, 110.0f);
+    if (rt_.terrain_vrs == 1) return glm::clamp(1.2f * (speed - 6.0f), 0.0f, 60.0f);
+    return 0.0f;
+}
+
+// The ground's shading rate for this frame, into the rate image (terrain_vrs.frag: 2 x 2 where
+// all the ground in a tile is nearer than tr_vrs_near_m(), every pixel elsewhere).
+void VulkanEngine::render_terrain_vrs_rate(VkCommandBuffer cmd) {
+    VkViewport vps{};
+    vps.width  = static_cast<float>(vrs_extent_.width);
+    vps.height = static_cast<float>(vrs_extent_.height);
+    vps.minDepth = 0.0f; vps.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &vps);
+    VkRect2D scissor{ {0, 0}, vrs_extent_ };
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr_->vrs_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &scene_desc_set_, 0, nullptr);
+    const float near_m = tr_vrs_near_m();
+    PushConstants pc{};
+    pc.color = glm::vec4(float(vrs_texel_size_.width), float(vrs_texel_size_.height), near_m, 0.0f);
+    vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+}
+
 void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd) {
     // Fullscreen-tri compose pass — sits at the START of the main
     // world color pass. Samples LR raymarch outputs and writes

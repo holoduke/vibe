@@ -9,6 +9,7 @@
 #include "fixtures.h"
 
 #include <functional>
+#include <limits>
 #include <random>
 
 using namespace vibe;
@@ -482,4 +483,155 @@ TEST_CASE("net: what is sent holds no pose - bytes per player per second", "[net
     CHECK(sizeof(Event) == 43);
     // no field of the state or of an event can carry a bone: the largest is three floats
     CHECK(sizeof(PackedState) < 53 * 4);          // less than one float per joint
+}
+
+// ---- cars ----
+
+namespace {
+// A car going round a circle of radius r at speed v: where it is and how it moves at time t.
+vibe::net::CarState car_on_circle(float t, float r, float v) {
+    vibe::net::CarState c;
+    const float a = v / r * t;
+    c.p[0] = r * std::cos(a); c.p[2] = r * std::sin(a); c.p[1] = 3.0f;
+    c.v[0] = -v * std::sin(a); c.v[2] = v * std::cos(a);
+    c.w[1] = -v / r;
+    c.q[1] = std::sin(-0.5f * a); c.q[3] = std::cos(-0.5f * a);      // turned about y with the bend
+    c.flags = vibe::net::kCarDriven;
+    for (float& s : c.spin) s = v / 0.4f;
+    return c;
+}
+}  // namespace
+
+TEST_CASE("net: wire form of a car state", "[net][car]") {
+    using namespace vibe::net;
+    CarState c = car_on_circle(1.3f, 60.0f, 30.0f);
+    c.car = 5; c.steer = -0.31f; c.susp[2] = 0.07f; c.susp[3] = -0.11f;
+    c.flags = uint8_t(kCarDriven | kCarLights | (kCarContact0 << 3));
+    const CarState r = unpack_car(pack_car(c));
+    CHECK(r.car == 5);
+    CHECK(r.flags == c.flags);
+    for (int i = 0; i < 3; ++i) {
+        CHECK(r.p[i] == c.p[i]);                                    // places are not rounded: the world is a planet
+        CHECK_THAT(r.v[i], WithinAbs(c.v[i], 0.006));
+        CHECK_THAT(r.w[i], WithinAbs(c.w[i], 0.0006));
+    }
+    for (int i = 0; i < 4; ++i) {
+        CHECK_THAT(r.q[i], WithinAbs(c.q[i], 1e-4));
+        CHECK_THAT(r.susp[i], WithinAbs(c.susp[i], 0.0021));
+        CHECK_THAT(r.spin[i], WithinAbs(c.spin[i], 0.006));
+    }
+    CHECK_THAT(r.steer, WithinAbs(c.steer, 0.0051));
+    // nothing that is not a number, no car that does not exist
+    CarState bad = c; bad.p[1] = std::numeric_limits<float>::quiet_NaN();
+    CHECK_FALSE(car_is_sane(bad));
+    bad = c; bad.car = kMaxCars;
+    CHECK_FALSE(car_is_sane(bad));
+    CarBuffer b;
+    CHECK_FALSE(b.add(10, bad, 10));
+    CHECK(b.snaps.empty());
+}
+
+TEST_CASE("net: a car seen from another machine moves evenly round a bend", "[net][car]") {
+    using namespace vibe::net;
+    // 108 km/h round a 60 m bend, told 30 times a second, drawn 100 ms late at 144 frames a second.
+    const float r = 60.0f, v = 30.0f;
+    CarBuffer b;
+    for (int i = 0; i < 90; ++i) { const uint32_t t = 1000u + uint32_t(i) * 33u; b.add(t, car_on_circle(float(t) * 0.001f, r, v), t); }
+    float worst_off = 0.0f, worst_step = 0.0f, worst_turn = 0.0f;
+    CarState last{};
+    bool have = false;
+    for (uint32_t rt = 1900; rt < 3900; rt += 7) {      // (the buffer keeps the last 64 states)
+        const CarBuffer::Sample s = b.sample(rt);
+        REQUIRE(s.valid);
+        CHECK_FALSE(s.teleported);
+        const CarState want = car_on_circle(float(rt) * 0.001f, r, v);
+        float off = 0.0f;
+        for (int k = 0; k < 3; ++k) off += (s.s.p[k] - want.p[k]) * (s.s.p[k] - want.p[k]);
+        worst_off = std::max(worst_off, std::sqrt(off));
+        float dq = 0.0f;
+        for (int k = 0; k < 4; ++k) dq += s.s.q[k] * want.q[k];
+        worst_turn = std::max(worst_turn, 2.0f * std::acos(std::min(1.0f, std::abs(dq))));
+        if (have) {
+            float st = 0.0f;
+            for (int k = 0; k < 3; ++k) st += (s.s.p[k] - last.p[k]) * (s.s.p[k] - last.p[k]);
+            worst_step = std::max(worst_step, std::abs(std::sqrt(st) - v * 0.007f));
+        }
+        last = s.s; have = true;
+    }
+    INFO("off the true path by " << worst_off << " m, a frame's step off by " << worst_step << " m, turned off by " << worst_turn << " rad");
+    CHECK(worst_off < 0.01f);          // (a straight line between the states is 2.3 cm inside the bend)
+    CHECK(worst_step < 0.004f);        // every frame moves it by speed x time, to a few millimetres
+    CHECK(worst_turn < 0.002f);
+}
+
+TEST_CASE("net: a car - lost states, a stall, a jump, a parked car", "[net][car]") {
+    using namespace vibe::net;
+    const float r = 60.0f, v = 30.0f;
+    // every third state lost: still on the path
+    CarBuffer b;
+    for (int i = 0; i < 60; ++i) {
+        if (i % 3 == 1) continue;
+        const uint32_t t = 1000u + uint32_t(i) * 33u;
+        b.add(t, car_on_circle(float(t) * 0.001f, r, v), t);
+    }
+    for (uint32_t rt = 1100; rt < 2800; rt += 11) {
+        const CarState want = car_on_circle(float(rt) * 0.001f, r, v);
+        const CarState got = b.sample(rt).s;
+        float off = 0.0f;
+        for (int k = 0; k < 3; ++k) off += (got.p[k] - want.p[k]) * (got.p[k] - want.p[k]);
+        CHECK(std::sqrt(off) < 0.03f);
+    }
+    // nothing newer: it goes on for a quarter of a second, then stands - it does not drive off
+    const double newest = b.snaps.back().t;
+    CarBuffer::Sample s = b.sample(newest + 100);
+    CHECK(s.extrapolated);
+    s = b.sample(newest + 5000);
+    const CarState at = b.snaps.back().s;
+    float gone = 0.0f;
+    for (int k = 0; k < 3; ++k) gone += (s.s.p[k] - at.p[k]) * (s.s.p[k] - at.p[k]);
+    CHECK(std::sqrt(gone) < v * 0.26f);
+    CHECK(s.s.v[0] == 0.0f);
+    CHECK(s.s.spin[0] == 0.0f);
+    // put back on its wheels somewhere else: a jump, not a slide
+    CarState far = at;
+    far.p[0] += 400.0f;
+    b.add(newest + 33, far, newest + 33);
+    CHECK(b.sample(newest + 16).teleported);
+    // a parked car is told once a second: it stands still in between
+    CarBuffer p;
+    CarState park;
+    park.p[0] = 12.0f; park.p[2] = -7.0f;
+    p.add(1000, park, 1000); p.add(2000, park, 2000);
+    CHECK(p.sample(1500).s.p[0] == 12.0f);
+    CHECK(p.sample(2600).s.p[2] == -7.0f);
+    // duplicates and states out of order are dropped
+    CHECK_FALSE(p.add(2000, park, 2000));
+    CHECK_FALSE(p.add(1500, park, 2000));
+    CHECK(p.dropped == 2);
+}
+
+TEST_CASE("net: the shared clock is steady under late packets", "[net][car]") {
+    using namespace vibe::net;
+    // The true offset is 5000 ms; every sample comes in late by 0 - 14 ms (the frame in which a
+    // packet is noticed), 60 a second.
+    ClockOffset c;
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<double> late(0.0, 14.0);
+    double worst_step = 0.0, last = 0.0;
+    for (int i = 0; i < 600; ++i) {
+        c.add(5000.0 - late(rng), 16.7);
+        if (i > 0) worst_step = std::max(worst_step, std::abs(c.value - last));
+        last = c.value;
+    }
+    CHECK(c.valid);
+    CHECK_THAT(c.value, WithinAbs(5000.0, 1.0));          // the least-delayed samples decide
+    CHECK(worst_step < 0.01);                             // 1/100 ms a snapshot: a third of a millimetre at 100 km/h
+    // a new host: the clock is simply another one
+    c.add(90000.0, 16.7);
+    CHECK_THAT(c.value, WithinAbs(90000.0, 1e-9));
+    // a late packet does not make a car jump: the delay in use follows at 1 % of the time passed
+    CarBuffer b;
+    b.lag_ms = 180.0f;
+    const double d0 = b.delay_now;
+    CHECK(b.advance_delay(10.0) - d0 <= 0.1 + 1e-9);
 }

@@ -440,6 +440,8 @@ float terrainM_shadow(vec2 p, float ray_t) {
 // as any terrain hit past the bound is irrelevant.
 // Steps the last raymarch() took (profiling view, VIBE_RM_SKIP bit 64).
 int g_rm_steps = 0;
+// How many times the settings' step count a march may take: see raymarch().
+float rm_step_budget(float kStep) { return clamp(0.55 / max(kStep, 0.05), 1.0, 3.0); }
 // `t_start`: a distance known to be clear of the ground (from the low-resolution march,
 // terrain_raymarch.frag main), 0 = none.
 float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
@@ -461,8 +463,15 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
     // contour banding from a too-aggressive step factor disperses into
     // noise (then washes out under TAA). Free; no extra texture taps.
     float jitter = ignBase(gl_FragCoord.xy);
-    int kSteps = int(pc.tex_params.x);
     float kStep = abs(pc.emissive.x);   // sign = full-resolution pass flag (see main)
+    // The step budget goes with the step factor. A step is `kStep` x the clearance, so with a
+    // small factor (asked for to keep steep rock faces whole) a ray that skims the ground gets
+    // a fraction as far on the same number of steps: at 0.15 and 192 steps the rays near the
+    // horizontal gave up a few hundred metres out, and a strip of sky lay between the near
+    // ground and the far land - only from the ground: from 100 m up the clearance, and so
+    // every step, is large. The setting's count is for a factor of 0.55; a smaller factor
+    // gets proportionally more (three times at most). Only rays that need them walk them.
+    int kSteps = int(pc.tex_params.x * rm_step_budget(kStep));
     bool relax = pc.grass_params.y > 0.5;
     // Tiny initial offset; max half-cell so the surface hit shifts
     // sub-pixel only.
@@ -659,6 +668,9 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
                     g_rm_ray_y = pm.y;
                     float hm2 = pm.y - terrainM_lod(pm.xz, tm);
                     g_rm_ray_y = -1e9;
+                    // (above the ground and as close as the march itself calls a hit: there.
+                    //  The other evaluations of the three would only move it by less than that)
+                    if (hm2 > 0.0 && hm2 < hit_eps && !RMDBG(8192)) return tm;
                     if (hm2 > 0.0) { ta = tm; ha = hm2; } else { tb = tm; hb = hm2; }
                 }
                 return ta + (tb - ta) * clamp(ha / (ha - hb), 0.0, 1.0) * 0.98;      // (just short of the crossing: never inside the ground)
@@ -725,8 +737,8 @@ float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone, out float t_grass) 
     if (t > t_limit)  { t_grass = 1e9; return 1e9; }
     // (the eye in the ground: the full pass has its own march for that)
     if (all(lessThan(abs(ro.xz), vec2(kHeightmapSide * 0.5 - 2.0))) && ro.y - meshHeight(ro.xz) < 1.5 && ro.y - terrainM_lod(ro.xz, 0.0) < 0.12) return 0.0;
-    int   kSteps = int(pc.tex_params.x);
     float kStep  = abs(pc.emissive.x);
+    int   kSteps = int(pc.tex_params.x * rm_step_budget(kStep));      // (as the full march: see there)
     t_grass = t;
     float t_safe = t;
     // (the same fast approach as the full march, aimed at where the clearance reaches the
@@ -755,7 +767,16 @@ float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone, out float t_grass) 
         if (h < thr) return t_safe;
         if (t > t_limit) return 1e9;
         t_safe = t;
-        float adv = kStep * mix(1.0, 2.5, smoothstep(200.0, 600.0, t)) * h;
+        // The stride lengthens with distance, as the full march's does (its "relaxation": a far
+        // pixel covers metres of ground, so the same care as close by is wasted there) - but
+        // never beyond 0.55 x the clearance (what a factor of 0.55 always took; the full march
+        // goes on to several times the clearance): a block's ray that jumps a ridge leaves a
+        // block-sized hole in it. A factor of 0.55 or more marches exactly as it did. Without this the
+        // march had no way to reach the far land over flat ground on a small step factor
+        // (0.15 x 3 m of clearance = 45 cm a step), and the full march, started where this one
+        // stopped, ran out of steps in its turn.
+        float k_far = kStep * mix(1.0, 2.5, smoothstep(200.0, 600.0, t));
+        float adv = max(k_far, min(k_far * max(t * 0.02, 1.0) * 0.7, 0.55)) * h;
         bool real = hm <= 0.75;
         if (conv > 0.0 && real && real_last) {
             float s = (h_last - h) / max(t - t_last, 1e-4);
