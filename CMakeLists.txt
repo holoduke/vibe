@@ -73,27 +73,27 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG 3.4
+    GIT_TAG 3.5.1
     GIT_SHALLOW TRUE)
 
 FetchContent_Declare(glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG 1.0.1
+    GIT_TAG 1.0.3
     GIT_SHALLOW TRUE)
 
 FetchContent_Declare(vk_bootstrap
     GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap.git
-    GIT_TAG v1.3.295
+    GIT_TAG v1.4.363
     GIT_SHALLOW TRUE)
 
 FetchContent_Declare(vma
     GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
-    GIT_TAG v3.1.0
+    GIT_TAG v3.5.0
     GIT_SHALLOW TRUE)
 
 FetchContent_Declare(Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG v3.7.1
+    GIT_TAG v3.16.1
     GIT_SHALLOW TRUE)
 
 # Jolt Physics — used for non-player rigid bodies (the player is custom Quake-style).
@@ -112,15 +112,17 @@ set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
 set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(JoltPhysics
     GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
-    GIT_TAG v5.2.0
+    GIT_TAG v5.7.0
     SOURCE_SUBDIR Build
     GIT_SHALLOW TRUE)
 
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG v1.91.5
+    GIT_TAG v1.93.0
     GIT_SHALLOW TRUE)
 
+# (2.9.x on purpose: 3.x is a rewrite with a C API - tiny_gltf.h and the bundled stb_image.h
+# moved to its attic/ - and would mean rewriting gltf_loader.cpp.)
 # tinygltf — header-only glTF 2.0 loader. Used to load the optional viewmodel
 # asset (drop a .glb at assets/gun.glb to activate). Opted out of its loader
 # for stb_image_write / json header generation; we only need the parser.
@@ -132,7 +134,7 @@ set(TINYGLTF_BUILD_VALIDATOR_EXAMPLE OFF CACHE BOOL "" FORCE)
 set(TINYGLTF_BUILD_BUILDER_EXAMPLE OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(tinygltf
     GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
-    GIT_TAG v2.9.3
+    GIT_TAG v2.9.7
     GIT_SHALLOW TRUE)
 
 # tinyexr — OpenEXR loader. Used to load the HDR equirect skybox (.exr) so
@@ -144,7 +146,7 @@ FetchContent_Declare(tinygltf
 set(TINYEXR_BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(tinyexr
     GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
-    GIT_TAG v1.0.8
+    GIT_TAG v3.4.0
     GIT_SHALLOW TRUE)
 
 # miniaudio — single-header audio engine (MIT-0). Built-in 3D spatial
@@ -154,7 +156,7 @@ FetchContent_Declare(tinyexr
 # sibling (audio.cpp) so MINIAUDIO_IMPLEMENTATION lives in exactly one TU.
 FetchContent_Declare(miniaudio
     GIT_REPOSITORY https://github.com/mackron/miniaudio.git
-    GIT_TAG 0.11.21
+    GIT_TAG 0.11.26
     GIT_SHALLOW TRUE)
 
 # FastNoiseLite — single-header noise (MIT). Used by the procedural
@@ -175,7 +177,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 # Used by src/engine/mesh_opt.h; the base for cluster LOD work.
 FetchContent_Declare(meshoptimizer
     GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
-    GIT_TAG v1.0
+    GIT_TAG v1.3
     GIT_SHALLOW TRUE)
 
 # ozz-animation - skeletons, compressed clips, sampling, blending, local-to-model, IK jobs (MIT).
@@ -239,28 +241,27 @@ else()
                    "`git submodule update --init --recursive` to enable.")
 endif()
 
-# AMD FidelityFX SDK (FSR3 + Frame Generation) — vendored at
-# external/FidelityFX-SDK (MIT, LICENSE.txt preserved). The v1.1.4 SDK
-# ships a stable C ABI behind a prebuilt DLL (amd_fidelityfx_vk.dll +
-# amd_fidelityfx_vk.lib in PrebuiltSignedDLL/). We link the import lib,
-# include the ffx-api headers, and copy the DLL alongside the exe at
-# build time. No add_subdirectory needed — the sample-framework CMake
-# in the SDK isn't designed for drop-in use.
-#
-# The DLL is the FIRST runtime dependency in the project; everything
-# else is statically linked. This is the cost of FSR3's chosen ABI.
+# AMD FSR SDK (FSR 3.1 / FSR 4 upscaling + frame generation) - a submodule at
+# external/FidelityFX-SDK, checked out at v2.4.0 (MIT). It ships signed DLLs
+# behind a C ABI (Kits/FidelityFX/signedbin): fsr3.cpp loads
+# amd_fidelityfx_loader_vk.dll at run time, and that one picks
+# amd_fidelityfx_upscaler_vk.dll / amd_fidelityfx_framegeneration_vk.dll.
+# We only take the headers and copy the DLLs next to the exe.
+# (Until 2026-11-24: v1.1.4, one amd_fidelityfx_vk.dll in PrebuiltSignedDLL/.)
 set(FFX_SDK_ROOT "${CMAKE_SOURCE_DIR}/external/FidelityFX-SDK")
-if(EXISTS "${FFX_SDK_ROOT}/PrebuiltSignedDLL/amd_fidelityfx_vk.lib")
-    add_library(ffx_sdk_vk SHARED IMPORTED)
-    set_target_properties(ffx_sdk_vk PROPERTIES
-        IMPORTED_LOCATION "${FFX_SDK_ROOT}/PrebuiltSignedDLL/amd_fidelityfx_vk.dll"
-        IMPORTED_IMPLIB   "${FFX_SDK_ROOT}/PrebuiltSignedDLL/amd_fidelityfx_vk.lib"
-        INTERFACE_INCLUDE_DIRECTORIES "${FFX_SDK_ROOT}/ffx-api/include")
-    message(STATUS "FidelityFX SDK 1.1.4 prebuilt VK lib + headers found")
+set(FFX_SDK_KIT "${FFX_SDK_ROOT}/Kits/FidelityFX")
+set(FFX_SDK_DLLS amd_fidelityfx_loader_vk.dll amd_fidelityfx_upscaler_vk.dll amd_fidelityfx_framegeneration_vk.dll)
+if(EXISTS "${FFX_SDK_KIT}/signedbin/amd_fidelityfx_loader_vk.dll")
+    add_library(ffx_sdk_vk INTERFACE)
+    target_include_directories(ffx_sdk_vk INTERFACE
+        "${FFX_SDK_KIT}/api/include"
+        "${FFX_SDK_KIT}/upscalers/include"
+        "${FFX_SDK_KIT}/framegeneration/include")
+    message(STATUS "AMD FSR SDK 2.4.0 signed VK DLLs + headers found")
 else()
     message(STATUS "FidelityFX SDK not present at external/FidelityFX-SDK — "
                    "FSR3 disabled. Run `git submodule update --init --recursive` "
-                   "and check out v1.1.4 in the submodule.")
+                   "and check out v2.4.0 in the submodule.")
 endif()
 
 # tinyexr enables -Weverything -Werror; clang on Apple Silicon flags
@@ -530,11 +531,12 @@ target_link_libraries(vibe PRIVATE vibe_engine)
 # Must be on the exe target (not vibe_engine, which is a static lib —
 # its POST_BUILD doesn't carry over to the exe's output dir).
 if(TARGET ffx_sdk_vk)
-    add_custom_command(TARGET vibe POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FFX_SDK_ROOT}/PrebuiltSignedDLL/amd_fidelityfx_vk.dll"
-            "$<TARGET_FILE_DIR:vibe>/amd_fidelityfx_vk.dll"
-        COMMENT "Staging amd_fidelityfx_vk.dll alongside vibe.exe")
+    foreach(dll ${FFX_SDK_DLLS})
+        add_custom_command(TARGET vibe POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FFX_SDK_KIT}/signedbin/${dll}" "$<TARGET_FILE_DIR:vibe>/${dll}"
+            COMMENT "Staging ${dll} (AMD FSR SDK)")
+    endforeach()
 endif()
 if(VIBE_HAVE_SL)
     foreach(dll sl.interposer.dll sl.common.dll sl.dlss.dll nvngx_dlss.dll sl.dlss_d.dll nvngx_dlssd.dll NvLowLatencyVk.dll

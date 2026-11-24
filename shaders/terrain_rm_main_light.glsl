@@ -118,7 +118,14 @@
     float rt_lod_t = 1.0 - smoothstep(lod_near, lod_far, cam_dist_pos);
     bool do_rt = rt_lod_t > 0.005 && !RMDBG(32);
     // (rm_rt_sun_shadow above: the soft band near the camera and the hard ray beyond it)
-    if (dif > 0.0) dyn_shadow = lo_ok ? lo_sh.y : rm_rt_sun_shadow(pos, nor, sunDir, self_shadow);
+    // (Also for ground turned away from the sun: this shadow takes most of the sky's light
+    //  with it as well - terrain_rm_main_gi.glsl, "the shadow of a canopy" - and asked only
+    //  where the sun could reach, a face turned away kept all of its sky light and came out
+    //  BRIGHTER than its shadowed neighbours. In the shade of a wood at a low sun, where the
+    //  sand's fine normal turns to and from the sun from pixel to pixel, that was a ragged
+    //  pattern of light and dark over the ripples.)
+    // (`RMDBG` 65536: only where the ground faces the sun, as it was - to compare)
+    if (dif > 0.0 || !RMDBG(65536)) dyn_shadow = lo_ok ? lo_sh.y : rm_rt_sun_shadow(pos, nor, sunDir, self_shadow);
     // The stones cast shadows on the soil and on each other: a short walk
     // toward the sun over the stone heights.
     if (t < 6.0 && sunDir.y > 0.03 && self_shadow < 0.98 && peb0_h > -0.5) {

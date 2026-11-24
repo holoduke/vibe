@@ -441,6 +441,26 @@ void VulkanEngine::build_menu_ui() {
 
     // ----- Graphics tab ----------------------------------------------------
     if (ImGui::BeginTabItem("Graphics")) {
+        if (ImGui::CollapsingHeader("Shading test (measuring - not saved)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            // (gfx_quality.cpp apply_shade_test: one part of the picture made plain or taken out,
+            //  to read the frame time with and without it)
+            int n = 0;
+            const ShadeRow* rows = shade_rows(n);
+            bool changed = false;
+            for (int i = 0; i < n; ++i) {
+                ImGui::SetNextItemWidth(360.0f);
+                changed |= ImGui::Combo(rows[i].label, &shade_test_[i], rows[i].names, rows[i].levels);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", rows[i].help);
+            }
+            if (changed) apply_shade_test();
+            if (ImGui::Button("Everything plainest")) set_simple_shading(true);
+            ImGui::SameLine();
+            if (ImGui::Button("Everything full")) set_simple_shading(false);
+            if (simple_shading_)
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "A shading test is on: the settings below are not yours and are not saved.\nSet everything to full to get them back.");
+            else
+                ImGui::TextDisabled("Make one part plain or take it out, and watch the frame time (top left).");
+        }
         if (ImGui::CollapsingHeader("Resolution & Quality", ImGuiTreeNodeFlags_DefaultOpen)) {
         // Quality preset combo. Switching writes a bundle of values onto rt_;
         // tweaking any individual slider afterward marks preset = -1 (custom).
@@ -883,7 +903,7 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SliderInt("FBM octaves (normals)",
                          &rt_.terrain_raymarch_normal_octaves, 4, 32);
         ImGui::SliderFloat("Step factor",
-                           &rt_.terrain_raymarch_step_factor, 0.15f, 0.8f, "%.2f");
+                           &rt_.terrain_raymarch_step_factor, 0.05f, 0.8f, "%.2f");
         // Distance-LOD ramp — drops FBM octaves with ray distance so the
         // expensive 3× terrainH() calls in calcNormal collapse to the
         // floor count past `lod_far_m`. Biggest perf win at horizon
@@ -935,7 +955,7 @@ void VulkanEngine::build_menu_ui() {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The low-resolution ground is sampled at a different place in each of its pixels every frame,\nso DLSS / FSR / TAA average its blocks away instead of seeing the same ones each frame.\nNot used together with the temporal reconstruction below.");
         if (ImGui::Checkbox("Temporal reconstruction (with Raymarch scale below 100 %)", &rt_.terrain_rm_temporal))
             recreate_terrain_raymarch_lowres();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The low-resolution terrain is offset by half a pixel from frame to frame\nand each frame is put together with the one before (checkerboard):\ntwice the detail of the scale alone when the view is still or moves slowly.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The low-resolution terrain is moved inside its own pixel from frame to frame\nand the frames are put together in a picture of the ground that is kept:\nnear the detail of full resolution when the view is still or moves slowly\n(16 frames at 50 %%), the plain enlargement where the light changes quickly.");
         ImGui::TextDisabled("Full resolution: scale 100 %%.  Low resolution, sharpened: scale below 100 %%.");
         {
             const char* vrs_labels[] = { "Every pixel", "Near ground 2x2 while moving fast", "Near ground 2x2: 8 m always, further at speed" };

@@ -145,17 +145,22 @@ void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
                        terrain_raymarch_lr_pipeline_ ? terrain_raymarch_lr_pipeline_
                        : terrain_raymarch_pipeline_  ? terrain_raymarch_pipeline_
                                                      : terrain_raymarch_lite_lr_pipeline_);
+    if (simple_shading_ && shade_test_[0] <= 1 && terrain_raymarch_lite_lr_pipeline_)      // (shading test, the ground flat or simple: the first-start build)
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrain_raymarch_lite_lr_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                              pipeline_layout_, 0, 1, &scene_desc_set_,
                              0, nullptr);
 
     PushConstants pc{};
     pc.mvp      = vp;
-    pc.model    = fv.inv_vp;
-    // (the "temporal" strategy: the whole picture a quarter of its pixel aside - the pixel at
+    // Camera-relative (rotation only), as the full-resolution pass in render_world(): with the
+    // full inverse the near and far points of a ray are both "camera + a little", and far
+    // from the origin the difference - the ray's direction - lost its precision.
+    pc.model    = glm::mat4(glm::inverse(glm::dmat4(fv.proj) * glm::dmat4(glm::dmat3(fv.view))));
+    // (the temporal upscaler: the whole picture part of its pixel aside - the pixel at
     // uv then shows the scene at uv + lr_jit)
     if (tr_->lr_jit != glm::vec2(0.0f))
-        pc.model = fv.inv_vp * glm::translate(glm::mat4(1.0f), glm::vec3(2.0f * tr_->lr_jit.x, 2.0f * tr_->lr_jit.y, 0.0f));
+        pc.model = pc.model * glm::translate(glm::mat4(1.0f), glm::vec3(2.0f * tr_->lr_jit.x, 2.0f * tr_->lr_jit.y, 0.0f));
     pc.prev_mvp = prev_view_proj_valid_ ? prev_view_proj_ : vp;
     // Plateau half-extent must mirror the full-res raymarch path
     // (line ~2800) — otherwise the LR pass paints a much wider
@@ -169,7 +174,7 @@ void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
     //   z = lod_far_m   — ray distance at which the FBM LOD ramp ends
     //   w = lod_min_oct — minimum octave count at far end of ramp
     pc.emissive = glm::vec4(
-        std::clamp(rt_.terrain_raymarch_step_factor, 0.15f, 0.8f),
+        std::clamp(rt_.terrain_raymarch_step_factor, 0.05f, 0.8f),
         std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
         std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
                  (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
@@ -219,7 +224,7 @@ void VulkanEngine::render_terrain_march_prepass(VkCommandBuffer cmd) {
     pc.prev_mvp = prev_view_proj_valid_ ? prev_view_proj_ : fv.vp;
     pc.color    = glm::vec4(0.0f, 0.0f, 11.5f, 22.0f);
     pc.emissive = glm::vec4(
-        -std::clamp(rt_.terrain_raymarch_step_factor, 0.15f, 0.8f),
+        -std::clamp(rt_.terrain_raymarch_step_factor, 0.05f, 0.8f),
         std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
         std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
                  (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
@@ -301,7 +306,8 @@ void VulkanEngine::render_terrain_raymarch_compose(VkCommandBuffer cmd, bool res
     // which of the two targets is this frame's, and whether last frame's can be used.
     pc.emissive = glm::vec4(tr_->lr_jit, tr_->lr_phase);      // (zw: the temporal upscaler's sample offset in the still picture)
     pc.tex_params = glm::vec4((tr_->lrb_color_view && tr_->resolve_pipeline) ? 1.0f : 0.0f, tr_->lr_cur_b ? 1.0f : 0.0f,
-                              (tr_->lr_hist_ok && prev_view_proj_valid_) ? 1.0f : 0.0f, 0.0f);
+                              (tr_->lr_hist_ok && prev_view_proj_valid_) ? 1.0f : 0.0f,
+                              tr_->cam_still ? 1.0f : 0.0f);      // (w: the camera stands still - the outline against the sky is kept too)
     vkCmdPushConstants(cmd, pipeline_layout_,
                        kPushConstantStages,
                        0, sizeof(PushConstants), &pc);
@@ -679,7 +685,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
                               : terrain_raymarch_pipeline_ ? terrain_raymarch_pipeline_ : terrain_raymarch_lite_pipeline_);
         // (VIBE_LITE_TERRAIN=1: look at the first-start build)
         static const bool kForceLite = std::getenv("VIBE_LITE_TERRAIN") != nullptr;
-        if (kForceLite && terrain_raymarch_lite_pipeline_) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrain_raymarch_lite_pipeline_);
+        if ((kForceLite || (simple_shading_ && shade_test_[0] <= 1)) && terrain_raymarch_lite_pipeline_) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrain_raymarch_lite_pipeline_);
         PushConstants pc{};
         pc.mvp = vp;
         // Reuse cached inverse from FrameView (was glm::inverse(vp) each
@@ -718,7 +724,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         // (x negative = this is the full-resolution pass: the shader may
         // clip its march against the depth pre-pass copy.)
         pc.emissive = glm::vec4(
-            -std::clamp(rt_.terrain_raymarch_step_factor, 0.15f, 0.8f),
+            -std::clamp(rt_.terrain_raymarch_step_factor, 0.05f, 0.8f),
             std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
             std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
                      (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),

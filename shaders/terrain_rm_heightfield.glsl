@@ -441,7 +441,9 @@ float terrainM_shadow(vec2 p, float ray_t) {
 // Steps the last raymarch() took (profiling view, VIBE_RM_SKIP bit 64).
 int g_rm_steps = 0;
 // How many times the settings' step count a march may take: see raymarch().
-float rm_step_budget(float kStep) { return clamp(0.55 / max(kStep, 0.05), 1.0, 3.0); }
+// (up to eight times: the factor goes down to 0.05 since 2026-11-24 - at the three times that
+// served a factor of 0.15, a ray at 0.05 would give up a third as far out)
+float rm_step_budget(float kStep) { return clamp(0.55 / max(kStep, 0.05), 1.0, 8.0); }
 // `t_start`: a distance known to be clear of the ground (from the low-resolution march,
 // terrain_raymarch.frag main), 0 = none.
 float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
@@ -470,7 +472,7 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
     // horizontal gave up a few hundred metres out, and a strip of sky lay between the near
     // ground and the far land - only from the ground: from 100 m up the clearance, and so
     // every step, is large. The setting's count is for a factor of 0.55; a smaller factor
-    // gets proportionally more (three times at most). Only rays that need them walk them.
+    // gets proportionally more (rm_step_budget). Only rays that need them walk them.
     int kSteps = int(pc.tex_params.x * rm_step_budget(kStep));
     bool relax = pc.grass_params.y > 0.5;
     // Tiny initial offset; max half-cell so the surface hit shifts
@@ -725,8 +727,12 @@ float raymarch(vec3 ro, vec3 rd, float t_max, float t_start) {
 // to the ground is done once for the block instead of once for every pixel.
 // Returns 0 = nothing known (march from the eye), 1e9 = no ground within the march's range.
 // `t_grass`: the last point at which the ray was still more than a blade's height above the
-// ground (0 = not known, 1e9 = it never comes that low): where the grass pass starts its own
-// march (grass_raymarch.frag), instead of walking through the open air again.
+// ground BEFORE it first came lower (0 = not known, 1e9 = it never comes that low): where the
+// grass pass starts its own march (grass_raymarch.frag), instead of walking through the open
+// air again. (Before it FIRST came lower: a ray that skims a crest and then has the ground
+// fall away under it is high again beyond the crest. Counted on from there, the grass march
+// started behind the blades on the crest - the far edge of a meadow came out in steps the
+// size of this march's blocks.)
 float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone, out float t_grass) {
     t_grass = 0.0;
     float maxH = terrainMaxHeight();
@@ -746,6 +752,7 @@ float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone, out float t_grass) 
     float conv = scene.rm_perf.z;
     float h_last = 0.0, t_last = t;
     bool  real_last = false;
+    bool  been_low = false;
     for (int i = 0; i < kSteps; i++) {
         vec3 pos = ro + t * rd;
         if (rd.y > 0.0 && pos.y > maxH) return 1e9;
@@ -763,7 +770,7 @@ float raymarch_lo(vec3 ro, vec3 rd, float t_max, float cone, out float t_grass) 
             g_rm_ray_y = -1e9;
         }
         float thr = 3.0 * cone * t + 0.06;
-        if (h >= thr + 1.25) t_grass = t;
+        if (h >= thr + 1.25) { if (!been_low) t_grass = t; } else been_low = true;
         if (h < thr) return t_safe;
         if (t > t_limit) return 1e9;
         t_safe = t;

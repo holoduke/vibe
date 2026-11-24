@@ -764,7 +764,11 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
         // 1. Blocker search (4 rays, 4× softness cone).
         // (Ray Reconstruction: 2 blocker rays a frame estimate the same mean distance as 4 - and a
         // single one when the softness is so low that the rays are all but parallel anyway)
-        int kBlocker = rr_denoise ? (base_softness < 0.004 ? 1 : 2) : 4;
+        // (One, whatever the softness - 2026-11-24. Here the search also decides whether any
+        // shadow ray is traced at all: with one ray instead of two a pixel at the very rim of a
+        // shadow finds its blocker half as often, in a frame - over the frames RR averages, the
+        // rim is a little lighter. On open ground, where both rays missed, it halves the cost.)
+        int kBlocker = rr_denoise ? 1 : 4;
         float sum_t = 0.0;
         int   hits  = 0;
         for (int i = 0; i < kBlocker; ++i) {
@@ -837,17 +841,18 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
     return dyn_shadow;
 }
 
-#ifdef VIBE_LITE
 // The "first start" build of this shader (terrain_raymarch_lite.frag.spv). The full shader is so
 // large that a graphics driver needs a minute or more to compile it the first time; the game
 // does not wait for that. It starts on this build - the same ground, found by the same march,
 // so everything standing on it is where it belongs - shaded in the simplest way (slope and
 // height give the colour, sun and sky the light, flat water), and switches to the full shader
 // the moment the driver has it ready (finish_terrain_raymarch_pipeline).
+// (Also in the full build: the shading test's flat water. Not in the water-plane build, which must not write depth.)
+#ifndef VIBE_WATER
 void lite_out(vec3 p, vec3 col) {
     vec4 clip = pc.mvp * vec4(p, 1.0);
     gl_FragDepth = min(clip.z / max(clip.w, 1e-4), 0.999989);
-    col = mix(col, scene.distance_fog_color.rgb, distanceFogAmount(p, scene.camera_pos.xyz));
+    if (!FLAT_GROUND) col = mix(col, scene.distance_fog_color.rgb, distanceFogAmount(p, scene.camera_pos.xyz));
     outColor = vec4(col, 1.0);
     outGBuffer0 = vec4(clamp(col, vec3(0.0), vec3(1.0)), 8.0 / 255.0);
     outGBuffer1 = vec4(0.5, 0.5, 0.7, 0.0);
@@ -1053,9 +1058,17 @@ void main() {
     bool air = !water_only && ro.y > terrainMaxHeight() + 60.0;
     // Where the low-resolution march got to: the nearest of the four blocks round this
     // pixel (each is clear to there by more than its own width). 1e9: no ground in range.
+    // (The low-resolution terrain pass - pc.emissive.x > 0, rm_perf.x bit 32 - starts there too.
+    //  Not for speed: a ray that skims ground falling away from the camera creeps along it in
+    //  ever smaller steps and, started at the eye, was taken for a hit a hundred metres out -
+    //  a strip of far field drawn in FRONT of the wood beyond it, over the trunks. Started
+    //  where the low-resolution march got to, it has those steps left for the ground it is
+    //  really going to. Its pixels are not the picture's: the place is taken from vNDC.)
     float t_start = 0.0;
-    if ((int(scene.rm_perf.x) & 1) != 0 && pc.emissive.x < 0.0 && !water_only && !air) {
-        vec4 g4 = textureGather(u_march_lo, gl_FragCoord.xy / (scene.rm_perf.y * vec2(textureSize(u_march_lo, 0))), 0);
+    bool  lr_start = pc.emissive.x > 0.0 && (int(scene.rm_perf.x) & 32) != 0;
+    if ((int(scene.rm_perf.x) & 1) != 0 && (pc.emissive.x < 0.0 || lr_start) && !water_only && !air) {
+        vec2 mpx = lr_start ? (vNDC * 0.5 + 0.5) / scene.viewport.zw : gl_FragCoord.xy;      // in the picture's pixels
+        vec4 g4 = textureGather(u_march_lo, mpx / (scene.rm_perf.y * vec2(textureSize(u_march_lo, 0))), 0);
         t_start = min(min(g4.x, g4.y), min(g4.z, g4.w));
         // "Start from the low-resolution hit" (rm_perf.x bit 8): that march went on to the
         // ground itself (without the close relief). Where the four blocks round this pixel

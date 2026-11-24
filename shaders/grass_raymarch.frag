@@ -860,7 +860,7 @@ void main() {
 
     // Sun shadow — sample the rasterised shadow map. PCF gives soft edges.
     float sun_lit = 1.0;
-    {
+    if (!FLAT_GRASS) {
         vec4 lc  = scene.light_vp * vec4(p, 1.0);
         if (abs(lc.w) > 1e-5) {
             vec3 lndc = lc.xyz / lc.w;
@@ -949,6 +949,13 @@ void main() {
         }
     }
 
+    // "Simplest shading" (scene_ubo.glsl FLAT_GRASS): the blade's colour and no more - all of
+    // the lighting below is left out.
+    vec3  col_out;
+    float alpha_out = 1.0;
+    if (FLAT_GRASS) {
+        col_out = grassCol * flat_light();
+    } else {
     // Height-from-ground AO. Slider-controlled floor (0 = darkest base,
     // 1 = no AO darkening); the lerp above already shifts colour with
     // height, so the AO term mostly adds extinction at the very base.
@@ -1147,8 +1154,10 @@ void main() {
             col = mix(col, scene.distance_fog_color.rgb, fa);
         }
     }
-    outColor = vec4(col, final_alpha);
-    outGBuffer0 = vec4(clamp(col, vec3(0.0), vec3(1.0)),
+    col_out = col; alpha_out = final_alpha;
+    }
+    outColor = vec4(col_out, alpha_out);
+    outGBuffer0 = vec4(clamp(col_out, vec3(0.0), vec3(1.0)),
                        5.0 / 255.0);   // mat 5 = pass-through
     // Best-effort normal: use the cumulative marched hit normal if a
     // local var carries one; otherwise zero — the downstream deferred

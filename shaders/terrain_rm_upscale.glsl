@@ -22,22 +22,17 @@ layout(push_constant) uniform PC {
 layout(set = 0, binding = 9)  uniform sampler2D u_lr_color;
 layout(set = 0, binding = 10) uniform sampler2D u_lr_motion;
 layout(set = 0, binding = 11) uniform sampler2D u_lr_depth;
-// The "temporal" strategy (pc.tex_params.x): a second colour and depth picture. The terrain
-// is drawn into the two in turn, each offset a quarter of its pixel the other way
-// (pc.emissive.xy this frame's offset, .zw last frame's, in uv); pc.tex_params.y = this
-// frame's is the second one, .z = last frame's may be used.
+// The temporal upscaler's two kept pictures of the terrain (terrain_rm_resolve.frag): larger than
+// this pass's target, written in turn - rgb colour, a distance. pc.tex_params.x = they are
+// there, .y = this frame's is the second one (binding 37), .z = last frame's may be used.
 layout(set = 0, binding = 36) uniform sampler2D u_lrb_color;
 layout(set = 0, binding = 37) uniform sampler2D u_lrb_depth;
-bool g_b = false;       // this frame's picture is the second one
-vec3  lrC(vec2 uv)   { return g_b ? textureLod(u_lrb_color, uv, 0.0).rgb : textureLod(u_lr_color, uv, 0.0).rgb; }
-float lrD(vec2 uv)   { return g_b ? textureLod(u_lrb_depth, uv, 0.0).r   : textureLod(u_lr_depth, uv, 0.0).r; }
-vec4  lrCg0(vec2 uv) { return g_b ? textureGather(u_lrb_color, uv, 0) : textureGather(u_lr_color, uv, 0); }
-vec4  lrCg1(vec2 uv) { return g_b ? textureGather(u_lrb_color, uv, 1) : textureGather(u_lr_color, uv, 1); }
-vec4  lrCg2(vec2 uv) { return g_b ? textureGather(u_lrb_color, uv, 2) : textureGather(u_lr_color, uv, 2); }
-vec4  lrDg(vec2 uv)  { return g_b ? textureGather(u_lrb_depth, uv)    : textureGather(u_lr_depth, uv); }
-// last frame's picture: the other one
-vec3  lrHC(vec2 uv)  { return g_b ? textureLod(u_lr_color, uv, 0.0).rgb : textureLod(u_lrb_color, uv, 0.0).rgb; }
-float lrHD(vec2 uv)  { return g_b ? textureLod(u_lr_depth, uv, 0.0).r   : textureLod(u_lrb_depth, uv, 0.0).r; }
+vec3  lrC(vec2 uv)   { return textureLod(u_lr_color, uv, 0.0).rgb; }
+float lrD(vec2 uv)   { return textureLod(u_lr_depth, uv, 0.0).r; }
+vec4  lrCg0(vec2 uv) { return textureGather(u_lr_color, uv, 0); }
+vec4  lrCg1(vec2 uv) { return textureGather(u_lr_color, uv, 1); }
+vec4  lrCg2(vec2 uv) { return textureGather(u_lr_color, uv, 2); }
+vec4  lrDg(vec2 uv)  { return textureGather(u_lr_depth, uv); }
 
 // CAS-style adaptive sharpen — same idea, takes 4 corner neighbours
 // (from textureGather) instead of cardinals.
@@ -87,6 +82,8 @@ vec3  g_edge_motion = vec3(0.0);  // xy: the motion at an outline, z: 1 = this p
 vec2  g_uv = vec2(0.0), g_uv_true = vec2(0.0);
 vec3  g_lo = vec3(0.0), g_hi = vec3(0.0);     // the range of the four low-resolution colours round the pixel
 vec2  g_lr_offset = vec2(0.0);    // set before tr_upscale(): the low-resolution picture's pixel at uv shows what this pass's pixel at uv + g_lr_offset shows
+vec2  g_inv_target = vec2(0.0);   // set before tr_upscale() by a pass whose target is not the render size: 1 / its size in pixels
+bool  g_plain = false;            // set before tr_upscale(): the plain (bilinear) enlargement will do - no Catmull-Rom, no sharpening
 
 // false: sky (nothing of the terrain at this pixel).
 bool tr_upscale() {
@@ -96,8 +93,7 @@ bool tr_upscale() {
     // free bilinear upscale — the sky-sentinel discard below
     // avoids dragging sky colour into terrain edges.
     // (this frame's picture is offset: its pixel at uv shows the scene at uv + pc.emissive.xy)
-    g_b = false;      // (the low-resolution picture is always the first one now)
-    vec2 uv_true = gl_FragCoord.xy * scene.viewport.zw;
+    vec2 uv_true = gl_FragCoord.xy * (g_inv_target.x > 0.0 ? g_inv_target : scene.viewport.zw);
     vec2 uv = uv_true - g_lr_offset;
     float lr_depth = lrD(uv);
     g_uv = uv; g_uv_true = uv_true;
@@ -131,14 +127,14 @@ bool tr_upscale() {
     // Smooth interior: Catmull-Rom, then an optional contrast-adaptive
     // sharpen whose neighbours are bilinear taps one low-res texel away
     // (continuous, unlike the gathered corners).
-    vec3 c = lrCatmullRom(uv);
+    vec3 c = g_plain ? c0 : lrCatmullRom(uv);
     // Anti-ringing: clamp to the 2x2 bilinear neighbourhood. The 4x4
     // Catmull-Rom footprint reaches sky texels two texels out (which the
     // 2x2 depth-edge test below doesn't see); its negative outer lobes
     // then overshot into a bright / dark halo along ridges against the sky.
     c = clamp(c, min(min(cTL, cTR), min(cBR, cBL)), max(max(cTL, cTR), max(cBR, cBL)));
     float strength = pc.color.x;
-    if (strength > 0.0 && pc.color.y > 0.5 && pc.color.z > 0.5) {
+    if (!g_plain && strength > 0.0 && pc.color.y > 0.5 && pc.color.z > 0.5) {
         vec2 lt = 1.0 / vec2(textureSize(u_lr_color, 0));
         vec3 nA = lrC(uv + vec2(-lt.x, 0.0));
         vec3 nB = lrC(uv + vec2( lt.x, 0.0));

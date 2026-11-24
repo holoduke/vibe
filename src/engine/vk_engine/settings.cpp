@@ -685,6 +685,7 @@ void VulkanEngine::save_settings() const {
                opts_.autodemo_seconds > 0.0f || opts_.scene != 0;
     }();
     if (test_run) return;
+    if (simple_shading_) return;      // (the measuring mode: its settings are not the player's)
     // Write a sibling temp file and rename it over the cfg: a crash or a
     // kill mid-write (the autosave runs while playing) can no longer leave
     // a truncated cfg that silently resets every missing setting.

@@ -585,7 +585,7 @@ void VulkanEngine::update_scene_ubo() {
     if (rr_low) gi_samples_eff = std::min(gi_samples_eff, 2);
     if (fsr_low) gi_samples_eff = std::min(gi_samples_eff, 2);   // (was 3: the third ray, with its second bounce, cost as much as the first two together - 4.7 ms of 20 in a forest on an RX 9070 XT; the accumulation over 28 frames hides the difference)
     data.rt_flags2 = glm::ivec4(gi_samples_eff,
-                                rt_.reflections_enabled ? 1 : 0,
+                                (rt_.reflections_enabled ? 1 : 0) | shade_flat_bits_,      // (bits 1-3: the shading test - scene_ubo.glsl FLAT_*)
                                 rt_.gi_bounces,
                                 rt_.ao_mode);  // 0=off, 1=fast, 2=RTAO
     // ReSTIR session 3+4 (temporal + spatial reservoir blend) was
@@ -943,7 +943,7 @@ void VulkanEngine::update_scene_ubo() {
         data.globe_frame = glm::mat4(glm::mat3(gc.F));
         data.globe_info = glm::vec4(gc.home ? 0.0f : 1.0f, float(gc.ox()), wv_nf_ok() ? 1.0f : 0.0f,
                                     // VIBE_RM_SKIP=<bits>: leave sections of the terrain shader out, to measure them (terrain_raymarch.frag RMDBG)
-                                    float((prof_rm_skip_ | (rt_.terrain_rm_skip & (128 | 1024 | 32768))) | []{ static const char* e = std::getenv("VIBE_RM_SKIP"); return e ? std::atoi(e) : 0; }()));
+                                    float((prof_rm_skip_ | shade_rm_skip_ | (rt_.terrain_rm_skip & (128 | 1024 | 32768))) | []{ static const char* e = std::getenv("VIBE_RM_SKIP"); return e ? std::atoi(e) : 0; }()));
         int32_t cells[globe::kOctaves][4]; float fracs[globe::kOctaves][4];
         globe::lattice(gc.F[1] * globe::kR, cells, fracs);
         for (int i = 0; i < 12; ++i) {
@@ -999,8 +999,9 @@ void VulkanEngine::update_scene_ubo() {
     }
     // Raymarched terrain, speed settings (terrain_raymarch.frag; scene_ubo.glsl rm_perf).
     data.rm_perf = glm::vec4((tr_march_prepass_on() ? 1.0f : 0.0f) + (rt_.terrain_rm_relief_lite ? 2.0f : 0.0f) +
-                                 ((tr_march_prepass_on() && rt_.terrain_rm_shade_lo) ? 4.0f : 0.0f) +
-                                 ((tr_march_prepass_on() && rt_.terrain_rm_start_at_hit) ? 8.0f : 0.0f),
+                                 ((tr_march_prepass_on() && !tr_use_lowres() && rt_.terrain_rm_shade_lo) ? 4.0f : 0.0f) +
+                                 ((tr_march_prepass_on() && tr_use_lowres()) ? 32.0f : 0.0f) +       // (the low-resolution terrain pass starts at the march)
+                                 ((tr_march_prepass_on() && !tr_use_lowres() && rt_.terrain_rm_start_at_hit) ? 8.0f : 0.0f),
                              float(tr_->march_div),
                              rt_.terrain_rm_converge,
                              rt_.terrain_rm_normal_px);

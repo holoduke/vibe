@@ -658,7 +658,7 @@ struct RtSettings {
         // Strategies to try (Graphics > terrain):
         bool  terrain_rm_start_at_hit    = false; // the low-resolution march goes on to the ground itself; each pixel starts just short of that hit (needs the march first)
         bool  terrain_rm_lr_full_jitter  = true;  // with "Raymarch scale" below 100 % under DLSS / FSR / TAA: the low-resolution picture's sub-pixel offset covers its own whole pixel, so the upscaler can average its blocks away (frame.cpp)
-        bool  terrain_rm_temporal        = false; // with "Raymarch scale" below 100 %: the low-resolution picture is offset by half its pixel from frame to frame and this frame's is put together with last frame's (checkerboard)
+        bool  terrain_rm_temporal        = false; // with "Raymarch scale" below 100 %: the terrain's own temporal upscaler - the low-resolution picture is moved inside its pixel from frame to frame and put together in a kept picture of twice the render size (terrain_rm_resolve.frag)
         bool  terrain_rm_shade_lo        = false; // the sun's shadows on the ground once per block of the low-resolution march, not per pixel. Off: measured, it costs as much in that pass as it saves in the main one (a loss on a Radeon)
         // Shading rate of the raymarched ground toward the edges of the screen (VRS; needs a GPU
         // that keeps it with shader depth writes): 0 = every pixel everywhere, 1 = one shade

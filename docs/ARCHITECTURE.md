@@ -641,7 +641,7 @@ Measured (High, 3440 x 1440, frame / terrain pass): river view 17.8 / 11.0 -> 11
 **Candidates not yet done** (from reading the shader; estimates, to be measured with the sweep): the ground under dense grass is fully lit - two bounce rays, object shadow rays, the blade-shadow march - and then covered by the blades (1-2 ms in a meadow); the 29-fetch cavity occlusion could be a baked texture (0.3-0.6); the two walks along the sun ray over the baked height could be one (0.2-0.4); the three normal taps share lattice cells and could hash once (0.4-0.6); outside the home tile the continent's 21-29 noises are added to every height evaluation (a texture round the camera would halve those steps - but its gradient shapes the coast's slope, so the normal cannot simply reuse one value).
 
 **Shader review** (2026-11-23, night; four readers over all shaders, then measured with `tools/perf/bench.sh` at the settings as played, 3440x1400). Frame, close / far / forest: 24.8 / 19.8 / 23.0 -> 23.6 / 19.1 / 22.6 ms; the terrain pass 11.2 / 6.3 / 3.7 -> 10.0 / 6.0 / 3.4.
-- *The ground's own sun shadow at home walks the baked heights* (`calcShadow`, `terrain_rm_shading_helpers.glsl`): the formula was asked for every step within 2.5 m of the bake (the first five or so of each lit pixel), after a 30-fetch walk over the same bake had already tested the same ray. Now one walk, on the bake, as outside the home tile. `RMDBG` 16384 brings the old path back. This is most of the gain (old against new, two runs each: -1.1 / -0.6 / -0.4 ms together with the next item). Pictures at 7.2 h, 14 h and 18.6 h in the close and far views: 0.2 - 0.9 grey levels from the old path, which is what two runs differ by. NOT looked at: a bare hillside in its own shadow at grazing sun, where the bake's 1 m texels could show as facets.
+- *The ground's own sun shadow at home walks the baked heights* (`calcShadow`, `terrain_rm_shading_helpers.glsl`): the formula was asked for every step within 2.5 m of the bake (the first five or so of each lit pixel), after a 30-fetch walk over the same bake had already tested the same ray. Now one walk, on the bake, as outside the home tile. `RMDBG` 16384 brings the old path back. This is most of the gain (old against new, two runs each: -1.1 / -0.6 / -0.4 ms together with the next item). Pictures at 7.2 h, 14 h and 18.6 h in the close and far views: 0.2 - 0.9 grey levels from the old path, which is what two runs differ by. Looked at on 2026-11-24 on the sand at home at 18:54 (sun 2 - 3 degrees up), old path against new: 0.8 - 0.9 of 255 apart, the same picture. (What that picture showed in both - a ragged pattern of light and dark over the sand - was another fault, since fixed: "Ground turned away from the sun, in an object's shadow" at the end.) Still not looked at: a bare hillside.
 - *The march's root find stops when it is there* (`terrain_rm_heightfield.glsl`; `RMDBG` 8192 = the old three evaluations always).
 - Small, same picture, nothing measurable alone: the wide layer of the small plants' shadow map is read only where it shows; the sea shore's sand noises only up to 2.5 m over the water (and a dead turf term is gone); the grass pass asks the height under an object only with the mesh terrain; a leaf card the detail rule leaves out quits the vertex shader at once (trees: no change measured).
 - *Measured and dropped*: a separate early-depth variant for the trees' colour pass - the EQUAL test already rejects early (`VIBE_VEG_NO_EQ=1` costs +0.7 ms in the forest).
@@ -677,19 +677,21 @@ Tests: `tests/anim/test_net.cpp` `[car]` (wire form, even motion round a bend at
 
 - *Coarse shading on ground that stands still in the picture shows.* Close view, everything within reach at 2 x 2: terrain pass 12.6 -> 5.9 ms, and the paving a mosaic of 4 x 4 screen pixels - the upscaler cannot rebuild what was never sampled, and the blocks sit on the pixel grid, so its jitter does not move them. So the distance comes from the camera's speed: `terrain_vrs` 1 = nothing up to 6 m/s, then 1.2 m per m/s (29 m at 108 km/h); 2 = 8 m at any speed, then 1.6 m per m/s. Standing or walking at level 1: every pixel, and the pass is not run.
 - Measured on the course on autopilot at 108 km/h, 3440 x 1400: terrain pass 4.3 -> 2.4 ms, frame 19.4 -> 17.1 ms.
-- It needs the march pre-pass (`terrain_rm_prepass`) and the full-resolution terrain (`terrain_raymarch_scale` 1). `VIBE_TEST_VRS_NEAR=<m>` sets the distance (tests).
+- It needs the march pre-pass (`terrain_rm_prepass`) and the full-resolution terrain (`terrain_raymarch_scale` 1; the march itself also runs ahead of the low-resolution terrain - last section). `VIBE_TEST_VRS_NEAR=<m>` sets the distance (tests).
 - Known: the validation layer reports that the other pipelines of the world pass were not created for a shading-rate attachment (they have no shading-rate state and draw at 1 x 1; it was so with the fixed pattern too).
 
 **A mesh for the near ground would not make it faster** (measured the same day, close view at home, terrain pass 12.5 ms): the march alone (`VIBE_RM_SKIP=64`) is 4.7 ms, and starting every pixel's march at the hit of the low-resolution march (`terrain_rm_start_at_hit`, what a mesh under the ray would give) makes that 4.6 ms and costs 1.1 ms in the pre-pass. Without the pre-pass at all the pass is 13.4 ms. The march's time is the last few evaluations of the detailed surface (relief, stones) and the root find, not the way to it; the rest of the pass is shading. A near mesh would pay off only as a second ground renderer whose detail is baked (geometry and textures instead of the formula) - and would then have to match the raymarched ground's look and shape at the hand-over.
 
-**The low-resolution terrain's upscaler, reviewed** (`terrain_raymarch_compose.frag`; same view: 50 % with "temporal" 4.7 ms against 12.5 at full size): smooth, but the paving's joints and the sand's grain are gone, and the two-frame checkerboard leaves a fine stipple on high-contrast ground. The pass is a spatial upscale (Catmull-Rom limited to the 2 x 2 neighbourhood, a sharpen) plus the one frame before; it cannot bring back what its samples never held. What would: a full-resolution picture of the terrain alone that is kept from frame to frame (four sample positions in turn, last frame's picture moved by the motion vectors and limited to the range of this frame's neighbourhood) - the terrain's own temporal upscaler in front of DLSS. It needs its own target, because the world pass draws objects over the terrain. Not built.
+**The low-resolution terrain's upscaler, reviewed** (`terrain_raymarch_compose.frag`; same view: 50 % with "temporal" 4.7 ms against 12.5 at full size): smooth, but the paving's joints and the sand's grain are gone, and the two-frame checkerboard leaves a fine stipple on high-contrast ground. The pass is a spatial upscale (Catmull-Rom limited to the 2 x 2 neighbourhood, a sharpen) plus the one frame before; it cannot bring back what its samples never held. What would: a full-resolution picture of the terrain alone that is kept from frame to frame (four sample positions in turn, last frame's picture moved by the motion vectors and limited to the range of this frame's neighbourhood) - the terrain's own temporal upscaler in front of DLSS. It needs its own target, because the world pass draws objects over the terrain. Built since: "The terrain's temporal upscaler" below.
+
+**The step factor goes down to 0.05** (2026-11-24, was 0.15: the menu, the three clamps in `world_render.cpp`, and `rm_step_budget` up to eight times the step count instead of three). Far view, terrain at 75 %: 8.8 ms at 0.15, 9.3 at 0.10, 10.6 at 0.05, the low-resolution march 0.47 -> 1.01; no holes seen.
 
 **The march's reach does not depend on the step factor** (`terrain_rm_heightfield.glsl rm_step_budget`, 2026-11-23). A step is the factor x the clearance, so on a small factor (0.15, set to keep steep rock faces whole) a ray skimming the ground got a fraction as far on the same step count and gave up a few hundred metres out: a strip of sky between the near ground and the far land, from the ground only (from 100 m up every step is large). The step count of the settings now stands for a factor of 0.55, and a smaller factor gets proportionally more (three times at most); the low-resolution march also lengthens its stride with distance, up to what a factor of 0.55 takes and no further (a block's ray that jumps a ridge leaves a block-sized hole). A factor of 0.55 or more marches as before. Cost at 0.15 / 192 steps in the view along the course: the low-resolution march 0.47 -> 0.78 ms, the full pass unchanged.
 
 ## Cars: the guard rail, and grass under a car (2026-11-23, late)
 
 - **A car slides along a rail or a wall instead of hanging on it** (`physics_world.cpp`, `highway_furniture.cpp hw_rail_boxes`). Measured: steered gently into the rail at 40 km/h on full throttle it dropped to 5 km/h and crawled along at 10 - 20; now 40 -> 35 -> 41 and on. Four causes, all removed: the wheels' sweep took the rail's side for ground (`VehicleImpl::WheelGround`: the wheels ignore the obstacle body - and the car's own, which the tester's default filter did and a filter of our own replaces); friction 0.5 on the obstacles (now 0.03); corners catching on the joints between a rail's boxes (`mEnhancedInternalEdgeRemoval`); a 12 cm sheet for a rail (now 40 cm, grown away from the road, the boxes overlapping).
-- **Grass lies down under a car and comes up behind it** (`grass_raymarch.frag car_press`, scene block `car_press[4]`, `jeep.cpp jeep_grass_press`): the two cars nearest the camera; a blade under one is a tenth of its height, and behind the car it rises again over the stretch driven in the last 1.5 s (25 m at most), swaying as it comes up. The stretch is straight behind where the car faces now. Seen in a test drive: no blades through the car. Not yet looked at: the blades rising behind it.
+- **Grass lies down under a car and comes up behind it** (`grass_raymarch.frag car_press`, scene block `car_press[4]`, `jeep.cpp jeep_grass_press`): the two cars nearest the camera; a blade under one is a tenth of its height, and behind the car it rises again over the stretch driven in the last 1.5 s (25 m at most), swaying as it comes up. The stretch is straight behind where the car faces now. Seen in a test drive: no blades through the car. The blades rising behind it, looked at on 2026-11-24 (straight across the meadow by the highway at 28 km/h, from above and behind: `VIBE_TEST_JEEP=0.3,0 VIBE_TEST_JEEP_AT=1697,930,3.14159 VIBE_TEST_JEEP_ORBIT=0.5,-0.55,10`): a flattened lane the car's width behind it, closing to nothing over about ten metres. One still picture - the sway as they come up was not watched.
 - Checked: a jeep placed by the test hook at `20,120` (inside the castle's colliders) is thrown about - by the build of release 0.2.0 too - and with this build ended under the ground. Placed on open ground inside the home tile (`300,300`, `-200,400`) it stands and drives. A bad place for the test, not a fault of the home tile.
 
 ## Cars: the dial, turbo, a passenger, street lamps (2026-11-23, night 2)
@@ -702,19 +704,200 @@ Tests: `tests/anim/test_net.cpp` `[car]` (wire form, even motion round a bend at
 - **Street lamps** (`highway_furniture.cpp`, `g_lamp`): on the landward side of the road every 40 m, for 2 km of road either way from the launch site. Their lights are not in `lamp_lights_` (they would be cut off when a site is left): `hw_lamps_near` adds the near ones when the scene's eight lamp lights are chosen (`descriptors.cpp`), at three times a lantern's strength. Seen at night: posts and lit heads; how much they light the road was not tuned.
 - Not done from the same list: per-cluster culling and ray-tracing structures for the cluster LOD, the terrain's temporal upscaler, bullets against the streamed trees (`props.cpp` already hands `wv_cols_` to the physics' near set - whether a bolt stops at a trunk was not tested).
 
-**Bolts against what the physics does not hold** (`combat.cpp update_projectiles`, 2026-11-23): a bolt's way since the last step is tested against the trunks of the trees beyond the home tile (`wv_cols_`), the road's guard rail (`hw_rail_boxes`) and the street lamps' poles (`hw_pole_boxes`). `VIBE_LOG_BOLT=1` says what stopped a bolt. Seen: bolts fired at the rail stop on it (they flew through before). The trunks go through the same test; not fired at in a test.
+**Bolts against what the physics does not hold** (`combat.cpp update_projectiles`, 2026-11-23): a bolt's way since the last step is tested against the trunks of the trees beyond the home tile (`wv_cols_`), the road's guard rail (`hw_rail_boxes`) and the street lamps' poles (`hw_pole_boxes`). `VIBE_LOG_BOLT=1` says what stopped a bolt. Seen: bolts fired at the rail stop on it (they flew through before). The trunks: fired into the wood beside the highway from (1687, 940) in two directions (2026-11-24, `VIBE_TEST_FIRE=1`) - every bolt, 37 and 36 of them, "stopped by a tree beyond the home tile", 55 and 113 m off. (That the collider stands exactly where the drawn trunk does was not checked: the hit lay behind a bush.)
 
-**The sun's glow stays out of the haze on things** (`ground_haze.glsl ground_haze_air`, `compose.frag`, 2026-11-23): the haze colour is the sky's no nearer than 40 degrees round from the sun. Taken straight toward a low sun it washed a mountain orange that had the sun BEHIND it (the air on this side of it lies in its shadow). Not yet looked at in an evening picture (the test at 19:54 was already night). The car's view: 3.6 / 4.6 / 5.8 m behind (2.7 / 3.3 / 4.0 was too near). The street lamps at three times a lantern's strength light the road visibly (seen at night).
+**The sun's glow stays out of the haze on things** (`ground_haze.glsl ground_haze_air`, `compose.frag`, 2026-11-23): the haze colour is the sky's no nearer than 40 degrees round from the sun. Taken straight toward a low sun it washed a mountain orange that had the sun BEHIND it (the air on this side of it lies in its shadow). Looked at on 2026-11-24 at 18:54 (close view at home, toward the sunset glow and to both sides): the far trees and what shows of the mountains keep their own colour, no orange wash. The car's view: 3.6 / 4.6 / 5.8 m behind (2.7 / 3.3 / 4.0 was too near). The street lamps at three times a lantern's strength light the road visibly (seen at night).
 
-## The terrain's temporal upscaler (2026-11-23, late night) - first version
+## The terrain's temporal upscaler (2026-11-24)
 
-`shaders/terrain_rm_resolve.frag`, `terrain_rm_upscale.glsl` (the enlargement, shared with `terrain_raymarch_compose.frag`), `frame.cpp` "Pass 0.55". With the terrain below full size and "temporal reconstruction" on (`terrain_rm_temporal`; the Medium and High levels), it replaces the two-picture checkerboard:
+`shaders/terrain_rm_resolve.frag`, `terrain_rm_upscale.glsl` (the enlargement, shared with `terrain_raymarch_compose.frag`), `frame.cpp` "Pass 0.55", `src/engine/terrain_keep.h` (the sample places; `tests/test_terrain_keep.cpp`). With the terrain below full size and "temporal reconstruction" on (`terrain_rm_temporal`; the Medium and High levels of "Terrain resolution"):
 
-- The low-resolution terrain is offset by a quarter of its pixel to four places in turn (`tr_->lr_phase`); at half size every full-resolution pixel is sampled once in four frames.
-- A full-resolution picture of the terrain alone is kept from frame to frame: two RGBA16F images written in turn (rgb colour, a distance; they live in the `lrb_color_*` / `lrb_depth_*` fields and bindings 36 / 37 the checkerboard's second picture had). The resolve pass puts this frame's samples into last frame's picture, moved by the motion vectors, where the distance agrees and within a range round this frame's own colours. The compose pass takes its colour from it; depth, outlines and motion stay this frame's.
-- *The kept picture lives in the STILL picture's pixels.* The main upscaler moves the camera by part of a pixel every frame; a history that followed it was sampled between its pixels every frame and only blurred. The low-resolution terrain takes that offset out (`lr_jit = lr_phase - jitter / 2`) and the compose pass reads the kept picture where its own moved pixel lies in it.
-- Cost: 0.2 ms (`terrain_resolve`).
+- A picture of the terrain alone is kept from frame to frame: two RGBA16F images written in turn (rgb colour, a distance; the `lrb_color_*` / `lrb_depth_*` fields, bindings 36 / 37). It is needed because the world pass draws objects over the terrain - the frame's final picture cannot be its history.
+- **The kept picture is twice the render size each way** (`tr_->keep_extent`). The main upscaler (DLSS, FSR) moves the camera by part of a pixel every frame and builds the screen's detail from what it finds at those places, so it must be handed, every frame, what the ground looks like at that frame's place inside each pixel. The first version kept a picture of the render size: one fixed place per pixel. Read between its pixels it gave the upscaler the same picture every frame, and paving ten metres off came out in blocks the size of a rendered pixel (its joints are one screen pixel wide). That was the fault that looked like "the low-resolution pass shades the ground more simply" - it does not; the pass is the same shader with the same push constants.
+- The low-resolution terrain is moved inside its own pixel to n x n places in turn (`terrain_keep_phase`, `tr_->lr_phase`): n = 4 at half size (each of its pixels covers 4 x 4 kept pixels, a round is 16 frames), 3 at three quarters, never more than 4. In ordered-dither order: any four frames in a row take one place in each quarter of the pixel.
+- *The kept picture lives in the STILL picture's pixels.* A history that followed the camera's sub-pixel offset was sampled between its pixels every frame and only blurred. The low-resolution terrain takes that offset out (`lr_jit = lr_phase - jitter / 2`) and the compose pass reads the kept picture where its own moved pixel lies in it.
+- The resolve pass, per kept pixel: last frame's picture where the ground has moved from (Catmull-Rom, five taps - with the plain bilinear filter a turning camera had no more detail than the plain enlargement), used where its distance agrees and limited to a range round this frame's own colour there; this frame's sample where one falls on the pixel (60 % of it: the ground's light is traced with a few rays a pixel, and a pixel is the mean of its last few samples); 0.6 % of this frame's plain enlargement, so an error does not stay.
+- The compose pass takes its colour from the kept picture; depth, outlines and motion stay this frame's. Pixels that come from the kept picture are marked as the full-resolution terrain marks its own (`gbuffer1.b` 0.7); only pixels enlarged from this frame alone keep the 0.6 that makes `rr_guides.comp` hand Ray Reconstruction a flat guide.
 
-State (close view at home, 50 %, still camera): the sand's grain is back, which the checkerboard had lost. The paving is NOT right: its stones come out as blotches instead of stones with joints. Ruled out: the range the history is limited to (widened: no change), taking a sample whole (halved: no change), the sign of the camera offset (checked against `world_render.cpp`). Not yet looked at: the terrain's light is traced with a few rays a pixel and each sample carries that frame's noise; the sharpen step runs before the samples are put together and overshoots each of them; a moving camera has not been looked at at all. Until those are, the Medium / High levels show this version.
+Measured (close view at home, 3440 x 1400 at render scale 50 %, 14 h, still camera; mean difference from the full-resolution picture, of 255 - two runs of the full-resolution picture differ by 1.1 - 1.4):
 
-**Why the paving stays wrong under the temporal upscaler** (found 2026-11-23, not yet fixed): with the sharpen step off the paving is the same, so it is not the sharpening. Beside the full-resolution picture of the same view, the low-resolution terrain's own picture is a different one: the stones have no relief or joints' shade, a small island of paving in the sand is nearly gone and the sand's ripples are flatter. The upscaler cannot bring back what its samples do not hold - the low-resolution pass shades the ground more simply than the full one. Where that happens is the next thing to find: not the pixel footprint (every use reads `scene.viewport`, the full size), not the far screen-space normal (beyond `lod_far_m` only), not the `pc.emissive.x` sign (depth pre-pass and march start only). Candidates not yet read: `terrain_raymarch_lr_pipeline_`'s two-attachment build writing no G-buffer (what the lighting pass then does for ground pixels), and the pre-pass depth copy the low-resolution pass does without.
+| | sand near | sand far | paving near | paving 10 m off | terrain pass |
+|---|---|---|---|---|---|
+| 50 %, plain enlargement | 8.5 | 4.6 | 12.6 | 18.4 | 7.5 ms |
+| 50 %, first version (kept picture of the render size) | 7.5 | 4.4 | 10.4 | 13.8 | 7.5 + 0.4 |
+| 50 %, kept picture twice the size | 5.7 | 3.6 | 6.5 | 9.3 | 7.5 + 0.44 |
+| 75 %, plain enlargement | 7.8 | 4.1 | 9.6 | 14.2 | 14.6 |
+| 75 %, kept picture twice the size | 5.6 | 3.4 | 5.9 | 8.6 | 14.6 + 0.46 |
+| full size | | | | | 20.2 - 20.6 |
+
+(The times are with the quality rows as in the player's file that day - sun shadows, bounce light and terrain shadows at their highest; they are higher than the 12.5 ms of the sections above.) Change from one frame to the next, still camera: 1.0 - 1.5 of 255 on sand and paving in all three of full / plain / kept - the kept picture does not flicker. With the kept picture, 75 % is hardly nearer the full picture than 50 % and costs twice as much: the High level could go to 50 % (not changed).
+
+In a steady turn (0.1 rad/s, two rendered pixels a frame): no trails or blocks; the paving keeps its stones and joints, the sand's grain is softer than at full size and a little sharper than the plain enlargement.
+
+Known:
+- *Light that changes quickly shows the round.* The shadow of grass swaying in the wind on sand: the sixteen kept pixels under a low-resolution pixel hold sixteen different moments, and the shadow comes out in a pattern four screen pixels wide instead of blades (the plain enlargement shows it as blobs; neither is the full picture). Tried without effect: limiting the history round the plain enlargement instead of round the four neighbours' own range, and going over to this frame's enlargement where the history was cut off (both are in). Also tried, and taken out again (2026-11-24): a measure of change in the compose pass - each of this frame's samples against last frame's kept picture at the very place it falls on (the same point of the ground a round ago, so fine detail does not count), only where the ground stands still, the kept picture itself left alone. It cannot tell a moved shadow from noise: on still, evenly lit sand a fresh sample differs from the kept one by 15 - 25 %, because the ground's light is traced with a few random rays a sample. A threshold above that misses most real change; one below it flags a tenth of all ground pixels at random. It would take the ground's light without its noise (the sun's shadow term kept apart from the traced bounce light) to compare. (Whether that difference is the light's noise was then tested from the other side: with a sample counting for 20 % instead of 60 % - each kept pixel the mean of many more - the kept picture was no nearer the full one, sand 6.1 against 5.7. So it is not simply noise frozen into the kept picture, and what the two samples of one point differ by is not explained.)
+- An outline of ground against ground (a near bump in front of far ground) is this frame's low-resolution picture, never the kept one.
+- The validation layer reports once that binding 36 is in the colour-attachment layout: the resolve pass writes one of the two kept pictures while both are named in the descriptor set. The shader reads only the other one.
+- Rain and snow (same close view, kept / plain, of 255): rain - sand 5.0 / 8.1, paving near 3.7 / 8.2, paving 10 m off 7.2 / 14.2; snow - 0.2 - 4.5 / 0.2 - 8.9, to the eye the same picture as full size. Walking: one capture, mostly tall grass, nothing wrong in it - not a real test.
+
+How it was found, for the next time a low-resolution pass "looks different": the three captures (full, 50 % plain, 50 % kept) of the same held view, cropped at the same place and enlarged eight times, showed blocks exactly one RENDERED pixel in size - the low-resolution picture's pixels are twice that. A debug colour in the compose pass (not in the resolve pass: what that writes is its own history next frame, so the colour feeds itself) showed that nearly every ground pixel did come from the kept picture.
+
+Capture recipe: a copy of `vibe_settings.cfg` with `terrain_raymarch_scale = 0.5`, `terrain_rm_temporal = 1`, `time_of_day = 14`, `day_night_enabled = 0` and the close view of `tools/perf/bench.sh`, run with `VIBE_CFG=<copy> VIBE_TEST_HOLD=1 VIBE_TEST_GROUND=1 VIBE_NO_NET=1 VIBE_TEST_SIZE=3440x1400 build/vibe.exe --frames 330 --screenshot x.png --screenshot-after 300` (`VIBE_TEST_PAN=0.1` and a yaw 0.5 rad less for the turn that ends on the same view). The `gfx_*` rows in a cfg copy do NOT set the settings they stand for at load: set the settings themselves.
+
+**Fast ground goes back to the plain enlargement** (`terrain_rm_resolve.frag`, `rush`). Ground that comes toward the camera grows in the picture from frame to frame, and what was kept of it is stretched along. Driving at 72 km/h the road came out in blotches the size of a low-resolution pixel - worse than the plain enlargement. The resolve pass measures how much the picture stretches at a pixel in one frame (the motion's change over one low-resolution pixel): up to about 1 % the kept picture holds, from 4 % on nothing is kept there (alpha 0: the compose pass enlarges this frame's picture itself and marks the pixel as it does without this pass); likewise from 5 - 10 low-resolution pixels of motion a frame. At 72 km/h that is: kept beyond some 30 m, plain inside 8 m. A turning camera stretches nothing, and the still view and the turn measure as before.
+
+More views, same day (difference from full size, of 255; kept / plain): night at 23 h - 0.4 - 0.9 / 0.5 - 1.9; the far view of `bench.sh` - paving 7.1 / 15.0, sand 5.3 / 8.5, the hillside 3.0 / 4.8, the mountains 5.3 / 6.5. Driving the course on autopilot (`VIBE_TEST_JEEP=1,9 VIBE_TEST_JEEP_AT=1689.5,837.2,3.14159`, no `VIBE_TEST_HOLD`): the same picture as the plain enlargement, as intended. Walking was not captured (the rule above covers it: plain inside about 2 m).
+
+## The low-resolution terrain starts at the march too (2026-11-24)
+
+Seen while driving with the terrain below full size (plain or kept, and at 98 % as at 50 %): a tan strip of far field drawn across the wood beside the highway, IN FRONT of the trunks. A debug colour by distance (compose pass) put the strip about 100 m from the camera; from 15 m up there is no such bank, in either mode. With `terrain_rm_prepass = 0` the full-resolution picture shows the same strip.
+
+So it is the plain march, not the low-resolution path: a ray that skims ground falling away from the camera creeps along it in ever smaller steps and, started at the eye, is taken for a hit far too early (careful stepping - `terrain_rm_converge = 1`, step factor 0.3 - makes the strip nearly vanish; the distance LOD has nothing to do with it). The full-resolution pass has been safe since it starts where the low-resolution march got to. The low-resolution terrain pass never did.
+
+- The march pre-pass now runs ahead of the low-resolution terrain as well (`frame.cpp` "Pass 0.45", before "Pass 0.5"; `tr_march_prepass_on()` no longer excludes it), and that pass starts its rays there (`terrain_raymarch.frag` `lr_start`, `scene.rm_perf.x` bit 32; the place in the march's picture comes from `vNDC`, since this pass's pixels are not the picture's). The shadow terms, the start at the hit and the shading rate stay with the full-resolution pass.
+- Ahead of the low-resolution terrain the march is always the coarsest (4 x 4 pixels: `init_terrain_raymarch_lowres`). At 2 x 2 it had as many pixels as the pass it serves: 1.7 ms against 0.7 saved. Highway view, 50 %: march 0.83 + terrain 2.92 ms, against 3.85 ms for the terrain alone before; close view 0.39 + 6.9 against 7.5.
+- The low-resolution pass's rays are built from the camera-relative matrix, as the full-resolution pass's (`render_terrain_raymarch_lr`). It did not cause the strip; it is what the march's distances are measured against.
+- Still true with the pre-pass switched off (`terrain_rm_prepass = 0`, no quality level does that): the strip, in both paths.
+
+## Ground turned away from the sun, in an object's shadow (2026-11-24)
+
+`terrain_rm_main_light.glsl` (the call of `rm_rt_sun_shadow`). Seen on the sand at home at 18:54, the sun 2 - 3 degrees up behind the wood: a ragged pattern of light and dark over the ripples, pixel by pixel, the same on every frame.
+
+It was not a shadow's edge. The whole of the sand lay in the wood's shadow. The ray-traced shadow of objects does two things to the ground: it takes the sun away, and it takes 70 % of the sky's light with it (`terrain_rm_main_gi.glsl`: under a canopy the sky is covered too). It was only asked for where the ground faces the sun (`dif > 0`). Ground turned away from the sun kept all of its sky light - and came out BRIGHTER than the shadowed ground beside it. At a low sun the sand's fine normal turns to and from the sun from pixel to pixel.
+
+Now asked for whichever way the ground faces. The same view: evenly shaded sand. At midday the picture is the same (1.1 - 1.4 of 255 from before, what two runs differ by) and so is the time (terrain pass 20.7 ms against 20.2 - 20.6; dusk 16.8 against 16.5).
+
+How it was found: `VIBE_RM_SKIP` 4 / 8 / 32 / 1024 in turn - only 32 (object shadows) took the pattern away; then a colour for the blocker's distance (all of it over 15 m: the wood, nothing near); then the same picture with Ray Reconstruction off and with the softness at a sixteenth - so no ray's noise, and nothing the rays' directions decide. What was left was which pixels ask at all.
+
+The cost in a wood at midday, where many more pixels are both turned from the sun and near trees (`VIBE_RM_SKIP=65536` asks only where the ground faces the sun, as it was): the forest view of `bench.sh` 5.58 against 5.58 ms, the same place looking down at the forest floor 10.7 against 10.6 - nothing.
+
+## The far edge of a meadow came out in steps (2026-11-24)
+
+`terrain_rm_heightfield.glsl raymarch_lo` (`t_grass`), read by `grass_raymarch.frag` ("Skip the open air"). Seen from the meadow by the highway looking at the wood, with the terrain at full size only: the line where the grass ends against the trees was notched in rectangles, the size of the march pre-pass's blocks.
+
+The low-resolution march hands the grass pass the place to start from: the last point at which the block's ray was still more than a blade's height above the ground. It went on counting after the ray had first come lower. A ray that skims the crest of a meadow has the ground fall away under it beyond the crest and is "high" again there - so the grass march started behind the blades standing on the crest, for the whole block. Now the point is fixed the first time the ray comes lower.
+
+Cost: nothing measurable (grass pass: meadow view 5.56 -> 5.67 ms, close view 3.40 -> 3.04, forest view 3.49 -> 3.41).
+
+## The outline against the sky under the temporal upscaler (2026-11-24)
+
+`terrain_rm_resolve.frag` and `terrain_raymarch_compose.frag` ("The outline"), `frame.cpp` (`tr_->cam_still`). Reported from play at "Terrain resolution" Medium: the edge of the snow mountains against the sky flickers, standing still.
+
+At an outline the compose pass took this frame's low-resolution picture - and that picture lies at another of sixteen places inside its pixel every frame, so the outline was drawn sixteen different ways a round (frame-to-frame change along the ridge 2.0 of 255, against 0.9 in the open sky and 1.5 for the plain enlargement, which is blocky but steady).
+
+While the camera stands still (the view matrix as last frame's: `cam_still`, `pc.tex_params.w`) the kept picture now holds the outline too. Its alpha says ground (the distance), sky (-1) or not known yet (0). At an outline a kept pixel is what the last sample that fell ON it said, and is left alone by every frame whose samples fall elsewhere; after a round the outline stands, at the kept picture's resolution. The compose pass lets the four kept pixels round its own decide - ground where they cover half of it or more. Measured: 0.9 along the ridge, the same outline on consecutive frames, and finer than before.
+
+Only with a still camera: the sky has no motion vectors to carry its kept pixels along by. Turning or walking, an outline is this frame's low-resolution picture as before (it moves anyway). An outline of ground against ground (a near hill before a far one) is also still this frame's: mixing the distances of two surfaces would put objects behind the near one in front of it.
+
+Not known: whether the player's view is exactly still when standing in a real game (it is in a held test view); if something moves it by a hair every frame, none of this takes effect.
+
+## "Simplest shading": a measuring mode (2026-11-24)
+
+Graphics tab, the checkbox at the top; `VIBE_TEST_SIMPLE=1` for a test run. `gfx_quality.cpp set_simple_shading`, `scene_ubo.glsl FLAT_SHADING` (bit 1 of `scene.rt_flags2.y`) and `flat_light()`.
+
+Everything is still drawn, at the same resolution - the same ground, trees, grass, water - but flat: a surface is its own colour times one light for the whole picture (half sun, half sky; no direction, no shadow, no rays, no haze). What a frame costs then is geometry, marching and the upscaler; the difference to the normal picture is what the shading costs.
+
+- *Settings*: put aside when it is switched on and brought back when it is switched off (`simple_saved_rt_`); while it is on nothing is saved. Off in it: ray-traced shadows, occlusion, bounce light, reflections, the light in the air, clouds, bloom and flares, grass shadows, the surface relief, Ray Reconstruction.
+- *Meshes, trees, cars, small plants* (everything in the G-buffer): `deferred_lighting.frag` returns colour x light right after the G-buffer is read. The G-buffer pass itself (`cube.frag`: textures, leaf cards) is as it was.
+- *Ground and water*: the first-start build of the terrain shader (`terrain_raymarch_lite`), with the flat light and no haze. Its low-resolution pipeline is now always built, not only when the game starts with the terrain below full size.
+- *Grass*: `grass_raymarch.frag` leaves out its lighting (the shadow map, the blade shadows, side light, translucency).
+
+Measured (3440 x 1400, render scale 50 %, 14 h; normal -> flat, ms):
+
+| view | frame | terrain | deferred lighting | upscaler | grass |
+|---|---|---|---|---|---|
+| close, terrain at 75 % | 28.9 -> 17.5 | 14.1 -> 6.1 | 1.6 -> (none logged) | 2.5 -> 1.3 | 3.5 -> 3.5 |
+| close, terrain at full size | 38.9 -> 19.5 | 21.9 -> 7.8 | 1.7 -> - | 2.7 -> 1.3 | 3.9 -> 3.5 |
+| forest, terrain at 75 % | 27.0 -> 14.3 | 5.8 -> 1.7 | 6.8 -> - | 2.5 -> 1.3 | 4.1 -> 4.2 |
+
+What it says: two thirds of the ground's time is its shading, one third (6 - 8 ms in the close view) finding the ground at all; the grass pass is all marching - its lighting costs nothing that can be measured; the trees' drawing (3.3 - 4 ms for depth and colour passes together) is geometry and does not change; half of the upscaler's time is Ray Reconstruction.
+
+Not tried: switching it on and off from the menu in a running game (only started with the test variable).
+
+## The shading test: drop-downs per part of the picture (2026-11-24)
+
+Graphics tab, the first section; `VIBE_TEST_SHADE="ground=0,water=1"` for a test run (`VIBE_TEST_SIMPLE=1`: everything plainest). `gfx_quality.cpp` (`shade_rows`, `apply_shade_test`), `scene_ubo.glsl` (`FLAT_OBJECTS` / `FLAT_GRASS` / `FLAT_GROUND`, bits 1 - 3 of `scene.rt_flags2.y`), `shade_rm_skip_` (sections of the terrain shader left out: the `RMDBG` bits). It replaces the single "simplest shading" switch of the section above; what that section says of "flat" still holds.
+
+Measuring switches, not quality levels: one part of the picture is made plain or taken out while the rest stays as it is. The player's settings are put aside when the first drop-down leaves "full" and come back when the last returns to it; nothing is saved meanwhile. Every change starts again from the settings put aside, so the order the drop-downs are used in does not matter.
+
+| drop-down (key) | levels | how |
+|---|---|---|
+| Ground: light (`ground`) | flat / simple / no shadows or bounce light / full | flat, simple: the first-start shader (`terrain_raymarch_lite`); "no shadows": `RMDBG` 4, 8, 16, 32 and no bounce rays |
+| Ground: stones (`stones`) | off / simple / full | `RMDBG` 2 + 32768 / 32768 |
+| Ground: close-up (`detail`) | off / full | `RMDBG` 1 + 128 + 1024, no relief on walls |
+| Water (`water`) | flat / simple / full | `RMDBG` 131072 (new: `terrain_rm_main_water.glsl`) / no ray-traced reflections, no shadows on it |
+| Objects: light (`objects`) | flat / sun and sky only / full | `FLAT_OBJECTS` / shadows, occlusion, bounce light, reflections off |
+| Grass (`grass`) | off / flat / no shadows / full | not drawn / `FLAT_GRASS` / its shadow settings |
+| Trees (`trees`) | off / full | draw distance 0 |
+| Sky and air (`sky`) | off / full | clouds, mist, bloom, flares |
+| Denoiser (`denoiser`) | off / on | Ray Reconstruction |
+
+Measured one at a time (close view at home, 3440 x 1400, render scale 50 %, terrain at 75 %, 14 h; full: frame 28.9 ms, terrain 14.0, grass 3.4, deferred lighting 1.6, upscaler 2.5):
+
+| changed | frame | what moved |
+|---|---|---|
+| ground: no shadows or bounce light | 26.5 | terrain 11.8 |
+| ground: simple | 21.9 | terrain 7.5 |
+| ground: flat | 22.2 | terrain 7.4 |
+| stones: simple / off | 28.6 / 28.4 | terrain 13.8 / 13.4 |
+| close-up: off | 23.8 | terrain 9.1 |
+| objects: sun and sky only | 26.0 | deferred 0.2, terrain 12.7 (the objects' shadows on the ground go too) |
+| objects: flat | 26.4 | deferred gone |
+| grass: no shadows / flat | 28.4 / 28.4 | nothing (grass 3.4) |
+| grass: off | 25.0 | grass gone |
+| trees: off | 28.3 | their passes 3.3 -> 2.3 |
+| sky and air: off | 28.4 | clouds 0.3 |
+| denoiser: off | 34.4 | SLOWER: upscaler 2.5 -> 1.2, but without it the lighting traces its full ray counts (deferred 1.6 -> 7.1, terrain 14.0 -> 15.5) |
+
+What it says for this view: the largest single thing in the ground's time is the close-up detail (textures and relief: 5 ms of 14); its shadows and bounce light are 2 ms; the stones 0.6. The grass costs what its marching costs. Ray Reconstruction pays for itself several times over.
+
+Not verified: the water drop-down (no water in the views tried: three runs showed no change in picture or time), the stones in a picture (the view's sand has none - only the time moved), and using the drop-downs from the menu in a running game (measured with the test variable only).
+
+## Libraries updated (2026-11-24)
+
+`CMakeLists.txt`, the `FetchContent` pins: glfw 3.4 -> 3.5.1, glm 1.0.1 -> 1.0.3, vk-bootstrap 1.3.295 -> 1.4.341, VulkanMemoryAllocator 3.1.0 -> 3.5.0, Catch2 3.7.1 -> 3.16.1, JoltPhysics 5.2.0 -> 5.7.0, imgui 1.91.5 -> 1.93.0, tinygltf 2.9.3 -> 2.9.7, tinyexr 1.0.8 -> 3.4.0, miniaudio 0.11.21 -> 0.11.26, meshoptimizer 1.0 -> 1.3. FastNoiseLite 1.1.1, enet 1.3.18 and ozz-animation 0.17.0 were the latest already.
+
+- *vk-bootstrap* follows the Vulkan headers' version: 1.4.341 is the one for the installed SDK (1.4.341.1). A newer one wants a newer SDK.
+- *tinygltf stays on 2.x.* 3.x is a rewrite with a C API (`tiny_gltf_v3.h`); `tiny_gltf.h` and the `stb_image.h` it carried - which `skybox.cpp`, `frame.cpp` and others include from its folder - moved to an `attic/`. Going to 3.x means rewriting `gltf_loader.cpp` and bringing stb in on its own.
+- *imgui 1.92.4+*: the Vulkan backend's pipeline fields moved (`ui_setup.cpp`: `ii.PipelineInfoMain.MSAASamples`, `.PipelineRenderingCreateInfo`). Its `ImGui_ImplVulkan_AddTexture(sampler, view, layout)` now ignores the sampler (the HUD's weapon icons: looks the same).
+- After trying a tag and going back (tinygltf 3.1 -> 2.9.7), `build/_deps/<lib>-build` kept the tests the abandoned version had registered and `build.ps1 -Test` stopped at the first of them ("Could not find executable ... tester_v3_c"): delete that folder.
+- The vendor SDKs and the Vulkan SDK: the next section.
+
+Checked: all 129 tests, a run of the close view (no errors in the log), the pause menu drawn.
+
+## The sun's shadows: where the rays' time is (2026-11-24)
+
+Asked: review the shadow logic and make it faster. Measured first (3440 x 1400, render scale 50 %, terrain at full size, every quality row at its highest, Ray Reconstruction on; close view / forest view):
+
+| left out | ground pass | objects' lighting pass |
+|---|---|---|
+| nothing | 18.4 / 5.2 ms | 1.7 / 6.8 ms |
+| the ground's own shadow (`VIBE_RM_SKIP=4`) | 18.5 / 4.9 | |
+| grass blades' shadow on the ground (8) | 17.8 / 4.8 | |
+| the small plants' shadow map on the ground (16) | 18.3 / 5.2 | |
+| every ray on the ground (32: object shadows, occlusion AND bounce light) | 15.9 / 3.7 | |
+| bounce light on the ground only (`terrain_gi_samples_cap = 0`) | 16.6 / 4.2 | |
+| ray-traced occlusion (`ao_mode = 0`) | 17.9 / 4.9 | 1.5 / 6.0 |
+| ray-traced sun shadows (`shadow_enabled = 0`) | 17.7 / 5.1 | 1.2 / 4.4 |
+| bounce light everywhere (`gi_samples = 0`) | 16.6 / 4.1 | 0.6 / 1.8 |
+
+So the shadows are not where the time is. On the ground all the shadow terms together are under 1 ms (the plants' shadow map is drawn in a pass of its own: another 0.5 - 1.1 ms); on objects the sun's shadow is about 2 ms in a wood. The rays' time is the bounce light: 1.7 ms on the ground close by, and 4.6 of the 6.4 ms of the objects' lighting in the forest (with "Bounce light" at its highest: full bounce light on leaves).
+
+Trap: `VIBE_RM_SKIP=32` is not "object shadows" - `do_rt` in `terrain_rm_main_light.glsl` also gates the occlusion rays and the bounce light.
+
+Changed: under Ray Reconstruction the search for a shadow's blocker takes one ray, not two (`deferred_lighting.frag` `n_block`, `terrain_raymarch.frag` `kBlocker`). The second was a third of the sun's shadow rays, spent on halving the noise of a distance that only sets the penumbra's width. Objects' lighting in the forest 6.8 -> 6.35 ms, close 1.74 -> 1.60; the ground unchanged (its rays were never the cost). Pictures: the same within what two runs differ by (forest floor 5.4 of 255 against 8.3 between two runs of the new build - the leaves move).
+
+Read and left: the ground's own shadow (one walk over the baked heights since 2026-11-23: nothing left to take), the plants' shadow map (two layers drawn every frame, 0.5 - 1.1 ms: it could be drawn less often, but the plants sway), the baked castle shadow (34 texture fetches per mesh-terrain pixel; not on the raymarched ground).
+
+## Vendor SDKs updated (2026-11-24)
+
+- *NVIDIA Streamline 2.14.16 / DLSS 310.9.16, FidelityFX-FSR2 2.2.1*: the newest already (FSR2's own repository ended at 2.2.1). Not touched.
+- *AMD FSR SDK 1.1.4 -> 2.4.0* (the `external/FidelityFX-SDK` submodule; the first 2.x with Vulkan on a par with DX12). What changed for us:
+  - Layout: headers in `Kits/FidelityFX/{api,upscalers,framegeneration}/include` (included without the `ffx_api/` prefix; the swap chain's structs are in `vk/ffx_api_framegeneration_vk.h`), DLLs in `Kits/FidelityFX/signedbin`.
+  - One DLL became three: `fsr3.cpp` loads `amd_fidelityfx_loader_vk.dll`, which picks `amd_fidelityfx_upscaler_vk.dll` / `amd_fidelityfx_framegeneration_vk.dll`. All three are copied next to the exe (`FFX_SDK_DLLS` in `CMakeLists.txt`); `build/amd_fidelityfx_vk.dll` is the old one and can go.
+  - `ffxCreateBackendVKDesc`: device, physical device and proc-addr moved into `.deviceContext`.
+  - `ffx_api_loader.h` resolves the entry points only with `_WINDOWS` defined (`fsr3.cpp` defines it).
+  - `screenshot.cpp` took `stb_image_write.h` out of the old SDK's sample framework; it now takes tinygltf's copy, like `stb_image.h` everywhere else.
+  - Checked on the NVIDIA card with `fsr_backend = 1`, `upscaler_auto = 0`: the upscaler context, the frame-generation context and the swap-chain proxy all come up, the picture is right, no errors. Not checked: on an AMD card (where the loader may pick FSR 4), and the frame times.
+- *Vulkan SDK 1.4.341.1 -> 1.4.363.1*, vk-bootstrap v1.4.341 -> v1.4.363 to match. Installed beside the old one without admin rights (`vulkansdk-windows-X64-1.4.363.1.exe --root C:\VulkanSDK\1.4.363.1 --accept-licenses --default-answer --confirm-command install copy_only=1`), which sets no environment variable: the *user-level* `VULKAN_SDK` (and `VK_SDK_PATH`) point at it, and `build.ps1` now reads the user-level variable before the machine-level one. Back to the old SDK: delete the user-level variable, delete the `Vulkan_*` lines' values from `build/CMakeCache.txt` (or `-Clean`), vk-bootstrap back to v1.4.341. A changed `glslc` recompiles every shader: the first start after it is the long one.
+- Checked after both: all 129 tests, the close view with DLSS + Ray Reconstruction and with FSR + frame generation (no errors, `vk_err=0`, pictures as before). Frame times not compared - another game was using the graphics card during the runs.

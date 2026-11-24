@@ -40,6 +40,7 @@
         alb = mix(alb, vec3(0.20, 0.20, 0.19) * mix(0.85, 1.1, tile_noise2(pos.xz, 5.0, vec2(0.0))), road_l.x);
         float dif_l = max(dot(n_l, scene.sun_direction.xyz), 0.0) * sun_horizon_lit(u_sun_horizon, pos);
         vec3 lin_l = dif_l * scene.sun_color.rgb * scene.sun_color.a + (0.45 + 0.35 * up_l) * scene.sky_color.rgb * 0.75;
+        if (FLAT_GROUND) lin_l = flat_light();        // ("simplest shading")
         lite_out(pos, alb * lin_l);
         return;
     }

@@ -1,11 +1,11 @@
-// FSR3 upscaler integration via AMD FidelityFX SDK 1.1.4 ffx-api
+// FSR upscaler integration via the AMD FSR SDK 2.4.0 ffx-api (1.1.4 until 2026-11-24)
 // (vendored at external/FidelityFX-SDK, MIT, see LICENSE.txt).
 //
 // IMPORTANT — the SDK's ffx_api.h hardcodes FFX_API_ENTRY as
 // __declspec(dllexport). Static-link consumers get NULL function
 // pointers. AMD's intended consumer path is runtime LoadLibrary +
 // GetProcAddress via ffx_api_loader.h. We follow that here: load
-// amd_fidelityfx_vk.dll on first init, resolve the 5 entry points,
+// amd_fidelityfx_loader_vk.dll on first init, resolve the 5 entry points,
 // call through function pointers from then on.
 //
 // Session 2 of docs/fsr3_plan.md (upscaler swap). Sessions 3-6
@@ -24,11 +24,15 @@
 #ifdef VIBE_HAVE_FSR3
   // Includes <windows.h> internally — keep ABOVE Vulkan/Win32 headers
   // already pulled in by internal.h to avoid macro collisions.
-  #include "ffx_api/ffx_api.h"
-  #include "ffx_api/ffx_api_loader.h"
-  #include "ffx_api/ffx_upscale.h"
-  #include "ffx_api/ffx_framegeneration.h"
-  #include "ffx_api/vk/ffx_api_vk.h"
+  #ifndef _WINDOWS
+    #define _WINDOWS        // ffx_api_loader.h only resolves the entry points when this is set
+  #endif
+  #include "ffx_api.h"
+  #include "ffx_api_loader.h"
+  #include "ffx_upscale.h"
+  #include "ffx_framegeneration.h"
+  #include "vk/ffx_api_vk.h"
+  #include "vk/ffx_api_framegeneration_vk.h"
 #endif
 
 namespace vibe {
@@ -64,9 +68,9 @@ void ffx_message_cb(uint32_t type, const wchar_t* message) {
 
 bool ensure_loaded() {
     if (g_ffx_loaded) return true;
-    g_ffx_dll = LoadLibraryA("amd_fidelityfx_vk.dll");
+    g_ffx_dll = LoadLibraryA("amd_fidelityfx_loader_vk.dll");
     if (!g_ffx_dll) {
-        log::warnf("[fsr3] LoadLibrary amd_fidelityfx_vk.dll failed (err %lu) — "
+        log::warnf("[fsr3] LoadLibrary amd_fidelityfx_loader_vk.dll failed (err %lu) — "
                    "ensure the DLL is staged next to the exe (CMake post-build)",
                    GetLastError());
         return false;
@@ -165,9 +169,9 @@ void VulkanEngine::init_fsr3() {
     ffxCreateBackendVKDesc backend{};
     backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
     backend.header.pNext = nullptr;
-    backend.vkDevice         = device_;
-    backend.vkPhysicalDevice = physical_device_;
-    backend.vkDeviceProcAddr = vkGetDeviceProcAddr;
+    backend.deviceContext.vkDevice         = device_;
+    backend.deviceContext.vkPhysicalDevice = physical_device_;
+    backend.deviceContext.vkDeviceProcAddr = vkGetDeviceProcAddr;
 
     ffxCreateContextDescUpscale up{};
     up.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
@@ -417,9 +421,9 @@ void VulkanEngine::init_fsr3_swapchain() {
 
     ffxCreateBackendVKDesc backend{};
     backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
-    backend.vkDevice = device_;
-    backend.vkPhysicalDevice = physical_device_;
-    backend.vkDeviceProcAddr = vkGetDeviceProcAddr;
+    backend.deviceContext.vkDevice         = device_;
+    backend.deviceContext.vkPhysicalDevice = physical_device_;
+    backend.deviceContext.vkDeviceProcAddr = vkGetDeviceProcAddr;
 
     VkSwapchainKHR sdk_sc = swapchain_;   // in/out — SDK overwrites
     ffxCreateContextDescFrameGenerationSwapChainVK desc{};
@@ -777,9 +781,9 @@ void VulkanEngine::init_fsr3_fg() {
     // FG context backend desc — same shape as the upscaler's.
     ffxCreateBackendVKDesc backend{};
     backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
-    backend.vkDevice         = device_;
-    backend.vkPhysicalDevice = physical_device_;
-    backend.vkDeviceProcAddr = vkGetDeviceProcAddr;
+    backend.deviceContext.vkDevice         = device_;
+    backend.deviceContext.vkPhysicalDevice = physical_device_;
+    backend.deviceContext.vkDeviceProcAddr = vkGetDeviceProcAddr;
 
     ffxCreateContextDescFrameGeneration fg{};
     fg.header.type     = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;

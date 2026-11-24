@@ -4,6 +4,7 @@ add_executable(vibe_tests
     test_frustum.cpp
     test_site_store.cpp
     test_globe.cpp
+    test_terrain_keep.cpp
 )
 
 target_link_libraries(vibe_tests PRIVATE

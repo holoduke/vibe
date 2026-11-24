@@ -9,10 +9,13 @@ $ErrorActionPreference = "Stop"
 $vcvars = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
 
-# Pull machine-level PATH and VULKAN_SDK into this session.
+# Pull PATH and VULKAN_SDK into this session. VULKAN_SDK: the user-level variable wins over the
+# machine-level one (an SDK installed side by side without admin rights - "copy_only=1" - sets neither;
+# point the user-level variable at it).
 $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
             [Environment]::GetEnvironmentVariable("Path", "User")
-$env:VULKAN_SDK = [Environment]::GetEnvironmentVariable("VULKAN_SDK", "Machine")
+$env:VULKAN_SDK = [Environment]::GetEnvironmentVariable("VULKAN_SDK", "User")
+if (-not $env:VULKAN_SDK) { $env:VULKAN_SDK = [Environment]::GetEnvironmentVariable("VULKAN_SDK", "Machine") }
 
 # vcvars64.bat needs vswhere.exe; the VS Installer dir often isn't in PATH.
 $vsInstaller = "C:\Program Files (x86)\Microsoft Visual Studio\Installer"

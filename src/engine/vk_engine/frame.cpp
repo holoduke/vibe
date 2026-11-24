@@ -12,6 +12,7 @@
 #include "engine/vk_engine/state/taau.h"
 #include "engine/vk_engine/state/clouds.h"
 #include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/terrain_keep.h"
 #include "engine/vk_engine/state/compose.h"
 #include "engine/vk_engine/state/taa.h"
 #include "engine/vk_engine/state/fsr3.h"
@@ -579,6 +580,41 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     VkClearValue clear_depth{};
     clear_depth.depthStencil.depth = 1.0f;
     wm_cache_bake(frame.command_buffer);        // the world's slow fields, when the camera has moved on (wm_cache.cpp)
+    // ---------- Pass 0.45: the terrain's low-resolution march ("march pre-pass") ----------
+    // One ray per block of pixels finds how far it can go before the ground comes near;
+    // the terrain pass - the full-resolution one in the world pass, or the low-resolution
+    // terrain just below - starts its march there.
+    if (tr_march_prepass_on()) {
+        VkCommandBuffer c = frame.command_buffer;
+        vkinit::transition_image(c, tr_->march_image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        vkinit::transition_image(c, tr_->shade_image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        VkClearValue mc{};
+        mc.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };          // 0 = nothing known: march from the eye
+        VkRenderingAttachmentInfo m_att =
+            vkinit::color_attachment_info(tr_->march_view, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        // (second attachment: the sun-shadow terms at the march's hits - cleared to "not valid")
+        const VkRenderingAttachmentInfo m_atts[2] = {
+            m_att, vkinit::color_attachment_info(tr_->shade_view, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) };
+        VkRenderingInfo m_ri{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr, .flags = 0,
+            .renderArea = { {0, 0}, tr_->march_extent },
+            .layerCount = 1, .viewMask = 0,
+            .colorAttachmentCount = 2, .pColorAttachments = m_atts,
+            .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
+        };
+        vkCmdBeginRendering(c, &m_ri);
+        render_terrain_march_prepass(c);
+        vkCmdEndRendering(c);
+        vkinit::transition_image(c, tr_->march_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkinit::transition_image(c, tr_->shade_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        prof_mark(c, "terrain_march_lo");
+    }
+
     // ---------- Pass 0.5: low-res raymarch terrain (when scale < 1) ----------
     // Renders the FBM raymarch into tr_lr_* attachments at a fraction of
     // the main resolution. Compose pass at the start of the world color
@@ -595,19 +631,26 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         tr_->lr_frame = fn;
         tr_->lr_cur_b = tb && (fn & 1) != 0;
         tr_->lr_jit_prev = tr_->lr_jit;
-        // (the temporal upscaler: the low-resolution picture offset by a quarter of its pixel
-        //  to four places in turn - at half size, the four full-resolution pixels of each of
-        //  its own. lr_cur_b: which of the two full-resolution terrain pictures is this frame's.)
-        static const glm::vec2 kPhase[4] = { { -1.0f, -1.0f }, { 1.0f, 1.0f }, { 1.0f, -1.0f }, { -1.0f, 1.0f } };
-        // The terrain's full-resolution picture is kept in the STILL picture's pixels: the
+        // (the temporal upscaler: the low-resolution picture offset inside its own pixel to
+        //  keep_n x keep_n places in turn - at half size, the sixteen kept pixels under each of
+        //  its own. lr_cur_b: which of the two kept pictures is this frame's.)
+        // The terrain's own picture is kept in the STILL picture's pixels: the
         // main upscaler (DLSS, FSR) moves the camera by part of a pixel every frame, and a
         // history that followed it was sampled between its pixels again every frame - blurred
         // a little more each time, so nothing was gained. So the low-resolution terrain takes
         // that offset out again (the projection's offset j shows, at uv, the scene at uv + j / 2)
-        // and adds its own four places: lr_phase. The compose pass reads the kept picture
+        // and adds its own places: lr_phase. The compose pass reads the kept picture
         // where its (moved) pixel lies in the still one.
-        tr_->lr_phase = tb ? glm::vec2(0.25f / float(tr_->lr_extent.width), 0.25f / float(tr_->lr_extent.height)) * kPhase[fn & 3u] : glm::vec2(0.0f);
+        tr_->lr_phase = tb ? terrain_keep_phase(tr_->keep_n, fn) / glm::vec2(float(tr_->lr_extent.width), float(tr_->lr_extent.height)) : glm::vec2(0.0f);
         tr_->lr_jit = tb ? tr_->lr_phase - 0.5f * current_frame_view_.jitter : glm::vec2(0.0f);
+        {   // (the camera stands still: every number of the view as last frame's)
+            const glm::mat4& v = current_frame_view_.view;
+            float dmax = 0.0f;
+            for (int c = 0; c < 4; ++c) for (int r = 0; r < 3; ++r)
+                dmax = std::max(dmax, std::abs(v[c][r] - tr_->keep_prev_view[c][r]) * (c == 3 ? 0.01f : 1.0f));
+            tr_->cam_still = tb && tr_->lr_hist_ok && dmax < 1e-6f;
+            tr_->keep_prev_view = v;
+        }
         // Under a temporal upscaler (DLSS, FSR, TAA) the camera's sub-pixel offset covers one
         // pixel of the main picture over its sequence - of this smaller picture that is only a
         // part of a pixel (a quarter of its area at 50 %), so the upscaler kept seeing the same
@@ -713,7 +756,7 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     prof_mark(frame.command_buffer, "terrain_raymarch_lr");
 
     // ---------- Pass 0.55: the terrain's temporal upscaler ----------
-    // (terrain_rm_resolve.frag: this frame's low-resolution terrain and the full-resolution
+    // (terrain_rm_resolve.frag: this frame's low-resolution terrain and the kept
     //  terrain picture of the frame before, into this frame's - which the compose pass in the
     //  world pass then takes its colour from.)
     if (tr_use_lowres() && tr_->lrb_color_view && tr_->lrb_depth_view && tr_->resolve_pipeline &&
@@ -727,56 +770,22 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         VkRenderingInfo h_ri{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .pNext = nullptr, .flags = 0,
-            .renderArea = { {0, 0}, render_extent_ },
+            .renderArea = { {0, 0}, tr_->keep_extent },
             .layerCount = 1, .viewMask = 0,
             .colorAttachmentCount = 1, .pColorAttachments = &h_att,
             .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
         };
         vkCmdBeginRendering(c, &h_ri);
         VkViewport hvp{};
-        hvp.width = float(render_extent_.width); hvp.height = float(render_extent_.height);
+        hvp.width = float(tr_->keep_extent.width); hvp.height = float(tr_->keep_extent.height);
         hvp.minDepth = 0.0f; hvp.maxDepth = 1.0f;
         vkCmdSetViewport(c, 0, 1, &hvp);
-        VkRect2D hsc{ {0, 0}, render_extent_ };
+        VkRect2D hsc{ {0, 0}, tr_->keep_extent };
         vkCmdSetScissor(c, 0, 1, &hsc);
         render_terrain_raymarch_compose(c, true);
         vkCmdEndRendering(c);
         vkinit::transition_image(c, h_img, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         prof_mark(c, "terrain_resolve");
-    }
-
-    // ---------- Pass 0.6: the terrain's low-resolution march ("march pre-pass") ----------
-    // One ray per block of pixels finds how far it can go before the ground comes near;
-    // the full-resolution terrain pass (in the world pass below) starts its march there.
-    if (tr_march_prepass_on()) {
-        VkCommandBuffer c = frame.command_buffer;
-        vkinit::transition_image(c, tr_->march_image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        vkinit::transition_image(c, tr_->shade_image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        VkClearValue mc{};
-        mc.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };          // 0 = nothing known: march from the eye
-        VkRenderingAttachmentInfo m_att =
-            vkinit::color_attachment_info(tr_->march_view, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        // (second attachment: the sun-shadow terms at the march's hits - cleared to "not valid")
-        const VkRenderingAttachmentInfo m_atts[2] = {
-            m_att, vkinit::color_attachment_info(tr_->shade_view, &mc, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) };
-        VkRenderingInfo m_ri{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .pNext = nullptr, .flags = 0,
-            .renderArea = { {0, 0}, tr_->march_extent },
-            .layerCount = 1, .viewMask = 0,
-            .colorAttachmentCount = 2, .pColorAttachments = m_atts,
-            .pDepthAttachment = nullptr, .pStencilAttachment = nullptr,
-        };
-        vkCmdBeginRendering(c, &m_ri);
-        render_terrain_march_prepass(c);
-        vkCmdEndRendering(c);
-        vkinit::transition_image(c, tr_->march_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        vkinit::transition_image(c, tr_->shade_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        prof_mark(c, "terrain_march_lo");
     }
 
     // ---------- Pass 0.65: the ground's shading rate, from that march ----------

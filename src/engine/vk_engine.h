@@ -130,6 +130,19 @@ private:
     void apply_gfx_row(int row, int level);
     void apply_gfx_all(int level);
     void gfx_test_hook();
+    // "Shading test" (Graphics tab; VIBE_TEST_SHADE, VIBE_TEST_SIMPLE): measuring switches - one
+    // part of the picture made plain or taken out, to see what it costs (gfx_quality.cpp).
+    // Not saved; everything back at "full" brings the player's settings back.
+    struct ShadeRow { const char* key; const char* label; const char* const* names; int levels; const char* help; };
+    static constexpr int kShadeRows = 9;
+    static const ShadeRow* shade_rows(int& count);
+    void apply_shade_test();
+    void set_simple_shading(bool on);       // everything plainest / everything full
+    void shade_test_hook();
+    int  shade_test_[kShadeRows] = { 3, 2, 1, 2, 2, 3, 1, 1, 1 };      // each row's level (the last = full)
+    bool simple_shading_ = false;           // any row is below full: the settings in use are not the player's
+    int  shade_rm_skip_ = 0;                // the terrain shader's sections the test leaves out (RMDBG bits)
+    int  shade_flat_bits_ = 0;              // scene.rt_flags2.y: 2 objects, 4 grass, 8 ground - colour only
     void gfx_quality_ui();
     void auto_scale_tick();                     // settings 'hold frame rate': the render scale follows the load
     void prof_sweep_tick();                     // VIBE_PROF_SWEEP: a list of experiments in one run
@@ -2870,6 +2883,7 @@ private:
     // flushed" (timer counts up). Keeping both stops the timer from resetting
     // forever just because the live struct still differs from the saved one.
     RtSettings rt_last_saved_{};
+    RtSettings simple_saved_rt_{};      // the settings as they were when "simplest shading" was switched on
     RtSettings rt_prev_frame_{};
     float      settings_dirty_timer_ = 0.0f;
 

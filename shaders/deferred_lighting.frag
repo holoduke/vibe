@@ -481,6 +481,9 @@ void main() {
         return;
     }
 
+    // "Simplest shading": the colour, and nothing else. (alpha 0 = geometry, as above)
+    if (FLAT_OBJECTS) { outColor = vec4(albedo * flat_light(), 0.0); return; }
+
     vec3 cam_pos = scene.camera_pos.xyz;
     vec3 view_vec = cam_pos - world_pos;
     float cam_dist = length(view_vec);
@@ -616,8 +619,11 @@ void main() {
         // estimate the same mean distance as 4 - and a single one when the
         // softness is so low that the penumbra is sub-pixel anyway (the
         // distance then only sets the shadow ray's length).
+        // (One, whatever the softness - 2026-11-24: the second ray was a third of all the sun's
+        // shadow rays, spent on halving the noise of a distance that only sets the penumbra's
+        // width; the shadow ray below is traced either way, and RR averages the width as well.)
         int n_block = 4;
-        if ((scene.rt_flags.x & 2) != 0) n_block = base_softness < 0.004 ? 1 : 2;
+        if ((scene.rt_flags.x & 2) != 0) n_block = 1;
         for (int i = 0; i < n_block; ++i) {
             float r1 = rand(seed_stable + uvec3(uint(i), 91u, 13u));
             float r = sqrt(r1) * kBlockerCone;

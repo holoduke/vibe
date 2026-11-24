@@ -7,6 +7,7 @@
 #include "engine/vk_engine/internal.h"
 #include "engine/vk_engine/state/svgf.h"
 #include "engine/vk_engine/state/terrain_raymarch.h"
+#include "engine/terrain_keep.h"
 #include "engine/vk_engine/state/taa.h"
 #include "engine/vk_pipelines.h"
 #include "engine/window.h"
@@ -305,7 +306,7 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
         vkpipe::GraphicsPipelineConfig li = cfg;
         li.frag = terrain_raymarch_lite_module_;
         terrain_raymarch_lite_pipeline_ = vkpipe::build_graphics_pipeline(device_, li);
-        if (rt_.terrain_raymarch_scale < 0.999f) {       // (the low-resolution terrain pass, when it is in use: a second compile)
+        {       // (the low-resolution terrain pass: a second compile - always, "simplest shading" may ask for it at any time)
             li.color_formats = { scene_color_format_, motion_vec_format_ };
             li.enable_vrs = false;
             terrain_raymarch_lite_lr_pipeline_ = vkpipe::build_graphics_pipeline(device_, li);
@@ -577,10 +578,12 @@ bool VulkanEngine::tr_use_lowres() const {
            rt_.terrain_raymarch_scale < 0.999f;
 }
 
-// The low-resolution march runs ahead of the full-resolution terrain pass (not with the
-// low-resolution terrain: that pass is cheap already and has no depth copy to line up with).
+// The low-resolution march runs ahead of the terrain pass - the full-resolution one, and the
+// low-resolution terrain too (frame.cpp): without it a ray skimming the ground was taken for a
+// hit far too early (terrain_raymarch.frag, "starts there too"). What else hangs on the march -
+// the shadow terms, the start at the hit, the shading rate - is for the full-resolution pass only.
 bool VulkanEngine::tr_march_prepass_on() const {
-    return rt_.terrain_rm_prepass && rt_.terrain_raymarch_enabled && !tr_use_lowres() &&
+    return rt_.terrain_rm_prepass && rt_.terrain_raymarch_enabled &&
            tr_->march_pipeline != VK_NULL_HANDLE && tr_->march_view != VK_NULL_HANDLE;
 }
 
@@ -712,6 +715,10 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
     // The low-resolution march's target: R32F, a whole number of full pixels per texel.
     {
         tr_->march_div = std::clamp(rt_.terrain_rm_prepass_div, 2, 4);
+        // (ahead of the low-resolution terrain the coarsest will do: that pass only wants a
+        //  safe place to start from, and its own pixels are two of the picture's already -
+        //  at 2 the march cost as many pixels as the pass it serves: 1.7 ms against 0.7 saved)
+        if (tr_use_lowres()) tr_->march_div = 4;
         tr_->march_extent = { (render_extent_.width  + uint32_t(tr_->march_div) - 1) / uint32_t(tr_->march_div),
                              (render_extent_.height + uint32_t(tr_->march_div) - 1) / uint32_t(tr_->march_div) };
         VkImageCreateInfo ici{
@@ -809,8 +816,11 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
     tr_->lr_frame = ~uint64_t(0);
     tr_->lr_jit = tr_->lr_jit_prev = glm::vec2(0.0f);
     if (tr_use_lowres() && rt_.terrain_rm_temporal) {
-        // The temporal upscaler's two full-resolution pictures of the terrain (state header;
-        // terrain_rm_resolve.frag): colour + distance, at the render size.
+        // The temporal upscaler's two kept pictures of the terrain (state header;
+        // terrain_rm_resolve.frag): colour + distance, at twice the render size. The low-resolution
+        // picture visits keep_n x keep_n places inside its own pixel (engine/terrain_keep.h).
+        tr_->keep_extent = { render_extent_.width * 2u, render_extent_.height * 2u };
+        tr_->keep_n = terrain_keep_places(tr_->keep_extent.width, lw);
         for (int k = 0; k < 2; ++k) {
             VkImage& img = k ? tr_->lrb_depth_image : tr_->lrb_color_image;
             VmaAllocation& al = k ? tr_->lrb_depth_alloc : tr_->lrb_color_alloc;
@@ -819,7 +829,7 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
             ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
             ici.imageType = VK_IMAGE_TYPE_2D;
             ici.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-            ici.extent = { render_extent_.width, render_extent_.height, 1 };
+            ici.extent = { tr_->keep_extent.width, tr_->keep_extent.height, 1 };
             ici.mipLevels = 1; ici.arrayLayers = 1;
             ici.samples = VK_SAMPLE_COUNT_1_BIT;
             ici.tiling = VK_IMAGE_TILING_OPTIMAL;

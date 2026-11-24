@@ -123,8 +123,128 @@ void VulkanEngine::apply_gfx_all(int level) {
     log::infof("[settings] graphics quality: all rows to level %d", rt_.gfx_all);
 }
 
+// "Shading test" (Graphics tab, at the top; VIBE_TEST_SHADE): measuring switches, not quality
+// levels. One drop-down per part of the picture - the ground's light, its stones, its close-up
+// detail, the water, the objects' light, the grass, the trees, the sky and air, the denoiser -
+// each from "off" or "flat" up to "full", so that a part can be taken out or made plain while
+// the rest stays as it is, and the frame time read with and without it.
+//
+// The player's settings are put aside when the first drop-down leaves "full" and come back
+// when the last one returns to it; nothing is saved while any is below "full"
+// (save_settings). Every change starts again from the settings put aside, so the drop-downs
+// do not depend on the order they are used in.
+//
+// What a level does is one of three things: a bit for the shaders (scene.rt_flags2.y,
+// scene_ubo.glsl FLAT_*: the part is its own colour times one light), sections of the terrain
+// shader left out (shade_rm_skip_, the RMDBG bits), or settings switched off.
+const VulkanEngine::ShadeRow* VulkanEngine::shade_rows(int& count) {
+    static const char* const kGround[]  = { "Flat (colour only)", "Simple (sun and sky, no detail)", "No shadows or bounce light", "Full" };
+    static const char* const kStones[]  = { "Off", "Simple (in the light only, not in the shape)", "Full" };
+    static const char* const kDetail[]  = { "Off (no close-up textures, no relief)", "Full" };
+    static const char* const kWater[]   = { "Flat", "Simple (no ray-traced reflections, no shadows)", "Full" };
+    static const char* const kObjects[] = { "Flat (colour only)", "Sun and sky only (no rays)", "Full" };
+    static const char* const kGrass[]   = { "Off", "Flat (colour only)", "No shadows", "Full" };
+    static const char* const kTrees[]   = { "Off", "Full" };
+    static const char* const kSky[]     = { "Off (no clouds, mist, bloom, flares)", "Full" };
+    static const char* const kDenoise[] = { "Off", "On" };
+    static const ShadeRow rows[kShadeRows] = {
+        { "ground",   "Ground: light",      kGround,  4, "How the ground is lit.\nFlat and Simple use the small first-start shader: no textures, stones or relief either.\nNo shadows or bounce light: the full ground, without its own shadow, the shadows of grass,\nplants and objects on it, and without bounce light." },
+        { "stones",   "Ground: stones",     kStones,  3, "The pebbles and stones lying on the ground close by.\nSimple: they are in the light and the colour, but do not change the ground's outline." },
+        { "detail",   "Ground: close-up",   kDetail,  2, "The photographed soil and rock textures close to the camera, and the fine relief\n(rills, ripples in sand, lumps)." },
+        { "water",    "Water",              kWater,   3, "Flat: one colour and the sky's sheen. Simple: waves and foam, but what it reflects is the sky only." },
+        { "objects",  "Objects: light",     kObjects, 3, "Castle, buildings, trees, cars, small plants.\nSun and sky only: no ray-traced shadows, occlusion, bounce light or reflections\n(this also takes the objects' shadows off the ground and the grass)." },
+        { "grass",    "Grass",              kGrass,   4, "The blades of grass. Off: none are drawn (the ground stays coloured as lawn)." },
+        { "trees",    "Trees",              kTrees,   2, "Off: no trees or bushes are drawn (their ray-traced shadows stay)." },
+        { "sky",      "Sky and air",        kSky,     2, "Clouds, mist and light in the air, bloom and lens flares." },
+        { "denoiser", "Denoiser (DLSS RR)", kDenoise, 2, "Ray Reconstruction. Off: the plain DLSS upscaler." },
+    };
+    count = kShadeRows;
+    return rows;
+}
+
+void VulkanEngine::apply_shade_test() {
+    int n = 0;
+    const ShadeRow* rows = shade_rows(n);
+    bool any = false;
+    for (int i = 0; i < n; ++i) {
+        shade_test_[i] = std::clamp(shade_test_[i], 0, rows[i].levels - 1);
+        any = any || shade_test_[i] != rows[i].levels - 1;
+    }
+    if (any && !simple_shading_) simple_saved_rt_ = rt_;        // the player's own settings: put aside
+    if (any || simple_shading_) {
+        // (from what was put aside - but not what is not shading and has moved on meanwhile)
+        RtSettings base = simple_saved_rt_;
+        base.time_of_day = rt_.time_of_day;
+        rt_ = base;
+    }
+    shade_rm_skip_ = 0;
+    shade_flat_bits_ = 0;
+    if (simple_shading_ != any) log::infof("[settings] shading test %s", any ? "ON (measuring: settings are not saved)" : "off");
+    simple_shading_ = any;
+    if (!any) return;
+
+    const int ground = shade_test_[0], stones = shade_test_[1], detail = shade_test_[2], water = shade_test_[3],
+              objects = shade_test_[4], grass = shade_test_[5], trees = shade_test_[6], sky = shade_test_[7], denoiser = shade_test_[8];
+    // -- the ground (levels 0 and 1 draw it with the first-start shader: world_render.cpp) --
+    if (ground == 0) shade_flat_bits_ |= 8;
+    if (ground <= 2) { shade_rm_skip_ |= 4 | 8 | 16 | 32; rt_.terrain_gi_samples_cap = 0; rt_.grass_shadow_on_terrain = false; }
+    if (stones == 0) shade_rm_skip_ |= 2 | 32768;
+    if (stones == 1) shade_rm_skip_ |= 32768;
+    if (detail == 0) { shade_rm_skip_ |= 1 | 128 | 1024; rt_.spom_strength = 0.0f; }
+    // -- water --
+    if (water == 0) shade_rm_skip_ |= 131072;
+    if (water <= 1) { rt_.water_rt_reflections = false; rt_.water_tlas_reflections = false; rt_.water_shadows_enabled = false; }
+    // -- objects --
+    if (objects == 0) shade_flat_bits_ |= 2;
+    if (objects <= 1) { rt_.shadow_enabled = false; rt_.ao_mode = 0; rt_.ao_samples = 0; rt_.gi_samples = 0; rt_.reflections_enabled = false; }
+    // -- grass --
+    if (grass == 0) { rt_.grass_enabled = false; rt_.grass_raymarch_enabled = false; }
+    if (grass == 1) shade_flat_bits_ |= 4;
+    if (grass <= 2) { rt_.grass_shadow_samples = 0; rt_.grass_shadow_on_terrain = false; rt_.grass_shadow_on_terrain_samples = 0; }
+    // -- trees --
+    if (trees == 0) rt_.tree_draw_distance = 0.0f;
+    // -- sky and air --
+    if (sky == 0) {
+        rt_.fog_volumetric = 0; rt_.terrain_raymarch_fog_strength = 0.0f; rt_.terrain_raymarch_fog_godrays = false;
+        rt_.clouds_enabled = 0; rt_.bloom_enabled = false; rt_.lens_flare_enabled = false;
+    }
+    if (denoiser == 0) rt_.dlss_rr = false;
+}
+
+// Everything at its plainest (but drawn: the grass flat, the trees there), or everything full.
+void VulkanEngine::set_simple_shading(bool on) {
+    int n = 0;
+    const ShadeRow* rows = shade_rows(n);
+    for (int i = 0; i < n; ++i) shade_test_[i] = on ? 0 : rows[i].levels - 1;
+    if (on) { shade_test_[5] = 1; shade_test_[6] = 1; }
+    apply_shade_test();
+}
+
+// VIBE_TEST_SHADE="ground=0,water=1,grass=0": levels by key (measurements). VIBE_TEST_SIMPLE=1: all plainest.
+void VulkanEngine::shade_test_hook() {
+    if (std::getenv("VIBE_TEST_SIMPLE")) set_simple_shading(true);
+    const char* e = std::getenv("VIBE_TEST_SHADE");
+    if (!e) return;
+    int n = 0;
+    const ShadeRow* rows = shade_rows(n);
+    std::string s(e);
+    size_t at = 0;
+    while (at < s.size()) {
+        size_t end = s.find(',', at);
+        if (end == std::string::npos) end = s.size();
+        const std::string item = s.substr(at, end - at);
+        at = end + 1;
+        const size_t eq = item.find('=');
+        if (eq == std::string::npos) continue;
+        for (int i = 0; i < n; ++i)
+            if (item.substr(0, eq) == rows[i].key) shade_test_[i] = std::atoi(item.c_str() + eq + 1);
+    }
+    apply_shade_test();
+}
+
 // VIBE_TEST_GFX="all=2,terrain_steps=0,forest=4": levels by key, in order (measurements).
 void VulkanEngine::gfx_test_hook() {
+    shade_test_hook();
     const char* e = std::getenv("VIBE_TEST_GFX");
     if (!e) return;
     const auto& rows = gfx_rows();

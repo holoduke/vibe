@@ -168,9 +168,9 @@ void VulkanEngine::init_imgui() {
     ii.DescriptorPool = imgui_pool_;
     ii.MinImageCount = 2;
     ii.ImageCount = static_cast<uint32_t>(swapchain_images_.size());
-    ii.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;        // (imgui 1.92.4+: the pipeline's fields moved into PipelineInfoMain)
     ii.UseDynamicRendering = true;
-    ii.PipelineRenderingCreateInfo = prci;
+    ii.PipelineInfoMain.PipelineRenderingCreateInfo = prci;
     ImGui_ImplVulkan_Init(&ii);
 
     // HUD weapon icons (generated artwork; see ui_gamehud.cpp).

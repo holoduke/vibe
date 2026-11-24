@@ -15,7 +15,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
 #pragma warning(push, 0)
-#include "../../../external/FidelityFX-SDK/framework/cauldron/framework/libs/stb/stb_image_write.h"
+#include <stb_image_write.h>      // (tinygltf's copy, as stb_image.h elsewhere - not a file out of a vendor SDK's samples)
 #pragma warning(pop)
 
 namespace vibe {

@@ -15,6 +15,16 @@
             return;
         }
 #endif
+#if !defined(VIBE_LITE) && !defined(VIBE_WATER)
+        if (RMDBG(131072)) {       // (shading test, water "flat": as the first-start build above)
+            vec3 wp = ro + rd * t_water;
+            float fres = 0.03 + 0.97 * pow(1.0 - clamp(-rd.y, 0.0, 1.0), 5.0);
+            vec3 sky_l = scene.sky_color.rgb * 0.55 + scene.sun_color.rgb * 0.10;
+            vec3 deep_l = scene.water_color.rgb * (scene.sun_color.rgb * scene.sun_color.a * max(scene.sun_direction.y, 0.0) * 0.6 + scene.sky_color.rgb * 0.5);
+            lite_out(wp, mix(deep_l, sky_l, fres));
+            return;
+        }
+#endif
 #ifndef VIBE_WATER
         vec3 wpos = ro + rd * t_water;
 #else /* VIBE_WATER */

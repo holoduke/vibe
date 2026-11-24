@@ -114,6 +114,8 @@ bool rm_flat_on() { return !rm_far_chart() || rm_ring(); }
 //   1 close-up ground textures   2 stones in the normal      4 the ground's own sun shadow
 //   8 grass blade shadows       16 small plants' shadow map  32 ray-traced object shadows
 // 512 screen-space normal      1024 close-range ground relief   32768 stones in the march
+// 65536 object shadows only where the ground faces the sun (as before 2026-11-24)
+// 131072 water flat (the shading test)
 #ifdef VIBE_LITE
 // The "first start" build of this shader (see VIBE_LITE in terrain_raymarch.frag): the sections
 // in VIBE_LITE_MASK are compiled out for good.
