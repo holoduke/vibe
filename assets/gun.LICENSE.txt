@@ -1,0 +1,3 @@
+MR-7 rifle (assets/gun.glb)
+Original model made for this project in Blender (source: rifle_mr7.blend, kept outside the repo).
+No third-party geometry or textures. Static, merged per material, barrel along glTF -X, up +Y.

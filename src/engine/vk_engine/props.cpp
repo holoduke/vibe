@@ -95,26 +95,19 @@ void VulkanEngine::init_viewmodel() {
         glm::vec3 center = (gltf.aabb_min + gltf.aabb_max) * 0.5f;
         glm::vec3 extent = gltf.aabb_max - gltf.aabb_min;
         float max_side = std::max({extent.x, extent.y, extent.z, 1e-3f});
-        // 0.55m max side reads better at first-person scale than the
-        // earlier 0.30m. The 180° Y-rotation flips the gun's nose to
-        // point forward (camera -Z); without it the assets/gun model
-        // points back at the player.
-        // m254 asset orientation walk-through: bare → pointed UP, pitch
-        // -90°X → pointed LEFT on its side. The asset's barrel axis
-        // turned out to be -X (not +X as previously assumed) — yaw
-        // +90° around Y mapped that to +Z (toward the player) and the
-        // gun pointed backwards. Yaw -90° flips it the other way so
-        // the barrel ends up along -Z (camera forward).
+        // The longest side (barrel to butt) is scaled to 0.85 m. Asset
+        // convention: barrel along glTF -X, up +Y, ejection port on -Z.
+        // Yaw -90° around Y turns -X into -Z (camera forward).
         float scale = 0.85f / max_side;
         glm::mat4 rot_yaw = glm::rotate(glm::mat4(1.0f),
                                          glm::radians(-90.0f),
                                          glm::vec3(0.0f, 1.0f, 0.0f));
 
-        // Z = -0.22 (was -0.35) pulls the gun back toward the camera
-        // a bit so a slightly larger model still fits comfortably in
-        // the lower-right corner of the frame.
+        // Places the MR-7's bounding-box centre so its pistol grip lands
+        // on WeaponDef::grip_r and its handguard on grip_l (the hands are
+        // fitted there). Another model needs this offset measured again.
         viewmodel_root_offset_ =
-            glm::translate(glm::mat4(1.0f), glm::vec3(0.16f, -0.20f, -0.22f)) *
+            glm::translate(glm::mat4(1.0f), glm::vec3(0.1617f, -0.2798f, -0.2809f)) *
             glm::scale(glm::mat4(1.0f), glm::vec3(scale)) *
             rot_yaw *
             glm::translate(glm::mat4(1.0f), -center);
