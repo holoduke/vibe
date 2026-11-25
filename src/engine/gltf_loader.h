@@ -3,6 +3,7 @@
 #include "engine/mesh.h"
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
 #include <string>
@@ -17,6 +18,7 @@ struct GltfPrimitive {
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     glm::vec4 base_color = glm::vec4(0.6f, 0.6f, 0.65f, 1.0f);
+    glm::vec3 emissive = glm::vec3(0.0f);   // emissiveFactor x KHR_materials_emissive_strength (capped at 3)
 };
 
 struct GltfModel {

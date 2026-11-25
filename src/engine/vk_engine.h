@@ -865,7 +865,7 @@ private:
         bool      remote = false;      // another player's shot (multiplayer): looks only, no hit decisions
     };
     std::vector<Projectile> projectiles_;
-    void fire_projectile(glm::vec3 origin, glm::vec3 direction);
+    void fire_projectile(glm::vec3 origin, glm::vec3 direction, bool rifle = false);   // rifle: a bullet, not a laser bolt
     void update_projectiles(float dt);
     // Bullet tracer afterimage. Every frame a projectile lives, the
     // segment it travelled is pushed here and fades over kTracerFade
@@ -893,6 +893,10 @@ private:
     // a single bright pixel per frame).
     static constexpr float kProjectileRad     = 0.04f;
     static constexpr float kProjectileHalf    = 0.90f;    // (= 1.8 m total)
+    static constexpr float kRifleSpeedScale   = 1.6f;     // a rifle bullet flies this much faster than a laser bolt
+    static constexpr float kRifleRps          = 11.0f;    // the rifle's rate of fire, held trigger (660 rounds a minute)
+    // Aimed: brings the MR-7's red dot, at (0.162, -0.159) in the weapon frame, onto the crosshair.
+    static constexpr glm::vec3 kRifleAdsShift{ -0.162f, 0.159f, -0.120f };
     static constexpr float kProjectileMass    = 10.0f;    // kg — really shoves
     static constexpr float kProjectileMinSpeed = 100.0f;  // despawn below this
 
@@ -971,10 +975,10 @@ private:
 
     // Viewmodel: a "gun" rendered at a fixed offset from the camera. Two
     // paths:
-    //   - If assets/gun.glb exists, it's loaded once into gun_meshes_ + their
-    //     own BLAS list and rendered via that path.
-    //   - Otherwise, a procedural fallback is drawn from the existing cube +
-    //     cylinder primitives (barrel, body, grip).
+    //   - assets/gun.glb (the laser, weapon 0) and assets/rifle.glb (weapon 2)
+    //     are loaded once (props.cpp init_viewmodel) and drawn as meshes.
+    //   - Without gun.glb, a procedural fallback is drawn from the existing
+    //     cube + cylinder primitives (barrel, body, grip).
     struct ViewmodelPart {
         enum class Kind { Cube, Cylinder } kind;
         glm::mat4 local;        // local-to-camera offset matrix
@@ -992,12 +996,18 @@ private:
     struct ViewmodelMesh {
         Mesh mesh;
         glm::vec4 base_color = glm::vec4(0.6f, 0.6f, 0.65f, 1.0f);
+        glm::vec3 emissive = glm::vec3(0.0f);       // glowing parts (from the glTF material)
     };
     std::vector<ViewmodelMesh> viewmodel_gltf_;
     glm::mat4 viewmodel_root_offset_{ 1.0f };    // local-to-camera placement
     // The tip of the gun's top barrel in view space (from the model's own vertices: props.cpp).
     // Where the laser leaves the weapon and where the muzzle flash sits.
     glm::vec3 viewmodel_muzzle_{ 0.18f, -0.18f, -0.72f };
+    // The rifle (weapon 2, assets/rifle.glb): the same, for the second gun.
+    std::vector<ViewmodelMesh> rifle_gltf_;
+    glm::mat4 rifle_root_offset_{ 1.0f };
+    glm::vec3 rifle_muzzle_{ 0.18f, -0.18f, -0.72f };
+    const glm::vec3& held_muzzle(bool rifle) const { return rifle && !rifle_gltf_.empty() ? rifle_muzzle_ : viewmodel_muzzle_; }
 
     // Spacejet flyover system — glTF asset loaded once, rendered as
     // an instanced flock that periodically streams across the level.
@@ -1121,8 +1131,9 @@ private:
     void retire_buffer(VkBuffer b, VmaAllocation a) { if (b) retired_buffers_.push_back({ b, a, frame_number_ }); }
     void collect_retired_buffers(bool all);
     std::vector<glm::vec4> craters_;
-    // ---- Weapons: 0 = laser gun, 1 = airstrike tablet (keys 1 / 2) ----
+    // ---- Weapons: 0 = laser gun, 1 = airstrike tablet, 2 = rifle (keys 1 / 2 / 3) ----
     int  weapon_ = 0;
+    bool gun_in_hand() const { return (weapon_ == 0 || weapon_ == 2) && !flashlight_on_; }
     // Hand flashlight (F): replaces the weapon in the hand. The lamp lags a
     // little behind the view and bobs with the steps; the beam is a ray-
     // traced spot light (flashlight.cpp).
@@ -1331,7 +1342,7 @@ private:
     void mp_shutdown();
     void mp_update(float dt);                          // network + events (main loop)
     void mp_pose_avatars(float dt);                    // after the local body was posed (frame.cpp)
-    void mp_on_local_fire(glm::vec3 origin, glm::vec3 dir);
+    void mp_on_local_fire(glm::vec3 origin, glm::vec3 dir, bool rifle);
     bool mp_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit);
     void mp_feed(const std::string& line);
     void mp_hud();
@@ -1341,8 +1352,8 @@ private:
     void draw_game_hud();                              // ui_gamehud.cpp
     ::ImFont* font_hud_ = nullptr;                // HUD fonts (null: the default font)
     ::ImFont* font_hud_big_ = nullptr;
-    // Weapon icons for the HUD bay: assets/hud/weapon_icons.png, three 256 px
-    // cells (laser, airstrike, flashlight), white with alpha - tinted when drawn.
+    // Weapon icons for the HUD bay: assets/hud/weapon_icons.png, four 256 px
+    // cells (laser, airstrike, rifle, flashlight), white with alpha - tinted when drawn.
     Texture2D   hud_icons_tex_{};
     VkSampler   hud_icons_sampler_ = VK_NULL_HANDLE;
     uint64_t    hud_icons_id_ = 0;                     // ImTextureID (0 = not loaded)
@@ -1354,7 +1365,7 @@ private:
     void update_player_body(float dt);
     void draw_player_body(VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam);
 
-    bool prev_weapon_key_[2]{};
+    bool prev_weapon_key_[3]{};
     bool airstrike_click_ = false;
     struct Airstrike {
         int       phase = 0;        // 0 ready, 1 aircraft inbound, 2 bomb falling, 3 cooldown

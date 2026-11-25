@@ -27,7 +27,7 @@ struct PlayerState {
     float crouch = 0;                          // 0 standing .. 1 crawling
     uint8_t flags = 0;                         // kFlag*
     uint8_t health = 100;                      // 0..100
-    uint8_t weapon = 0;                        // 0 laser gun, 1 airstrike tablet
+    uint8_t weapon = 0;                        // 0 laser gun, 1 airstrike tablet, 2 rifle
     uint8_t move = 0;                          // kMove*: the movement keys held (what the player wants, for prediction)
     uint16_t shot_seq = 0;                     // shots fired so far (wraps): recoil survives a lost event
 };

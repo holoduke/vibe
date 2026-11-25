@@ -84,8 +84,8 @@ void VulkanEngine::draw_game_hud() {
     {
         const float x1 = W - 34.0f * s, x0 = W - 372.0f * s;
         panel(x0, top, x1, base, -lean);
-        const char* name = flashlight_on_ ? "LIGHT" : (weapon_ == 1 ? "STRIKE" : "LASER");
-        const char* sub = "ENERGY";
+        const char* name = flashlight_on_ ? "LIGHT" : (weapon_ == 1 ? "STRIKE" : (weapon_ == 2 ? "RIFLE" : "LASER"));
+        const char* sub = weapon_ == 2 && !flashlight_on_ ? "5.56 AUTO" : "ENERGY";
         ImU32 sub_col = kDim;
         char subbuf[48];
         if (flashlight_on_) {
@@ -117,19 +117,19 @@ void VulkanEngine::draw_game_hud() {
     }
 
     // ---------------- weapon bay (bottom centre) ----------------
-    // Three tiles with the weapon's icon, its key in the corner and its name
+    // Four tiles with the weapon's icon, its key in the corner and its name
     // underneath; the one in the hand is larger, framed and lit in amber.
     {
         struct Slot { const char* key; const char* name; bool on; };
-        const Slot slots[3] = { { "1", "LASER", !flashlight_on_ && weapon_ == 0 }, { "2", "AIRSTRIKE", !flashlight_on_ && weapon_ == 1 },
-                                { "F", "LIGHT", flashlight_on_ } };
+        const Slot slots[4] = { { "1", "LASER", !flashlight_on_ && weapon_ == 0 }, { "2", "AIRSTRIKE", !flashlight_on_ && weapon_ == 1 },
+                                { "3", "RIFLE", !flashlight_on_ && weapon_ == 2 }, { "F", "LIGHT", flashlight_on_ } };
         const float tile = 78.0f * s, big = 96.0f * s, gap = 12.0f * s;
         float total = -gap;
         for (const Slot& sl : slots) total += (sl.on ? big : tile) + gap;
         float x = (W - total) * 0.5f;
         const float bottom = base - 4.0f * s;
         const ImTextureID tex = static_cast<ImTextureID>(hud_icons_id_);
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 4; ++i) {
             const Slot& sl = slots[i];
             const float sz = sl.on ? big : tile;
             const ImVec2 p0(x, bottom - sz), p1(x + sz, bottom);
@@ -144,7 +144,7 @@ void VulkanEngine::draw_game_hud() {
             }
             const float pad = sz * 0.10f;
             if (hud_icons_id_) {
-                const ImVec2 uv0(float(i) / 3.0f, 0.0f), uv1(float(i + 1) / 3.0f, 1.0f);
+                const ImVec2 uv0(float(i) / 4.0f, 0.0f), uv1(float(i + 1) / 4.0f, 1.0f);   // (the atlas: one 256 px cell per slot)
                 dl->AddImage(tex, ImVec2(p0.x + pad + 2.0f * s, p0.y + pad + 2.0f * s), ImVec2(p1.x - pad + 2.0f * s, p1.y - pad + 2.0f * s),
                              uv0, uv1, IM_COL32(0, 0, 0, sl.on ? 150 : 90));                                    // drop shadow
                 dl->AddImage(tex, ImVec2(p0.x + pad, p0.y + pad), ImVec2(p1.x - pad, p1.y - pad), uv0, uv1,

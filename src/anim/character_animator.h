@@ -78,7 +78,8 @@ struct WeaponDef {
     float     ready_pitch_fp = 0.0f, ready_yaw_fp = 0.0f, ready_roll_fp = -0.07f;
     // Aiming, in the player's own view only: the weapon comes to the middle of the screen, its
     // sights under the crosshair. Nobody else sees this: for them it is in the shoulder.
-    glm::vec3 ads_shift_fp{-0.158f, 0.052f, -0.120f};
+    // (LR-9: brings its holo sight, at (0.162, -0.119) in the weapon frame, onto the crosshair.)
+    glm::vec3 ads_shift_fp{-0.162f, 0.119f, -0.120f};
     float     hip_fire_hold = 0.7f;     // seconds a weapon fired from the hip stays level before it sinks again
     glm::vec3 tablet_centre{0.155f, -0.165f, -0.40f};   // the tablet in the weapon frame (as drawn)
     glm::vec3 tablet_chest{0.10f, -0.20f, -0.30f};      // ... and from the neck joint when seen from outside (model axes)

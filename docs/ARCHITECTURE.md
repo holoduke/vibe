@@ -105,7 +105,7 @@ its local variables and are not self-contained.
 | A new setting | `settings_types.h` (field + default), `settings.cpp` (`f("name", ...)` line + clamp), `ui_menu.cpp` (slider) |
 | A HUD element | `ui_hud.cpp` |
 | Editor items | `veg_zones.cpp` (`kItems`) |
-| Gun, bullets, fire rate | `combat.cpp`; bolt glow: `fx.cpp` |
+| Gun, bullets, fire rate (laser and rifle) | `combat.cpp`; bolt glow: `fx.cpp`; gun models and where they sit: `props.cpp` `init_viewmodel` |
 | The soldier's meshes: body without head, head with helmet, three levels of detail each | built by `tools/character/make_soldier.py`, exported by `tools/character/export_fp.py` into `assets/character/soldier_fp*.qchar`, `soldier_head*.qchar`, `soldier_atlas.jpg`; loaded and chosen in `player_body.cpp` (`load_skin_mesh`, `body_mesh_lod`) |
 | The soldiers' shadows | Ray traced for the nearest six: `vk_engine/body_rt.cpp` (`record_body_rt`, called from `rebuild_tlas`), `shaders/skin_rt.comp`. On the ground for all: `clutter_shadow.cpp` (`draw_skinned_shadows`), `shaders/skin_shadow.vert` |
 | Order of a frame's first steps (camera, poses, TLAS) | `frame.cpp`: `pose_characters_for_frame` runs before `submit_tlas_build` because the TLAS build skins the soldiers' ray-tracing copies |

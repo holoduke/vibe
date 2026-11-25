@@ -1,0 +1,7 @@
+assets/gun.glb    LR-9 Helix laser rifle (slot 1)
+assets/rifle.glb  MR-7 assault rifle (slot 3)
+assets/hud/weapon_icons.png  cells 1 and 3 (LR-9, MR-7)
+
+Original models made for this project in Blender; no third-party geometry or textures.
+Static, merged per material, barrel along glTF -X, up +Y, ejection side -Z.
+The animated (rigged) versions are kept outside the repo.

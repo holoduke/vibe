@@ -120,10 +120,11 @@ void VulkanEngine::mp_update(float dt) {
             const glm::vec3 o(e.a[0], e.a[1], e.a[2]), d(e.b[0], e.b[1], e.b[2]);
             mp_->remote_shot = true;
             for (const auto& a : mp_->avatars) if (a.id == e.from && a.animator) shot_weapon_offset_ = &a.fire_offset;
-            fire_projectile(o, d);
+            const bool rifle = e.v > 0.5f;                  // (Fire: v = 1 for the rifle, 0 for the laser)
+            fire_projectile(o, d, rifle);
             shot_weapon_offset_ = nullptr;
             mp_->remote_shot = false;
-            if (audio_) audio_->play_at(ClipID::Laser, o, 0.8f);
+            if (audio_) audio_->play_at(rifle ? ClipID::Shot : ClipID::Laser, o, 0.8f);
             for (auto& a : mp_->avatars) if (a.id == e.from) { a.recoil_t = kRecoilDuration; a.muzzle_t = kMuzzleFlashDuration; a.combat_t = 0.0f; }
         } else if (e.kind == net::Event::Hit) {
             // (where and from where they were hit: the push their body gets if this kills them)
@@ -386,8 +387,8 @@ void VulkanEngine::draw_remote_players(VkCommandBuffer cmd, const glm::mat4& vp)
     const int sv_weapon = weapon_; const bool sv_flash = flashlight_on_;
     for (auto& a : mp_->avatars) {
         if (!a.id || !a.drawn) continue;
-        // What they hold, as replicated: the laser gun or the tablet (a torch is not drawn for others).
-        recoil_timer_ = a.recoil_t; muzzle_flash_timer_ = a.muzzle_t; weapon_ = a.st.weapon == 1 ? 1 : 0; flashlight_on_ = false;
+        // What they hold, as replicated: the laser gun, the tablet or the rifle (a torch is not drawn for others).
+        recoil_timer_ = a.recoil_t; muzzle_flash_timer_ = a.muzzle_t; weapon_ = a.st.weapon <= 2 ? a.st.weapon : 0; flashlight_on_ = false;
         mp_->draw = &a;
         draw_viewmodel(cmd, vp, a.view_inv);
         mp_->draw = nullptr;
@@ -458,12 +459,13 @@ void VulkanEngine::mp_sync_world(float dt) {
 
 // The local player fired (called from fire_projectile).
 
-void VulkanEngine::mp_on_local_fire(glm::vec3 origin, glm::vec3 dir) {
+void VulkanEngine::mp_on_local_fire(glm::vec3 origin, glm::vec3 dir, bool rifle) {
     if (!net_ || mp_->remote_shot) return;
     net::Event e{};
     e.kind = net::Event::Fire; e.from = net_->id();
     e.a[0] = origin.x; e.a[1] = origin.y; e.a[2] = origin.z;
     e.b[0] = dir.x; e.b[1] = dir.y; e.b[2] = dir.z;
+    e.v = rifle ? 1.0f : 0.0f;                     // which gun: the others draw and hear it
     net_->send_event(e);
 }
 

@@ -190,6 +190,17 @@ void walk_node(const tinygltf::Model& model, int node_idx,
                                 df.Get(c).GetNumberAsDouble());
                     }
                 }
+                // Glowing parts (a laser's coils, a sight's dot). The strength is capped so
+                // they bloom like the muzzle flash rather than white out.
+                if (mat.emissiveFactor.size() == 3) {
+                    float strength = 1.0f;
+                    auto es = mat.extensions.find("KHR_materials_emissive_strength");
+                    if (es != mat.extensions.end() && es->second.Has("emissiveStrength"))
+                        strength = static_cast<float>(es->second.Get("emissiveStrength").GetNumberAsDouble());
+                    strength = std::min(strength, 3.0f);
+                    for (int c = 0; c < 3; ++c)
+                        p.emissive[c] = static_cast<float>(mat.emissiveFactor[c]) * strength;
+                }
             }
             process_primitive(model, prim, xform, p);
             if (!p.vertices.empty() && !p.indices.empty()) {
