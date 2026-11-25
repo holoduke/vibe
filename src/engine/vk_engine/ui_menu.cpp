@@ -883,7 +883,7 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SeparatorText("Renderer");
         // Mode switch is always visible; everything below adapts to it
         // so you only see the settings for the selected terrain path.
-        if (ImGui::Checkbox("Procedural raymarched terrain (FBM)",
+        if (ImGui::Checkbox("Procedural terrain (the world formula)",
                             &rt_.terrain_raymarch_enabled)) {
             // Mesh(water-only) wants full-res, FBM wants the scaled LR
             // buffer — resize when the mode flips.
@@ -894,6 +894,19 @@ void VulkanEngine::build_menu_ui() {
                              "Terrain BLAS (RT shadows on terrain) is built once\n"
                              "at load — toggling off mid-session means no RT\n"
                              "terrain shadow contact until restart.");
+        // The patch terrain: the ground within the march's reach from a rasterised mesh (terrain_patches.cpp).
+        if (rt_.terrain_raymarch_enabled) {
+            if (ImGui::Checkbox("Ground from a patch mesh (no march)", &rt_.terrain_patches))
+                recreate_terrain_raymarch_lowres();     // (its depth picture is the low-resolution depth target at full size)
+            ImGui::TextDisabled("The visible ground is found by drawing a mesh of grid\n"
+                                "patches (finer near the camera) instead of marching a ray\n"
+                                "per pixel. Same materials and light. Off = the march.");
+            if (rt_.terrain_patches) {
+                ImGui::Checkbox("Baked ground texture", &rt_.terrain_bake);
+                ImGui::TextDisabled("The ground's material is kept in pictures round the camera\n"
+                                    "and read from there, instead of worked out for every pixel.");
+            }
+        }
 
         if (rt_.terrain_raymarch_enabled) {
         ImGui::SeparatorText("FBM raymarch");

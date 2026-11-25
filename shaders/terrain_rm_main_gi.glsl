@@ -359,6 +359,10 @@
             float pn = tile_noise2(pos.xz, 0.33, vec2(0.0)) * 0.65 + tile_noise2(pos.xz, 1.21, vec2(7.0)) * 0.35;
             float thr = 0.66 - 0.34 * wet;
             float puddle = flatn * smoothstep(thr, thr + 0.06, pn) * smoothstep(0.2, 0.6, wet);
+            // (standing water is level: what the ground's material stands out by is scaled down in a
+            //  puddle, for the screen-space displacement - the reference game's rule. Here, in the
+            //  lighting, so it is the same for a baked pixel and one worked out)
+            if (GND_SSDM && g_gnd_ssdm_h > 0.0) g_gnd_ssdm_h = max(g_gnd_ssdm_h * (1.0 - 0.9 * puddle), 0.006 * kGndSsdmMax);
             vec3 pn_n = normalize(mix(nor, vec3(0.0, 1.0, 0.0), max(max(puddle, 0.5 * wet), 0.92 * shore)));
             if (puddle > 0.01 && pd < 60.0) {
                 vec3 rw = water_ripples(pos.xz);

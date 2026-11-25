@@ -375,6 +375,7 @@ float crater_cover(vec2 q) {
 vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
     road_uv = vec2(0.0);
     r_dir = vec2(0.0, 1.0);
+    if (RMDBG(4194304)) return vec2(0.0);                 // profiling: no material (see getMaterial)
     int rn = int(scene.road_info.x + 0.5);
     if (rn < 2 || any(lessThan(q, scene.road_bbox.xy)) || any(greaterThan(q, scene.road_bbox.zw)))
         return vec2(0.0);
@@ -441,7 +442,23 @@ vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
 // Layered material: rock base, grass on flats, snow up high (with
 // noise-broken transition), sand near the floor. Multi-frequency
 // noise (`nz`) breaks regularity in the transition lines.
+#ifdef VIBE_BAKE
+float g_bake_cam_d = 0.0;       // the level's distance, where the material asks how far the camera is (terrain_rm_bake.glsl)
+#endif
+// The palette's bands by height (close by): the caller may hand over the height of the scan
+// shown at the point (0..1) and how much of the rule to apply (1 near .. 0 far); then rock comes
+// up through the earth stone by stone, and sand lies in the scan's hollows first, instead of
+// the bands fading through each other (rm_height_blend). -1: plain cross-fades.
+float g_mat_h = -1.0, g_mat_hk = 0.0;
+float rm_band(float h_under, float h_over, float w) {
+    if (g_mat_h < 0.0 || g_mat_hk <= 0.0 || w <= 0.001 || w >= 0.999) return w;
+    return mix(w, rm_height_blend(h_under, h_over, w), g_mat_hk);
+}
 vec3 getMaterial(vec3 pos, vec3 nor) {
+    // Profiling (VIBE_RM_SKIP bit 4194304, with 1, 2 and 512): the ground without its material -
+    // one colour, no road, no highway surface. What is left is the light; the difference is the
+    // most a baked ground texture could save.
+    if (RMDBG(4194304)) return vec3(0.09, 0.10, 0.06);
     float slope = nor.y;
     float h = pos.y;
     float nz = tile_noise2(pos.xz, 0.04, vec2(0.0)) * tile_noise2(pos.xz, 0.005, vec2(0.0));
@@ -453,7 +470,8 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
     vec3 snow  = vec3(0.62, 0.65, 0.70);
     vec3 sand  = scene.terrain_sand_color.rgb;
     vec3 col = rock;
-    col = mix(col, grass, smoothstep(0.5, 0.8, slope));
+    // (earth over rock: the earth fills the scan's low places, the rock's high places stand through)
+    col = mix(col, grass, 1.0 - rm_band(0.5, g_mat_h, 1.0 - smoothstep(0.5, 0.8, slope)));
     // The snow line depends on which way the slope faces, as on a real mountain: a slope
     // turned to the south (toward the midday sun, +z here) loses its snow up to ~16 m higher
     // than a level shelf, a north face keeps it that much lower - so the two sides of one
@@ -464,14 +482,18 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
                    * smoothstep(0.3, 0.7, slope);
     col = mix(col, snow, snowMask);
     float beachMask = smoothstep(2.5, 1.0, h) * smoothstep(0.5, 0.9, slope);
-    col = mix(col, sand, beachMask);
+    col = mix(col, sand, rm_band(g_mat_h, 0.42, beachMask));       // (sand in the hollows first)
     // Grass-density green tint — drives the ground colour where the
     // raymarched grass pass (grass_raymarch.frag) would place blades.
     // Two colours (close + far) blend with camera distance so meadows
     // can read as bright lit-green near the player and a darker
     // muted hue at distance (or whatever the user picks).
     float grass_amt = grassEligibility(pos.xz, pos.y);
+#ifdef VIBE_BAKE
+    float cam_d     = g_bake_cam_d;      // (the baked ground texture: the level's own distance - terrain_rm_bake.glsl)
+#else
     float cam_d     = distance(pos, scene.camera_pos.xyz);
+#endif
     // Red sand (terra rossa): irregular patches on flats and gentle slopes
     // below the snow, thinner where grass grows thick; a reddish stain
     // also creeps onto the dry slopes around them.
@@ -485,7 +507,7 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
         float alt_w  = 1.0 - smoothstep(55.0, 80.0, h);
         float red_w  = patchm * flat_w * alt_w * (1.0 - 0.65 * grass_amt) * min(1.0, red_amt * 1.4) * 0.85;
         vec3 red = scene.rm_red_sand.rgb * mix(0.85, 1.15, tile_noise2(pos.xz, 0.9, vec2(0.0)));
-        col = mix(col, red, red_w);
+        col = mix(col, red, rm_band(g_mat_h, 0.42, red_w));
         // Stain on the bare dry ground around the patches.
         col = mix(col, col * mix(vec3(1.0), scene.rm_red_sand.rgb / max(dot(scene.rm_red_sand.rgb, vec3(0.333)), 1e-3), 0.35),
                   smoothstep(0.45, 0.65, rn) * (1.0 - grass_amt) * alt_w * red_amt * 0.35);
@@ -690,7 +712,54 @@ float calcShadowMesh(vec3 pos, vec3 sunDir) {
 
 // One of the photo-scanned ground sets at `uv`: normal + height (u_normal[idx]) and colour
 // (u_albedo[idx]).
+// ---- Anti-tiling for the tiled ground scans (the reference game's remedy) ----
+// A scan laid out as a plain repeat shows its tile as a grid. So the plane is cut into cells of
+// two tiles, and every cell lays the scan its own way: turned by a quarter, a half or three
+// quarters of a turn and shifted (a quarter turn keeps the texels square on the pixels, so the
+// mip is the same). The cells' borders are bent by noise - no straight seams -, and within 9 % of
+// a cell from a border the neighbouring cell's layout is sampled too and the two are blended
+// (half and half on the border itself), so there is no seam to see: one sample over most of the
+// ground, two near a border, three near a corner. Where a tile is smaller than a few pixels
+// (lod 7 and up) the blend is left out: nothing of a seam is resolved there. A sampled normal is
+// turned back by its cell's angle. The baked ground texture and the per-pixel path both come
+// through here, so they cannot differ. (A cell's turn is hashed from its number modulo 32.)
+struct RmAt { vec2 uv[3]; vec2 cs[3]; float w[3]; int n; };
+void rm_at_cell(inout RmAt A, vec2 cell, vec2 uv, float w) {
+    float h = tile_h21(cell - 32.0 * floor(cell / 32.0) + 0.37);
+    float k = floor(h * 4.0);
+    vec2 cs = k < 0.5 ? vec2(1.0, 0.0) : (k < 1.5 ? vec2(0.0, 1.0) : (k < 2.5 ? vec2(-1.0, 0.0) : vec2(0.0, -1.0)));
+    A.cs[A.n] = cs;
+    A.uv[A.n] = vec2(cs.x * uv.x - cs.y * uv.y, cs.y * uv.x + cs.x * uv.y) + vec2(fract(h * 7.13), fract(h * 13.7));
+    A.w[A.n] = w;
+    A.n++;
+}
+RmAt rm_at(vec2 uv, float lod) {
+    RmAt A;
+    A.n = 0;
+    vec2 p = uv * 0.5 + (vec2(noise2(uv * 0.61 + 3.7), noise2(uv * 0.61 + 21.3)) - 0.5) * 0.30;
+    vec2 c = floor(p), f = p - c;
+    vec2 wn = lod < 7.0 ? 0.5 * (1.0 - smoothstep(0.0, 0.09, min(f, 1.0 - f))) : vec2(0.0);
+    rm_at_cell(A, c, uv, (1.0 - wn.x) * (1.0 - wn.y) + wn.x * wn.y);
+    if (wn.x > 0.004) rm_at_cell(A, c + vec2(f.x < 0.5 ? -1.0 : 1.0, 0.0), uv, wn.x * (1.0 - wn.y));
+    if (wn.y > 0.004) rm_at_cell(A, c + vec2(0.0, f.y < 0.5 ? -1.0 : 1.0), uv, wn.y * (1.0 - wn.x));
+    return A;
+}
+vec4 rm_at_normal(int idx, RmAt A, float lod) {
+    vec4 n = vec4(0.0);
+    for (int i = 0; i < A.n; ++i) {
+        vec4 s = textureLod(u_normal[idx], A.uv[i], lod);
+        vec2 v = s.xy - 0.5, cs = A.cs[i];
+        n += vec4(vec2(cs.x * v.x + cs.y * v.y, cs.x * v.y - cs.y * v.x) + 0.5, s.zw) * A.w[i];
+    }
+    return n;
+}
+vec3 rm_at_albedo(int idx, RmAt A, float lod) {
+    vec3 a = vec3(0.0);
+    for (int i = 0; i < A.n; ++i) a += textureLod(u_albedo[idx], A.uv[i], lod).rgb * A.w[i];
+    return a;
+}
 void rm_det_sample(int idx, vec2 uv, float lod, out vec4 n, out vec3 a) {
-    n = textureLod(u_normal[idx], uv, lod);
-    a = textureLod(u_albedo[idx], uv, lod).rgb;
+    RmAt A = rm_at(uv, lod);
+    n = rm_at_normal(idx, A, lod);
+    a = rm_at_albedo(idx, A, lod);
 }

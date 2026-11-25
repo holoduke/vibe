@@ -107,6 +107,11 @@ layout(set = 0, binding = 27) uniform sampler2D u_prepass_depth;
 layout(set = 0, binding = 34) uniform sampler2D u_march_lo;
 // ... and the sun-shadow terms at those blocks' hits (binding 35, RGBA16F; see outShadeLo).
 layout(set = 0, binding = 35) uniform sampler2D u_shade_lo;
+#ifndef VIBE_WATER
+// The patch renderer's depth picture (binding 11, the low-resolution terrain's depth target, which
+// is free while the patches are drawn): terrain_rm_heightfield.glsl rm_patch_hit.
+layout(set = 0, binding = 11) uniform sampler2D u_patch_depth;
+#endif
 // Fog wisp pattern (R8 256², REPEAT). One textureLod() replaces the
 // 3-octave noise2() weighted sum the fog density + godray probe
 // loops used to compute per-tap. UV maps q→texture as `q / 16.0` so
@@ -135,53 +140,11 @@ float clutterOcc(vec2 uv, int layer, float zref) {
     return occ / 9.0;
 }
 #endif /* ! VIBE_WATER */
-// (in a far chart - another part of the planet - there is no home tile: its side is nothing)
-bool g_far_chart = false;        // (set first thing in main: scene.globe_info.x)
-#define kHeightmapSide (g_far_chart ? 1.0e-3 : 2048.0)
-// Forward decl — terrainDetailNoise is defined after `noised` + `m2`
-// (further down in the file) so we can reuse them. We use a forward
-// declaration here so sampleHeightDelta can call it without moving
-// the whole noise toolkit above the declarations of u_terrain_height.
-float terrainDetailNoise(vec2 worldXZ);
-vec3  noised(in vec2 p);   // single-octave value noise + analytical derivatives
-
-float sampleHeightDelta(vec2 worldXZ) {
-    // Was: 4 compare branches before the fetch. Replaced with clamp +
-    // textureLod 0 — sampler is CLAMP_TO_EDGE and the heightmap delta
-    // is ~0 at the world boundary (no sculpting past the edge), so a
-    // clamped read at out-of-world XZ returns the right value too.
-    // Beyond the home tile there is no sculpting. The edge texels are NOT
-    // all zero, and a clamped read drew them out into ruled furrows running
-    // straight away from the tile (lines in the meadows east/west/north/south
-    // of home): fade the delta out over the tile's last metres instead.
-    vec2 aq = abs(worldXZ);
-    float edge = kHeightmapSide * 0.5 - max(aq.x, aq.y);
-    if (edge <= 0.0) return 0.0;
-    vec2 uv = (worldXZ / kHeightmapSide) + vec2(0.5);
-    return textureLod(u_terrain_height, uv, 0.0).r * smoothstep(0.0, 14.0, edge);
-}
+#include "terrain_rm_height_tex.glsl"   // sampleHeightDelta, meshHeight, meshNormal (shared with terrain_patch.vert)
 
 // === The open sea's wave field ======================================
 // (the sea's wave field - sea_map - is further down, after scene_ubo.glsl: it reads the scene buffer)
 
-// === Mesh-terrain height (water-only mode) ==========================
-// Bilinear lookup of the FULL baked heightmap — identical to the
-// surface the rasterised CDLOD mesh draws. Used INSTEAD of the FBM
-// terrainM* functions throughout the water path when the engine runs
-// the water-only pass over mesh terrain, so the water never reflects
-// or shows procedural noise that disagrees with the mesh.
-float meshHeight(vec2 worldXZ) {
-    vec2 uv = clamp((worldXZ / kHeightmapSide) + vec2(0.5), 0.0, 1.0);
-    return textureLod(u_terrain_height_full, uv, 0.0).r;
-}
-vec3 meshNormal(vec2 worldXZ) {
-    const float e = 1.5;   // ≈ heightmap cell — smooth mesh-scale normal
-    float hL = meshHeight(worldXZ - vec2(e, 0.0));
-    float hR = meshHeight(worldXZ + vec2(e, 0.0));
-    float hD = meshHeight(worldXZ - vec2(0.0, e));
-    float hU = meshHeight(worldXZ + vec2(0.0, e));
-    return normalize(vec3(hL - hR, 2.0 * e, hD - hU));
-}
 // raymarchMesh / raymarchReflectMesh / calcShadowMesh are defined
 // after the Scene UBO block (they read scene.terrain_local_info.y for
 // the air early-out) — see below, just after raymarchReflect().
@@ -656,6 +619,7 @@ vec3 sample_sky(vec3 dir) {
 #include "terrain_rm_heightfield.glsl"   // Terrain height (FBM + ground relief) and the ray march against it
 #include "terrain_rm_shading_helpers.glsl"   // Normal, terrain / grass shadows, road weights, ground material, reflection marches
 #include "terrain_rm_water.glsl"   // Water: flow, normals, foam pattern, ripples
+#include "terrain_rm_bake.glsl"   // The baked ground texture: its pictures and the read of them
 // ---- The sun's shadow on the ground, as two functions ----
 // They are called for every pixel by the full pass, or - settings: 'sun shadows at low
 // resolution' - once per block of pixels by the low-resolution build, whose results the full
@@ -882,6 +846,23 @@ void main() {
     // are derived from (vWPos - camera) so reflection helpers below see
     // the same world geometry.
 #endif /* VIBE_WATER */
+#ifdef VIBE_BAKE
+    // The bake build (terrain_rm_bake.glsl; vk_engine/terrain_bake.cpp): this fragment is a texel of
+    // one level of the baked ground texture. model[0] = the window's first world index (x, z),
+    // the texel's size, and the distance the level is made for. The texel's world index is the
+    // one inside the window that falls on this place in the picture; the eye stands straight
+    // above it at the level's distance. No footprints (they change from step to step).
+    g_foot_r2 = -1.0;
+    ivec2 bake_w0 = ivec2(pc.model[0].xy);
+    ivec2 bake_i  = bake_w0 + ((ivec2(gl_FragCoord.xy) - bake_w0) & (kBakeSize - 1));
+    vec2  bake_xz = (vec2(bake_i) + 0.5) * pc.model[0].z;
+    float t = pc.model[0].w;
+    g_bake_cam_d = t;
+    vec3  rd = vec3(0.0, -1.0, 0.0);
+    vec3  ro = vec3(bake_xz.x, rm_patch_height(bake_xz, t, false) + t, bake_xz.y);
+    bool  water_on = scene.water_params.x > 0.5, water_only = false;
+    float water_y = scene.water_params.y, t_water = -1.0, t_water_plane = -1.0;
+#else
     vec3 ro = scene.camera_pos.xyz;
 #ifndef VIBE_WATER
     vec3 rd = normalize(vWFar.xyz / vWFar.w - vWNear.xyz / vWNear.w);
@@ -1056,6 +1037,12 @@ void main() {
     // only through the empty-space bug fixed in terrain_rm_heightfield.glsl, and the far march for
     // every pixel cost five times as much.)
     bool air = !water_only && ro.y > terrainMaxHeight() + 60.0;
+    // The patch renderer (settings 'terrain_patches'; vk_engine/terrain_patches.cpp): the ground
+    // within the march's reach was rasterised as a mesh into a depth picture of its own before
+    // this pass, and this pixel reads its distance there instead of marching for it
+    // (tex_params.x, the march's step count, is negative then). Everything else - what stands in
+    // front, the water, the far march, the shading - is as it was. Not from the air.
+    bool patch_mode = pc.tex_params.x < 0.0 && !water_only && !air;
     // Where the low-resolution march got to: the nearest of the four blocks round this
     // pixel (each is clear to there by more than its own width). 1e9: no ground in range.
     // (The low-resolution terrain pass - pc.emissive.x > 0, rm_perf.x bit 32 - starts there too.
@@ -1090,8 +1077,12 @@ void main() {
             }
         }
     }
+    g_bake_t0 = patch_mode ? pc.grass_params.y : 0.0;       // (the baked ground texture: with the patches only - terrain_rm_bake.glsl)
+    g_bake_lmin = floor(g_bake_t0 / 8.0);                   // (its first level in use rides in the eights)
+    g_bake_t0 -= 8.0 * g_bake_lmin;
     float t = water_only ? raymarchMesh(ro, rd, t_water_plane)
-                         : ((air || t_start > 1e8) ? -1.0 : raymarch(ro, rd, t_stop, t_start));
+                         : (air ? -1.0 : patch_mode ? rm_patch_hit(ro, rd, t_stop)
+                                : (t_start > 1e8 ? -1.0 : raymarch(ro, rd, t_stop, t_start)));
     if (!air && obj_stop && t < 0.0) discard;      // an object owns this pixel
     // From the air (above 1 km): the landscape beyond the normal march's reach.
     if (t < 0.0 && !water_only && (air || !obj_stop)) {
@@ -1145,9 +1136,33 @@ void main() {
     }
 
 #include "terrain_rm_main_water.glsl"   // main(), continued: the water surface: waves, refraction, reflection, foam, the bed seen through it
+#endif /* ! VIBE_BAKE */
 
+// The ground's material and its lighting are two files, each in two parts that are included
+// in this order (RM_PART): the material's normal and heights (ground, 1), its colour (light, 2) -
+// those two are skipped for a pixel that reads the baked ground texture, and are all the
+// bake build runs -, then the sun's term (ground, 3) and the lighting (light, 4).
+#define RM_PART 1
 #include "terrain_rm_main_ground.glsl"   // main(), continued: the ground's material: road and path, the close-up detail, wetness
+#undef RM_PART
+#define RM_PART 2
+#include "terrain_rm_main_light.glsl"   // main(), continued: the material's colour
+#undef RM_PART
+#ifdef VIBE_BAKE
+    {
+        bool use = nor.y > 0.6 && !(water_on && pos.y < water_y + 0.05) && !(abs(pos.x) < 11.3 && abs(pos.z) < 11.3);
+        outColor = vec4(sqrt(clamp(mate, vec3(0.0), vec3(1.0))), clamp(g_gnd_ssdm_h / kGndSsdmMax, 0.0, 1.0));
+        outMotion = nor.xz * 0.5 + 0.5;
+        outGBuffer0 = vec4(hw_pave, sand_cov, hw_gloss, use ? 1.0 : 0.0);
+        outGBuffer1 = vec4(0.0);
+    }
+#else
+#define RM_PART 3
+#include "terrain_rm_main_ground.glsl"   // main(), continued: the sun on the surface
+#undef RM_PART
+#define RM_PART 4
 #include "terrain_rm_main_light.glsl"   // main(), continued: direct light: the sun's shadows (terrain, objects, clutter), ambient occlusion, sky light
+#undef RM_PART
 #include "terrain_rm_main_gi.glsl"   // main(), continued: bounce light (path-traced GI), the lamps and other local lights, the final colour
 #include "terrain_rm_main_fog.glsl"   // main(), continued: the ground fog (ray-marched) and the haze of distance
     // The castle floor brushes are 0.5 m thin slabs sitting ~5 cm above
@@ -1224,4 +1239,5 @@ void main() {
             outMotion = vec2(0.0);
         }
     }
+#endif /* ! VIBE_BAKE */
 }

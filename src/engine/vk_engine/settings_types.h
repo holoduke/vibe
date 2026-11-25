@@ -651,6 +651,12 @@ struct RtSettings {
         float terrain_ao_final_strength  = 0.45f; // 0=no final-colour AO, 1=full
         float terrain_rm_contrast        = 1.25f; // raymarched terrain: 1 = neutral
         // Raymarched terrain, speed (Graphics > terrain; shaders: scene.rm_perf).
+        // The patch terrain (vk_engine/terrain_patches.cpp): the visible ground from a rasterised
+        // mesh of instanced grid patches instead of the march. 0 = the march.
+        bool  terrain_patches            = true;
+        // The baked ground texture (vk_engine/terrain_bake.cpp): the ground's material read from
+        // pictures kept round the camera instead of worked out per pixel. With the patches only.
+        bool  terrain_bake               = true;
         bool  terrain_rm_prepass         = true;  // march at low resolution first; the full pass starts from it
         int   terrain_rm_prepass_div     = 2;     // that march's pixel: 2, 3 or 4 full pixels wide
         float terrain_rm_converge        = 0.8f;  // fast final approach to the ground (0 = off, the old small steps)

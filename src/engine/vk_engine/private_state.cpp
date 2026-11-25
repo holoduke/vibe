@@ -29,6 +29,8 @@
 #include "engine/vk_engine/state/svgf.h"
 #include "engine/vk_engine/state/taa.h"
 #include "engine/vk_engine/state/taau.h"
+#include "engine/vk_engine/state/terrain_bake.h"
+#include "engine/vk_engine/state/terrain_patches.h"
 #include "engine/vk_engine/state/terrain_raymarch.h"
 #include "engine/vk_engine/state/voxel.h"
 
@@ -62,6 +64,8 @@ void VulkanEngine::alloc_private_state() {
     taa_ = new TaaState();
     taau_ = new TaauState();
     tr_ = new TerrainRaymarchState();
+    tp_ = new TerrainPatchState();
+    tb_ = new TerrainBakeState();
     voxel_ = new VoxelState();
 }
 
@@ -93,6 +97,8 @@ void VulkanEngine::free_private_state() {
     delete taa_; taa_ = nullptr;
     delete taau_; taau_ = nullptr;
     delete tr_; tr_ = nullptr;
+    delete tp_; tp_ = nullptr;
+    delete tb_; tb_ = nullptr;
     delete voxel_; voxel_ = nullptr;
 }
 

@@ -717,6 +717,10 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
             static_cast<float>(std::clamp(rt_.terrain_raymarch_shadow_steps, 16, 96)),
             static_cast<float>(std::clamp(rt_.terrain_raymarch_octaves, 4, 24)),
             static_cast<float>(std::clamp(rt_.terrain_raymarch_normal_octaves, 4, 32)));
+        // The patch terrain (terrain_patches.cpp): the ground within the march's reach is in
+        // its depth picture this frame - a negative step count tells the shader to read it
+        // there instead of marching (terrain_raymarch.frag `patch_mode`).
+        if (terrain_patches_active()) pc.tex_params.x = -pc.tex_params.x;
         // emissive layout — mirrors render_terrain_raymarch_lr:
         //   x = step factor (0.15..0.8)
         //   y = lod_near_m  — ray-t at which FBM LOD ramp starts
@@ -736,6 +740,10 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
             rt_.terrain_raymarch_relaxation ? 1.0f : 0.0f,
             rt_.terrain_raymarch_fog_godrays ? 1.0f : 0.0f,
             rt_.water_rt_reflections ? 1.0f : 0.0f);
+        // With the patches the march's 'relaxation' flag is not read: its place carries the
+        // baked ground texture - the distance its first level is made for, 0 = none this frame
+        // (terrain_bake.cpp; shaders/terrain_rm_bake.glsl g_bake_t0).
+        if (terrain_patches_active()) pc.grass_params.y = terrain_bake_ready() ? terrain_bake_t0() : 0.0f;
         vkCmdPushConstants(cmd, pipeline_layout_,
                            kPushConstantStages,
                            0, sizeof(PushConstants), &pc);

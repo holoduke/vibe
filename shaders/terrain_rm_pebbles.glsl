@@ -276,7 +276,7 @@ float sand_road_h(vec2 wp) {
 float sand_fine_ripple(vec2 wp, float wn) {
     float ph = (dot(wp, vec2(64.0, 24.0)) + 10.0 * wn + 3.0 * tile_noise2(wp, 2.3, vec2(7.0))) * 0.15915;
     float rs = fract(ph);
-    float rr = rs < 0.70 ? rs / 0.70 : (1.0 - rs) / 0.30;
+    float rr = rs < 0.58 ? rs / 0.58 : (1.0 - rs) / 0.42;        // (a rounder ripple: the lee was a third of the windward side - a hard edge)
     return rr * rr * (3.0 - 2.0 * rr);
 }
 

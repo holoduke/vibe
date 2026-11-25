@@ -462,6 +462,38 @@ float terrainM_shadow(vec2 p, float ray_t) {
 // unbounded (default 1500 m). Caller can pass a tighter bound — e.g.
 // the water-plane intersection distance — so the loop bails as soon
 // as any terrain hit past the bound is irrelevant.
+// ---- The patch renderer (vk_engine/terrain_patches.cpp, docs/ARCHITECTURE.md "Patch terrain") ----
+// The ground as a mesh of instanced grid patches instead of a march: this is the height its
+// vertices are placed at (terrain_patch.vert, `lite`: the landscape with the main rills of the
+// close relief - what a vertex grid can carry without flicker) and the height a pixel of that
+// mesh is put back on before it is shaded (rm_patch_hit below: the surface the march walks
+// over, stones included). `t`: distance from the eye - the formula's detail goes by it, as in
+// the march. On the castle road the surface is the baked one (the march and main() slide the
+// hit onto it: see "On the road the marched surface IS the baked one"), with the blown sand.
+float rm_patch_height(vec2 wp, float t, bool lite) {
+    bool lite0 = g_rm_relief_lite;
+    g_rm_relief_lite = lite;
+    g_rm_ray_y = lite ? -1e9 : -1e7;        // (-1e7: "marching", and near the ground - the march's own relief)
+    // (without the loose stones: those are raised by the screen-space displacement - terrain_rm_main_ground.glsl)
+    int peb0 = g_peb_mode;
+    g_peb_mode = -1;
+    float h = terrainM_lod(wp, t);
+    g_peb_mode = peb0;
+    g_rm_ray_y = -1e9;
+    g_rm_relief_lite = lite0;
+    if (!rm_far_chart() && all(lessThan(abs(wp), vec2(kHeightmapSide * 0.5 - 2.0)))) {
+        float keep = scene.road_info.y;
+        float rdist = rm_road_dist_thr(wp, keep + 0.9);
+        if (rdist < keep + 0.9) {
+            float hr = meshHeight(wp);
+            if (g_snow < 0.01) hr += sand_road_h(wp) * (1.0 - smoothstep(10.0, 26.0, t));
+            h = mix(hr, h, smoothstep(keep, keep + 0.9, rdist));
+        }
+    }
+    return h;
+}
+
+#ifndef VIBE_PATCH_VS
 // Steps the last raymarch() took (profiling view, VIBE_RM_SKIP bit 64).
 int g_rm_steps = 0;
 // How many times the settings' step count a march may take: see raymarch().
@@ -900,6 +932,30 @@ float raymarch_far(vec3 ro, vec3 rd, float t_end, bool whole) {
     return t;
 }
 #endif
+#ifndef VIBE_WATER
+// The patch renderer: where this pixel's ray meets the ground, read from the depth picture the
+// patches were rasterised into (binding 11; reversed depth, near plane kPatchNear, no far plane:
+// depth = kPatchNear / distance along the view axis - terrain_patches.cpp). Stands in for
+// raymarch(): the same distance or -1 (no ground in front of `t_max`, or none within the
+// march's 1500 m). The point is then put on the formula's surface straight above or below it
+// (the mesh is the formula sampled at its vertices; between them it is off by a little, and the
+// sun-shadow march must not start under the ground), which turns the ray a little: `rd`.
+const float kPatchNear = 0.05;
+float rm_patch_hit(vec3 ro, inout vec3 rd, float t_max) {
+    float zg = texelFetch(u_patch_depth, ivec2(gl_FragCoord.xy), 0).r;
+    if (zg <= 0.0) return -1.0;
+    // (row 3 of the view-projection: a point's distance along the view axis)
+    float t = (kPatchNear / zg) / max(dot(vec3(pc.mvp[0][3], pc.mvp[1][3], pc.mvp[2][3]), rd), 1e-4);
+    if (t > 1500.0 || (t_max > 0.0 && t > t_max)) return -1.0;
+    vec3 p = ro + rd * t;
+    p.y = rm_patch_height(p.xz, t, false);
+    vec3 d = p - ro;
+    t = max(length(d), 1e-3);
+    rd = d / t;
+    return t;
+}
+#endif
+#endif /* ! VIBE_PATCH_VS */
 
 // Finite-difference normal with distance-scaled epsilon. Eps grows
 // linearly with distance (was quadratic — that smeared distant

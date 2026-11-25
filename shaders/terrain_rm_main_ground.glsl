@@ -3,6 +3,7 @@
 // variables (ro, rd, t, pos, nor, col, ...). Split off only to keep that file readable;
 // the order of the parts is the order of the #include lines there.
 
+#if RM_PART == 1
     // Water-only (mesh-terrain) mode: reaching here means water was not
     // the visible surface — the rasterised CDLOD mesh already owns this
     // pixel (sky pixels were discarded above). Never shade the FBM
@@ -17,6 +18,7 @@
     // anyway. Same kCastleHalfExtent constant as the late discard so
     // they can never disagree. Saves the entire shading payload for
     // the ~castle-footprint slice of the frame.
+#ifndef VIBE_BAKE      /* (the bake marks those texels 'not to be used' instead: a discarded texel would keep what was there) */
     {
         const float kCastleHalfExtentEarly = 11.05;
         if (abs(pos.x) < kCastleHalfExtentEarly &&
@@ -24,6 +26,7 @@
             discard;
         }
     }
+#endif
 #ifdef VIBE_LITE
     {
         vec3 n_l = calcNormal(pos, t);
@@ -45,6 +48,19 @@
         return;
     }
 #endif
+    // ---- The ground's material: worked out below, or read from the baked ground texture ----
+    // (terrain_rm_bake.glsl. What the lighting takes from the material is declared here; the
+    //  material's own working is inside the braces, which close at the end of the colour part
+    //  in terrain_rm_main_light.glsl. See RM_PART in terrain_raymarch.frag for the order.)
+    vec3  nor = vec3(0.0, 1.0, 0.0), mate = vec3(0.0), sunDir = scene.sun_direction.xyz;
+    bool  lo_ok = false;
+    vec2  lo_sh = vec2(0.0);
+    float peb0_h = -1.0, rm_road_vis = 1.0, sand_cov = 0.0, hw_pave = 0.0, hw_gloss = 0.0;
+    bool  rm_baked = false;
+#if !defined(VIBE_WATER) && !defined(VIBE_BAKE) && !defined(VIBE_MARCH_ONLY) && !defined(VIBE_LITE)
+    if (g_bake_t0 > 0.0) rm_baked = rm_bake_fetch(pos, t, nor, mate, hw_pave, hw_gloss, sand_cov);
+#endif
+    if (!rm_baked) {
     // Castle road: cobble normal map in road space, before any lighting.
     vec2 rm_road_uv, rm_road_dir;
     vec2 rm_road = roadWeights(pos.xz, rm_road_uv, rm_road_dir);
@@ -92,14 +108,12 @@
                     vec2(noise2(wq * 1.13 + 5.3) - 0.5, noise2(wq * 1.13 + 41.1) - 0.5) * 0.08;
         rm_road_uv += warp;
     }
-    vec3 nor = calcNormal(pos, t);
+    nor = calcNormal(pos, t);
     // The sun-shadow terms from the low-resolution pass (settings: 'sun shadows at low
     // resolution'): the four blocks round this pixel, each used only if its hit lies on this
     // pixel's own surface - its distance must be what a neighbouring ray would find on the
     // plane through this point. Where none qualifies (an edge, something in front, a ridge)
     // the pixel works its shadows out itself, exactly as before.
-    bool lo_ok = false;
-    vec2 lo_sh = vec2(0.0);
 #if !defined(VIBE_WATER) && !defined(VIBE_MARCH_ONLY)
     if ((int(scene.rm_perf.x) & 5) == 5 && pc.emissive.x < 0.0 && !water_only && t > 0.0 && t < 1400.0) {
         float dv = scene.rm_perf.y;
@@ -122,7 +136,8 @@
         if (ws > 0.2) { lo_sh /= ws; lo_ok = true; }
     }
 #endif
-    float peb0_h = g_pebN_h, peb0_id = g_pebN_id, peb0_k = g_pebN_k, peb0_sz = g_pebN_sz;
+    peb0_h = g_pebN_h;
+    float peb0_id = g_pebN_id, peb0_k = g_pebN_k, peb0_sz = g_pebN_sz;
     g_rm_detail_mul = 1.0;
     if (rm_road.x > 0.001 && rm_far_chart()) {
         nor = normalize(mix(nor, vec3(0.0, 1.0, 0.0), rm_road.x));       // (a site's street: on its level ground)
@@ -137,8 +152,8 @@
     float rm_road_lod = 0.0;
     float rm_cob_h = 0.0;              // the cobbles' height 0..1 at this pixel
     float rm_road_wx = rm_road.x;      // the share of cobbles in the colour (by height at the paving's edge)
+    float rm_cob_sink = 1.0, rm_cob_fill = 0.0, rm_cob_moss = 0.0, rm_cob_lvl = 0.0;   // the old paving: see "Old, hand-laid paving" below
     float gnd_det_h = 0.0, gnd_rockw = 0.0;      // the soil / rock scan's height 0..1 here, and the share of rock
-    float rm_road_vis = 1.0;   // cobble relief self-shadow (sun visibility)
     if (rm_road.x > 0.001) {
         // Mip from the pixel footprint (no screen derivatives: road_uv is
         // discontinuous at the road edge and across the march).
@@ -197,11 +212,40 @@
         }
         vec4 rn4 = textureLod(u_normal[kRmMatRoad], rm_road_uv, rm_road_lod);
         vec3 rn = rn4.xyz * 2.0 - 1.0;
-        nor = normalize(mix(nor, rT * rn.x + rB * rn.y + nor * rn.z, rm_road.x));
         rm_cob_h = rn4.a;
-        // Where the paving ends the earth lies in the joints first and the stones' tops stand
-        // clear of it, instead of the two fading through each other (rm_height_blend).
-        if (GND_SSDM && rm_road.x < 0.999) rm_road_wx = mix(rm_height_blend(0.45, rm_cob_h, rm_road.x), rm_road.x, smoothstep(20.0, 45.0, t));
+        // Old, hand-laid paving (close by; colour and height together - the colour's side is in
+        // terrain_rm_main_light.glsl "Road"). The scan is one even sheet of stones; what makes
+        // it old is generated here, from noise at the stones' own scale laid on the scan's height:
+        //  * the stones have settled in groups - some stand, some have sunk (rm_cob_sink);
+        //  * a stone is missing here and there, earth in the hole (the paving's share goes to 0
+        //    there - by height, so the hole ends at the joints round it);
+        //  * earth stands in the joints, higher toward the edges and where the bed has sunk, and
+        //    moss grows on it (rm_cob_fill, rm_cob_moss);
+        //  * the edge is ragged: the paving's share is pushed about stone by stone before the
+        //    earth and the stones are laid over each other by height (rm_height_blend), so
+        //    single stones stand in the earth and tongues of earth reach in between them.
+        float cob_keep = rm_road.x;                       // the paving's share before the height blend
+        if (t < 60.0) {
+            float nearw = 1.0 - smoothstep(30.0, 60.0, t);
+            float lat_k = abs(rm_road_uv.x) * g_tile / max(scene.road_info.y, 0.5);      // 0 the middle .. 1 the edge
+            float edge_k = smoothstep(0.35, 0.95, lat_k);
+            float sink_n = tile_noise2(pos.xz, 2.3, vec2(83.0)) * 0.6 + tile_noise2(pos.xz, 0.7, vec2(19.0)) * 0.4;
+            rm_cob_sink = mix(1.0, mix(0.62, 1.10, smoothstep(0.22, 0.72, sink_n)), nearw);
+            float hole = smoothstep(0.80, 0.87, tile_noise2(pos.xz, 3.1, vec2(47.0))) *
+                         smoothstep(0.45, 0.70, tile_noise2(pos.xz, 0.23, vec2(5.0))) * nearw;
+            float rag = (tile_noise2(pos.xz, 5.5, vec2(29.0)) - 0.5) * 1.3 * (rm_road.x * (1.0 - rm_road.x) * 4.0);
+            cob_keep = clamp(rm_road.x + rag * nearw, 0.0, 1.0) * (1.0 - hole);
+            float lvl_s = rm_cob_h * rm_cob_sink;
+            float fill_lvl = clamp(0.34 * edge_k + (tile_noise2(pos.xz, 1.3, vec2(71.0)) - 0.5) * 0.36 + 0.25 * (1.0 - rm_cob_sink), 0.0, 0.46) * nearw;
+            rm_cob_fill = (1.0 - smoothstep(fill_lvl - 0.10, fill_lvl + 0.02, lvl_s)) * step(0.02, fill_lvl);
+            rm_cob_lvl = max(lvl_s, fill_lvl);
+            rm_cob_moss = 0.75 * rm_cob_fill * smoothstep(0.42, 0.68, tile_noise2(pos.xz, 0.9, vec2(13.0))) * smoothstep(0.15, 0.6, edge_k);
+            rm_road_wx = mix(rm_height_blend(0.50, lvl_s, cob_keep), cob_keep, smoothstep(30.0, 60.0, t));
+        } else {
+            rm_cob_lvl = rm_cob_h;
+        }
+        // (the stones' own relief only where stone shows: earth in a joint or a hole lies flat)
+        nor = normalize(mix(nor, rT * rn.x + rB * rn.y + nor * rn.z, rm_road.x * mix(1.0, rm_road_wx / max(rm_road.x, 1e-3), 0.85) * (1.0 - 0.8 * rm_cob_fill)));
     }
     // ---- Close-up ground detail --------------------------------------
     // The procedural palette is flat colour; within ~45 m the photo-scanned
@@ -315,7 +359,6 @@
             rm_det_tint = mix(vec3(1.0), clamp(mix(vec3(1.0), aD, 0.55), vec3(0.6), vec3(1.5)) * cav, dw);
         }
     }
-    vec3 sunDir = scene.sun_direction.xyz;
 
     // Winter: a clean sheet of snow. Its normal comes from the snow surface
     // itself (the marched height, sampled a few cm apart) - none of the
@@ -323,7 +366,7 @@
     // lumps and the prints pressed into it shade it. Before the lighting.
     // Sand on the road: the same - the normal of the sand's own surface (its drifts, ripples and
     // the prints in it), no cobble relief showing through.
-    float sand_cov = 0.0, sand_rip = 0.5;
+    float sand_rip = 0.5;
     if (rm_road.x + rm_road.y > 0.001) {
         float sp = sand_road_patch(pos.xz) * clamp(rm_road.x + rm_road.y, 0.0, 1.0);
         if (sp > 0.005) {
@@ -350,7 +393,7 @@
                 const float re = 0.008;
                 sand_rip = sand_fine_ripple(pos.xz, wn);
                 float rx = sand_fine_ripple(pos.xz + vec2(re, 0.0), wn), rz = sand_fine_ripple(pos.xz + vec2(0.0, re), wn);
-                n_s = normalize(n_s + vec3(sand_rip - rx, 0.0, sand_rip - rz) * (0.0045 / re) * rip_f);
+                n_s = normalize(n_s + vec3(sand_rip - rx, 0.0, sand_rip - rz) * (0.0022 / re) * rip_f);      // (gentle: at 0.0045 the ripples were hard stripes)
                 sand_rip = mix(0.5, sand_rip, rip_f);
             }
             // grains: three sizes, each gone before it is finer than a pixel
@@ -363,9 +406,11 @@
     }
     // A highway (engine/highway.h): asphalt to about 5.5 m from the centre line, gravel under
     // its edge and out to 8 m. The surface's relief comes from the scans' normal maps.
-    float hw_pave = 0.0, hw_verge = 0.0, hw_d = 0.0, hw_s = 0.0, hw_lod = 0.0, hw_hgt = 0.5, hw_gloss = 0.0, hw_wk = 1.0;
+    float hw_verge = 0.0, hw_d = 0.0, hw_s = 0.0, hw_lod = 0.0, hw_hgt = 0.5, hw_wk = 1.0;
+    RmAt  hw_at, gv_at;                 // the asphalt's and the gravel's layouts here (rm_at: anti-tiling)
+    hw_at.n = 0; gv_at.n = 0;
     vec2  hw_uv = vec2(0.0);
-    if (rm_hw_in(pos.xz)) {
+    if (rm_hw_in(pos.xz) && !RMDBG(4194304)) {
         hw_d = rm_hw_dh(pos.xz).x;
         float ad = abs(hw_d), aa = max(t * 0.002, 0.015);
         // The asphalt's edge is not a ruled line: it wanders a hand's width and has broken away in places.
@@ -379,9 +424,18 @@
             float fp = t * 2.0 / max(scene.viewport.y, 1.0);
             hw_uv = pos.xz / TILE_CELL(2.6);
             hw_lod = log2(max(fp / TILE_CELL(2.6) * float(textureSize(u_albedo[kRmMatAsphalt], 0).x), 1.0));
-            vec4 na = textureLod(u_normal[kRmMatAsphalt], hw_uv, hw_lod);
-            vec4 ng = textureLod(u_normal[kRmMatGravel], pos.xz / TILE_CELL(1.7), hw_lod + 0.6);
+            hw_at = rm_at(hw_uv, hw_lod);
+            gv_at = rm_at(pos.xz / TILE_CELL(1.7), hw_lod + 0.6);
+            vec4 na = rm_at_normal(kRmMatAsphalt, hw_at, hw_lod);
+            vec4 ng = rm_at_normal(kRmMatGravel, gv_at, hw_lod + 0.6);
             vec3 rn = mix(ng.xyz, na.xyz, hw_pave) * 2.0 - 1.0;
+            // Close by the asphalt's edge is a broken edge, not a line: over a hand's width the sheet
+            // and the gravel are laid over each other by height - the gravel's stones show where they
+            // stand higher than the thinning sheet (rm_height_blend).
+            if (t < 45.0) {
+                float soft = 1.0 - smoothstep(edge - 0.07, edge + 0.07, ad);
+                hw_pave = mix(rm_height_blend(ng.a, 0.55 + 0.35 * na.a, soft), hw_pave, smoothstep(20.0, 45.0, t));
+            }
             hw_hgt = mix(ng.a, na.a, hw_pave);
             // (the ground plan is the texture's plane: x east, y north)
             float k = mix(1.5, 1.0, hw_pave);
@@ -389,6 +443,89 @@
             nor = normalize(mix(nor, normalize(base + vec3(rn.x, 0.0, -rn.y) * k), max(hw_pave, hw_verge)));
         }
     }
+    // Beaches (the palette's sand by the water): the wind's fine ripples, as on the sand that
+    // lies on the road - in the normal here, and as height for the displacement below.
+    float beach_w = 0.0, beach_rip = 0.5;
+    if (t < 24.0 && !water_only && nor.y > 0.5 && pos.y < 2.5 && g_snow < 0.3) {
+        beach_w = smoothstep(2.5, 1.0, pos.y) * smoothstep(0.5, 0.9, nor.y) * (1.0 - clamp(rm_road.x + rm_road.y, 0.0, 1.0));
+        float rip_f = (1.0 - smoothstep(6.0, 18.0, t)) * beach_w * smoothstep(0.30, 0.55, tile_noise2(pos.xz, 0.9, vec2(31.0)));
+        if (rip_f > 0.01) {
+            float wn = tile_noise2(pos.xz, 0.6, vec2(3.0));
+            const float re = 0.008;
+            float r0 = sand_fine_ripple(pos.xz, wn);
+            float rx = sand_fine_ripple(pos.xz + vec2(re, 0.0), wn), rz = sand_fine_ripple(pos.xz + vec2(0.0, re), wn);
+            nor = normalize(nor + vec3(r0 - rx, 0.0, r0 - rz) * (0.0022 / re) * rip_f);
+            beach_rip = mix(0.5, r0, rip_f);
+        }
+    }
+    // ---- How far this pixel's material stands out of the surface the patches / the march give ----
+    // Written to the G-buffer by main(); shaders/ssdm_ground.frag and the screen-space
+    // displacement passes move the pixel by it. Metres, never negative: the ground only rises.
+    // Every ground material has a height, and where two meet the higher one shows (the
+    // reference game's rule). Here: all that lies under the snow; the snow, which fills the
+    // low places of this first, follows.
+    float gnd_h = 0.0, gnd_root = 0.0, gnd_lawn = 0.0;
+    bool  gnd_h_on = t < 24.0 && !water_only;
+    if (gnd_h_on) {
+        gnd_lawn = grassEligibility(pos.xz, pos.y);
+        // (not under a lawn: the blades stand on the surface and hide it)
+        float bare = 1.0 - smoothstep(0.30, 0.65, gnd_lawn);
+        // the scan of soil / rock: what stands above its middle - stones, clods, ribs
+        float h = mix(0.07, 0.09, gnd_rockw) * max(gnd_det_h - 0.4, 0.0) / 0.6;
+        // Bare earth has more on it than the scan carries: clods a hand across and crumbs,
+        // most where the scan is flat; under trees, roots running across the forest floor.
+        if (bare > 0.01 && t < 14.0 && rm_road.x < 0.99) {
+            float cw = (1.0 - smoothstep(8.0, 14.0, t)) * (1.0 - gnd_rockw);
+            float clod = smoothstep(0.52, 0.80, tile_noise2(pos.xz, 7.0, vec2(55.0))) * 0.022 +
+                         smoothstep(0.60, 0.85, tile_noise2(pos.xz, 19.0, vec2(23.0))) * 0.010;
+            h += clod * cw * (1.0 - 0.6 * smoothstep(0.4, 0.8, gnd_det_h));
+            vec2 vuv = pos.xz / 2048.0 + 0.5;
+            if (!g_far_chart && all(greaterThan(vuv, vec2(0.0))) && all(lessThan(vuv, vec2(1.0)))) {
+                float trees = textureLod(u_albedo[22], vuv, 1.0).r;
+                if (trees > 0.05) {
+                    float r1 = abs(tile_noise2(pos.xz, 0.9, vec2(37.0)) - 0.5), r2 = abs(tile_noise2(pos.xz, 1.7, vec2(91.0)) - 0.5);
+                    gnd_root = max(1.0 - smoothstep(0.0, 0.030, r1), 0.7 * (1.0 - smoothstep(0.0, 0.024, r2))) *
+                               smoothstep(0.05, 0.35, trees) * cw * bare;
+                    h = max(h, 0.045 * gnd_root);
+                }
+            }
+        }
+        h *= bare;
+        // Where turf meets bare ground the sod's edge stands a few centimetres proud (a rim: deep
+        // in the lawn the height is 0 again, the blades stand on the surface as it is).
+        h += 0.03 * smoothstep(0.28, 0.42, gnd_lawn) * (1.0 - smoothstep(0.55, 0.9, gnd_lawn)) * (1.0 - gnd_rockw) * (1.0 - clamp(rm_road.x + rm_road.y, 0.0, 1.0));
+        // The loose stones (terrain_rm_pebbles.glsl; the normal looked them up): with the march
+        // they were part of the marched surface, with the patches they are raised here.
+        if (peb0_h > 0.0) h = max(h, min(peb0_h, 0.10) * (1.0 - smoothstep(10.0, 20.0, t)) * (1.0 - plateauWeight(pos.xz)));
+        // The paved road, worn: the stones stand 7 cm out of their joints; along the two wheel
+        // lines (a cart's, 1.5 m apart) and where the bed has settled they are pressed down - the
+        // road's height is a FACTOR on what is there, as the reference game's road decal does it
+        // (it multiplies the ground's height, so a track can only press the ground down). The
+        // trodden earth beside the paving the same. Earth in the joints and in a missing stone's
+        // hole, sunk stones: rm_cob_lvl, "Old, hand-laid paving" above.
+        if (rm_road.x + rm_road.y > 0.001) {
+            float lat = abs(rm_road_uv.x) * max(scene.spom_params.z, 0.25);
+            float line = 1.0 - smoothstep(0.16, 0.46, abs(lat - min(0.75, 0.5 * scene.road_info.y)));
+            line *= mix(0.45, 1.0, tile_noise2(pos.xz, 0.11, vec2(61.0)));                   // (they come and go)
+            float settled = smoothstep(0.56, 0.80, tile_noise2(pos.xz, 0.55, vec2(77.0)));
+            float press = (1.0 - 0.45 * line) * (1.0 - 0.35 * settled);
+            h *= 1.0 - 0.55 * rm_road.y;
+            h = mix(max(h, 0.020 * rm_road.x), 0.07 * rm_cob_lvl * press, rm_road_wx);
+        }
+        // Sand: a sheet a few centimetres thick with its ripples (the ones the normal is made
+        // from), its lumps, and the prints pressed into it. Stones that stand higher than it
+        // show through it (sand_cov already follows the cobbles' height on the road).
+        if (sand_cov > 0.001 || beach_w > 0.01) {
+            float lump = 0.012 * tile_noise2(pos.xz, 4.3, vec2(11.0)) + 0.006 * tile_noise2(pos.xz, 17.0, vec2(3.0));
+            float fd = foot_depth(pos.xz);
+            if (sand_cov > 0.001) h = mix(h, max(0.034 + 0.006 * (sand_rip - 0.5) + lump - 0.45 * fd, 0.0), sand_cov);
+            if (beach_w > 0.01)   h = mix(h, max(0.030 + 0.006 * (beach_rip - 0.5) + lump - 0.45 * fd, 0.0), rm_height_blend(clamp(h / 0.08, 0.0, 1.0), 0.40, beach_w));
+        }
+        if (hw_pave + hw_verge > 0.001) h = mix(h, mix(0.03 * hw_hgt, 0.034 + 0.004 * hw_hgt, hw_pave), max(hw_pave, hw_verge));   // roadside gravel 3 cm; the asphalt a sheet whose top is 3.4 cm up, with its grain - so its edge is a step over the gravel (its cracks, ruts and patches: rm_hw_asphalt's `lvl`, terrain_rm_main_light.glsl)
+        if (scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 0.03) h = 0.0;
+        gnd_h = h;
+    }
+    float snow_h = 0.0;                // the snow's own surface, as height above the same base
     float snow_cov = 0.0;
     {
         float sn = g_snow;
@@ -408,6 +545,21 @@
                     }
                 }
                 snow_cov *= smoothstep(0.35, 0.7, n_s.y);
+                // Close by the snow lies in the low places of what is under it first - the joints
+                // of the paving, between stones and clods - and covers the tops last as the cover
+                // grows (the reference game's rule): its surface is a level that rises with the
+                // cover, with the snow's own lumps on it (the third term of snow_layer_h, which
+                // the normal above is made from) and the prints pressed in.
+                if (gnd_h_on) {
+                    float lump = 0.030 * g_snow * noise2(pos.xz * 2.6 + 3.0) * smoothstep(0.0, 0.4, snow_cov);
+                    float lvl = snow_cov * 0.11 + lump;
+                    float in_low = smoothstep(-0.004, 0.008, lvl - gnd_h) * smoothstep(0.0, 0.08, snow_cov);
+                    // (a full sheet needs no level of its own - only its lumps and a floor for the
+                    //  prints to be pressed into: lifting every pixel of a white field by a hand's
+                    //  width bought nothing and smeared at the screen's edge)
+                    snow_h = max(mix(lvl, 0.05 + lump, smoothstep(0.6, 1.0, snow_cov)) - 0.8 * foot_depth(pos.xz), 0.0);
+                    snow_cov = mix(in_low, snow_cov, smoothstep(14.0, 24.0, t));
+                }
                 // Fine grain of the snow surface (it is never a mirror-smooth sheet).
                 vec2 gq = pos.xz * 38.0;
                 n_s = normalize(n_s + vec3(tile_noise2(pos.xz, 38.0, vec2(0.0)) - 0.5, 0.0, tile_noise2(pos.xz, 38.0, vec2(17.0)) - 0.5) * 0.10 * (1.0 - smoothstep(4.0, 22.0, t)));
@@ -415,19 +567,9 @@
             }
         }
     }
-    // ---- How far this pixel's material stands out of the marched surface (GND_SSDM) ----
-    // Written to the G-buffer by main(); shaders/ssdm_ground.frag and the screen-space
-    // displacement passes move the pixel by it. Metres, never negative: the ground only rises.
-    if (GND_SSDM && t < 24.0 && !water_only) {
-        // the scan of soil / rock: what stands above its middle - stones, clods, ribs
-        float h = mix(0.07, 0.09, gnd_rockw) * max(gnd_det_h - 0.4, 0.0) / 0.6;
-        // (not under a lawn: the blades stand on the marched ground and hide it)
-        if (h > 0.0) h *= 1.0 - smoothstep(0.30, 0.65, grassEligibility(pos.xz, pos.y));
-        h = mix(h, 0.04 * rm_cob_h, rm_road_wx);                               // cobbles: 4 cm from joint to top
-        h *= 1.0 - sand_cov;                                                    // (sand lies over them; its own shape is marched)
-        if (hw_pave + hw_verge > 0.001) h = mix(h, hw_hgt * mix(0.03, 0.004, hw_pave), max(hw_pave, hw_verge));   // roadside gravel 3 cm, asphalt grain
-        h *= 1.0 - snow_cov;
-        if (scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 0.03) h = 0.0;
+    // ---- ... and with the snow on it: the height the displacement pass gets ----
+    if (GND_SSDM && gnd_h_on) {
+        float h = mix(gnd_h, snow_h, snow_cov);
         // (never more than a twelfth of the way to the eye: a bank the camera leans against came
         //  out in front of the weapon in the hands)
         h = min(h, 0.08 * t);
@@ -435,6 +577,8 @@
         //  moved or not - a grid with holes where the height happens to be 0 came out stippled)
         g_gnd_ssdm_h = max(min(h, kGndSsdmMax) * (1.0 - smoothstep(16.0, 24.0, t)), 0.006 * kGndSsdmMax);
     }
+#endif /* RM_PART == 1 */
+#if RM_PART == 3
     float dif = clamp(dot(nor, sunDir), 0.0, 1.0);
 
     // Match cube.frag's terrain contrast power on n_dot_l. Without
@@ -453,3 +597,4 @@
         else if (contrast == 4.0) { float n2 = dif * dif; dif = n2 * n2; }
         else                      { dif = pow(dif, contrast); }
     }
+#endif /* RM_PART == 3 */

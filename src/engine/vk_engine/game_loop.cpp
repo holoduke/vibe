@@ -1005,6 +1005,7 @@ void VulkanEngine::loop_upkeep(InputFrame& in, float frame_dt) {
     // dim*dim*4 bytes; happens only on the frame the dirty bit
     // is set, not every frame the brush is held.
     if (terrain_height_dirty_) {
+        terrain_bake_invalidate();          // (the baked ground texture shows the ground as it was)
         refresh_terrain_height_texture();
         refresh_terrain_height_full_texture();
     }

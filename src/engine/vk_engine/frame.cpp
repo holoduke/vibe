@@ -358,6 +358,7 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     prof_begin_frame(frame.command_buffer, gpu_query_slot);
     // (the frame's camera and the soldiers' poses: pose_characters_for_frame, before the TLAS build)
     finish_terrain_raymarch_pipeline(0);   // (variants of the terrain shader still compiling on a first start)
+    { CPU_SCOPE("+terrain-patches"); update_terrain_patches(); }   // (before the scene constants: terrain_patches.cpp)
     // Scene UBO + per-pass UBOs: staged after this frame's camera so
     // camera_pos / jitter are current, then copied in one batch before any
     // pass reads them (frames in flight - see frame_upload.cpp).
@@ -763,6 +764,18 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
                                         VK_IMAGE_ASPECT_DEPTH_BIT);
     }
     prof_mark(frame.command_buffer, "terrain_raymarch_lr");
+
+    // ---------- Pass 0.52: the patch terrain's depth picture ----------
+    // (terrain_patches.cpp: the ground as instanced grid patches, depth only, into the depth
+    //  target of the low-resolution terrain above - which does not run then. The terrain pass
+    //  in the world pass reads it in place of marching.)
+    if (terrain_patches_active()) {
+        render_terrain_patch_depth(frame.command_buffer);
+        prof_mark(frame.command_buffer, "terrain_patches");
+    }
+    // ---------- Pass 0.53: the baked ground texture - what is missing of it ----------
+    update_terrain_bake(frame.command_buffer);
+    prof_mark(frame.command_buffer, "terrain_bake");
 
     // ---------- Pass 0.55: the terrain's temporal upscaler ----------
     // (terrain_rm_resolve.frag: this frame's low-resolution terrain and the kept

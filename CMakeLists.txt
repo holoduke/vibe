@@ -352,6 +352,8 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine.cpp
     src/engine/vk_engine/game_loop.cpp
     src/engine/vk_engine/private_state.cpp
+    src/engine/vk_engine/terrain_patches.cpp
+    src/engine/vk_engine/terrain_bake.cpp
     src/engine/vk_engine/sites.cpp
     src/engine/vk_engine/highway_field.cpp
     src/engine/vk_engine/highway_furniture.cpp
@@ -688,6 +690,19 @@ add_custom_command(
     COMMENT "Compiling shader terrain_raymarch_lite.frag (first-start variant)"
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${TR_LITE_SPV})
+
+# The baked ground texture's build of the terrain shader (VIBE_BAKE; shaders/terrain_rm_bake.glsl):
+# the material code alone, run over the texels of a picture instead of the pixels of the view.
+set(TR_BAKE_SPV "${SHADER_OUTPUT_DIR}/terrain_bake.frag.spv")
+add_custom_command(
+    OUTPUT ${TR_BAKE_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DVIBE_BAKE=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_BAKE_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader terrain_bake.frag (baked ground texture variant)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${TR_BAKE_SPV})
 
 # The low-resolution march of the terrain (VIBE_MARCH_ONLY in the shader): the same source,
 # cut down to "how far can a ray go before the ground comes near" - one value per block of pixels.

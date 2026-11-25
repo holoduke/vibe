@@ -569,6 +569,8 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_gi_bounces_cap", s.rt_.terrain_gi_bounces_cap);
     f("terrain_ao_final_strength", s.rt_.terrain_ao_final_strength);
     f("terrain_rm_contrast", s.rt_.terrain_rm_contrast);
+    f("terrain_patches", s.rt_.terrain_patches);
+    f("terrain_bake", s.rt_.terrain_bake);
     f("terrain_rm_prepass", s.rt_.terrain_rm_prepass);
     f("terrain_rm_prepass_div", s.rt_.terrain_rm_prepass_div);
     f("terrain_rm_converge", s.rt_.terrain_rm_converge);
@@ -822,6 +824,9 @@ void VulkanEngine::load_settings() {
     clampf(rt_.terrain_rm_normal_px, 0.0f, 4.0f);
     clampi(rt_.foliage_ray_mode, 0, 2);
     clampi(rt_.water_style, 0, 2);
+    // (VIBE_TERRAIN_PATCHES=0|1: the patch terrain or the march, whatever the file says)
+    if (const char* e = std::getenv("VIBE_TERRAIN_PATCHES")) rt_.terrain_patches = std::atoi(e) != 0;
+    if (const char* e = std::getenv("VIBE_TERRAIN_BAKE")) rt_.terrain_bake = std::atoi(e) != 0;
     // (VIBE_TEST_FOLIAGE=<0..4>, VIBE_TEST_SHADOWS=<0..2>: a level, whatever the file says - measurements)
     if (const char* e = std::getenv("VIBE_TEST_FOLIAGE")) apply_foliage_quality(std::atoi(e));
     if (const char* e = std::getenv("VIBE_TEST_SHADOWS")) apply_shadow_quality(std::atoi(e));

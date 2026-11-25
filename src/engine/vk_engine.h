@@ -578,6 +578,27 @@ private:
     // (the state of this is private to its own files: vk_engine/state/terrain_raymarch.h)
     struct TerrainRaymarchState;
     TerrainRaymarchState* tr_ = nullptr;
+    // The patch terrain: the visible ground from a rasterised mesh of instanced grid patches
+    // instead of the march (vk_engine/terrain_patches.cpp; state: vk_engine/state/terrain_patches.h).
+    struct TerrainPatchState;
+    TerrainPatchState* tp_ = nullptr;
+    void init_terrain_patches();
+    void destroy_terrain_patches();
+    void update_terrain_patches();                          // pick this frame's patches (before update_scene_ubo)
+    void render_terrain_patch_depth(VkCommandBuffer cmd);   // their depth picture, in a pass of its own
+    bool terrain_patches_on() const;                        // the setting is on and the renderer can run
+    bool terrain_patches_active() const;                    // ... and this frame's ground comes from it
+    // The baked ground texture: the ground's material kept in pictures round the camera
+    // (vk_engine/terrain_bake.cpp; state: vk_engine/state/terrain_bake.h; shaders/terrain_rm_bake.glsl).
+    struct TerrainBakeState;
+    TerrainBakeState* tb_ = nullptr;
+    void init_terrain_bake();
+    void destroy_terrain_bake();
+    void update_terrain_bake(VkCommandBuffer cmd);          // draw what is missing of the pictures (before the world pass)
+    void terrain_bake_signature(const struct SceneUBO& d);  // hash what the material depends on (update_scene_ubo)
+    void terrain_bake_invalidate();                         // the ground itself was changed
+    bool terrain_bake_ready() const;                        // the terrain pass may read the pictures this frame
+    float terrain_bake_t0() const;                          // ... and the distance their first level is made for
 
     bool tr_march_prepass_on() const;
     void render_terrain_march_prepass(VkCommandBuffer cmd);

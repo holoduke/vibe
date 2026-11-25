@@ -119,6 +119,7 @@ bool rm_flat_on() { return !rm_far_chart() || rm_ring(); }
 // 131072 water flat (the shading test)
 // 524288 the normal's relief from the main rills alone   1048576 one tap of the relief in the normal, not three
 // 2097152 view: the cloud shadow map on the ground (white = open sky)
+// 4194304 no ground material (one colour, no road or highway surface; with 1 + 2 + 512: what the light alone costs)
 #ifdef VIBE_LITE
 // The "first start" build of this shader (see VIBE_LITE in terrain_raymarch.frag): the sections
 // in VIBE_LITE_MASK are compiled out for good.
@@ -173,8 +174,20 @@ float rm_hw_width(vec2 wp) {         // 1 a highway; 0.364 the castle lane
     return max(textureLod(u_normal[31], (wp - scene.hw_info.xy) / scene.hw_info.w + 0.5, 0.0).a, 0.2);
 }
 vec2 rm_hw_dh(vec2 wp) {             // x: signed distance to the centre line (the road's measure), y: the road's height
-    vec4 f = textureLod(u_normal[30], (wp - scene.hw_info.xy) / scene.hw_info.w + 0.5, 0.0);
-    return vec2((f.r * 65280.0 + f.g * 255.0) * (128.0 / 65535.0) - 64.0, (f.b * 65280.0 + f.a * 255.0) * (512.0 / 65535.0) - 64.0);
+    vec2 uv = (wp - scene.hw_info.xy) / scene.hw_info.w + 0.5;
+    vec4 f = textureLod(u_normal[30], uv, 0.0);
+    vec2 dh = vec2((f.r * 65280.0 + f.g * 255.0) * (128.0 / 65535.0) - 64.0, (f.b * 65280.0 + f.a * 255.0) * (512.0 / 65535.0) - 64.0);
+    // Under a bridge the field says "far" with the side's sign kept (highway.cpp bake): -64 on
+    // one side of the centre line, +64 on the other. Read bilinearly that goes THROUGH ZERO
+    // along the centre line - a strip of road two metres wide under the whole deck, shelf and
+    // asphalt: a wall across the river. So a distance that reads near is checked against the
+    // four texels it was made from: all four "far" (the top byte 0 or 255) is no road.
+    // (highway.cpp ground() - keep in step.)
+    if (abs(dh.x) < 34.0) {
+        vec4 g = textureGather(u_normal[30], uv, 0);
+        if (all(lessThan(min(g, 1.0 - g), vec4(0.002)))) dh.x = 64.0;
+    }
+    return dh;
 }
 float rm_hw_s(vec2 wp) {             // metres along the road (from a reference that keeps the dashes' place)
     vec3 f = textureLod(u_normal[31], (wp - scene.hw_info.xy) / scene.hw_info.w + 0.5, 0.0).rgb;
@@ -426,11 +439,25 @@ float snow_road_patch(vec2 wp) {
 // dust gathers toward the edge, and the paint is worn where tyres cross it.
 //   d: signed distance from the centre line, s: metres along the road, t: distance from the eye,
 //   tex: the scan's colour here, hgt: its height (0 pores .. 1 stone tops).
-// Returns the colour; gloss: 0 matt .. 1 like tar.
+// Returns the colour; gloss: 0 matt .. 1 like tar; lvl: the surface's level as a factor on the
+// asphalt's height for the screen-space displacement (1 the sheet, 0 the bottom of a crack,
+// below 1 in the wheel ruts, above 1 on a patch laid on top).
 float rm_hw_hash(float x) { return fract(sin(x * 12.9898) * 43758.5453); }
+// Plates: the plane cut into irregular cells (one a unit across). Returns how far p is from the
+// nearest joint between two cells (0 on it), id: a number 0..1 for the cell p is in.
+float rm_hw_plates(vec2 p, out float id) {
+    vec2 n = floor(p), f = fract(p);
+    float f1 = 8.0, f2 = 8.0; id = 0.0;
+    for (int j = -1; j <= 1; ++j) for (int i = -1; i <= 1; ++i) {
+        vec2 g = vec2(float(i), float(j)), c = n + g;
+        float dd = length(g + vec2(hash21(c), hash21(c + 37.3)) - f);
+        if (dd < f1) { f2 = f1; f1 = dd; id = hash21(c + 11.7); } else if (dd < f2) f2 = dd;
+    }
+    return f2 - f1;
+}
 // `wk`: the road's width (rm_hw_width). A road of one lane (wk < 0.75) has one pair of wheel
 // tracks about its middle, an edge line a hand inside each edge, and no line down the middle.
-vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, float wk, out float gloss) {
+vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, float wk, out float gloss, out float lvl) {
     float ad = abs(d), lane = d < 0.0 ? -1.0 : 1.0;
     bool  one = wk < 0.75;
     float ar = ad * wk;                                   // metres from the centre line
@@ -445,6 +472,7 @@ vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, floa
     float oil = (1.0 - smoothstep(0.10, 0.50, one ? ar : abs(ad - 1.95))) * smoothstep(0.25, 0.7, noise2(vec2(s * 0.05, lane * 5.0)));
     a *= 1.0 + 0.11 * track - 0.20 * oil * mid;
     gloss += 0.16 * track + 0.10 * oil;
+    lvl = 1.0 - 0.30 * track;
     {   // a patch: a rectangle of newer asphalt, in some 37 m stretches of a lane
         float cell = floor(s / 37.0), r = rm_hw_hash(cell * 1.7 + lane * 31.0);
         if (r > 0.70) {
@@ -455,9 +483,11 @@ vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, floa
             float in_p = 1.0 - smoothstep(-fw, fw, sd);
             a = mix(a, tex * 0.36 * vec3(0.96, 0.98, 1.04), in_p);
             gloss = mix(gloss, 0.30, in_p);
+            lvl = mix(lvl, 1.35, in_p);
             float seam = (1.0 - smoothstep(0.012, 0.012 + fw, abs(sd))) * min(1.0, 0.03 / fw);     // its tarred joint
             a = mix(a, vec3(0.012), seam * 0.85);
             gloss = mix(gloss, 0.75, seam);
+            lvl *= 1.0 - seam;
         }
     }
     {   // cracks across the lane, sealed with tar
@@ -468,6 +498,7 @@ vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, floa
             float cr = (1.0 - smoothstep(0.016, 0.016 + fw, abs(x))) * min(1.0, 0.04 / fw) * ext;
             a = mix(a, vec3(0.013), cr * 0.9);
             gloss = mix(gloss, 0.8, cr);
+            lvl *= 1.0 - cr;
         }
     }
     {   // a crack along the lane, wandering, in stretches
@@ -475,6 +506,38 @@ vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, floa
         float gate = smoothstep(0.55, 0.7, noise2(vec2(s * 0.013, lane * 4.0 + 8.0)));
         float cr = (1.0 - smoothstep(0.006, 0.006 + fw, abs(y))) * min(1.0, 0.02 / fw) * gate;
         a = mix(a, a * 0.25, cr);
+        lvl *= 1.0 - cr;
+    }
+    // Wear that no texture carries, generated here (close by only; colour and level together, so
+    // the screen-space displacement gives it depth): the sheet broken into plates where the
+    // wheels run, and potholes.
+    if (t < 40.0) {
+        float cl = 1.0 - smoothstep(25.0, 40.0, t);
+        vec2 p = vec2(s, d * wk);                          // metres along, metres across
+        float gate = smoothstep(0.62, 0.78, noise2(vec2(s * 0.021, lane * 6.0 + 13.0))) * (0.35 + 0.65 * track) * cl;
+        if (gate > 0.01) {
+            float id;
+            float e = rm_hw_plates(p * 5.5 + (noise2(p * 2.3) - 0.5) * 0.6, id);      // plates a hand or two across
+            float w = 0.05 + fw * 5.5;
+            float cr = (1.0 - smoothstep(w * 0.4, w, e)) * gate * min(1.0, 0.012 / fw);
+            a *= mix(1.0, mix(0.86, 1.06, id), gate);       // (each plate its own shade, and settled its own way)
+            a = mix(a, a * 0.22, cr);
+            lvl = mix(lvl, lvl * mix(0.55, 1.05, id), gate) * (1.0 - cr);
+            gloss *= 1.0 - 0.5 * cr;
+        }
+        float cell = floor(s / 53.0), r = rm_hw_hash(cell * 4.7 + lane * 17.0);
+        if (r > 0.72) {                                     // a pothole, in some 53 m stretches: in a wheel track
+            float r2 = rm_hw_hash(cell * 2.9 + 1.0), r3 = rm_hw_hash(cell * 6.1 + 3.0);
+            float yc = one ? (d < 0.0 ? -0.80 : 0.80) : lane * (1.95 + (r3 > 0.5 ? 0.85 : -0.85));
+            vec2 q = p - vec2((cell + 0.25 + 0.5 * r2) * 53.0, yc);
+            float dist = length(q * vec2(0.7, 1.0)) + (noise2(q * 6.0 + cell) - 0.5) * 0.14 - (0.20 + 0.22 * r3);
+            float in_h = (1.0 - smoothstep(-0.03 - fw, fw, dist)) * cl;
+            float rim = (1.0 - smoothstep(0.0, 0.12, abs(dist))) * cl;
+            a = mix(a, a * 0.70, rim * (1.0 - in_h));       // (the broken rim)
+            a = mix(a, vec3(0.085, 0.078, 0.070) * (0.6 + 0.8 * hgt), in_h);          // the base course: grit
+            gloss = mix(gloss, 0.05, in_h);
+            lvl = mix(lvl, 0.0, in_h);
+        }
     }
     // Dust and grit toward the edge: it lies in the pores.
     float dusty = smoothstep(4.2, 5.4, ad) * (0.45 + 0.55 * noise2(vec2(s * 0.08, lane * 2.0 + 1.0)));

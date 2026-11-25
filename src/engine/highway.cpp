@@ -646,6 +646,9 @@ float ground(float h_nat, float x, float z) {
             } else { cd = kFieldMaxD; ch = 0.0f; }
             dd[k] = cd; hh[k] = ch;
         }
+        // (all four "far", some on each side of the centre line: read bilinearly that goes through
+        //  zero along the line - a wall of shelf under the whole deck. No road: rm_hw_dh, the same.)
+        if (std::abs(dd[0]) > kFieldMaxD - 0.25f && std::abs(dd[1]) > kFieldMaxD - 0.25f && std::abs(dd[2]) > kFieldMaxD - 0.25f && std::abs(dd[3]) > kFieldMaxD - 0.25f) return h_nat;
         d = glm::mix(glm::mix(dd[0], dd[1], tx), glm::mix(dd[2], dd[3], tx), tz);
         h = glm::mix(glm::mix(hh[0], hh[1], tx), glm::mix(hh[2], hh[3], tx), tz);
     }

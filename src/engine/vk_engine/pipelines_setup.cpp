@@ -574,8 +574,10 @@ void VulkanEngine::destroy_terrain_water_pipeline() {
 // world pass with depth-test LESS_OR_EQUAL so the already-prepass-
 // populated cube/castle depths properly occlude the procedural surface.
 bool VulkanEngine::tr_use_lowres() const {
+    // (not with the patch terrain: its depth picture is at full size, and the terrain pass that
+    //  reads it is the full-resolution one - terrain_patches.cpp)
     return rt_.terrain_raymarch_enabled &&
-           rt_.terrain_raymarch_scale < 0.999f;
+           rt_.terrain_raymarch_scale < 0.999f && !terrain_patches_on();
 }
 
 // The low-resolution march runs ahead of the terrain pass - the full-resolution one, and the
@@ -583,7 +585,13 @@ bool VulkanEngine::tr_use_lowres() const {
 // hit far too early (terrain_raymarch.frag, "starts there too"). What else hangs on the march -
 // the shadow terms, the start at the hit, the shading rate - is for the full-resolution pass only.
 bool VulkanEngine::tr_march_prepass_on() const {
-    return rt_.terrain_rm_prepass && rt_.terrain_raymarch_enabled &&
+    // With the patch terrain nothing is marched within the march's reach, so the terrain pass
+    // has no use for it. It still runs for the two others that read it: the raymarched lawn
+    // (its start distance) and 'sun shadows at low resolution' (which go by the hit's distance,
+    // however it was found).
+    const bool patch_skip = terrain_patches_on() && !rt_.terrain_rm_shade_lo &&
+                            !(rt_.grass_enabled && rt_.grass_raymarch_enabled && !turf_on());
+    return rt_.terrain_rm_prepass && rt_.terrain_raymarch_enabled && !patch_skip &&
            tr_->march_pipeline != VK_NULL_HANDLE && tr_->march_view != VK_NULL_HANDLE;
 }
 
@@ -597,6 +605,8 @@ void VulkanEngine::init_terrain_raymarch_lowres() {
     // reconstruct a clean edge between full-res rasterised terrain and
     // a low-res water buffer).
     if (!rt_.terrain_raymarch_enabled) s = 1.0f;
+    // The patch terrain draws its depth picture into the depth target made here: full size.
+    if (terrain_patches_on()) s = 1.0f;
     uint32_t lw = std::max<uint32_t>(1u, static_cast<uint32_t>(
         std::round(static_cast<float>(render_extent_.width)  * s)));
     uint32_t lh = std::max<uint32_t>(1u, static_cast<uint32_t>(

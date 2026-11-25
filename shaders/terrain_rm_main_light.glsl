@@ -3,6 +3,7 @@
 // variables (ro, rd, t, pos, nor, col, ...). Split off only to keep that file readable;
 // the order of the parts is the order of the #include lines there.
 
+#if RM_PART == 4
     float amb = 0.5 + 0.5 * nor.y;
     float fre_in = clamp(1.0 + dot(rd, nor), 0.0, 1.0);
     float fre    = fre_in * fre_in;   // pow(x, 2) is just a square
@@ -223,7 +224,13 @@
         if (cav_w > 0.01) ao *= mix(1.0, terrainCavityAO(pos.xz), cav_w);
     }
 
-    vec3 mate = getMaterial(pos, nor) * rm_det_tint;
+#endif /* RM_PART == 4 */
+#if RM_PART == 2
+    // (the palette's bands meet by the scan's height close by: getMaterial, g_mat_h)
+    g_mat_h = (gnd_det_h > 0.0 && t < 45.0) ? gnd_det_h : -1.0;
+    g_mat_hk = 1.0 - smoothstep(20.0, 45.0, t);
+    mate = getMaterial(pos, nor) * rm_det_tint;
+    g_mat_h = -1.0;
     // (a steep face: the rock itself - terrain_rm_main_ground.glsl rm_cliff. A little of what
     //  grows there is left: moss in streaks, not a lawn.)
     if (rm_cliff > 0.001) mate = mix(mate, rm_cliff_alb * mix(vec3(1.0), vec3(0.80, 0.95, 0.70), 0.35 * smoothstep(0.55, 0.8, tile_noise2(pos.xz, 0.09, vec2(4.0)))), rm_cliff * 0.92);
@@ -357,6 +364,8 @@
             mate = mix(mate, pc0, peb_cover);
         }
     }
+    // Roots across the forest floor (their height: terrain_rm_main_ground.glsl gnd_root): bark-dark, paler along the top.
+    if (gnd_root > 0.01) mate = mix(mate, vec3(0.060, 0.044, 0.030) * mix(0.8, 1.5, smoothstep(0.5, 1.0, gnd_root)), smoothstep(0.25, 0.6, gnd_root));
     // Road: trodden dirt verge, then the cobbles. The procedural palette
     // above is authored darker than texture albedo (rock 0.10 vs
     // ~0.33), so the cobble texture is scaled toward that range.
@@ -369,13 +378,29 @@
                         max(textureLod(u_albedo[9], pos.xz * 0.55, 12.0).rgb, vec3(0.03));
             float vn = tile_noise2(pos.xz, 0.9, vec2(0.0)) * 0.6 + tile_noise2(pos.xz, 3.7, vec2(0.0)) * 0.4;
             vec3 verge = vec3(0.105, 0.078, 0.052) * clamp(soil, vec3(0.45), vec3(1.8)) * mix(0.72, 1.25, vn);
-            mate = mix(mate, verge, rm_road.y);
+            // (under the paving too: it is what shows in a missing stone's hole, between the
+            //  single stones of the ragged edge, and - darker, damp - in the joints)
+            mate = mix(mate, verge, max(rm_road.y, rm_road.x));
         }
         // Stone-to-stone colour variation: patches of lighter / darker and
         // slightly warmer / cooler stone, plus some sun-bleached wear.
         vec3 cob = textureLod(u_albedo[kRmMatRoad], rm_road_uv, rm_road_lod).rgb * kRmAlbedoScale;
         float cv1 = tile_noise2(pos.xz, 6.5, vec2(9.1)) * 0.6 + tile_noise2(pos.xz, 2.1, vec2(1.7)) * 0.4, cv2 = tile_noise2(pos.xz, 0.55, vec2(3.3));
         cob *= mix(0.74, 1.22, cv1) * mix(vec3(1.06, 1.0, 0.92), vec3(0.94, 0.98, 1.05), cv2);
+        {   // (the wheel lines of terrain_rm_main_ground.glsl: dirt in the joints, the tops rubbed pale)
+            float lat = abs(rm_road_uv.x) * max(scene.spom_params.z, 0.25);
+            float line = 1.0 - smoothstep(0.16, 0.46, abs(lat - min(0.75, 0.5 * scene.road_info.y)));
+            line *= mix(0.45, 1.0, tile_noise2(pos.xz, 0.11, vec2(61.0)));
+            cob *= mix(1.0, mix(0.70, 1.07, smoothstep(0.3, 0.8, rm_cob_h)), line);
+        }
+        // Old paving (terrain_rm_main_ground.glsl "Old, hand-laid paving"): a sunk stone is
+        // dirtier; earth stands in the joints, and moss on the earth toward the edges.
+        cob *= mix(0.78, 1.0, smoothstep(0.4, 1.0, rm_cob_sink));
+        if (rm_cob_fill > 0.001) {
+            vec3 joint = mate * 0.72;
+            joint = mix(joint, vec3(0.026, 0.038, 0.016) * mix(0.7, 1.3, tile_noise2(pos.xz, 9.0, vec2(5.0))), rm_cob_moss);
+            cob = mix(cob, joint, rm_cob_fill);
+        }
         mate = mix(mate, cob, rm_road_wx);       // (by height at the paving's edge: terrain_rm_main_ground.glsl)
         // Sand lying on it: pale and fine-grained, darker and damper where it is thin; a print's
         // floor is packed (darker) and the sun leaves part of it in shade.
@@ -388,11 +413,11 @@
                 float gk1 = 1.0 - smoothstep(1.5, 7.0, t), gk2 = 1.0 - smoothstep(0.6, 3.0, t);
                 float g1 = tile_noise2(pos.xz, 190.0, vec2(3.0)), g2 = tile_noise2(pos.xz, 610.0, vec2(11.0));
                 sand *= 1.0 + (g1 - 0.5) * 0.30 * gk1 + (g2 - 0.5) * 0.34 * gk2;
-                float dark = smoothstep(0.74, 0.80, tile_noise2(pos.xz, 260.0, vec2(71.0))) * gk1 * mix(1.0, 0.45, sand_rip);
+                float dark = smoothstep(0.74, 0.80, tile_noise2(pos.xz, 260.0, vec2(71.0))) * gk1 * mix(1.0, 0.65, sand_rip);
                 sand = mix(sand, sand * vec3(0.42, 0.40, 0.40), dark * 0.75);
                 float pale = smoothstep(0.80, 0.86, tile_noise2(pos.xz, 330.0, vec2(19.0))) * gk1;
                 sand = mix(sand, sand * 1.35 + 0.02, pale * 0.6);
-                sand *= mix(0.86, 1.07, sand_rip);
+                sand *= mix(0.95, 1.03, sand_rip);       // (was 0.86 .. 1.07: with the normal's share, corduroy)
             }
             float dC = t < 30.0 ? foot_depth(pos.xz) : 0.0;
             if (dC > 0.002) {
@@ -414,7 +439,7 @@
 
     // A highway's surface (hw_* from terrain_rm_main_ground.glsl; rm_hw_asphalt).
     if (hw_pave + hw_verge > 0.001) {
-        vec3 grav = textureLod(u_albedo[kRmMatGravel], pos.xz / TILE_CELL(1.7), hw_lod + 0.6).rgb * 0.50;
+        vec3 grav = rm_at_albedo(kRmMatGravel, gv_at, hw_lod + 0.6) * 0.50;
         grav *= mix(0.78, 1.12, tile_noise2(pos.xz, 0.6, vec2(2.0))) * vec3(1.0, 0.97, 0.92);
         // (the land's own cover comes back through it toward its outer edge)
         float grav_w = hw_verge * (1.0 - 0.55 * smoothstep(7.0, 8.6, abs(hw_d)) * tile_noise2(pos.xz, 1.9, vec2(0.0)));
@@ -422,9 +447,12 @@
         if (GND_SSDM && t < 45.0 && hw_pave < 0.5) grav_w = mix(rm_height_blend(0.45, hw_hgt, grav_w), grav_w, smoothstep(20.0, 45.0, t));
         mate = mix(mate, grav, grav_w);
         if (hw_pave > 0.001) {
-            vec3 tex = textureLod(u_albedo[kRmMatAsphalt], hw_uv, hw_lod).rgb * 0.50;
-            float gl = 0.0;
-            vec3 asph = rm_hw_asphalt(pos.xz, hw_d, hw_s, t, tex, hw_hgt, hw_wk, gl);
+            vec3 tex = rm_at_albedo(kRmMatAsphalt, hw_at, hw_lod) * 0.50;
+            float gl = 0.0, lvl = 1.0;
+            vec3 asph = rm_hw_asphalt(pos.xz, hw_d, hw_s, t, tex, hw_hgt, hw_wk, gl, lvl);
+            // (cracks, tarred joints and ruts sink, a patch stands proud: the height written for the
+            //  screen-space displacement, by a factor - within its reach only)
+            if (GND_SSDM && g_gnd_ssdm_h > 0.0) g_gnd_ssdm_h = max(g_gnd_ssdm_h * mix(1.0, lvl, hw_pave), 0.006 * kGndSsdmMax);
             mate = mix(mate, asph, hw_pave);
             hw_gloss = gl * hw_pave;
         }
@@ -464,3 +492,5 @@
         }
     }
 
+    }   // (!rm_baked: opened in terrain_rm_main_ground.glsl)
+#endif /* RM_PART == 2 */

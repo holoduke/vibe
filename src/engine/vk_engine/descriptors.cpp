@@ -74,7 +74,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 30 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
+            kTextureCount * 2 + 33 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -94,7 +94,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[46]{};
+    VkDescriptorSetLayoutBinding bindings[49]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -119,12 +119,12 @@ void VulkanEngine::init_descriptors() {
     bindings[3].binding = 3;
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[3].descriptorCount = kTextureCount;
-    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT;      // (vertex: terrain_patch.vert includes the terrain's height formula, which declares them)
 
     bindings[4].binding = 4;
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[4].descriptorCount = kTextureCount;
-    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT;      // (vertex: the highway field and the soil relief, read by the height formula in terrain_patch.vert)
 
     bindings[5].binding = 5;
     bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -156,7 +156,7 @@ void VulkanEngine::init_descriptors() {
     bindings[8].binding = 8;
     bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[8].descriptorCount = 1;
-    bindings[8].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[8].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT;      // (vertex: terrain_patch.vert)
 
     // Bindings 9..11: low-res raymarch upscale targets, sampled by the
     // compose pass when terrain_raymarch_scale < 1. Color and motion
@@ -361,7 +361,8 @@ void VulkanEngine::init_descriptors() {
     // Bindings 39, 40: the world's slow fields round the camera, near and far (RG32F; wm_cache.cpp).
     bindings[39] = bindings[31];
     bindings[39].binding = 39;
-    bindings[40] = bindings[31];
+    bindings[39].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT;     // (vertex: the height formula in terrain_patch.vert)
+    bindings[40] = bindings[39];
     bindings[40].binding = 40;
     // Bindings 41, 42: the trail round the player - where people and cars have just been
     // (grass_trail.cpp). 41 is read by the plants' vertex shader, 42 (last frame's) by the
@@ -380,10 +381,12 @@ void VulkanEngine::init_descriptors() {
     bindings[45] = bindings[41];
     bindings[45].binding = 45;
 
+    // Bindings 46..48: the baked ground texture's three pictures, arrays of levels (terrain_bake.cpp).
+    for (int b = 46; b <= 48; ++b) { bindings[b] = bindings[31]; bindings[b].binding = uint32_t(b); }
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 46, .pBindings = bindings,
+        .bindingCount = 49, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -1253,6 +1256,7 @@ void VulkanEngine::update_scene_ubo() {
     VmaAllocationInfo ai{};
     vmaGetAllocationInfo(allocator_, scene_ubo_alloc_, &ai);
     wm_cache_plan(data);
+    terrain_bake_signature(data);       // (what the baked ground texture depends on: terrain_bake.cpp)
     upload(scene_ubo_buffer_, 0, &data, sizeof(data), ai.pMappedData);   // staged while a frame is in flight
     // Defensive flush — no-op on coherent host memory but required by spec
     // for non-coherent allocations (e.g. some non-NVIDIA drivers).
