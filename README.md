@@ -4,6 +4,8 @@ Vibe is a 3D game engine and first-person game in C++20 and Vulkan 1.3, written
 entirely by AI (vibe coding with Claude Code): hardware ray tracing, a ray-marched procedural
 planet, motion-matched characters and LAN multiplayer.
 
+The goal is see how far you can get with AI. Feel free to let your agent work on this game. Create pull requests if you want.
+
 Important: This engine was written by AI for humans. No code was (and never will be) seen by humans in development. 
 
 ![Vibe game engine: soldiers running beside a jeep on the lane along the river (Vulkan, C++)](docs/screenshots/lane_soldiers_jeep.jpg)
