@@ -16,9 +16,18 @@
 //   6  upper body: aim pitch spread over spine / neck / head, recoil
 //   7  feet: stride warp, ground height, world locks, pelvis compensation, two-bone fit
 //   8  weapon frame (from gameplay aim), reload / equip offsets, both arms fitted to the grips, fingers
+// On top of whatever made the pose - locomotion, an action clip, the seat - come the LIFE LAYERS
+// (life_layers.cpp; docs/animation/actions.md "Life layers"), always in this order:
+//   a  the person's own posture (PersonStyle: constant offsets)           additive
+//   b  a clip over part of the body (layer_clip + LayerMask)               override, masked
+//   c  breathing, the weight from one side to the other                    additive, own clocks
+//   d  a gesture or a fidget (a hand to the head, a look at the wrist)     override, one arm
+//   e  the look: head, neck, chest and eyes to what is worth one           within limits
+// and only then what fits the body to the world (feet, the seat's hips, hands on a weapon).
 #include "anim/airborne.h"
 #include "anim/inertializer.h"
 #include "anim/motion_matcher.h"
+#include "anim/person_style.h"
 #include "anim/runtime.h"
 #include "game/physics.h"
 
@@ -46,10 +55,13 @@ struct AnimationSet {
     };
     Face   face{};
     float  stand_hips = 1.0f;            // hips height of the standing idle, metres
+    // A weight a joint for every LayerMask (life_layers.cpp build_layer_masks).
+    std::vector<float> mask[int(LayerMask::Count)];
     size_t asset_bytes = 0;
 
     bool load(const char* path, std::string* why = nullptr);
     bool init(const AnimAsset& asset, std::string* why = nullptr);
+    void build_masks();
     bool ok() const { return runtime != nullptr && db.ok(); }
 };
 
@@ -132,6 +144,10 @@ struct AnimTuning {
     float blink_hold = 0.0f, jaw_hold = 0.0f, eyes_hold = 0.0f;
     float idle_look = 1.0f;              // not aiming: the head looks about, at others, or nowhere for a while (0 = never)
     float idle_sway = 1.0f;              // standing, not aiming: breathing and a shift of weight now and then (0 = none)
+    // How far a look may turn the head from the way the chest faces (radians; the eyes do the
+    // rest), what is added by the look included to what the clip already has.
+    float look_yaw_max = 1.05f, look_pitch_up = 0.45f, look_pitch_down = 0.60f;
+    float layer_halflife = 0.16f;        // seconds: a clip over part of the body comes and goes this fast
     float head_to_sights = 1.0f;         // seen from outside: the head leans to the stock (0 = stays upright)
     float chest_keep = 0.35f;            // share of the torso's lean away from its rest place that is kept (1 = all of it)
     float spine_pitch_share = 0.30f;     // share of the aim pitch taken by the spine (third person)
@@ -239,6 +255,34 @@ struct CharacterAnimationInput {
     bool      has_look_at = false;
     glm::vec3 look_at{0.0f, 1.6f, -5.0f};
     uint32_t  variation = 0;
+    // ---- LIFE LAYERS (see the top of this file; PersonStyle in person_style.h) ----
+    // individuality: how much of this person's own posture (person_style(variation)) is put on
+    //   top of what is played. 0 = nobody in particular (the players' soldiers).
+    // life_on_clip: an action clip or the seat pose also breathes, shifts its weight, looks
+    //   and fidgets, as locomotion always does. Off for something done once (sitting down).
+    // look_weight: how much of the time the head goes to look_at (1 = now and then, 2.5 = most
+    //   of the time: who is talked to; 4 and more = fixed on it). look_id: what is looked at -
+    //   a change is something new that catches the eye soon.
+    // fidgets: how often a hand goes to the head or the wrist by itself (0 never, 1 every
+    //   quarter of a minute or so). fidget_arms: which hands are free for it (1 left, 2 right).
+    // gesture + gesture_seq: one asked for (a change of gesture_seq starts it).
+    // layer_clip: a clip over part of the body (layer_mask) while the rest goes on as it was -
+    //   an upper body that talks on legs that sit, a head that looks about on a body that
+    //   walks. The animator owns its time (layer_rate) and its coming and going; it is played
+    //   round and round and let go for a moment where it wraps.
+    // action_mirror: the action clip is played left for right.
+    float     individuality = 0.0f;
+    bool      life_on_clip = false;
+    float     look_weight = 1.0f;
+    uint32_t  look_id = 0;
+    float     fidgets = 0.0f;
+    uint8_t   fidget_arms = 3;
+    Gesture   gesture = Gesture::None;
+    uint32_t  gesture_seq = 0;
+    ClipId    layer_clip = kNoClip;
+    LayerMask layer_mask = LayerMask::UpperBody;
+    float     layer_rate = 1.0f, layer_weight = 1.0f;
+    bool      action_mirror = false;
     bool      first_person = false;
     bool      teleported = false;        // position jumped: drop every world-space memory
     int       lod = 0;                   // 0 full .. 3 no pose (see anim_lod.h)
@@ -291,6 +335,12 @@ public:
     float lids() const { return lid_; }
     glm::vec2 eyes() const { return glm::vec2(eye_yaw_, eye_pitch_); }      // radians: + right, + up
     float jaw() const { return jaw_; }                                      // radians
+    // The life layers (debug views, tests): the gesture in hand and how far it is in (0 .. 1),
+    // how far the clip over part of the body is in, this person's style.
+    Gesture gesture() const { return gest_; }
+    float   gesture_weight() const { return gest_w_; }
+    float   layer_weight() const { return layer_w_; }
+    const PersonStyle& style() const { return style_; }
     int   blinks() const { return blinks_; }
     // Model-space muzzle position and direction (effects; never hit registration).
     glm::vec3 muzzle_position() const { return muzzle_pos_; }
@@ -310,6 +360,12 @@ private:
     void arms(const CharacterAnimationInput& in);
     void seated(const CharacterAnimationInput& in);
     void action(const CharacterAnimationInput& in);
+    // The life layers: `base` 0 locomotion, 1 the seat pose, 2 an action clip.
+    void life_layers(const CharacterAnimationInput& in, int base);
+    void posture_layer(const CharacterAnimationInput& in, bool sitting);
+    void clip_layer(const CharacterAnimationInput& in, float dt);
+    void gesture_layer(const CharacterAnimationInput& in, float dt, bool alive, bool sitting, bool moving);
+    void look_layer(const CharacterAnimationInput& in, float dt, bool busy, bool moving, bool sitting);
     void rotate_in_model(int joint, const glm::quat& q);              // turns a joint about model axes (local pose)
     glm::quat model_rotation(int joint) const;                        // from pose_, by walking the parents
     void fit_limb(int a, int b, int c, glm::vec3 target, const glm::vec3* pole, bool from_rest = false);
@@ -366,6 +422,24 @@ private:
     float     gaze_want_yaw_ = 0.0f, gaze_want_pitch_ = 0.0f;     // where the head is being turned to (the eyes are there first)
     void      face_layer(const CharacterAnimationInput& in);
     bool      mag_visible_ = false;
+    // the life layers
+    PersonStyle style_{};
+    uint32_t  style_of_ = 0;
+    bool      action_mirror_ = false;
+    ClipId    layer_clip_ = kNoClip;
+    LayerMask layer_mask_ = LayerMask::UpperBody;
+    float     layer_t_ = 0.0f, layer_w_ = 0.0f, layer_wv_ = 0.0f;
+    Gesture   gest_ = Gesture::None;
+    int       gest_side_ = 1;                          // 0 left, 1 right
+    float     gest_t_ = 0.0f, gest_dur_ = 0.0f, gest_w_ = 0.0f, fidget_left_ = 6.0f;
+    uint32_t  gesture_seq_ = 0, look_id_ = 0;
+    float     gest_look_yaw_ = 0.0f, gest_look_pitch_ = 0.0f;     // where a gesture takes the head
+    // (a blend of two poses of a joint keeps the way round it chose when it began: see blend_kept)
+    std::vector<glm::quat> layer_pa_, layer_pb_;
+    glm::quat gest_pa_[3]{}, gest_pb_[3]{};
+    float     layer_prev_eff_ = 0.0f, gest_prev_w_ = 0.0f;
+    float     layer_eff_ = 0.0f;                       // the weight of the clip layer this frame (0: not there)
+    float     hips_shift_ = 0.0f;                      // metres the layers moved the hips sideways this frame
     uint32_t  hit_seq_ = 0;
     float     flinch_pitch_ = 0.0f, flinch_pitch_v_ = 0.0f, flinch_roll_ = 0.0f, flinch_roll_v_ = 0.0f;
     AnimDebug dbg_;

@@ -324,6 +324,7 @@ add_library(vibe_anim STATIC
     src/anim/inertializer.cpp
     src/anim/airborne.cpp
     src/anim/character_animator.cpp
+    src/anim/life_layers.cpp
 )
 target_link_libraries(vibe_anim PUBLIC vibe_core PRIVATE ozz_animation ozz_base)
 
@@ -357,6 +358,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/lane_edge.cpp
     src/engine/vk_engine/river_stream.cpp
     src/engine/vk_engine/jeep.cpp
+    src/engine/vk_engine/sound_env.cpp
     src/engine/vk_engine/gfx_quality.cpp
     src/engine/vk_engine/bridges.cpp
     src/engine/vk_engine/mem_log.cpp

@@ -41,6 +41,7 @@ enum TaskType : uint8_t { GoNode, GoPoint, Sit, Stand, EnterCar, DoAct };
 struct Task { TaskType type; int a = -1; glm::vec3 p{0.0f}; float yaw = 0.0f; float time = 0.0f; Pose pose = Pose::Stand; uint8_t style = 0; };
 
 enum CarState : uint8_t { Cruise, Approach, OnPath, Waiting, Parked };
+enum Cls : uint8_t { Slow, Normal, Fast, Speeder, Police };      // the kinds of driver (make_driver)
 
 struct Agent {
     Kind kind = Kind::Person; Pose pose = Pose::Stand; uint8_t look = 0; bool hidden = false;
@@ -73,6 +74,19 @@ struct Agent {
     int riders[3] = { -1, -1, -1 }; int out = 0;       // its people, and how many are out of it
     float wait = 0.0f; bool decided = false; bool leaving = false; float stuck = 0.0f; float visit = 0.0f;
     bool driverless = false; float abandoned = 0.0f;   // its driver was shot: it rolls to a stop, and how long it has stood since
+    // ---- a car in the traffic (THE TRAFFIC, below)
+    uint8_t cls = 1;                                   // what kind of driver: Cls
+    float accel = 1.8f, side = 2.6f;                   // how hard he accelerates (m/s2), and how much sideways pull he takes through a bend
+    float gap_t = 1.3f, patience = 3.0f;               // the time he keeps behind the car in front (s), and how long he is held up before he looks to pass
+    float lat = 1.9f, lat_cmd = 1.9f;                  // metres right of the centre line, the way it drives: where it is, and where it is steering to
+    uint8_t ov = 0;                                    // 0 in its lane, 1 out and passing, 2 pulling back in
+    int ov_key = -1; float ov_lat = -1.9f;             // ... whom it has to get past (a Thing's key), and where it drives meanwhile
+    float held = 0.0f, ov_cool = 0.0f, ov_t = 0.0f;
+    bool siren = false; float siren_t = 0.0f;          // a police car: its siren, and the seconds until it is switched
+    float yield = 0.0f;                                // it keeps to the side for a siren this long yet
+    bool hard = false;                                 // it brakes as hard as it can
+    glm::vec2 knock{0.0f}; float knock_w = 0.0f;       // struck (push_car): it slides (m/s, world) and turns (rad/s); both die away
+    float shaken = 0.0f;                               // ... and its driver stands this long yet
     // ---- a person put out of a car out on the road: stands there so many seconds more, then is gone
     float leave = 0.0f;
 };
@@ -129,6 +143,15 @@ struct World::Impl {
     Rng rng;
     std::vector<glm::vec3> run_path; float run_len = 0.0f;
     std::vector<glm::vec3> walkers;          // the players on foot (set_walkers): cars do not drive into them
+    std::vector<Obstacle> obstacles;         // the players' cars (set_obstacles)
+    struct ObsAt { glm::vec3 pos{0.0f}; float s = 0.0f, goff = 0.0f; bool near_road = false; };
+    std::map<uint32_t, ObsAt> obs_at;        // ... and where along the road each was found last
+    // Everything on the road, as the traffic sees it (build_things, once a step): metres along
+    // the road, metres right of the centre line and speed along it FOR INCREASING s, half its
+    // length along the road and half its width across.
+    struct Thing { float s, goff, v, hl, hw; int key; bool siren; };
+    std::vector<Thing> things;
+    int n_overtakes = 0, n_given_up = 0;
     int steps = 0;
     float acc = 0.0f;
     std::vector<View> prev, cur;             // the last two states, for views()
@@ -486,6 +509,8 @@ struct World::Impl {
         // somebody new: a local, walking on to the site
         const uint8_t look = uint8_t(rng.pick(256));
         const Kind k = a.kind;
+        const bool police = k == Kind::Car && a.cls == Police;      // (the road keeps its police)
+        const bool speeder = k == Kind::Car && a.cls == Speeder;    // (... and its one who is far too fast)
         a = Agent();
         a.kind = k; a.look = look;
         if (k == Kind::Person) {
@@ -493,7 +518,7 @@ struct World::Impl {
             if (!nodes.empty()) { const int nd = rng.pick(int(nodes.size())); a.pos = nodes[size_t(nd)].p; a.at_node = nd; }
         } else {
             a.cs = Cruise; a.pose = Pose::Drive; a.dir = rng.chance(0.5f) ? 1 : -1;
-            a.s = rng.range(0.0f, std::max(road.length, 1.0f)); a.v_want = kCruise * rng.range(0.8f, 1.15f); a.speed = a.v_want;
+            a.s = rng.range(0.0f, std::max(road.length, 1.0f)); make_driver(a, police ? int(Police) : speeder ? int(Speeder) : -1); a.speed = a.v_want;
             // (not on top of the site, nor of another car)
             for (int tries = 0; tries < 8; ++tries) {
                 bool clear = !(site && std::abs(wrap_s(a.s - s_in + 0.5f * road.length) - 0.5f * road.length) < 400.0f);
@@ -618,12 +643,296 @@ struct World::Impl {
     static constexpr float kAccel = 1.8f, kBrake = 3.2f, kSideways = 2.6f;
     float wrap_s(float s) const { if (road.length <= 0.0f) return 0.0f; s = std::fmod(s, road.length); return s < 0.0f ? s + road.length : s; }
     // The middle of the car's lane `s` along the road, and the way it runs for this car.
-    bool lane_at(const Agent& c, float s, glm::vec3& p, glm::vec2& fwd) const {
+    // (`lat`: so far right of the centre line instead - a car that passes another drives on the left)
+    bool lane_at(const Agent& c, float s, glm::vec3& p, glm::vec2& fwd, float lat = kLane) const {
         glm::vec2 d;
         if (!road.at || !road.at(wrap_s(s), p, d)) return false;
         fwd = d * float(c.dir);
-        p += glm::vec3(-fwd.y, 0.0f, fwd.x) * kLane;
+        p += glm::vec3(-fwd.y, 0.0f, fwd.x) * lat;
         return true;
+    }
+
+    // ---------------------------------------------------------------- THE TRAFFIC
+    // Every driver is somebody (make_driver): a slow one in a loaded pickup, most at about the
+    // same pace, some in a hurry, and now and then one who drives twice as fast as the rest.
+    // The police patrol at the common pace and sometimes put the siren on and go.
+    //
+    // Each step everything on the road is put in one list (build_things): this world's cars
+    // and the players' (set_obstacles) alike, each with its place along the road, how far right
+    // of the centre line it is, and its speed along the road. From that list a car
+    //   FOLLOWS   whatever is ahead in the strip of road it drives on: it comes no nearer than
+    //             its driver's time gap, and is never faster than it can still brake from
+    //             (2.4 m/s2 planned, 7 when it must). What stands - a car left on the road -
+    //             it stops well short of.
+    //   PASSES    when it has been held up for longer than its driver's patience: the cars to
+    //             get past are counted (up to three nose to tail), the time that takes at the
+    //             speed it would pass at is worked out, and it pulls out only if nothing comes
+    //             the other way within that time and a margin, nobody is beside or coming up
+    //             behind in the other lane, the road ahead is straight enough to have seen all
+    //             that, and it is not by the station's ways in and out. Out, it drives on the
+    //             left until it is clear of the last of them and the lane has room, and pulls
+    //             back in.
+    //   GIVES UP  when, out there, somebody comes after all: it drops back in behind if it is
+    //             not yet alongside, pushes on if it is all but past, and otherwise brakes
+    //             until there is room behind the car it is beside. Whoever meets a car in his
+    //             own lane brakes too, and keeps right.
+    //   MAKES WAY for a siren: to the edge of the road and slower, so that the police car can
+    //             go down the middle.
+    static constexpr float kShoulder = 3.15f;     // how far right of the centre line a car goes to make way
+    float sdiff(float a, float b) const {         // a - b along the road, the short way round
+        if (road.length <= 0.0f) return 0.0f;
+        float d = std::fmod(a - b, road.length);
+        if (d > 0.5f * road.length) d -= road.length;
+        if (d < -0.5f * road.length) d += road.length;
+        return d;
+    }
+    void make_driver(Agent& c, int cls = -1) {
+        if (cls < 0) { const float r = rng.uni(); cls = r < 0.16f ? Slow : r < 0.74f ? Normal : r < 0.965f ? Fast : Speeder; }
+        c.cls = uint8_t(cls);
+        int kind = int(c.look % 3);               // (the renderer's: 0 a sports car, 1 a saloon, 2 a pickup)
+        switch (cls) {
+        case Slow:    c.v_want = kCruise * rng.range(0.60f, 0.74f); c.accel = 1.2f; c.side = 2.2f; c.gap_t = rng.range(1.5f, 2.0f); c.patience = rng.range(6.0f, 12.0f); kind = 2; break;
+        case Fast:    c.v_want = kCruise * rng.range(1.14f, 1.34f); c.accel = 2.4f; c.side = 3.4f; c.gap_t = rng.range(0.9f, 1.2f); c.patience = rng.range(1.0f, 2.5f); break;
+        case Speeder: c.v_want = kCruise * rng.range(1.75f, 2.0f);  c.accel = 3.6f; c.side = 6.0f; c.gap_t = rng.range(0.6f, 0.8f); c.patience = rng.range(0.3f, 0.8f); kind = 0; break;
+        case Police:  c.v_want = kCruise * rng.range(0.92f, 1.0f);  c.accel = 2.2f; c.side = 3.0f; c.gap_t = 1.3f; c.patience = 3.0f; c.siren_t = rng.range(20.0f, 70.0f); kind = 1; break;
+        default:      c.v_want = kCruise * rng.range(0.86f, 1.08f); c.accel = 1.8f; c.side = 2.6f; c.gap_t = rng.range(1.2f, 1.6f); c.patience = rng.range(2.5f, 6.0f); break;
+        }
+        c.look = uint8_t(std::min(int(c.look), 251) / 3 * 3 + kind);
+        c.lat = c.lat_cmd = kLane;
+    }
+    // Where along the road a point is, and how far right of the centre line (for increasing s).
+    // `hint`: near there if it is given (>= 0), else the whole road is looked through.
+    bool locate(glm::vec3 p, float hint, float& s_out_, float& goff, float& dist) const {
+        if (!road.at || road.length <= 0.0f) return false;
+        float best = 0.0f, bd = 1e30f;
+        auto probe = [&](float s) {
+            glm::vec3 q; glm::vec2 d;
+            if (!road.at(wrap_s(s), q, d)) return;
+            const float dd = glm::distance(glm::vec2(q.x, q.z), glm::vec2(p.x, p.z));
+            if (dd < bd) { bd = dd; best = s; }
+        };
+        if (hint >= 0.0f) for (float s = hint - 48.0f; s <= hint + 48.0f; s += 6.0f) probe(s);
+        if (hint < 0.0f || bd > 40.0f) for (float s = 0.0f; s < road.length; s += 10.0f) probe(s);
+        const float mid = best;
+        for (float s = mid - 5.0f; s <= mid + 5.0f; s += 1.0f) probe(s);
+        glm::vec3 q; glm::vec2 d;
+        if (!road.at(wrap_s(best), q, d)) return false;
+        const glm::vec2 rel(p.x - q.x, p.z - q.z);
+        s_out_ = wrap_s(best + glm::dot(rel, d));
+        goff = glm::dot(rel, glm::vec2(-d.y, d.x));
+        dist = bd;
+        return true;
+    }
+    void build_things() {
+        things.clear();
+        for (size_t i = 0; i < agents.size(); ++i) {
+            const Agent& a = agents[i];
+            if (a.kind != Kind::Car || a.gone > 0.0f || (a.cs != Cruise && a.cs != Approach)) continue;
+            things.push_back({ a.s, a.lat * float(a.dir), a.speed * float(a.dir), kCarHalfL, kCarHalfW, int(i), a.siren });
+        }
+        // The players' cars. Finding one on a long road costs a look along all of it, so where
+        // each was found is kept: one that has moved is looked for near there, one that stands
+        // away from the road is not looked for again until it moves.
+        std::map<uint32_t, ObsAt> seen;
+        for (const Obstacle& o : obstacles) {
+            ObsAt at; bool have = false;
+            if (auto it = obs_at.find(o.id); it != obs_at.end()) { at = it->second; have = true; }
+            const float moved = have ? glm::distance(at.pos, o.pos) : 1e9f;
+            if (!have || moved > 60.0f || (at.near_road ? moved > 0.02f : moved > 3.0f)) {
+                float s = 0.0f, g = 0.0f, d = 1e9f;
+                if (!locate(o.pos, have && at.near_road && moved <= 60.0f ? at.s : -1.0f, s, g, d)) continue;
+                at.pos = o.pos; at.s = s; at.goff = g; at.near_road = d < 30.0f;
+            }
+            seen[o.id] = at;
+            if (!at.near_road || std::abs(at.goff) > 7.5f) continue;
+            glm::vec3 q; glm::vec2 d;
+            if (!road.at(wrap_s(at.s), q, d)) continue;
+            // (as it lies on the road: across it a car is 4.7 m wide and 2 m long)
+            const glm::vec2 f(std::sin(o.yaw), -std::cos(o.yaw));
+            const float ca = std::abs(glm::dot(f, d)), sa = std::sqrt(std::max(0.0f, 1.0f - ca * ca));
+            things.push_back({ at.s, at.goff, glm::dot(glm::vec2(o.vel.x, o.vel.z), d), ca * o.half_l + sa * o.half_w, ca * o.half_w + sa * o.half_l, 1000 + int(o.id % 100000u), false });
+        }
+        obs_at.swap(seen);
+    }
+    // What one of the things is to this car: metres ahead of it (centre to centre; behind: < 0),
+    // metres right of the centre line and speed, both the way this car drives.
+    struct Rel { float gc, lat, v, gap; };
+    Rel rel_of(const Agent& c, const Thing& t) const {
+        Rel r;
+        r.gc = sdiff(t.s, c.s) * float(c.dir);
+        r.lat = t.goff * float(c.dir); r.v = t.v * float(c.dir);
+        r.gap = std::abs(r.gc) - t.hl - kCarHalfL;                 // bumper to bumper
+        return r;
+    }
+    // How long it takes to gain `D` metres on something it is `rel0` m/s faster than now, speeding
+    // up at `a` until it is `dv` m/s faster.
+    static float pass_time(float rel0, float D, float dv, float a) {
+        if (D <= 0.0f) return 0.0f;
+        const float t_a = std::max(dv - rel0, 0.0f) / a;
+        const float gained = rel0 * t_a + 0.5f * a * t_a * t_a;
+        if (gained >= D) return (-rel0 + std::sqrt(std::max(rel0 * rel0 + 2.0f * a * D, 0.0f))) / a;
+        return t_a + (D - gained) / std::max(dv, 0.5f);
+    }
+    // May this car pull out now to get past what holds it up? `want`: the speed it would
+    // drive if it could. Gives whom it has to get past (`key`) and where it would drive (`lat_p`).
+    bool can_pass(const Agent& c, float want, int& key, float& lat_p) const {
+        const int me = int(&c - agents.data());
+        const float me_v = std::abs(c.speed);
+        // (not by the station: cars turn in and pull out there)
+        if (site && sdiff(c.s, s_in) > -230.0f && sdiff(c.s, s_out) < 230.0f) return false;
+        // ---- the cars to get past: the one in front and whoever is nose to tail with it
+        const float w0 = kCarHalfW + 0.35f;
+        const Thing* line[4] = { nullptr, nullptr, nullptr, nullptr }; Rel lr[4]{}; int n = 0;
+        for (;;) {
+            const Thing* next = nullptr; Rel nr{};
+            for (const Thing& t : things) {
+                if (t.key == me) continue;
+                const Rel r = rel_of(c, t);
+                if (r.gc <= 0.0f || r.v < -0.5f || std::abs(r.lat - kLane) >= t.hw + w0) continue;
+                if (n > 0 && r.gc <= lr[n - 1].gc) continue;
+                if (!next || r.gc < nr.gc) { next = &t; nr = r; }
+            }
+            if (!next) break;
+            if (n > 0 && nr.gc - lr[n - 1].gc - next->hl - line[n - 1]->hl > 20.0f + 0.9f * std::max(nr.v, 0.0f)) break;      // (room to pull in behind that one)
+            if (n == 3) return false;                              // (a longer queue than can be passed in one go)
+            line[n] = next; lr[n] = nr; ++n;
+        }
+        if (n == 0) return false;
+        float v_ref = 0.0f, lat_min = 1e9f, hw_max = 0.0f;
+        for (int i = 0; i < n; ++i) { v_ref = std::max(v_ref, lr[i].v); lat_min = std::min(lat_min, lr[i].lat); hw_max = std::max(hw_max, line[i]->hw); }
+        const float v_pass = std::min(want * 1.10f + 1.0f, want + 5.0f);
+        const float dv = v_pass - v_ref;
+        if (dv < 2.5f) return false;
+        // ---- how long it takes: up to the passing speed, then at it, until clear of the last
+        const float D = lr[n - 1].gc + line[n - 1]->hl + kCarHalfL + 6.0f + 0.5f * v_ref;
+        const float a = c.siren ? 3.4f : std::max(c.accel, 2.6f);
+        const float t_a = std::max(v_pass - me_v, 0.0f) / a;
+        float secs = pass_time(std::min(me_v - v_ref, dv), D, dv, a);
+        secs += 3.0f;                                              // (out, and back in)
+        if (secs > 18.0f) return false;
+        const float travel = 0.5f * (me_v + v_pass) * std::min(secs, t_a) + v_pass * std::max(secs - t_a, 0.0f);
+        // ---- a straight enough road to have seen it all
+        {
+            glm::vec3 p0, p1; glm::vec2 d0, d1;
+            if (!road.at(wrap_s(c.s), p0, d0) || !road.at(wrap_s(c.s + travel * float(c.dir)), p1, d1)) return false;
+            if (glm::dot(d0, d1) < 0.90f) return false;
+        }
+        // ---- where it drives meanwhile: the other lane - past something that stands, only as
+        //      far out as it must; with the siren on, down the middle if they have made way
+        const float need = lat_min - (hw_max + kCarHalfW + 0.85f);
+        lat_p = v_ref < 1.0f ? need : c.siren ? std::max(need, -kLane) : std::min(need, -kLane);
+        if (lat_p < -3.4f) return false;
+        // ---- and that strip free for as long as it takes
+        for (const Thing& t : things) {
+            if (t.key == me) continue;
+            const Rel r = rel_of(c, t);
+            if (std::abs(r.lat - lat_p) >= t.hw + w0) continue;
+            if (r.v < -0.5f) {                                     // coming the other way
+                if (r.gc > 0.0f ? r.gap < (v_pass - r.v) * (secs + 3.5f) : r.gc > -12.0f) return false;
+            } else if (r.gc > 0.0f) {                              // in that lane ahead, going my way or standing
+                if (r.gap < (r.v < 1.0f ? travel + 30.0f : D + 40.0f)) return false;
+            } else if (r.gc > -(10.0f + std::max(r.v - me_v, 0.0f) * 5.0f + std::max(r.v - me_v, 0.0f) * std::max(r.v - me_v, 0.0f) / 5.0f)) return false;      // beside, or coming up behind
+        }
+        key = line[n - 1]->key;
+        return true;
+    }
+    // One step of a car on the road among the others: the speed it may drive, and (lat_want)
+    // how far right of the centre line it wants to be.
+    float traffic(Agent& c, float dt, float& lat_want) {
+        const int me = int(&c - agents.data());
+        const float me_v = std::abs(c.speed);
+        // (the police: the siren goes on and off)
+        if (c.cls == Police && !c.driverless) {
+            c.siren_t -= dt;
+            if (c.siren_t <= 0.0f) { c.siren = !c.siren; c.siren_t = c.siren ? rng.range(45.0f, 100.0f) : rng.range(60.0f, 170.0f); }
+        } else if (c.driverless) c.siren = false;
+        const float want = c.siren ? kCruise * 1.75f : c.v_want;
+        const float v_pass = std::min(want * 1.10f + 1.0f, want + 5.0f);
+        float v = c.ov == 1 ? v_pass : want;
+        const float w0 = kCarHalfW + 0.35f;
+        // ---- what is ahead in the strip it drives on (from where it is to where it steers)
+        const Thing* lead = nullptr; Rel lead_r{};                 // the nearest ahead in its own lane, going its way or standing
+        const Thing* target = nullptr; Rel target_r{};             // whom it is getting past (ov_key)
+        bool home_clear = true, danger = false, make_way = false, meets = false;
+        float beside_v = 1e9f;
+        const float range = 70.0f + me_v * me_v / (2.0f * 2.4f);
+        for (const Thing& t : things) {
+            if (t.key == me) continue;
+            const Rel r = rel_of(c, t);
+            if (c.ov && t.key == c.ov_key) { target = &t; target_r = r; }
+            const float w = t.hw + w0;
+            // (a siren: behind and going my way, or coming toward me)
+            if (t.siren && !c.siren && ((r.v > 0.5f && r.gc < 0.0f && r.gc > -160.0f) || (r.v < -0.5f && r.gc > 0.0f && r.gc < 260.0f))) make_way = true;
+            // (its own lane, about where it is: is there room to be in it?)
+            if (std::abs(r.lat - kLane) < w) {
+                // (room for whoever comes up behind to slow to my speed, room for me to slow to his in front)
+                const float faster = std::max(r.v - me_v, 0.0f), slower = std::max(me_v - r.v, 0.0f);
+                if (r.gc > -(t.hl + kCarHalfL + 4.0f + 0.4f * std::max(r.v, 0.0f) + faster * faster / 5.0f) && r.gc < t.hl + kCarHalfL + 3.0f + slower + slower * slower / 5.0f) { home_clear = false; beside_v = std::min(beside_v, r.v); }
+                if (r.gc > 0.0f && r.v >= -0.5f && (!lead || r.gc < lead_r.gc)) { lead = &t; lead_r = r; }
+            }
+            if (r.gc <= 0.0f || r.gap > range) continue;
+            // (where it will be across the road by the time it gets there)
+            const float reach = c.ov ? std::clamp(0.35f * std::max(r.gap, 0.0f), 0.0f, std::abs(c.lat_cmd - c.lat)) : 0.0f;
+            const float lat_then = c.lat + (c.lat_cmd > c.lat ? reach : -reach);
+            if (r.lat < std::min(lat_then, c.lat_cmd) - w || r.lat > std::max(lat_then, c.lat_cmd) + w) continue;
+            if (r.v >= -0.5f) {
+                // going my way, or standing: no nearer than the time gap, never too fast to stop
+                const float room = r.gap - (r.v < 1.0f ? 8.0f : 2.5f);
+                float vl = room > 0.0f ? std::sqrt(r.v * r.v + 2.0f * 2.4f * room) : 0.0f;
+                if (r.gap < 12.0f + 2.5f * me_v) vl = std::min(vl, std::max(0.0f, r.v + (room - (c.ov ? 0.5f : c.gap_t) * std::max(r.v, 0.0f)) * 0.5f));
+                v = std::min(v, vl);
+            } else {
+                // coming at me in the strip I drive on
+                const float ttc = r.gap / std::max(me_v - r.v, 0.1f);
+                if (ttc < 5.0f) meets = true;
+                if (ttc < 3.2f) v = 0.0f;
+            }
+        }
+        c.yield = make_way ? 2.5f : std::max(0.0f, c.yield - dt);
+        c.ov_cool = std::max(0.0f, c.ov_cool - dt);
+        const bool may = c.cs == Cruise && !c.driverless && c.shaken <= 0.0f;
+        if (c.ov == 0) {
+            // ---- held up? then, patience gone, out if the way is free
+            const bool slow = lead && lead_r.v < want - std::max(2.5f, 0.12f * want) &&
+                              lead_r.gap < 20.0f + 1.6f * me_v + std::max(me_v * me_v - lead_r.v * lead_r.v, 0.0f) / 4.8f;      // (near enough to be braking for it)
+            c.held = slow ? c.held + dt : std::max(0.0f, c.held - 2.0f * dt);
+            int key = -1; float lat_p = -kLane;
+            if (may && slow && c.held > (c.siren ? 0.3f : c.patience) && c.ov_cool <= 0.0f && can_pass(c, want, key, lat_p)) {
+                c.ov = 1; c.ov_key = key; c.ov_lat = lat_p; c.ov_t = 0.0f; c.held = 0.0f;
+                ++n_overtakes;
+            }
+        } else if (c.ov == 1) {
+            c.ov_t += dt;
+            const bool past = !target || target_r.gc < -(target->hl + kCarHalfL + 5.0f + 0.45f * std::max(target_r.v, 0.0f));
+            // ---- does somebody come after all? (in the strip it passes on, within the time it still needs)
+            const float d_rem = target ? target_r.gc + target->hl + kCarHalfL + 5.0f + 0.45f * std::max(target_r.v, 0.0f) : 0.0f;
+            const float v_t = target ? std::max(target_r.v, 0.0f) : 0.0f;
+            const float t_rem = pass_time(std::min(me_v - v_t, v_pass - v_t), d_rem, std::max(v_pass - v_t, 1.0f), c.siren ? 3.4f : std::max(c.accel, 2.6f)) + 1.5f;
+            if (!past)
+                for (const Thing& t : things) {
+                    if (t.key == me) continue;
+                    const Rel r = rel_of(c, t);
+                    if (r.gc > 0.0f && r.v < -0.5f && std::abs(r.lat - c.ov_lat) < t.hw + w0 && r.gap < (me_v - r.v) * (t_rem + 1.0f)) danger = true;
+                }
+            if ((past || danger || c.ov_t > 45.0f || !may) && home_clear) {
+                c.ov = 2;
+                if (!past) ++n_given_up;
+            } else if (danger && d_rem > 10.0f && beside_v < 1e8f) {
+                v = std::min(v, std::max(0.0f, beside_v - 5.0f));  // (beside somebody, and no time to get past: back behind him)
+            }
+        }
+        if (c.ov == 2) {
+            if (std::abs(c.lat - kLane) < 0.45f) { c.ov = 0; c.ov_cool = 3.0f; c.held = 0.0f; }
+            // (the room it was pulling in to has gone - somebody braked, somebody came up: out
+            //  again while it is still mostly out, and back in when there is room)
+            else if (!home_clear && c.lat_cmd < 0.4f) c.ov = 1;
+        }
+        lat_want = c.ov == 1 ? c.ov_lat : kLane;
+        if (c.ov == 0 && !c.siren) {
+            if (c.yield > 0.0f) { lat_want = kShoulder; v = std::min(v, want * 0.6f); }
+            else if (meets) lat_want = kShoulder;
+        }
+        return v;
     }
     void car_on_road(Agent& c) {                   // (put there: only when the world is made)
         glm::vec3 p; glm::vec2 fwd;
@@ -647,9 +956,13 @@ struct World::Impl {
                 v_want = std::min(v_want, 1.6f);
             }
         }
-        if (std::abs(kappa) > 1e-3f) v_want = std::min(v_want, std::sqrt(kSideways / std::abs(kappa)));
+        // (each driver his own: how hard he accelerates and how fast he takes a bend - make_driver)
+        const float accel = c.siren ? 3.4f : c.ov == 1 ? std::max(c.accel, 2.6f) : c.accel;
+        const float side = c.siren ? std::max(c.side, 5.0f) : c.side;
+        const float brake = c.hard ? 7.0f : kBrake;
+        if (std::abs(kappa) > 1e-3f) v_want = std::min(v_want, std::sqrt(side / std::abs(kappa)));
         float sp = std::abs(c.speed);
-        sp = std::max(0.0f, sp + std::clamp(v_want - sp, -kBrake * dt, kAccel * dt));
+        sp = std::max(0.0f, sp + std::clamp(v_want - sp, -brake * dt, accel * dt));
         const float steer_want = std::clamp(std::atan(kWheelbase * kappa) + straighten, -kMaxSteer, kMaxSteer);
         c.steer += std::clamp(steer_want - c.steer, -kSteerRate * dt, kSteerRate * dt);
         const float v = c.reverse ? -sp : sp;
@@ -799,6 +1112,16 @@ struct World::Impl {
     void step_car(Agent& c, float dt) {
         if (c.gone > 0.0f) { c.gone -= dt; if (c.gone <= 0.0f) { respawn(c); c.hidden = false; } return; }
         const int me = int(&c - agents.data());
+        // Struck (push_car): it slides and turns, less and less.
+        if (glm::dot(c.knock, c.knock) > 1e-4f || std::abs(c.knock_w) > 1e-3f) {
+            c.pos.x += c.knock.x * dt; c.pos.z += c.knock.y * dt;
+            c.yaw = wrap_pi(c.yaw + c.knock_w * dt);
+            const glm::vec2 f(std::sin(c.yaw), -std::cos(c.yaw));
+            c.rear = c.pos - glm::vec3(f.x, 0.0f, f.y) * (kWheelbase * 0.5f);
+            const float k = glm::length(c.knock);
+            c.knock = k > 5.0f * dt ? c.knock * ((k - 5.0f * dt) / k) : glm::vec2(0.0f);
+            c.knock_w = std::abs(c.knock_w) > 3.0f * dt ? c.knock_w - (c.knock_w > 0.0f ? 3.0f : -3.0f) * dt : 0.0f;
+        }
         // Its driver was shot (World::kill): it rolls to a stop where it is going (the branches
         // below, with no speed asked for); once it stands the others get out, and two minutes
         // later it is cleared away - nothing may stand for good.
@@ -815,24 +1138,25 @@ struct World::Impl {
         case Cruise: case Approach: {
             // Where along the road it is: the place on its lane beside it (its own wheels took it
             // there - round the inside of a bend that is fewer metres than round the outside).
+            // (and how far right of the centre line)
             glm::vec3 lp; glm::vec2 lf;
-            if (!lane_at(c, c.s, lp, lf)) break;
-            c.s = wrap_s(c.s + glm::dot(glm::vec2(c.pos.x - lp.x, c.pos.z - lp.z), lf) * float(c.dir));
-            // keep behind the car in front
-            float v = c.v_want;
-            for (const Agent& o : agents) {
-                if (&o == &c || o.kind != Kind::Car || (o.cs != Cruise && o.cs != Approach) || o.dir != c.dir) continue;
-                float gap = (o.s - c.s) * float(c.dir);
-                if (gap < 0.0f) gap += road.length;
-                if (gap < 45.0f) v = std::min(v, std::max(0.0f, std::abs(o.speed) + (gap - 14.0f) * 0.5f));
+            if (!lane_at(c, c.s, lp, lf, 0.0f)) break;
+            {
+                const glm::vec2 rel(c.pos.x - lp.x, c.pos.z - lp.z);
+                c.s = wrap_s(c.s + glm::dot(rel, lf) * float(c.dir));
+                c.lat = glm::dot(rel, glm::vec2(-lf.y, lf.x));
             }
+            // the others on the road: behind the one in front, past it when that can be done (THE TRAFFIC)
+            float lat_want = kLane;
+            float v = traffic(c, dt, lat_want);
             float to_in = (s_in - c.s) * float(c.dir);
             if (to_in < 0.0f) to_in += road.length;
             if (c.dir > 0 && site) {
                 if (to_in > kDecide + 30.0f && to_in < road.length - 30.0f) c.decided = false;
                 if (!c.decided && c.cs == Cruise && to_in < kDecide) {
                     c.decided = true;
-                    if (rng.chance(0.38f)) plan_visit(c);
+                    // (not the police, and nobody who is out passing somebody)
+                    if (c.cls != Police && c.ov == 0 && rng.chance(0.38f)) plan_visit(c);
                 }
                 // (off the throttle and on the brake in good time: 7 m/s where it turns in)
                 if (c.cs == Approach) v = std::min(v, std::sqrt(49.0f + 2.0f * 1.9f * to_in));
@@ -843,16 +1167,38 @@ struct World::Impl {
                 if (std::abs(wk.x - c.pos.x) > 95.0f || std::abs(wk.z - c.pos.z) > 95.0f || std::abs(wk.y - c.pos.y) > 4.0f) continue;
                 for (float a = 0.0f; a <= 90.0f; a += 3.0f) {
                     glm::vec3 q; glm::vec2 qf;
-                    if (!lane_at(c, c.s + a * float(c.dir), q, qf)) break;
+                    if (!lane_at(c, c.s + a * float(c.dir), q, qf, c.lat_cmd)) break;
                     if (glm::distance(glm::vec2(q.x, q.z), glm::vec2(wk.x, wk.z)) < 2.3f) { v = std::min(v, walker_speed(a)); break; }
                 }
             }
-            if (c.driverless) v = 0.0f;
-            const float look = std::clamp(std::abs(c.speed) * 0.75f, 5.0f, 17.0f);
+            // (a bend ahead: down to the speed it can be taken at, in good time - the faster the
+            //  driver, the further he has to look)
+            {
+                const float side = c.siren ? std::max(c.side, 5.0f) : c.side, sp = std::abs(c.speed);
+                for (float d : { 25.0f, 50.0f, 80.0f, 120.0f, 170.0f, 230.0f, 300.0f }) {
+                    if (d > 40.0f + sp * sp / 4.4f) break;
+                    glm::vec3 p0, p1; glm::vec2 d0, d1;
+                    if (!road.at(wrap_s(c.s + (d - 8.0f) * float(c.dir)), p0, d0) || !road.at(wrap_s(c.s + (d + 8.0f) * float(c.dir)), p1, d1)) break;
+                    const float kappa = std::abs(d0.x * d1.y - d0.y * d1.x) / 16.0f;
+                    if (kappa < 1e-4f) continue;
+                    v = std::min(v, std::sqrt(side / kappa + 2.0f * 2.2f * std::max(d - 14.0f, 0.0f)));
+                }
+            }
+            if (c.driverless || c.shaken > 0.0f) v = 0.0f;
+            c.shaken = std::max(0.0f, c.shaken - dt);
+            c.hard = !c.driverless && v < std::abs(c.speed) - 3.0f;                 // (far too fast for what is ahead: everything the brakes have)
+            // (where it steers to moves across the road no faster than a driver changes lanes)
+            {
+                const float rate = c.ov ? std::clamp(0.6f + 0.07f * std::abs(c.speed), 1.0f, 1.7f) : std::clamp(0.3f + 0.06f * std::abs(c.speed), 0.4f, 1.3f);
+                c.lat_cmd += std::clamp(lat_want - c.lat_cmd, -rate * dt, rate * dt);
+            }
+            // (it looks further ahead the faster it goes: at 40 m/s seventeen metres is under half a second)
+            const float look = std::clamp(std::abs(c.speed) * 0.75f, 5.0f, 30.0f);
             glm::vec3 tp; glm::vec2 tf;
-            if (!lane_at(c, c.s + look * float(c.dir), tp, tf)) break;
+            if (!lane_at(c, c.s + look * float(c.dir), tp, tf, c.lat_cmd)) break;
             c.reverse = false;
             drive(c, tp, v, dt);
+            c.hard = false;
             c.pos.y = lp.y + (tp.y - lp.y) * std::min(1.0f, std::abs(c.speed) * dt / look);
             c.pose = c.driverless ? Pose::Park : Pose::Drive;
             break; }
@@ -927,6 +1273,7 @@ struct World::Impl {
                 else if (!c.legs.empty()) { begin_leg(c); }
                 else {                                   // back on the road
                     c.cs = Cruise; c.s = s_out; c.leaving = false; c.decided = true; c.reverse = false;
+                    c.lat = c.lat_cmd = kLane; c.ov = 0; c.held = 0.0f;
                     if (c.stop >= 0) stops[size_t(c.stop)].user = -1;
                     if (c.bay >= 0) bays[size_t(c.bay)].user = -1;
                     c.stop = c.bay = -1;
@@ -960,9 +1307,11 @@ struct World::Impl {
             v.pos = a.pos; v.yaw = a.yaw; v.speed = a.speed;
             v.car = (a.kind == Kind::Person && a.car >= 0) ? uint8_t(a.car) : uint8_t(255); v.seat = uint8_t(a.car_seat);
             v.act = Act(a.act); v.act_t = a.act_t; v.aim = a.aim; v.style = a.style;
+            if (a.kind == Kind::Car) v.style = uint8_t((a.cls == Police ? kCarPolice : 0) | (a.siren ? kCarSiren : 0) | (a.ov ? kCarOvertaking : 0));
         }
     }
     void step() {
+        build_things();
         for (Agent& a : agents) if (a.kind == Kind::Car) step_car(a, kStep);
         for (Agent& a : agents) if (a.kind == Kind::Person) step_person(a, kStep);
         // (and once more when everybody has moved: somebody who got up from a seat, or out of a
@@ -992,10 +1341,11 @@ bool World::load_site_text(const std::string& text, glm::vec3 origin) {
 }
 void World::set_road(Road road) { d_->road = std::move(road); d_->link_road(); }
 
-void World::populate(uint32_t seed) {
+void World::populate(uint32_t seed, int traffic) {
     Impl& w = *d_;
     w.rng.s = seed ? seed : 1u;
     w.agents.clear(); w.steps = 0; w.acc = 0.0f; w.is_replica = false;
+    w.n_overtakes = w.n_given_up = 0; w.obs_at.clear(); w.things.clear();
     for (auto* v : { &w.seats, &w.spots, &w.bays, &w.stops }) for (Place& p : *v) p.user = -1;
     auto person = [&](Role role) -> Agent* {
         if (int(w.agents.size()) >= kMaxAgents) return nullptr;
@@ -1046,15 +1396,17 @@ void World::populate(uint32_t seed) {
     // ---- the traffic: spread round the course, half each way; those that pass the site on
     //      their right carry people who may get out there
     if (w.road.at && w.road.length > 100.0f) {
-        const int n = 26;
+        const int n = std::max(traffic, 0);
         for (int i = 0; i < n && int(w.agents.size()) < kMaxAgents; ++i) {
             Agent c; c.kind = Kind::Car; c.cs = Cruise; c.pose = Pose::Drive; c.look = uint8_t(w.rng.pick(256));
             c.dir = i % 2 ? -1 : 1;
             c.s = w.road.length * (float(i) + w.rng.range(0.1f, 0.9f)) / float(n);
-            c.v_want = kCruise * w.rng.range(0.8f, 1.15f); c.speed = c.v_want;
+            // (who drives it: two of them are the police, one is always somebody far too fast,
+            //  the rest as it falls - make_driver)
+            w.make_driver(c, i == 5 || i == 12 ? int(Police) : i == 8 ? int(Speeder) : -1); c.speed = c.v_want;
             w.agents.push_back(c);
             const int ci = int(w.agents.size()) - 1;
-            if (c.dir > 0 && w.site) {
+            if (c.dir > 0 && w.site && c.cls != Police) {
                 const int riders = 1 + (w.rng.chance(0.5f) ? 1 : 0) + (w.rng.chance(0.2f) ? 1 : 0);
                 for (int r = 0; r < riders; ++r) {
                     Agent* p = person(Traveller); if (!p) break;
@@ -1128,6 +1480,60 @@ bool World::can_take_car(int id) const {
 }
 
 void World::set_walkers(const std::vector<glm::vec3>& feet) { d_->walkers = feet; }
+void World::set_obstacles(const std::vector<Obstacle>& obs) { d_->obstacles = obs; }
+
+bool World::push_car(int id, glm::vec3 dv, float spin) {
+    Impl& w = *d_;
+    if (w.is_replica || id < 0 || size_t(id) >= w.agents.size()) return false;
+    Agent& c = w.agents[size_t(id)];
+    if (c.kind != Kind::Car || c.gone > 0.0f || !std::isfinite(dv.x + dv.z + spin)) return false;
+    glm::vec2 d(dv.x, dv.z);
+    const float hit = glm::length(d);
+    if (hit > 30.0f) d *= 30.0f / hit;
+    const glm::vec2 f(std::sin(c.yaw), -std::cos(c.yaw));
+    if (c.cs == Cruise || c.cs == Approach || c.cs == OnPath) {
+        // (what goes along it is its speed; a car that reverses is not thrown forward)
+        const float along = glm::dot(d, f);
+        c.speed = c.reverse ? std::min(0.0f, c.speed + along) : std::max(0.0f, c.speed + along);
+        d -= f * along;
+    }
+    c.knock += d;
+    c.knock_w = std::clamp(c.knock_w + spin, -2.5f, 2.5f);
+    if (hit > 3.0f && (c.cs == Cruise || c.cs == Approach)) c.shaken = std::max(c.shaken, std::min(2.0f + hit * 0.4f, 7.0f));
+    if (c.ov == 1) c.ov = 2;
+    return true;
+}
+
+void World::set_sirens(bool on) {
+    for (Agent& a : d_->agents) if (a.kind == Kind::Car && a.cls == Police) { a.siren = on; a.siren_t = 1e9f; }
+}
+
+int World::add_car(float s, int dir, float cruise, uint8_t style) {
+    Impl& w = *d_;
+    if (w.is_replica || int(w.agents.size()) >= kMaxAgents || !w.road.at) return -1;
+    Agent c; c.kind = Kind::Car; c.cs = Cruise; c.pose = Pose::Drive; c.look = uint8_t(w.agents.size() * 7u);
+    c.dir = dir < 0 ? -1 : 1; c.s = w.wrap_s(s); c.decided = true;
+    w.make_driver(c, (style & kCarPolice) ? int(Police) : int(Normal));
+    c.v_want = cruise; c.speed = cruise; c.patience = 1.5f;
+    if (cruise > kCruise * 1.6f) { c.cls = Speeder; c.accel = 3.6f; c.side = 6.0f; c.gap_t = 0.7f; c.patience = 0.5f; }
+    if (style & kCarSiren) { c.siren = true; c.siren_t = 1e9f; } else if (c.cls == Police) c.siren_t = 1e9f;
+    w.agents.push_back(c);
+    w.car_on_road(w.agents.back());
+    w.snapshot(w.cur); w.prev = w.cur;
+    return int(w.agents.size()) - 1;
+}
+
+World::Traffic World::traffic() const {
+    const Impl& w = *d_;
+    Traffic t; t.overtakes = w.n_overtakes; t.given_up = w.n_given_up;
+    for (const Agent& a : w.agents) {
+        if (a.kind != Kind::Car || a.gone > 0.0f || (a.cs != Cruise && a.cs != Approach)) continue;
+        t.overtaking += a.ov ? 1 : 0; t.slow += a.cls == Slow ? 1 : 0; t.speeders += a.cls == Speeder ? 1 : 0;
+        t.police += a.cls == Police ? 1 : 0; t.sirens += a.siren ? 1 : 0;
+        t.fastest = std::max(t.fastest, std::abs(a.speed));
+    }
+    return t;
+}
 
 bool World::take_car(int id) {
     if (!can_take_car(id)) return false;
@@ -1169,7 +1575,7 @@ void World::views(std::vector<View>& out) const {
 void World::serialize(std::vector<uint8_t>& out) const {
     const Impl& w = *d_;
     out.resize(4 + w.cur.size() * sizeof(Wire));
-    out[0] = 'N'; out[1] = 'P'; out[2] = 4; out[3] = uint8_t(w.cur.size());
+    out[0] = 'N'; out[1] = 'P'; out[2] = 5; out[3] = uint8_t(w.cur.size());
     for (size_t i = 0; i < w.cur.size(); ++i) {
         const View& v = w.cur[i];
         Wire r;
@@ -1178,14 +1584,14 @@ void World::serialize(std::vector<uint8_t>& out) const {
         for (int k = 0; k < 3; ++k) r.aim[k] = int16_t(std::clamp(std::lround((v.aim[k] - v.pos[k]) * 100.0f), -32000L, 32000L));      // (centimetres from where it stands)
         r.x = v.pos.x; r.y = v.pos.y; r.z = v.pos.z;
         r.yaw = int16_t(std::lround(wrap_pi(v.yaw) * 10000.0f));
-        r.speed = int8_t(std::clamp(std::lround(v.speed * 4.0f), -127L, 127L));
+        r.speed = int8_t(std::clamp(std::lround(v.speed * 2.0f), -127L, 127L));      // (halves of a m/s: to 63 m/s - a speeder passing drives 47)
         std::memcpy(out.data() + 4 + i * sizeof(Wire), &r, sizeof(Wire));
     }
 }
 
 bool World::apply(const uint8_t* data, size_t size) {
     Impl& w = *d_;
-    if (!data || size < 4 || data[0] != 'N' || data[1] != 'P' || data[2] != 4) return false;
+    if (!data || size < 4 || data[0] != 'N' || data[1] != 'P' || data[2] != 5) return false;
     const size_t n = data[3];
     if (n > size_t(kMaxAgents) || size != 4 + n * sizeof(Wire)) return false;
     std::vector<View> in(n);
@@ -1194,7 +1600,7 @@ bool World::apply(const uint8_t* data, size_t size) {
         View& v = in[i];
         v.id = r.id; v.kind = Kind(r.bits & 1); v.pose = Pose((r.bits >> 1) & 7); v.hidden = (r.bits & 0x80) != 0; v.look = r.look; v.car = r.car; v.seat = uint8_t((r.bits >> 4) & 3);
         v.act = Act((r.act & 7) <= uint8_t(Act::CarExit) ? (r.act & 7) : 0); v.style = uint8_t(r.act >> 3); v.act_t = float(r.act_t) * 0.05f;
-        v.pos = glm::vec3(r.x, r.y, r.z); v.yaw = float(r.yaw) * 0.0001f; v.speed = float(r.speed) * 0.25f;
+        v.pos = glm::vec3(r.x, r.y, r.z); v.yaw = float(r.yaw) * 0.0001f; v.speed = float(r.speed) * 0.5f;
         v.aim = v.pos + glm::vec3(float(r.aim[0]), float(r.aim[1]), float(r.aim[2])) * 0.01f;
         if (!std::isfinite(v.pos.x) || !std::isfinite(v.pos.y) || !std::isfinite(v.pos.z) || uint8_t(v.pose) > uint8_t(Pose::Run)) return false;
     }

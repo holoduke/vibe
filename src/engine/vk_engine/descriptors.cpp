@@ -1063,6 +1063,7 @@ void VulkanEngine::update_scene_ubo() {
     data.rm_perf = glm::vec4((tr_march_prepass_on() ? 1.0f : 0.0f) + (rt_.terrain_rm_relief_lite ? 2.0f : 0.0f) +
                                  ((tr_march_prepass_on() && !tr_use_lowres() && rt_.terrain_rm_shade_lo) ? 4.0f : 0.0f) +
                                  ((tr_march_prepass_on() && tr_use_lowres()) ? 32.0f : 0.0f) +       // (the low-resolution terrain pass starts at the march)
+                                 (ground_ssdm_active() ? 64.0f : 0.0f) +                             // (the ground is displaced in screen space: ssdm.cpp)
                                  ((tr_march_prepass_on() && !tr_use_lowres() && rt_.terrain_rm_start_at_hit) ? 8.0f : 0.0f),
                              float(tr_->march_div),
                              rt_.terrain_rm_converge,

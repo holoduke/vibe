@@ -6,6 +6,7 @@
 
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/state/environment.h"
+#include "engine/vk_engine/state/aim_spread.h"
 
 #include "engine/log.h"
 #include "engine/vk_initializers.h"   // vibe::vk_check
@@ -213,10 +214,15 @@ void VulkanEngine::build_hud_ui() {
     const ImU32 col_shadow = IM_COL32(0, 0, 0, 180);
     dl->AddCircleFilled(ImVec2(cen.x, cen.y), 2.5f, col_shadow);
     dl->AddCircleFilled(ImVec2(cen.x, cen.y), 1.5f, col);
-    dl->AddLine(ImVec2(cen.x - 9, cen.y), ImVec2(cen.x - 4, cen.y), col, 1.5f);
-    dl->AddLine(ImVec2(cen.x + 4, cen.y), ImVec2(cen.x + 9, cen.y), col, 1.5f);
-    dl->AddLine(ImVec2(cen.x, cen.y - 9), ImVec2(cen.x, cen.y - 4), col, 1.5f);
-    dl->AddLine(ImVec2(cen.x, cen.y + 4), ImVec2(cen.x, cen.y + 9), col, 1.5f);
+    // The four arms stand apart by the weapon's spread (game/aim_spread.h): the angle of the
+    // cone, as far from the middle as it is on the screen. Closed (4 px) when aiming at rest.
+    const float g = std::max(4.0f, std::tan(glm::radians(spread_->model.shown_deg)) /
+                                   std::tan(glm::radians(view_fov_deg_) * 0.5f) * io.DisplaySize.y * 0.5f);
+    const float e = g + 5.0f;
+    dl->AddLine(ImVec2(cen.x - e, cen.y), ImVec2(cen.x - g, cen.y), col, 1.5f);
+    dl->AddLine(ImVec2(cen.x + g, cen.y), ImVec2(cen.x + e, cen.y), col, 1.5f);
+    dl->AddLine(ImVec2(cen.x, cen.y - e), ImVec2(cen.x, cen.y - g), col, 1.5f);
+    dl->AddLine(ImVec2(cen.x, cen.y + g), ImVec2(cen.x, cen.y + e), col, 1.5f);
 }
 
 

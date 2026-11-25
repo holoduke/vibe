@@ -433,7 +433,8 @@ void VulkanEngine::loop_weapons_and_edit(InputFrame& in, float frame_dt) {
     if (fire_cooldown_ > 0.0f) fire_cooldown_ -= frame_dt;
     if (muzzle_flash_timer_ > 0.0f) muzzle_flash_timer_ -= frame_dt;
     if (recoil_timer_       > 0.0f) recoil_timer_       -= frame_dt;
-    mp_update(frame_dt);               // LAN multiplayer: network, other players' shots, hits
+    spread_tick(frame_dt);             // the weapon's spread: the cone of the next shot, the crosshair's opening
+    mp_update(frame_dt);              // LAN multiplayer: network, other players' shots, hits
     if (state_ == State::Playing && (window_->cursor_captured() ||
                                        std::getenv("VIBE_TEST_FIRE") || std::getenv("VIBE_TEST_NPC_SHOOT"))) {
         // Raymarch terrain reads FBM directly in the shader — sculpting
@@ -527,12 +528,13 @@ void VulkanEngine::loop_weapons_and_edit(InputFrame& in, float frame_dt) {
             float rps = rifle ? kRifleRps : std::max(0.0f, game_.fire_rate_rps);
             if (rps <= 0.0f) {
                 if (in.fire) {
-                    fire_projectile(player_.eye_position(), player_.forward(), rifle);
+                    fire_projectile(player_.eye_position(), spread_shot_dir(player_.forward(), rifle), rifle);
                 }
             } else if (in.fire_held) {
                 float interval = 1.0f / rps;
                 if (fire_cooldown_ <= 0.0f) {
-                    fire_projectile(player_.eye_position(), player_.forward(), rifle);
+                    // (the direction: inside the cone of the weapon's spread, game/aim_spread.h)
+                    fire_projectile(player_.eye_position(), spread_shot_dir(player_.forward(), rifle), rifle);
                     fire_cooldown_ += interval;
                 }
             } else {

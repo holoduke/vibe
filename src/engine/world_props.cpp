@@ -101,7 +101,7 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
     // Old pines: 3 giants (20 m+), for the old-growth stands.
     for (int v = 0; v < 5; ++v) {
         VegArchetype a; a.species = 0; a.old = true;
-        PineParams p{ 20.5f + 2.0f * float(v) + 1.5f * U(rng), 9, 3.5f + 0.5f * U(rng), U(rng) * 6.28f, (U(rng) - 0.5f) * 0.9f };
+        PineParams p{ 20.5f + 2.0f * float(v) + 1.5f * U(rng), 9, 3.5f + 0.5f * U(rng), U(rng) * 6.28f, (U(rng) - 0.5f) * 0.9f, true };
         for (int l = 0; l < kVegLods; ++l) build_pine(a.lods[l], p, l, lo, hi);
         finish(a); out.push_back(std::move(a));
     }
@@ -126,7 +126,7 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
         VegArchetype a; a.species = 1; a.old = true;
         const glm::vec2 crown(1.40f + 0.12f * float(v), 0.95f);
         OakParams p{ 11.0f + 1.0f * float(v) + 1.0f * U(rng), 6, U(rng) * 6.28f, 3.2f * crown.x,
-                     glm::vec3((U(rng) - 0.5f) * 1.0f, 0.0f, (U(rng) - 0.5f) * 1.0f), crown, 7 };
+                     glm::vec3((U(rng) - 0.5f) * 1.0f, 0.0f, (U(rng) - 0.5f) * 1.0f), crown, 7, true };
         for (int l = 0; l < kVegLods; ++l) build_oak(a.lods[l], p, l, lo, hi, tiny, ultra);
         finish(a); out.push_back(std::move(a));
     }
@@ -237,6 +237,16 @@ std::vector<VegArchetype> build_veg_archetypes(int seed) {
             }
         }
         finish(a); out.push_back(std::move(a));
+    }
+    if (std::getenv("VIBE_LOG_VEG")) {      // triangles of every tree / bush type, per detail bucket
+        for (size_t i = 0; i < out.size(); ++i) {
+            const VegArchetype& a = out[i];
+            if (a.species > 2) continue;
+            log::infof("[vegtris] %zu species %d cell %d%s H %.1f r %.1f: %zu / %zu / %zu / %zu", i, a.species, a.lods[0].card_cell,
+                       a.old ? " old" : (a.riverside ? " river" : ""), a.height, a.radius,
+                       a.lods[0].idx.size() / 3, a.lods[1].idx.size() / 3, a.lods[2].idx.size() / 3,
+                       a.lods[3].idx.size() / 3);
+        }
     }
     return out;
 }
@@ -498,6 +508,25 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         }
     }
     const size_t rocks_placed = out.size();
+    // Test hook: VIBE_TEST_TREES=x,z stands one tree of every type in rows of six from there (16 m
+    // apart toward +x, a row every 20 m toward +z: conifers first, then the broadleaf trees, in
+    // the order of the [vegtris] log lines of VIBE_LOG_VEG), and keeps the wood out of the way.
+    float tt_x = 0.0f, tt_z = 0.0f;
+    bool  tt_on = false;
+    if (const char* e = std::getenv("VIBE_TEST_TREES")) {
+        tt_on = std::sscanf(e, "%f,%f", &tt_x, &tt_z) == 2;
+        int k = 0;
+        for (size_t i = 0; tt_on && i < arch.size(); ++i) {
+            if (arch[i].species > 1) continue;
+            const float x = tt_x + 16.0f * float(k % 6), z = tt_z + 20.0f * float(k / 6);
+            ++k;
+            VegInstance vi{};
+            vi.pos_scale = glm::vec4(x, h_at(x, z) - 0.05f, z, 1.0f);
+            vi.rot_arch_phase = glm::vec4(0.0f, float(i), 0.0f, 0.0f);
+            out.push_back(vi);
+            log::infof("[vegpos] test tree %zu at (%.1f, %.1f, %.1f), %.1f m tall", i, x, vi.pos_scale.y, z, arch[i].height);
+        }
+    }
     {   // Dev aid: the rocks nearest the castle (where to look when tuning them).
         std::vector<size_t> ord(out.size());
         for (size_t i = 0; i < ord.size(); ++i) ord[i] = i;
@@ -519,6 +548,7 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         float x = (u() * 2.0f - 1.0f) * ext, z = (u() * 2.0f - 1.0f) * ext;
         if (std::sqrt(x * x + z * z) < P.castle_clear) continue;
         if (excluded(x, z) || road_d(x, z) < road_clear + 4.5f) continue;
+        if (tt_on && x > tt_x - 30.0f && x < tt_x + 110.0f && z > tt_z - 40.0f && z < tt_z + 100.0f) continue;
         float h = h_at(x, z);
         if (h < std::max(P.grass_band_lo, P.water_level + 2.0f) || h > P.tree_line) continue;
         if (!dry(x, z, 2.0f)) continue;

@@ -14,7 +14,7 @@
 
 namespace vibe::net {
 
-constexpr uint8_t  kProtocolVersion = 8;       // 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in. 5: the NPC world (kMsgNpc). 6: its wire format 4 (styles, runners). 7: shots at NPCs and their cars taken, as events. 8: NpcHit may name somebody who sits in a car, or a car (its driver); a car with people in it can be taken
+constexpr uint8_t  kProtocolVersion = 9;       // 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in. 5: the NPC world (kMsgNpc). 6: its wire format 4 (styles, runners). 7: shots at NPCs and their cars taken, as events. 8: NpcHit may name somebody who sits in a car, or a car (its driver); a car with people in it can be taken. 9: the NPC world's wire format 5 (a car's speed in thirds of a m/s, its kind and siren in the style bits), NpcCarPush
 constexpr uint32_t kInterpDelayMs = 100;       // remote players are shown at least this far in the past
 constexpr uint32_t kMaxInterpDelayMs = 500;    // ... and at most this far, however slow the link
 constexpr uint32_t kMaxExtrapolateMs = 250;    // nothing newer: carry on along the last velocity this long at most
@@ -51,7 +51,8 @@ struct Event {
     enum Kind : uint8_t { Fire = 1, Hit = 2, Death = 3, Leave = 4, Airstrike = 5,      // Airstrike: a = target, b = run direction
                           NpcHit = 6,        // somebody of the NPC world was shot: to = which (a person - on foot or in a car - or a car: its driver), a = where, b = the shot's direction
                           NpcCarTake = 7,    // a client asks the host for an NPC car that stands: to = which
-                          NpcCarTaken = 8 }; // that car is a players' car now: from = who gets in, to/a/b = pack_taken()
+                          NpcCarTaken = 8,   // that car is a players' car now: from = who gets in, to/a/b = pack_taken()
+                          NpcCarPush = 9 };  // a client's car struck an NPC car: to = which, a = the change of its velocity (m/s, world), b[0] = of its turning (rad/s); the host's to apply
     uint8_t  kind;
     uint32_t from;             // Fire: shooter. Hit: shooter. Death: the one who died. Leave: who left
     uint32_t to;               // Hit: victim. Death: killer

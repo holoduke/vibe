@@ -1,4 +1,5 @@
 #version 460
+#extension GL_GOOGLE_include_directive : require
 // Screen-space displacement mapping - the height pass (vertex stage). See ssdm_grid.vert for
 // the method and vk_engine/ssdm.cpp for the pass sequence.
 //
@@ -20,6 +21,8 @@ layout(push_constant) uniform PC {
     vec4 grass_params;  // HERE: x displacement amplitude (m), y fade start (m), z fade end (m)
 } pc;
 
+#include "scene_ubo.glsl"
+
 layout(location = 0) out vec3 vWorldPos;
 layout(location = 1) out vec3 vNormal;
 layout(location = 2) out vec2 vUv;
@@ -29,6 +32,14 @@ void main() {
     vNormal   = mat3(pc.model) * inNormal;
     vUv       = inUv;
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
+    // (a mesh in world coordinates: the same sum as cube.vert's, term for term, or the depth
+    //  it wrote is not the depth this pass tests against)
+    if (pc.model == mat4(1.0)) {
+        precise vec3 from_eye = inPosition - scene.camera_pos.xyz;
+        precise vec4 eye_clip = pc.mvp * vec4(scene.camera_pos.xyz, 1.0);
+        precise vec4 rel_clip = pc.mvp * vec4(from_eye, 0.0);
+        gl_Position = rel_clip + eye_clip;
+    }
     // Toward the camera by a hair: this is the surface already in the depth buffer, and the
     // test must pass on it whatever the last bit of the two vertex shaders' arithmetic says.
     gl_Position.z -= 4e-7 * gl_Position.w;

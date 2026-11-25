@@ -101,10 +101,10 @@ void main() {
         albedo = mix(albedo, albedo * vec3(0.52, 0.47, 0.38), stone_ground * 0.85);
     }
     int part = plant ? int(vUv.x + 0.5) : -1;
-    // (part 9 = a flowering stalk of the meadow: a grass blade in everything but its head)
+    // (part 10 = a flowering stalk of the meadow: a grass blade in everything but its head)
     float stalk_u = 0.0;
-    bool  stalk = part == 9;
-    if (stalk) { part = 8; stalk_u = 1.0; }
+    bool  stalk = part == 10;
+    if (stalk) { part = 8; stalk_u = 2.0; }
     if (part == 8 && vRotSeed.y < 0.999) {
         // Grass tufts at the end of their range dissolve (the reference game's foliage pixel
         // shader: interleaved gradient noise against the instance's fade, a new pattern

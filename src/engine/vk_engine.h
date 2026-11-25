@@ -1213,6 +1213,12 @@ private:
     glm::mat4 body_fire_offset_{1.0f};                 // the weapon the moment a shot leaves it (level, no recoil): view * this
     const glm::mat4* shot_weapon_offset_ = nullptr;    // set while somebody else's shot is replayed: their weapon then
     bool      body_aim_ = false;                       // right mouse held: aiming (rifle in the shoulder); else at the ready
+    // Weapon spread: the cone a shot leaves in, shown by the crosshair (model and numbers:
+    // game/aim_spread.h; the state of this is private to its own files: vk_engine/state/aim_spread.h)
+    struct AimSpreadState;
+    AimSpreadState* spread_ = nullptr;
+    void      spread_tick(float dt);                   // once a frame (combat.cpp)
+    glm::vec3 spread_shot_dir(glm::vec3 forward, bool rifle);   // the direction of the local player's next shot; heats the burst
     glm::mat4 body_weapon_offset_{1.0f};               // recoil, reload, equip: what is carried is drawn at view * this
     float     anim_ms_ = 0.0f, skin_ms_ = 0.0f;        // this frame, all characters
     int       anim_lod_count_[4]{};
@@ -2013,6 +2019,7 @@ private:
     void create_ssdm_targets();
     void destroy_ssdm_targets();
     bool ssdm_active() const;                  // on this frame? (the parts it displaces are then drawn without parallax relief)
+    bool ground_ssdm_active() const;           // ... and the raymarched ground with it? (ssdm.cpp; the terrain shader then writes its height)
     bool render_ssdm(VkCommandBuffer cmd);     // mid world pass; true = the pass was interrupted (bindings are to be restored)
     glm::vec3 bridge_a_{0.0f}, bridge_b_{0.0f};   // the stone bridge over the river (world.cpp); deck ends
     bool      bridge_placed_ = false;
@@ -2132,12 +2139,29 @@ private:
     bool      npc_car_make(const net::NpcCarTaken& t);               // (jeep.cpp) ... and every machine makes it one of the players' cars
     void      npc_taken_tick(float dt);
     void      car_audio_tick(float dt);          // (jeep.cpp) the engines' sound: the player's car and the nearest others
+    // The surroundings for the ear: how much echo where the listener stands, and whether a hill
+    // or a wall is between the ear and a source (vk_engine/sound_env.cpp; the state of this is
+    // private to its own files: vk_engine/state/sound_env.h).
+    struct SoundEnvState;
+    SoundEnvState* sound_env_ = nullptr;
+    void      sound_env_tick(float dt, bool cabin);
+    float     sound_occlusion(glm::vec3 ear, glm::vec3 source) const;
     std::unordered_map<JeepState*, uint32_t> car_voices_;
     glm::vec3 car_ear_last_{0.0f}, car_ear_vel_{0.0f};
     bool      car_ear_has_ = false;
     bool      cars_need_lights() const;          // (jeep.cpp) evening or night: a car that drives has its lights on
     void      npc_cars_init();
     void      npc_cars_place(const std::vector<npc::View>& views, float dt);
+    // Cars among cars (jeep.cpp; state: vk_engine/state/car_traffic.h): cars strike each other, the
+    // traffic is told of the players' cars, the military police's light bars and sirens.
+    struct CarTrafficState;
+    CarTrafficState* cars_x_ = nullptr;
+    void      cars_collide(float dt);            // the other cars as bodies for the simulated one; who strikes whom
+    void      npc_feed_obstacles();              // the players' cars near the road, for the NPC engine's traffic
+    void      npc_car_push(const net::Event& e); // (the host's) a client's car struck an NPC car
+    void      police_init();                     // the light bars' meshes
+    void      police_place(float dt);            // ... where they are and whether they flash; the traffic's log
+    void      siren_audio_tick(float dt);        // the sirens' sound: one voice a police car whose siren is on
     bool      npc_car_seat(int agent, int seat, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs, anim::CharacterAnimationInput::SeatExtras* more = nullptr) const;
     void      jeep_ride_place();
     bool      jeep_passenger_seat(int car, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs, anim::CharacterAnimationInput::SeatExtras* more = nullptr) const;

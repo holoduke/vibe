@@ -101,3 +101,42 @@ Hooks: `VIBE_NPC_ACT=<clip>` (everybody who stands plays it), `VIBE_NPC_WARM=<s>
 - Made with HY-Motion (`vibe_prompts/life2.txt`, takes in `C:\Users\gillis\dev\hy-motion\vibe_out2`): `bar_idle`, `table_drink`, `table_idle` (two seeds each). NOT yet chosen, copied to `hy_actions` or cooked. Not made: `walk_relaxed`, `walk_swagger`, `look_watch`, `look_around`, `cashier_idle` (the run died when a game started beside it, with 13.2 GB peak; the second run was stopped).
 - `npc_world.cpp` already names all eight: whoever stays takes turns (bar: `bar_sit` / `bar_talk` / `bar_idle`; eating: `table_eat` / `table_drink`; talking: `table_talk` / `table_idle` / `table_drink`; cashier: `cashier` / `cashier_take` / `cashier_idle`; standing: `look_around`, `look_watch` beside the four there were; walking: `look % 8` 5 `walk_relaxed`, 6 `walk_swagger`). A name the cooked set does not have falls back to the clip used before, so nothing breaks until they are cooked. When the two walks are cooked, set their paces in `npc::kPace[5]`, `[6]`.
 - The soldiers' run is still the motion-matched run (real capture, rifle in the hands); no clip was made for it.
+- **Finished later that day.** The five that were missing were made (`C:\Users\gillis\dev\hy-motion\vibe_out3`, one run, 13.2 GB peak with no game beside it) and all eight chosen by their numbers (scratch `takes.pl`: hips height, travel, turn, how far the last frame is from the first, how much moves) and cooked - 41 action clips in the set:
+
+  | clip | take | why |
+  |---|---|---|
+  | `bar_idle` | s11 | the last frame nearer the first (1.8 against 4.2 degrees a channel), more movement |
+  | `table_drink` | s23 | nearer a loop (1.8 against 3.9) |
+  | `table_idle` | s11 | nearest a loop of all (0.9), moves more |
+  | `cashier_idle` | s23 | the hips turn 16 degrees, not 31 |
+  | `look_around` | s23 | wanders 0.28 m, not 0.65 |
+  | `look_watch` | s23 | 9.6 against 16.3 at the wrap |
+  | `walk_relaxed` | s23 | straighter (turns 11 degrees over 10 s); 0.88 m/s cooked - `npc::kPace[5]` = 0.82 |
+  | `walk_swagger` | s11 | ends straighter; 1.25 m/s cooked - `npc::kPace[6]` stays 1.0 |
+
+  None of the eight was looked at one by one in the game.
+
+## Life layers (2026-11-25): nobody is the same picture as the next
+
+Two people who play the same clip were the same picture a few frames apart. Now everybody is
+somebody, and whatever plays - locomotion, an action clip, the seat pose - has layers on top.
+`src/anim/life_layers.cpp`, `src/anim/person_style.h`; the order is fixed:
+
+| | layer | kind | what |
+|---|---|---|---|
+| - | base | | motion matching, an action clip (inertialised), or the seat pose |
+| a | posture | additive, constant | `PersonStyle`: slouch, a lean, shoulders up / dropped / one higher, head tilt / turn / nod, arms held out, on a seat the feet out or tucked, wider or closer |
+| b | clip layer | override, masked | `layer_clip` over `LayerMask` (UpperBody, Head, ArmLeft, ArmRight, Arms; a weight a joint, feathered down the spine). The animator owns its clock and its weight (`AnimTuning::layer_halflife`); it lets go for a moment where the clip wraps |
+| c | breathing, weight | additive, own clocks | chest and shoulders at the person's own rate; the weight to one leg (standing: the hips move, the feet are solved back) or one side of the seat |
+| d | gesture | override, one arm | `Gesture`: ScratchHead, RubNeck, CheckWrist, Shift, Wave. The arm is solved from rest to a place on the body and blended in and out. A fidget is one the animator starts by itself (`fidgets`, `fidget_arms` = the hands that are free); any can be asked for (`gesture` + `gesture_seq`) |
+| e | look | additive, limited | head, neck, chest and eyes to `look_at` some of the time (`look_weight`: 1 now and then, 2.5 mostly, 4+ fixed; a new `look_id` catches the eye soon), else a side, a sweep, nowhere. Measured from the head the layers below made and limited from the chest (`look_yaw_max` 60 degrees, `look_pitch_up` / `_down`), so a clip that turns the head is not turned twice |
+| - | fitting | | feet (locks, or the action's standing feet), the seat's hips, hands on a weapon or a wheel |
+
+- **Who somebody is**: `person_style(id)` - everything from one number, so the same on every machine and every time that person is shown. Besides the posture it gives the caller `phase` (where in a loop this person starts), `rate` (playback 0.93 - 1.07) and `mirror` (`action_mirror`: the clip left for right, its travel too). `individuality` 0 (the players' soldiers) = nobody in particular: no offsets, the old behaviour.
+- **Opting in**: locomotion always had the look, the breath and the weight shift; an action clip or the seat pose gets them with `life_on_clip` (somebody who stays - not sitting down, not dying). A driver at a wheel keeps the pose he had.
+- **Every weight is eased** (the clip layer by a spring, a gesture at 4 a second at most, the look by its own spring, clamped to its limits), so something that ends early - shot in the middle of a wave - lets go without a jump.
+- **What the station's people get** (`npc_world.cpp` "WHAT IT PLAYS", "COMBINED", "THE LIFE LAYERS"): their own phase, pace and - except the cashier, the pump and the till - side; a second clip part of the time (talking arms on `table_idle`, `bar_talk`'s head on `bar_idle` / `bar_sit`, `look_around`'s head on somebody who walks or stands, a phone or `sit_idle` upper body on a plain seat); fidgets with the hand that holds no fork or glass; and something to look at - the player within 3.5 - 4.5 m, a car that drives past (those outside, and whoever eats by the window), whoever is talked to (the next stool, across the table, the customer at the counter), the plate or the glass, the player out to 9 m. The more curious half of those on foot wave once when the player comes within 6 m in front of them.
+- Hooks: `VIBE_NPC_NO_LIFE=1` (everybody as the bare clip, to compare), `VIBE_NPC_GESTURE=<1..5>` (everybody does that gesture every five seconds), and `VIBE_LOG_NPC` says per body the clip, "mirrored", the second clip, the gesture and where the head is.
+- Tests (`tests/anim/test_animator.cpp`, tag `[life]`, the real asset): two ids on one clip at the same moment differ and one id twice does not; mirrored is the reflection; the look reaches a target at 40 degrees, stops at the limit for one at 95, ignores one behind, keeps the limit on a clip that turns the head itself; a wave goes up and comes back with the feet where the clip has them; an upper-body layer on the seat pose changes the hands and not the legs.
+- Cost: not measured. Per body a handful of joint turns; one more clip sample while a clip layer is in; one two-bone solve while a gesture runs. Posture at every level of detail, the clip layer to level 2, the rest to level 1.
+- Not done: no gesture uses both arms; a gesture's hand does not know the head's real size (the wrist is put 16 cm beside the head joint); the eyes need the face joints and level 0; players' soldiers get none of the posture (`individuality` 0); nothing of this crosses the network - each machine draws the same person's own style, but fidgets and glances run on each machine's own clock.

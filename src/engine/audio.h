@@ -1,7 +1,10 @@
 #pragma once
 
+#include "engine/sound_space.h"
+
 #include <glm/vec3.hpp>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -29,6 +32,7 @@ enum class ClipID : uint8_t {
     RocketRoar, // the launch: 8 s of engine roar with a Hann envelope, overlapped like the rain (assets/sounds/rocket_roar.wav, synthesised)
     Beep,       // the count's tick (assets/sounds/beep.wav, synthesised)
     Land,       // landing after a fall (assets/sounds/land.ogg)
+    Siren,      // a police siren: wail and yelp, 16 s that loop (assets/sounds/siren_wail.wav, synthesised: engine/siren_synth.h)
     Count
 };
 
@@ -101,12 +105,54 @@ public:
     // a line - rendered from an engine simulation by C:/Users/.../engine-sim/vibe, see
     // docs/ARCHITECTURE.md "Car sound"). A voice plays the two loops either side of the
     // engine's speed, each pitched to it, cross-faded by speed and by load, through its own
-    // low-pass (the caller's: distance, a cabin). Panned by position, Doppler from the two
-    // velocities, no distance law of its own (the caller sets the volume).
+    // spatialiser (below): the caller gives where it is, how fast it moves and how loud it is
+    // at its source; distance, tone, Doppler, direction, what is in the way and the echo of
+    // the surroundings are the spatialiser's.
+    //   level: the engine's loudness beside it (its load and speed, the kind of car).
+    //   ridden_hz > 0: the listener rides in or with this car - no distance law, no Doppler,
+    //     in the middle, through this low-pass (the cabin's, the chase view's).
+    //   simple: one loop only (a car far off).
+    // Returns what is heard of it now (Heard::gain is what to judge a voice's worth by: a
+    // voice may be let go once it is 0).
     int      engine_set_load(std::string_view list_file);        // -1: not there
-    uint32_t engine_start(int set);                              // 0: failed
-    void     engine_update(uint32_t h, glm::vec3 pos, glm::vec3 vel, float rpm, float load, float volume, float lpf_hz, bool simple = false);   // simple: one loop only (a car far off)
+    uint32_t engine_start(int set, sound_space::Shape shape = {});   // 0: failed
+    struct Heard;
+    Heard    engine_update(uint32_t h, glm::vec3 pos, glm::vec3 vel, float rpm, float load, float level, float ridden_hz = 0.0f, bool simple = false);
     void     engine_stop(uint32_t h);
+
+    // SOUND IN SPACE: the spatialiser every moving source goes through (the curves:
+    // sound_space.h; the filters, the ears and the reverb: sound_dsp.h; docs/ARCHITECTURE.md
+    // "Sound in space"). Per source, from where it is and where the listener is: loudness by
+    // the distance down to silence, the air's low-pass, Doppler, equal-power panning with the
+    // far ear later and duller, a hill or a building in the way, and its share of the one
+    // reverb. Everything is followed over time - a source comes out of silence and goes back
+    // into it; nothing steps.
+    struct Heard {
+        float gain = 0.0f;          // the loudness it has now (source level x distance x what is in the way), followed; 0 = silent
+        float distance = 0.0f;      // m
+        float cutoff_hz = 0.0f;     // its low-pass
+        float doppler = 1.0f;       // the pitch ratio
+        float pan = 0.0f;           // -1 left .. +1 right
+        float send = 0.0f;          // what goes to the reverb
+        float occlusion = 0.0f;     // 0 clear .. 1 behind a hill or a building
+    };
+    // A SOURCE: any clip, looping or not, at a place in the world (a siren, a generator, a
+    // radio). The whole interface:
+    //     h = source_start(ClipID::X, { ref_m, top_hz });       // once (0: failed)
+    //     source_update(h, pos, vel, level, pitch);             // every frame it sounds
+    //     source_stop(h);                                       // fades to nothing, then frees itself
+    // level 1 = the clip as recorded, heard from within Shape::ref_m; a level of 0 fades it
+    // out without letting it go. Not updated for a frame: it keeps its last place.
+    uint32_t source_start(ClipID id, sound_space::Shape shape = {}, bool loop = true);
+    Heard    source_update(uint32_t h, glm::vec3 pos, glm::vec3 vel, float level = 1.0f, float pitch = 1.0f);
+    void     source_stop(uint32_t h);
+    // The surroundings (how much echo, the listener under a roof or in a cabin): from the game
+    // a few times a second, followed smoothly.
+    void     set_space(const sound_space::Space& s);
+    sound_space::Space space() const;       // as it is now (followed)
+    // What is between the listener's ear and a source, 0 clear .. 1 blocked. Asked on the
+    // game thread, about five times a second for each source.
+    void     set_occlusion_probe(std::function<float(glm::vec3 ear, glm::vec3 source)> fn);
     void     set_listener_velocity(glm::vec3 v);
     void     engine_counts(int& voices, int& loops_playing) const;       // engine voices held, and how many of their loops are being mixed
 

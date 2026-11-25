@@ -130,7 +130,9 @@ void main() {
         w = clamp(1.0 - f, 0.0, 1.0);
     }
     vec3 off = N0 * (h * w);
-    if (w < 1.0 && ndv > 0.02) off += V * (h * (1.0 - w) / ndv);
+    // (limited: on ground seen at a flat angle 1 / ndv is large, and a border pixel came all
+    //  the way up to the camera - in front of the weapon in the hands)
+    if (w < 1.0 && ndv > 0.02) off += V * min(h * (1.0 - w) / ndv, min(4.0 * h, 0.25 * d0));
 
     // ---- The light the stones leave this point ----
     // In a joint: lower than what is around it.

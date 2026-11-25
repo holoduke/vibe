@@ -72,6 +72,9 @@ constexpr float kSsdmRefHeight = 0.10f;
 // the lighting pass adds its own shadows and ambient occlusion on top.
 constexpr float kSsdmSunShade   = 0.70f;
 constexpr float kSsdmJointShade = 0.40f;
+// The ground (ssdm_ground.frag): the height in metres that the terrain shader's largest value
+// stands for (terrain_rm_heightfield.glsl kGndSsdmMax: keep the two the same).
+constexpr float kGndSsdmMax = 0.12f;
 
 // How far the stones of a box brush stand out (m), 0 = not displaced. The depth the box relief
 // of cube.frag gives the same wall (deeper for bigger stones, never more than a part of the
@@ -92,6 +95,15 @@ bool VulkanEngine::ssdm_active() const {
     return !off && !ssdm_failed_ && deferred_lighting_active_;
 }
 
+// Is the raymarched ground displaced too this frame? (terrain_raymarch.frag then writes its
+// material's height into the G-buffer and leaves its own parallax out: scene constant
+// rm_perf bit 64, descriptors.cpp.) Only with the terrain at full resolution: the
+// low-resolution terrain's compose pass carries no height. VIBE_NO_GROUND_DETAIL=1 off.
+bool VulkanEngine::ground_ssdm_active() const {
+    static const bool off = std::getenv("VIBE_NO_GROUND_DETAIL") != nullptr;
+    return !off && ssdm_active() && ssdm_ && ssdm_->ground_pipeline && rt_.terrain_raymarch_enabled && !tr_use_lowres() && rt_.textures_enabled;
+}
+
 void VulkanEngine::destroy_ssdm_targets() {
     for (SsdmImage* t : { &ssdm_->hn, &ssdm_->off, &ssdm_->color, &ssdm_->g0, &ssdm_->g1, &ssdm_->scene_z }) {
         if (t->view) vkDestroyImageView(device_, t->view, nullptr);
@@ -104,11 +116,11 @@ void VulkanEngine::destroy_ssdm_targets() {
 void VulkanEngine::destroy_ssdm() {
     if (device_) vkDeviceWaitIdle(device_);
     destroy_ssdm_targets();
-    for (VkPipeline* p : { &ssdm_->height_pipeline, &ssdm_->solve_pipeline, &ssdm_->grid_pipeline }) {
+    for (VkPipeline* p : { &ssdm_->height_pipeline, &ssdm_->solve_pipeline, &ssdm_->grid_pipeline, &ssdm_->ground_pipeline }) {
         if (*p) vkDestroyPipeline(device_, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
-    for (VkShaderModule* m : { &ssdm_->height_vert, &ssdm_->height_frag, &ssdm_->solve_frag, &ssdm_->grid_vert, &ssdm_->grid_frag }) {
+    for (VkShaderModule* m : { &ssdm_->height_vert, &ssdm_->height_frag, &ssdm_->solve_frag, &ssdm_->grid_vert, &ssdm_->grid_frag, &ssdm_->ground_frag }) {
         if (*m) vkDestroyShaderModule(device_, *m, nullptr);
         *m = VK_NULL_HANDLE;
     }
@@ -217,6 +229,20 @@ bool VulkanEngine::init_ssdm() {
         cfg.depth_compare = VK_COMPARE_OP_LESS; // (where nothing moved the flat wall stays as it is)
         ssdm_->grid_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     }
+    // Ground heights (ssdm_ground.frag): full-screen triangle into the height target, after the
+    // meshes, inside the same pass (which has the depth attachment; not tested, not written).
+    // The shader is optional: without it only the stonework is displaced.
+    ssdm_->ground_frag = vkpipe::load_shader_module(device_, sd + "/ssdm_ground.frag.spv");
+    if (ssdm_->ground_frag) {
+        vkpipe::GraphicsPipelineConfig cfg{};
+        cfg.vert = taa_->vert_module; cfg.frag = ssdm_->ground_frag;
+        cfg.layout = ssdm_->layout;
+        cfg.color_formats = { kSsdmVecFormat };
+        cfg.depth_format = depth_format_;
+        cfg.cull = VK_CULL_MODE_NONE;
+        cfg.depth_test = false; cfg.depth_write = false;
+        ssdm_->ground_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
+    }
     if (!ssdm_->height_pipeline || !ssdm_->solve_pipeline || !ssdm_->grid_pipeline) {
         log::warnf("[ssdm] pipeline creation failed - screen-space displacement off");
         ssdm_failed_ = true;
@@ -321,7 +347,11 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
             brushes.push_back(uint32_t(i));
             grow(lo, hi);
         }
-    if (parts.empty() && brushes.empty()) return false;
+    // The ground: every terrain pixel near the camera may be displaced, so the whole screen is
+    // the rectangle. Not from high up (nothing of it is within the terrain shader's reach).
+    const bool ground = ground_ssdm_active() && rm_air_lod_k_ < 40.0f;
+    if (ground) { x0 = 0.0f; y0 = 0.0f; x1 = rw; y1 = rh; }
+    if (parts.empty() && brushes.empty() && !ground) return false;
     // (two pixels of margin; the grid's last column / row of vertices is the pixel at x1 / y1)
     const int rx0 = std::clamp(int(std::floor(x0)) - 2, 0, int(render_extent_.width) - 1);
     const int ry0 = std::clamp(int(std::floor(y0)) - 2, 0, int(render_extent_.height) - 1);
@@ -392,6 +422,35 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
         vkinit::transition_image_aspect(cmd, depth_image_, TS, DA, DEPTH);
     }
 
+    // ---- The passes' constants: camera-relative matrices (ssdm_common.glsl) ----
+    SsdmPC pc{};
+    {
+        const glm::dmat4 to_world = glm::translate(glm::dmat4(1.0), glm::dvec3(fv.eye_pos));
+        const glm::dmat4 vp_rel = glm::dmat4(fv.vp) * to_world;
+        pc.vp = glm::mat4(vp_rel);
+        pc.inv_vp = glm::mat4(glm::inverse(vp_rel));
+        glm::dmat4 prev = vp_rel;
+        if (prev_view_proj_valid_) {
+            glm::dmat4 T(1.0);
+            if (rt_.fsr2_enabled) {
+                const glm::vec2 jd = -(fv.jitter - prev_jitter_) * 0.5f;
+                T[3][0] = 2.0 * jd.x; T[3][1] = 2.0 * jd.y;
+            }
+            prev = T * glm::dmat4(prev_view_proj_) * to_world;
+        }
+        pc.prev_vp = glm::mat4(prev);
+        pc.size = glm::vec4(rw, rh, 1.0f / rw, 1.0f / rh);
+        pc.rect = glm::vec4(float(rx0), float(ry0), kSsdmJointShade, kGndSsdmMax);
+        const float tan_half = 1.0f / std::max(std::abs(fv.proj[1][1]), 1e-6f);
+        static const bool debug = std::getenv("VIBE_SSDM_DEBUG") != nullptr;
+        pc.par = glm::vec4(kSsdmSmooth, kSsdmRefHeight, debug ? 1.0f : 0.0f, 2.0f * tan_half / rh);
+        {   // the sun, as the scene constants have it (descriptors.cpp); its shadow fades out as it sets
+            const float pitch = glm::radians(rt_.sun_pitch_deg), yaw = glm::radians(rt_.sun_yaw_deg);
+            const glm::vec3 sun = glm::normalize(glm::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)));
+            pc.sun = glm::vec4(sun, kSsdmSunShade * glm::smoothstep(0.0f, 0.12f, sun.y));
+        }
+    }
+
     // ---- 1. The height pass ----
     vkinit::transition_image(cmd, ssdm_->hn.image, from_c, CA);
     {
@@ -436,38 +495,15 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
                 vkCmdDrawIndexed(cmd, cube_mesh_.index_count, 1, 0, 0, 0);
             }
         }
+        if (ground && ssdm_->ground_pipeline) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->ground_pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->layout, 0, 1, &ssdm_->set, 0, nullptr);
+            vkCmdPushConstants(cmd, ssdm_->layout, kSsdmStages, 0, sizeof(pc), &pc);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+        }
         vkCmdEndRendering(cmd);
     }
     vkinit::transition_image(cmd, ssdm_->hn.image, CA, RO);
-
-    // ---- The passes' constants: camera-relative matrices (ssdm_common.glsl) ----
-    SsdmPC pc{};
-    {
-        const glm::dmat4 to_world = glm::translate(glm::dmat4(1.0), glm::dvec3(fv.eye_pos));
-        const glm::dmat4 vp_rel = glm::dmat4(fv.vp) * to_world;
-        pc.vp = glm::mat4(vp_rel);
-        pc.inv_vp = glm::mat4(glm::inverse(vp_rel));
-        glm::dmat4 prev = vp_rel;
-        if (prev_view_proj_valid_) {
-            glm::dmat4 T(1.0);
-            if (rt_.fsr2_enabled) {
-                const glm::vec2 jd = -(fv.jitter - prev_jitter_) * 0.5f;
-                T[3][0] = 2.0 * jd.x; T[3][1] = 2.0 * jd.y;
-            }
-            prev = T * glm::dmat4(prev_view_proj_) * to_world;
-        }
-        pc.prev_vp = glm::mat4(prev);
-        pc.size = glm::vec4(rw, rh, 1.0f / rw, 1.0f / rh);
-        pc.rect = glm::vec4(float(rx0), float(ry0), kSsdmJointShade, 0.0f);
-        const float tan_half = 1.0f / std::max(std::abs(fv.proj[1][1]), 1e-6f);
-        static const bool debug = std::getenv("VIBE_SSDM_DEBUG") != nullptr;
-        pc.par = glm::vec4(kSsdmSmooth, kSsdmRefHeight, debug ? 1.0f : 0.0f, 2.0f * tan_half / rh);
-        {   // the sun, as the scene constants have it (descriptors.cpp); its shadow fades out as it sets
-            const float pitch = glm::radians(rt_.sun_pitch_deg), yaw = glm::radians(rt_.sun_yaw_deg);
-            const glm::vec3 sun = glm::normalize(glm::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)));
-            pc.sun = glm::vec4(sun, kSsdmSunShade * glm::smoothstep(0.0f, 0.12f, sun.y));
-        }
-    }
 
     // ---- 2. The solve pass ----
     vkinit::transition_image(cmd, ssdm_->off.image, from_c, CA);

@@ -37,6 +37,24 @@ void main() {
         outGBuffer0.rgb = mix(outGBuffer0.rgb, mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y), pulled)
                         * (1.0 - 0.35 * pulled);
     }
+    // The raymarched ground (material 8, ssdm_ground.frag) is lit already: the lighting pass
+    // hands its colour on untouched, so what is done to the albedo above and below has to be
+    // done to the colour itself.
+    bool prelit = int(outGBuffer0.a * 255.0 + 0.5) == 8;
+    if (prelit) {
+        if (pulled > 0.0) {
+            vec2  t  = vSrc - 0.5;
+            ivec2 b  = ivec2(floor(t));
+            vec2  f  = t - vec2(b);
+            vec3  c00 = texelFetch(u_color, clamp(b, ivec2(0), lim), 0).rgb;
+            vec3  c10 = texelFetch(u_color, clamp(b + ivec2(1, 0), ivec2(0), lim), 0).rgb;
+            vec3  c01 = texelFetch(u_color, clamp(b + ivec2(0, 1), ivec2(0), lim), 0).rgb;
+            vec3  c11 = texelFetch(u_color, clamp(b + ivec2(1, 1), ivec2(0), lim), 0).rgb;
+            outColor.rgb = mix(outColor.rgb, mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y), pulled)
+                         * (1.0 - 0.35 * pulled);
+        }
+        outColor.rgb *= vKeep;
+    }
     // The stones shade each other (ssdm_solve): into the albedo, as the parallax relief did -
     // the lighting pass only knows the flat wall's shadow.
     outGBuffer0.rgb *= vKeep;

@@ -16,8 +16,9 @@ struct VulkanEngine::SsdmState {
     SsdmImage hn, off, color, g0, g1, scene_z;
     VkExtent2D extent{ 0, 0 };
     VkPipeline height_pipeline = VK_NULL_HANDLE, solve_pipeline = VK_NULL_HANDLE, grid_pipeline = VK_NULL_HANDLE;
+    VkPipeline ground_pipeline = VK_NULL_HANDLE;       // ssdm_ground.frag: the raymarched ground's heights (absent = ground not displaced)
     VkShaderModule height_vert = VK_NULL_HANDLE, height_frag = VK_NULL_HANDLE, solve_frag = VK_NULL_HANDLE,
-                   grid_vert = VK_NULL_HANDLE, grid_frag = VK_NULL_HANDLE;
+                   grid_vert = VK_NULL_HANDLE, grid_frag = VK_NULL_HANDLE, ground_frag = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkDescriptorPool pool = VK_NULL_HANDLE;

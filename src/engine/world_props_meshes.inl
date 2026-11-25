@@ -343,10 +343,11 @@ WorldPropStats build_world_props(const Heightmap& hm, const Road* road,
 // =====================================================================
 namespace {
 
-struct PineParams { float H; int tiers; float r0; float seed; float lean; };
+struct PineParams { float H; int tiers; float r0; float seed; float lean; bool old = false; };
 struct OakParams  { float H; int branches; float seed; float spread; glm::vec3 top_off;
                     glm::vec2 crown = glm::vec2(1.0f);   // crown scale (xz, y): wide oak / tall narrow / round
-                    int clumps = 0; };                  // extra small crown clumps (LOD0 lumpiness)
+                    int clumps = 0;                  // extra small crown clumps (LOD0 lumpiness)
+                    bool old = false; };
 struct BushParams { int blobs; float seed; float sx = 1.0f, sy = 1.0f; };
 
 
@@ -716,52 +717,28 @@ void build_broadleaf(LevelMesh& m, const OakParams& p, int lod, const Ico& lo, c
 void build_pine(LevelMesh& m, const PineParams& p, int lod, const Ico& lo, const Ico& hi) {
     (void)lo; (void)hi;
     {
-        // Every LOD bucket: EZ-Tree evergreen (trunk + whorled boughs carrying
-        // needle-spray cards). Trimmed from the 'pine medium' preset to a
-        // real-time triangle budget.
-        EzTreeOptions o = ez_preset_pine();
+        // Every LOD bucket: a conifer grown by its habit (eztree.h TreeHabit) - a spruce
+        // (whorls of boughs carrying flat sprays) or a pine (bare stem, crooked limbs, needle
+        // tufts). Age follows the height: the short ones are young cones, the giants are old.
+        EzTreeOptions o;
         o.seed = uint32_t(p.seed * 9173.0f) + 11u;
-        if (glm::fract(p.seed * 3.7f) > 0.5f) {      // Scots-pine habit: fewer, longer, more open boughs
-            o.leaf_kind = 3.0f;
-            o.angle[1] = 84.0f;
-            o.leaf_size = 2.9f;
-            o.start[1] = 0.42f;
-        }
-        o.children[0] = glm::clamp(int(p.H * 4.6f), 44, 74);
-        o.sections[0] = 10; o.sections[1] = 5; o.segments[1] = 4;
-        o.leaf_count = 14;
-        o.leaf_size = 2.3f;
-        o.length[1] = 23.87f * glm::clamp(p.r0 / 2.6f, 0.75f, 1.3f);
-        // More variation between individuals: bough angle, droop, twist.
+        o.evergreen = true;
+        const bool  scots = glm::fract(p.seed * 3.7f) > 0.5f;
         const float v1 = glm::fract(p.seed * 5.3f), v2 = glm::fract(p.seed * 9.1f);
-        o.angle[1] += (v1 - 0.5f) * 26.0f;
-        o.gnarliness[1] = 0.04f + 0.10f * v2;
-        o.force_strength = -0.001f - 0.006f * v1;
-        if (p.H > 18.0f) {
-            // Old pine: a tall bare trunk, heavy, a high crown of long boughs.
-            o.radius[0] = 1.05f * 1.7f;
-            o.start[1] = 0.46f + 0.10f * v2;
-            o.children[0] = glm::clamp(int(p.H * 3.2f), 56, 80);
-            o.length[1] *= 1.25f;
-            o.leaf_size = 2.7f;
-            o.gnarliness[0] = 0.09f;
-        }
-        // Side twigs: a bough is not one rod with needles stuck on it - it carries short twigs
-        // to both sides, and those carry the needle sprays. One more branching level: the
-        // boughs fork into 3 - 4 twigs each along their outer two thirds (they come in late in
-        // the detail order, so only trees near the camera pay for them).
-        o.levels = 2;
-        o.children[1] = 3 + int(v1 * 1.99f);
-        o.angle[2] = 34.0f + 14.0f * v2;
-        o.length[2] = 6.5f + 2.5f * v1;
-        o.radius[2] = 0.55f;
-        o.sections[2] = 2; o.segments[2] = 3;
-        o.start[2] = 0.30f;
-        o.gnarliness[2] = 0.10f;
-        o.leaf_count = 5;                       // per twig (was 14 per bough: about the same number of sprays)
-        o.leaf_start = 0.05f;
+        o.habit.kind = scots ? 4 : 3;
+        o.habit.age = p.old ? 0.80f + 0.20f * v1 : glm::clamp((p.H - 8.0f) / 12.0f, 0.05f, 0.70f);
+        o.habit.crown_w = glm::clamp(p.r0 / 2.6f, 0.75f, 1.3f);
+        o.habit.lean = glm::min(std::abs(p.lean) * 0.25f, 0.12f);
+        o.habit.lean_az = p.seed;
+        o.habit.asym = 0.08f + 0.22f * v2;
+        o.habit.asym_az = p.seed * 2.7f;
+        o.leaf_kind = scots ? 3.0f : 1.0f;
+        o.leaf_double = true;
+        o.leaf_size = 0.20f + 0.030f * p.H;                 // metres
+        o.leaf_size_variance = 0.25f;
+        o.leaf_count = 3;                                   // cards a side shoot (spruce) / a tuft (pine)
         // Roots: pines hold theirs mostly under the needle litter; the old ones show more.
-        o.roots = (p.H > 18.0f) ? 0.80f + 0.35f * v1 : 0.30f + 0.40f * v2;
+        o.roots = p.old ? 0.80f + 0.35f * v1 : 0.30f + 0.40f * v2;
         build_ez_tree(m, o, kVegDetail[lod], p.H);
         return;
     }
@@ -796,50 +773,34 @@ void build_pine(LevelMesh& m, const PineParams& p, int lod, const Ico& lo, const
 void build_oak(LevelMesh& m, const OakParams& p, int lod, const Ico& lo, const Ico& hi, const Ico& tiny,
                const Ico& ultra) {
     {
-        // Every LOD bucket: EZ-Tree deciduous, from the 'oak medium' preset.
-        // The crown shape parameter picks the habit (wide / tall / round).
+        // Every LOD bucket: a broadleaf tree grown by its habit (eztree.h TreeHabit) - an oak
+        // (the trunk divides into heavy limbs, a broad dome) or a birch (one slender stem,
+        // hanging twigs). The crown shape parameter sets the width, the height the age.
         (void)lo;
-        EzTreeOptions o = ez_preset_oak();
+        EzTreeOptions o;
         o.seed = uint32_t(p.seed * 7919.0f) + 3u;
-        const bool birch = glm::fract(p.seed * 3.7f) > 0.5f;   // birch: small leaves, lighter crown
-        if (birch) o.leaf_kind = 2.0f;
-        o.leaf_count = 9;
-        o.leaf_size = birch ? 2.9f : 3.4f;
-        o.children[0] = 5 + int(p.branches % 3);
+        o.evergreen = false;
+        const bool  small_leaf = glm::fract(p.seed * 3.7f) > 0.5f;
         const float wide = p.crown.x / glm::max(p.crown.y, 0.2f);      // > 1 wide, < 1 tall
-        o.angle[1] = glm::clamp(54.0f * wide, 30.0f, 70.0f);
-        o.length[0] = 37.24f * glm::clamp(1.0f / wide, 0.8f, 1.35f);
-        o.length[1] = 11.08f * glm::clamp(wide, 0.8f, 1.4f) * 1.5f;
-        o.length[2] = 12.39f * 0.9f;
-        // More variation between individuals: limb curl, twist, fork angle.
         const float v1 = glm::fract(p.seed * 5.3f), v2 = glm::fract(p.seed * 9.1f);
-        o.gnarliness[1] = -0.04f - 0.16f * v1;
-        o.gnarliness[2] = -0.08f - 0.18f * v2;
-        o.twist[0] = -0.35f + 0.5f * v2;
-        o.angle[2] = 46.0f + 26.0f * v1;
-        if (p.H > 10.5f) {
-            // Old oak: a massive short trunk, more and heavier limbs that reach
-            // far out and curl, a broad dense crown.
-            o.radius[0] = 1.41f * 1.85f;
-            o.radius[1] = 0.9f * 1.25f;
-            o.children[0] += 2;
-            o.children[1] = 5;
-            o.length[0] *= 0.82f;
-            o.length[1] *= 1.30f;
-            o.gnarliness[1] -= 0.10f;
-            o.leaf_count = 12;
-            o.leaf_size *= 1.12f;
-            o.start[1] = 0.36f;
-        }
-        // Twigs: more of them and curved (two sections each, they were straight sticks), so a
-        // crown seen from below or in winter is a web of fine branches, not a few bare limbs.
-        o.children[2] = 4 + int(v2 * 1.99f);
-        o.sections[3] = 2;
-        o.gnarliness[3] = 0.22f;
-        o.leaf_count = std::max(6, o.leaf_count - 2);      // (more twigs carry them: the crown keeps its leaf count)
+        const float Ht = p.H * 1.2f;
+        const bool  birch = small_leaf && !p.old;
+        o.habit.kind = birch ? 2 : 1;
+        o.habit.age = p.old ? 0.85f + 0.15f * v1 : glm::clamp((p.H - 5.0f) / 9.0f, 0.05f, 0.70f);
+        o.habit.crown_w = birch ? glm::clamp(wide, 0.8f, 1.25f) : glm::clamp(wide, 0.6f, 1.35f);
+        o.habit.lean = glm::min(glm::length(glm::vec2(p.top_off.x, p.top_off.z)) * 0.25f, 0.14f);
+        o.habit.lean_az = std::atan2(p.top_off.z, p.top_off.x + 1e-6f);
+        o.habit.asym = 0.10f + 0.25f * v2;
+        o.habit.asym_az = p.seed * 2.7f;
+        o.leaf_kind = small_leaf ? 2.0f : 0.0f;
+        o.leaf_double = true;
+        o.leaf_size = (small_leaf ? 0.22f : 0.27f) + 0.030f * Ht;      // metres
+        o.leaf_size_variance = 0.35f;
+        o.leaf_count = 6;                                              // cards a twig
+        o.habit.density = p.old ? 0.92f : 1.15f;                       // (the old ones are large enough to be costly)
         // Roots: a birch stands on a modest foot, an oak on a spreading one, an old oak on buttresses.
-        o.roots = (p.H > 10.5f) ? 1.10f + 0.40f * v1 : (birch ? 0.35f + 0.35f * v1 : 0.65f + 0.45f * v2);
-        build_ez_tree(m, o, kVegDetail[lod], p.H * 1.2f);
+        o.roots = p.old ? 1.10f + 0.40f * v1 : (birch ? 0.35f + 0.35f * v1 : 0.65f + 0.45f * v2);
+        build_ez_tree(m, o, kVegDetail[lod], Ht);
         return;
     }
     glm::vec3 b(0.0f);

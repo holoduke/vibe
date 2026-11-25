@@ -157,7 +157,7 @@ void VulkanEngine::mp_update(float dt) {
             for (auto& a : mp_->avatars) if (a.id == e.from) a.die = true;      // their body falls where it is (ragdoll.cpp)
             if (e.to == net_->id()) ++mp_->kills;
             mp_feed(net_->name_of(e.to) + " killed " + net_->name_of(e.from));
-        } else if (e.kind == net::Event::NpcHit || e.kind == net::Event::NpcCarTake || e.kind == net::Event::NpcCarTaken) {
+        } else if (e.kind == net::Event::NpcHit || e.kind == net::Event::NpcCarTake || e.kind == net::Event::NpcCarTaken || e.kind == net::Event::NpcCarPush) {
             npc_event(e);
         } else if (e.kind == net::Event::Leave) {
             mp_feed("a player left");

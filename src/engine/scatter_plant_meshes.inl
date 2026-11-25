@@ -464,7 +464,7 @@ void grass_blade(std::vector<Vertex>& v, std::vector<uint32_t>& ix, glm::vec3 ba
         const float tw = twist * t;
         const glm::vec3 sd = glm::normalize(side * std::cos(tw) + glm::cross(tg, side) * std::sin(tw));
         float w = wid * (1.0f - 0.92f * t * t);                    // tapers to a point
-        // (a flowering stalk, part 9: a thin stem that swells into a head `head` wide below its tip)
+        // (a flowering stalk, part 10: a thin stem that swells into a head `head` wide below its tip)
         if (head > 0.0f) w = wid * 0.45f + head * glm::smoothstep(0.55f, 0.80f, t) * (1.0f - 0.7f * glm::smoothstep(0.85f, 1.0f, t));
         glm::vec3 nrm = glm::normalize(glm::cross(sd, tg));
         if (glm::dot(nrm, L) < 0.0f) nrm = -nrm;
@@ -535,7 +535,7 @@ void build_grass_turf(std::vector<Vertex>& v, std::vector<uint32_t>& ix, int lev
 // Species 18: flowering meadow - the dense, low, yellow-flowered plants of a field (the
 // reference game's flower fields are its ordinary placed clumps with their own meshes; ours: a clump of
 // 16 from a 0.4 m wide base - leaf blades round the outside, and stalks that end in a flower
-// head (part 9: scatter.frag colours the head) standing a little above them. Placed by
+// head (part 10: scatter.frag colours the head) standing a little above them. Placed by
 // shaders/tuft_place.comp in the fields the engine lists (flower_fields_).
 // `level`: 0 the full clump; 1 (from 22 m) the stalks alone, one blade each; 2 (from 48 m) every
 // other stalk with a head twice as wide - the same yellow from far off with a sixth of the
@@ -556,8 +556,8 @@ void build_meadow(std::vector<Vertex>& v, std::vector<uint32_t>& ix, int level =
             const float arch = 0.10f + 0.35f * outer * rnd(), hw = 0.011f + 0.006f * rnd();
             if (level == 2 && (i % 2) == 1) continue;
             const float wide = level == 2 ? 2.0f : level == 1 ? 1.35f : 1.0f;
-            grass_blade(v, ix, base, lean, len, 0.0050f * wide, arch, 0.0f, i, 9.0f, hw * wide);
-            if (level == 0) grass_blade(v, ix, base, lean, len, 0.0050f, arch, 2.2f, i, 9.0f, hw * 0.8f);
+            grass_blade(v, ix, base, lean, len, 0.0050f * wide, arch, 0.0f, i, 10.0f, hw * wide);
+            if (level == 0) grass_blade(v, ix, base, lean, len, 0.0050f, arch, 2.2f, i, 10.0f, hw * 0.8f);
         } else {
             const float len = 0.05f + 0.16f + 0.16f * rnd();
             const float wid = 0.0100f + 0.0050f * rnd(), ar = 0.25f + 0.75f * outer * rnd(), tw = (rnd() - 0.5f) * 1.6f;

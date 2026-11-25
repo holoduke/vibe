@@ -376,7 +376,7 @@
         vec3 cob = textureLod(u_albedo[kRmMatRoad], rm_road_uv, rm_road_lod).rgb * kRmAlbedoScale;
         float cv1 = tile_noise2(pos.xz, 6.5, vec2(9.1)) * 0.6 + tile_noise2(pos.xz, 2.1, vec2(1.7)) * 0.4, cv2 = tile_noise2(pos.xz, 0.55, vec2(3.3));
         cob *= mix(0.74, 1.22, cv1) * mix(vec3(1.06, 1.0, 0.92), vec3(0.94, 0.98, 1.05), cv2);
-        mate = mix(mate, cob, rm_road.x);
+        mate = mix(mate, cob, rm_road_wx);       // (by height at the paving's edge: terrain_rm_main_ground.glsl)
         // Sand lying on it: pale and fine-grained, darker and damper where it is thin; a print's
         // floor is packed (darker) and the sun leaves part of it in shade.
         if (sand_cov > 0.001) {
@@ -417,7 +417,10 @@
         vec3 grav = textureLod(u_albedo[kRmMatGravel], pos.xz / TILE_CELL(1.7), hw_lod + 0.6).rgb * 0.50;
         grav *= mix(0.78, 1.12, tile_noise2(pos.xz, 0.6, vec2(2.0))) * vec3(1.0, 0.97, 0.92);
         // (the land's own cover comes back through it toward its outer edge)
-        mate = mix(mate, grav, hw_verge * (1.0 - 0.55 * smoothstep(7.0, 8.6, abs(hw_d)) * tile_noise2(pos.xz, 1.9, vec2(0.0))));
+        float grav_w = hw_verge * (1.0 - 0.55 * smoothstep(7.0, 8.6, abs(hw_d)) * tile_noise2(pos.xz, 1.9, vec2(0.0)));
+        // (close by the gravel thins out stone by stone: the land comes up between the stones first)
+        if (GND_SSDM && t < 45.0 && hw_pave < 0.5) grav_w = mix(rm_height_blend(0.45, hw_hgt, grav_w), grav_w, smoothstep(20.0, 45.0, t));
+        mate = mix(mate, grav, grav_w);
         if (hw_pave > 0.001) {
             vec3 tex = textureLod(u_albedo[kRmMatAsphalt], hw_uv, hw_lod).rgb * 0.50;
             float gl = 0.0;

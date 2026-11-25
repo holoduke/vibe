@@ -36,6 +36,24 @@ bool g_rm_relief_lite = false;
 // The hit then lies up to ~0.3 m under the drawn ground - near enough to ask "is the sun
 // blocked here", which is all it is used for.
 bool g_rm_no_relief = false;
+// The ground displaced in screen space (vk_engine/ssdm.cpp, shaders/ssdm_ground.frag; the way the
+// reference game gives its near ground relief): while GND_SSDM is on, the shading works out how
+// far the material at the pixel stands out of the marched surface (metres; cobbles, the scan's
+// stones and clods, rock, roadside gravel) and main() writes it into the G-buffer; the
+// screen-space pass moves the pixel by it. The materials' own parallax is then left out.
+// Only upward: shadows, collision and the grass's roots stay those of the marched surface.
+#define GND_SSDM ((int(scene.rm_perf.x) & 64) != 0)
+const float kGndSsdmMax = 0.12;          // (ssdm.cpp kGndSsdmMax: keep the two the same)
+float g_gnd_ssdm_h = 0.0;                // metres, 0 = nothing to displace at this pixel
+// Two materials laid over each other by their heights (the reference game's blend: the one that
+// stands higher where both are present wins, over a band of 0.15): the share of the second.
+// ha / hb = the two heights 0..1, w = how much of the second the plain mask asks for.
+float rm_height_blend(float ha, float hb, float w) {
+    float a = max(ha, 0.01) * (1.0 - w), b = max(hb, 0.01) * w;
+    float d = max(max(a, b) - 0.15, 0.0);
+    a = max(a - d, 0.0); b = max(b - d, 0.0);
+    return b / max(a + b, 1e-5);
+}
 float rm_ground_detail_raw(vec2 wp, float t, float h);
 // The close relief, less on a highway: none on the asphalt, growing over the verge (a hard stop
 // at the asphalt's edge stood up as a wall of streaks).

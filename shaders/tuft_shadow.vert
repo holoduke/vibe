@@ -36,7 +36,7 @@ void main() {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     vec3  base = inPosScale.xyz;
     // Only what the placement made: hand-placed tufts are in the CPU cells' pass.
-    if (inPosScale.w >= 0.0 || int(inUv.x + 0.5) < 8) return;
+    if (inPosScale.w >= 0.0 || (int(inUv.x + 0.5) != 8 && int(inUv.x + 0.5) != 10)) return;
     float size = -inPosScale.w;
     vec2  d = base.xz - pc.model[0].xz;
     if (dot(d, d) > pc.model[0].w * pc.model[0].w || size < 0.05) return;

@@ -13,6 +13,8 @@
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <cstring>
 #include <map>
+#include <unordered_map>
+#include <glm/gtc/quaternion.hpp>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -69,7 +71,11 @@ namespace Layers {
     // forearm weighs 2 kg - one that struck a body sent it out of sight. A bolt through a body
     // is found by the game (ragdoll.cpp corpse_bolt_hits) and gives it a knock of its own size.
     static constexpr JPH::ObjectLayer CORPSE     = 5;
-    static constexpr JPH::ObjectLayer NUM        = 6;
+    // The other cars' bodies (vehicle_set_cars): what moves runs into them, a bolt does not -
+    // who sits in a car is hit by the game's own test (npc_bolt_hits), which needs the bolt to
+    // get as far as the seat and not stop on the roof's box.
+    static constexpr JPH::ObjectLayer CAR        = 6;
+    static constexpr JPH::ObjectLayer NUM        = 7;
 }
 
 namespace BPLayers {
@@ -87,6 +93,7 @@ public:
         map_[Layers::SPARK]      = BPLayers::MOVING;
         map_[Layers::VOXEL]      = BPLayers::NON_MOVING;  // static
         map_[Layers::CORPSE]     = BPLayers::MOVING;
+        map_[Layers::CAR]        = BPLayers::MOVING;
     }
     unsigned int GetNumBroadPhaseLayers() const override { return BPLayers::NUM; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer l) const override {
@@ -113,6 +120,7 @@ public:
             case Layers::BULLET:
             case Layers::SPARK:
             case Layers::CORPSE:
+            case Layers::CAR:
                 // Movables sweep the whole broadphase; pair filter below
                 // does the actual game-logic culling.
                 return true;
@@ -156,6 +164,8 @@ public:
         matrix_[Layers::VOXEL][Layers::MOVING]      = yes;
         // CORPSE: the world, what moves, other bodies - not bolts, not sparks
         for (JPH::ObjectLayer o : { Layers::NON_MOVING, Layers::MOVING, Layers::VOXEL, Layers::CORPSE }) { matrix_[Layers::CORPSE][o] = yes; matrix_[o][Layers::CORPSE] = yes; }
+        // CAR: what moves and bodies that lie about - not bolts, not sparks
+        for (JPH::ObjectLayer o : { Layers::MOVING, Layers::CORPSE }) { matrix_[Layers::CAR][o] = yes; matrix_[o][Layers::CAR] = yes; }
     }
 
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
@@ -1096,9 +1106,13 @@ struct PhysicsWorld::VehicleImpl {
     // the rail it was sliding along. What stands beside the road is for the body to hit.
     struct WheelGround : JPH::BodyFilter {
         JPH::BodyID skip, self;       // (self: the car's own body - the tester's own filter, which this one replaces, left it out)
-        bool ShouldCollide(const JPH::BodyID& id) const override { return id != skip && id != self; }
-        bool ShouldCollideLocked(const JPH::Body& b) const override { return b.GetID() != skip && b.GetID() != self; }
+        std::vector<JPH::BodyID> cars;      // (the other cars: vehicle_set_cars)
+        bool other(const JPH::BodyID& id) const { for (const JPH::BodyID& c : cars) if (c == id) return true; return false; }
+        bool ShouldCollide(const JPH::BodyID& id) const override { return id != skip && id != self && !other(id); }
+        bool ShouldCollideLocked(const JPH::Body& b) const override { return b.GetID() != skip && b.GetID() != self && !other(b.GetID()); }
     };
+    struct OtherCar { JPH::BodyID id; bool seen = false; };
+    std::unordered_map<uint32_t, OtherCar> cars;      // the other cars' bodies, by their keys (vehicle_set_cars)
     WheelGround wheel_ground;
     std::vector<float> patch_samples;  // (Jolt keeps a pointer for the shape's life only: kept anyway)
 };
@@ -1298,6 +1312,7 @@ void PhysicsWorld::vehicle_remove() {
     }
     for (JPH::BodyID id : { vehicle_->body, vehicle_->patch, vehicle_->obstacles })
         if (!id.IsInvalid()) { bi.RemoveBody(id); bi.DestroyBody(id); }
+    for (auto& kv : vehicle_->cars) { bi.RemoveBody(kv.second.id); bi.DestroyBody(kv.second.id); }
     vehicle_.reset();
 }
 
@@ -1464,6 +1479,60 @@ void PhysicsWorld::vehicle_set_obstacles(const OrientedBox* boxes, size_t count)
     bcs.mRestitution = 0.10f;
     vehicle_->obstacles = bi.CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
     vehicle_->wheel_ground.skip = vehicle_->obstacles;
+}
+
+// The other cars (physics_world.h): kinematic bodies, moved to where each is said to be.
+void PhysicsWorld::vehicle_set_cars(const CarBody* cars, size_t count, float dt) {
+    if (!vehicle_exists()) return;
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    VehicleImpl& V = *vehicle_;
+    for (auto& kv : V.cars) kv.second.seen = false;
+    bool changed = false;
+    for (size_t i = 0; i < count; ++i) {
+        const CarBody& c = cars[i];
+        if (!c.boxes || !c.n_boxes) continue;
+        const glm::quat gq = glm::normalize(glm::quat_cast(glm::mat3(c.body)));
+        const JPH::Quat q(gq.x, gq.y, gq.z, gq.w);
+        const JPH::RVec3 p(c.body[3].x, c.body[3].y, c.body[3].z);
+        if (!std::isfinite(c.body[3].x + c.body[3].y + c.body[3].z + gq.x + gq.y + gq.z + gq.w)) continue;
+        auto it = V.cars.find(c.key);
+        if (it == V.cars.end()) {
+            JPH::StaticCompoundShapeSettings cs;
+            for (size_t b = 0; b < c.n_boxes; ++b) {
+                const StaticBox& sb = c.boxes[b];
+                const JPH::Vec3 he((std::max)(sb.half_extents.x, 0.05f), (std::max)(sb.half_extents.y, 0.05f), (std::max)(sb.half_extents.z, 0.05f));
+                cs.AddShape(JPH::Vec3(sb.center.x, sb.center.y, sb.center.z), JPH::Quat::sIdentity(), new JPH::BoxShape(he, 0.03f));
+            }
+            JPH::ShapeSettings::ShapeResult sr = cs.Create();
+            if (sr.HasError()) { log::errorf("[jolt] another car's shape: %s", sr.GetError().c_str()); continue; }
+            JPH::BodyCreationSettings bcs(sr.Get(), p, q, JPH::EMotionType::Kinematic, Layers::CAR);
+            // (metal on metal slides: with more a car that brushed another was held by it)
+            bcs.mFriction = 0.25f; bcs.mRestitution = 0.12f;
+            const JPH::BodyID id = bi.CreateAndAddBody(bcs, JPH::EActivation::Activate);
+            if (id.IsInvalid()) continue;
+            VehicleImpl::OtherCar oc; oc.id = id; oc.seen = true;
+            V.cars.emplace(c.key, oc);
+            changed = true;
+            continue;
+        }
+        it->second.seen = true;
+        const JPH::RVec3 was = bi.GetPosition(it->second.id);
+        // (it jumped - lent to another car, put somewhere: there at once, with no speed)
+        if ((p - was).Length() > 4.0f || dt <= 1e-4f) {
+            bi.SetPositionAndRotation(it->second.id, p, q, JPH::EActivation::Activate);
+            bi.SetLinearAndAngularVelocity(it->second.id, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+        } else bi.MoveKinematic(it->second.id, p, q, (std::max)(dt, 1.0f / 240.0f));
+    }
+    for (auto it = V.cars.begin(); it != V.cars.end();) {
+        if (it->second.seen) { ++it; continue; }
+        bi.RemoveBody(it->second.id); bi.DestroyBody(it->second.id);
+        it = V.cars.erase(it);
+        changed = true;
+    }
+    if (changed) {
+        V.wheel_ground.cars.clear();
+        for (const auto& kv : V.cars) V.wheel_ground.cars.push_back(kv.second.id);
+    }
 }
 
 } // namespace vibe

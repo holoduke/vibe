@@ -156,6 +156,22 @@ void main() {
     }
 
     gl_Position = pc.mvp * vec4(inPos_ext, 1.0);
+    // Meshes whose vertices ARE world positions (model = identity: buildings, their furniture,
+    // what hangs on their walls). `mvp * world position` adds up terms as large as the world
+    // coordinate (1600 m: one float step is 0.12 mm) to a result of a few metres, and it rounds
+    // clip z and clip w each on its own, per vertex. Depth is their ratio: an error e in either
+    // moves a surface by e * distance / near plane in depth - 2 cm at 9 m, more further off,
+    // different at every vertex. Layers a few millimetres apart (a poster, its frame, the wall)
+    // then won and lost by the triangle, and it changed with every step of the camera.
+    // So: the position from the eye first (that subtraction is exact in floats), transformed
+    // without the translation, plus the eye's own clip position - one value for the whole draw,
+    // whose rounding moves every vertex alike. The same sum, without the big terms per vertex.
+    if (pc.model == mat4(1.0)) {
+        precise vec3 from_eye = inPos_ext - scene.camera_pos.xyz;
+        precise vec4 eye_clip = pc.mvp * vec4(scene.camera_pos.xyz, 1.0);
+        precise vec4 rel_clip = pc.mvp * vec4(from_eye, 0.0);
+        gl_Position = rel_clip + eye_clip;
+    }
     vec4 wp = pc.model * vec4(inPos_ext, 1.0);
     vWorldPos = wp.xyz;
     // Shell base = un-extruded world position. cube.frag computes

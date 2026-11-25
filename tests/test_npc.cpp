@@ -447,3 +447,257 @@ TEST_CASE("npc: a driver shot in his car - it rolls to a stop, the others get ou
     run(w, 900.0f);
     REQUIRE(w.sane());
 }
+
+// ---------------------------------------------------------------------------------------------
+// The traffic: drivers of different pace, following, overtaking, the police, what is left on the road.
+namespace {
+
+// An oval: two straights of 1500 m (x = 0 driven toward +z, x = 240 driven toward -z) joined by
+// half circles of 120 m. A car driving the way s grows keeps right: on the first straight at x = -1.9.
+constexpr float kOvalS = 1500.0f, kOvalR = 120.0f;
+npc::Road oval_road() {
+    npc::Road r;
+    r.length = 2.0f * kOvalS + 2.0f * 3.14159265f * kOvalR;
+    r.at = [](float s, glm::vec3& pos, glm::vec2& dir) {
+        const float arc = 3.14159265f * kOvalR;
+        if (s < kOvalS) { pos = glm::vec3(0.0f, 0.0f, s); dir = glm::vec2(0.0f, 1.0f); return true; }
+        s -= kOvalS;
+        if (s < arc) { const float a = s / kOvalR; pos = glm::vec3(kOvalR - kOvalR * std::cos(a), 0.0f, kOvalS + kOvalR * std::sin(a)); dir = glm::vec2(std::sin(a), std::cos(a)); return true; }
+        s -= arc;
+        if (s < kOvalS) { pos = glm::vec3(2.0f * kOvalR, 0.0f, kOvalS - s); dir = glm::vec2(0.0f, -1.0f); return true; }
+        s -= kOvalS;
+        const float a = s / kOvalR;
+        pos = glm::vec3(kOvalR + kOvalR * std::cos(a), 0.0f, -kOvalR * std::sin(a)); dir = glm::vec2(-std::sin(a), -std::cos(a));
+        return true;
+    };
+    return r;
+}
+// The nearest two cars on the road come to each other (centre to centre). Side by side in two
+// lanes they are 3.8 m apart, nose to tail 4.7 m: under 2 m they are in each other.
+float nearest_pair(const std::vector<npc::View>& v, std::string* what = nullptr) {
+    float best = 1e9f;
+    for (size_t i = 0; i < v.size(); ++i)
+        for (size_t k = i + 1; k < v.size(); ++k)
+            if (v[i].kind == npc::Kind::Car && v[k].kind == npc::Kind::Car && !v[i].hidden && !v[k].hidden) {
+                const float d = glm::distance(v[i].pos, v[k].pos);
+                if (d >= best) continue;
+                best = d;
+                if (what) {
+                    char b[256];
+                    std::snprintf(b, sizeof(b), "car %d at (%.1f, %.1f) yaw %.2f %.1f m/s style %d and car %d at (%.1f, %.1f) yaw %.2f %.1f m/s style %d", int(i), v[i].pos.x, v[i].pos.z, v[i].yaw, v[i].speed,
+                                  int(v[i].style), int(k), v[k].pos.x, v[k].pos.z, v[k].yaw, v[k].speed, int(v[k].style));
+                    *what = b;
+                }
+            }
+    return best;
+}
+// ... keeping the worst moment of a run.
+struct Nearest {
+    float d = 1e9f; std::string what; int step = 0;
+    void look(const std::vector<npc::View>& v, int at) { std::string s; const float n = nearest_pair(v, &s); if (n < d) { d = n; what = s; step = at; } }
+};
+
+}  // namespace
+
+TEST_CASE("npc traffic: a faster car follows a slower one at a distance, and stops for a car left on its lane", "[npc][traffic]") {
+    // (on the ring: a bend all the way round, where nobody overtakes)
+    npc::World w;
+    w.set_road(ring_road());
+    w.populate(3, 0);
+    const int slow = w.add_car(300.0f, 1, 12.0f);
+    const int fast = w.add_car(100.0f, 1, 22.0f);
+    REQUIRE(slow >= 0);
+    REQUIRE(fast >= 0);
+    float nearest = 1e9f;
+    for (int i = 0; i < 10 * 90; ++i) { w.update(npc::kStep); nearest = std::min(nearest, nearest_pair(w.state())); }
+    const float gap = glm::distance(w.state()[size_t(slow)].pos, w.state()[size_t(fast)].pos);
+    INFO("after 90 s: " << gap << " m apart, the follower at " << w.state()[size_t(fast)].speed << " m/s; nearest ever " << nearest);
+    REQUIRE(std::abs(w.state()[size_t(fast)].speed - 12.0f) < 1.0f);      // at the pace of the one in front
+    REQUIRE(gap > 12.0f);                                                // 4.7 m of car, 2.5 m and over a second at 12 m/s
+    REQUIRE(gap < 40.0f);
+    REQUIRE(nearest > 9.0f);
+    REQUIRE(w.traffic().overtakes == 0);
+    // A car left standing on the lane 150 m ahead of the slow one: both stop short of it.
+    const npc::View lead = w.state()[size_t(slow)];
+    npc::Obstacle o; o.id = 9;
+    {
+        glm::vec3 p; glm::vec2 d;
+        const npc::Road r = ring_road();
+        const float R = 2000.0f / 6.2831853f;
+        float a = std::atan2(lead.pos.z, 40.0f + R - lead.pos.x);              // where the slow car is on the ring
+        if (a < 0.0f) a += 6.2831853f;
+        r.at(std::fmod(a * R + 150.0f, 2000.0f), p, d);
+        o.pos = p + glm::vec3(-d.y, 0.0f, d.x) * 1.9f; o.yaw = std::atan2(d.x, -d.y);
+    }
+    npc::Obstacle o2 = o; o2.id = 10;                 // (and one beside it in the other lane: the road is shut)
+    {
+        glm::vec3 p; glm::vec2 d;
+        const float R = 2000.0f / 6.2831853f;
+        float a = std::atan2(lead.pos.z, 40.0f + R - lead.pos.x);
+        if (a < 0.0f) a += 6.2831853f;
+        ring_road().at(std::fmod(a * R + 150.0f, 2000.0f), p, d);
+        o2.pos = p - glm::vec3(-d.y, 0.0f, d.x) * 1.9f;
+    }
+    float nearest_o = 1e9f;
+    for (int i = 0; i < 10 * 60; ++i) {
+        w.set_obstacles({ o, o2 });
+        w.update(npc::kStep);
+        for (int c : { slow, fast }) nearest_o = std::min(nearest_o, glm::distance(w.state()[size_t(c)].pos, o.pos));
+    }
+    INFO("nearest to the car left on the lane: " << nearest_o << " m; speeds " << w.state()[size_t(slow)].speed << ", " << w.state()[size_t(fast)].speed);
+    REQUIRE(nearest_o > 4.7f + 3.0f);                 // not into it
+    REQUIRE(nearest_o < 30.0f);                       // and it did come up to it
+    REQUIRE(std::abs(w.state()[size_t(slow)].speed) < 0.3f);
+    REQUIRE(std::abs(w.state()[size_t(fast)].speed) < 0.3f);
+    REQUIRE(w.sane());
+}
+
+TEST_CASE("npc traffic: a car left on a straight road is gone round when nothing comes", "[npc][traffic]") {
+    npc::World w;
+    w.set_road(oval_road());
+    w.populate(3, 0);
+    const int c = w.add_car(100.0f, 1, 20.0f);
+    npc::Obstacle o; o.id = 4; o.pos = glm::vec3(-1.9f, 0.0f, 400.0f); o.yaw = 3.14159265f;      // on the lane, 300 m ahead
+    float nearest = 1e9f, slowest = 1e9f;
+    for (int i = 0; i < 10 * 60; ++i) {
+        w.set_obstacles({ o });
+        w.update(npc::kStep);
+        nearest = std::min(nearest, glm::distance(w.state()[size_t(c)].pos, o.pos));
+        slowest = std::min(slowest, std::abs(w.state()[size_t(c)].speed));
+    }
+    const npc::View v = w.state()[size_t(c)];
+    INFO("nearest to it " << nearest << " m, slowest " << slowest << " m/s, after a minute at z " << v.pos.z << ", x " << v.pos.x << ", " << v.speed << " m/s");
+    REQUIRE(nearest > 2.25f);                         // beside it, clear: two car widths are 2.04 m centre to centre
+    REQUIRE(v.pos.z > 500.0f);                        // past it
+    REQUIRE(std::abs(-v.pos.x - 1.9f) < 0.5f);        // and back in its lane
+    REQUIRE(w.traffic().overtakes == 1);
+}
+
+TEST_CASE("npc traffic: a car held up overtakes - after what comes the other way has passed", "[npc][traffic]") {
+    npc::World w;
+    w.set_road(oval_road());
+    w.populate(3, 0);
+    const int slow = w.add_car(200.0f, 1, 10.0f);
+    const int fast = w.add_car(120.0f, 1, 24.0f);
+    const int other = w.add_car(620.0f, -1, 21.0f);             // 400 m ahead of the slow one, coming: they meet in 13 s
+    float nearest = 1e9f, out_at = -1.0f, met_at = -1.0f, back_at = -1.0f, most_left = 1e9f, lane_after = 1e9f, speed_after = 0.0f, ahead_after = 0.0f;
+    for (int i = 0; i < 10 * 80; ++i) {
+        w.update(npc::kStep);
+        const std::vector<npc::View>& v = w.state();
+        nearest = std::min(nearest, nearest_pair(v));
+        const float t = float(i) * npc::kStep;
+        const npc::View& f = v[size_t(fast)];
+        if (met_at < 0.0f && v[size_t(other)].pos.z < f.pos.z) met_at = t;                   // (the first straight runs along +z)
+        if (out_at < 0.0f && (f.style & npc::kCarOvertaking)) out_at = t;
+        if (out_at >= 0.0f && back_at < 0.0f && !(f.style & npc::kCarOvertaking)) back_at = t;
+        if (out_at >= 0.0f && back_at < 0.0f) most_left = std::min(most_left, -f.pos.x);      // (right of the centre line: -x)
+        if (back_at >= 0.0f && t < back_at + 6.0f) { lane_after = -f.pos.x; speed_after = f.speed; ahead_after = f.pos.z - v[size_t(slow)].pos.z; }      // (six seconds on: still on the straight)
+    }
+    const std::vector<npc::View>& v = w.state();
+    INFO("pulled out at " << out_at << " s, the oncoming car passed at " << met_at << " s, back in lane at " << back_at << " s; furthest left " << most_left
+         << " m right of the centre; nearest two cars ever " << nearest << " m; overtakes " << w.traffic().overtakes << ", given up " << w.traffic().given_up);
+    REQUIRE(met_at > 0.0f);
+    REQUIRE(out_at > met_at - 1.0f);                  // not out in front of the car that came
+    REQUIRE(back_at > out_at);
+    REQUIRE(most_left < -1.2f);                       // it did drive in the other lane
+    REQUIRE(nearest > 3.0f);                          // and nobody touched anybody
+    (void)v;
+    REQUIRE(ahead_after > 8.0f);                      // past it
+    REQUIRE(std::abs(lane_after - 1.9f) < 0.5f);      // and back in its own lane
+    REQUIRE(speed_after > 20.0f);
+    REQUIRE(w.traffic().overtakes == 1);
+    REQUIRE(w.sane());
+}
+
+TEST_CASE("npc traffic: somebody comes while a car is out passing - it gets back in, and nobody is hit", "[npc][traffic]") {
+    for (float ahead : { 120.0f, 200.0f, 300.0f }) {
+        npc::World w;
+        w.set_road(oval_road());
+        w.populate(3, 0);
+        const int slow = w.add_car(200.0f, 1, 10.0f);
+        const int fast = w.add_car(150.0f, 1, 24.0f);
+        (void)slow;
+        float nearest = 1e9f;
+        bool added = false;
+        for (int i = 0; i < 10 * 60; ++i) {
+            w.update(npc::kStep);
+            const std::vector<npc::View>& v = w.state();
+            // (the moment it is fully out: a car appears in that lane, coming)
+            if (!added && (v[size_t(fast)].style & npc::kCarOvertaking) && -v[size_t(fast)].pos.x < -1.0f) {
+                added = true;
+                REQUIRE(w.add_car(v[size_t(fast)].pos.z + ahead, -1, 21.0f) >= 0);
+            }
+            nearest = std::min(nearest, nearest_pair(w.state()));
+        }
+        INFO("a car appearing " << ahead << " m ahead: nearest two cars ever " << nearest << " m; overtakes " << w.traffic().overtakes << ", given up " << w.traffic().given_up);
+        REQUIRE(added);
+        REQUIRE(nearest > 2.6f);
+        REQUIRE(w.sane());
+    }
+}
+
+TEST_CASE("npc traffic: slow drivers, speeders and the police share the road for half an hour without touching", "[npc][traffic]") {
+    npc::World w;
+    w.set_road(oval_road());
+    w.populate(11);
+    const npc::World::Traffic t0 = w.traffic();
+    REQUIRE(t0.speeders >= 1);
+    REQUIRE(t0.police == 2);
+    float nearest = 1e9f, fastest = 0.0f;
+    int siren_steps = 0;
+    Nearest nn;
+    for (int i = 0; i < 10 * 60 * 30; ++i) {
+        w.update(npc::kStep);
+        nn.look(w.state(), i); nearest = nn.d;
+        const npc::World::Traffic t = w.traffic();
+        fastest = std::max(fastest, t.fastest);
+        siren_steps += t.sirens;
+    }
+    const npc::World::Traffic t = w.traffic();
+    INFO("overtakes " << t.overtakes << " (given up " << t.given_up << "), fastest " << fastest << " m/s, siren-seconds " << siren_steps / 10 << ", nearest two cars ever " << nearest << " m: at step " << nn.step << " " << nn.what);
+    REQUIRE(t.overtakes > 10);
+    REQUIRE(fastest > 34.0f);                         // the speeder got to drive (the rest want 13 .. 28 m/s)
+    REQUIRE(siren_steps > 0);
+    REQUIRE(nearest > 2.6f);
+    REQUIRE(w.sane());
+}
+
+TEST_CASE("npc traffic: the others make way for a siren, and the police car gets through", "[npc][traffic]") {
+    npc::World w;
+    w.set_road(oval_road());
+    w.populate(3, 0);
+    const int a = w.add_car(260.0f, 1, 16.0f), b = w.add_car(300.0f, 1, 16.0f);
+    const int police = w.add_car(100.0f, 1, 20.0f, npc::kCarPolice | npc::kCarSiren);
+    float nearest = 1e9f, most_right = 0.0f;
+    Nearest nn;
+    for (int i = 0; i < 10 * 45; ++i) {
+        w.update(npc::kStep);
+        nn.look(w.state(), i); nearest = nn.d;
+        most_right = std::max(most_right, -w.state()[size_t(a)].pos.x);
+    }
+    const std::vector<npc::View>& v = w.state();
+    INFO("the car behind which the siren came went " << most_right << " m right of the centre; police at z " << v[size_t(police)].pos.z << ", the others at " << v[size_t(a)].pos.z << ", " << v[size_t(b)].pos.z << "; nearest " << nearest << " at step " << nn.step << ": " << nn.what);
+    REQUIRE((v[size_t(police)].style & npc::kCarSiren) != 0);
+    REQUIRE(most_right > 2.6f);                       // to the edge of the road
+    REQUIRE(v[size_t(police)].pos.z > v[size_t(b)].pos.z + 10.0f);
+    REQUIRE(nearest > 2.3f);                          // (down the middle past a car at the edge: about 3 m centre to centre)
+}
+
+TEST_CASE("npc traffic: a car that is struck is pushed, and drives on", "[npc][traffic]") {
+    npc::World w;
+    w.set_road(oval_road());
+    w.populate(3, 0);
+    const int c = w.add_car(300.0f, 1, 20.0f);
+    run(w, 2.0f);
+    const npc::View before = w.state()[size_t(c)];
+    REQUIRE(w.push_car(c, glm::vec3(4.0f, 0.0f, -6.0f), 0.8f));          // from the left front: sideways and back
+    run(w, 0.5f);
+    const npc::View hit = w.state()[size_t(c)];
+    REQUIRE(hit.speed < before.speed - 4.0f);         // slowed by what went against it
+    REQUIRE(hit.pos.x > before.pos.x + 0.8f);         // and slid sideways
+    run(w, 40.0f);
+    const npc::View after = w.state()[size_t(c)];
+    REQUIRE(after.speed > 18.0f);                     // it drives on
+    REQUIRE(std::abs(-after.pos.x - 1.9f) < 0.6f);    // in its lane
+    REQUIRE(w.sane());
+}

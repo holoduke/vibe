@@ -20,8 +20,33 @@
 
 namespace vibe {
 
+// A tree grown by its species' habit (eztree.cpp "Habit growth" - this engine's own, not part of
+// EZ-Tree). `kind` 0 keeps the EZ-Tree algorithm above (bushes, river scrub); the others build
+// the skeleton the way that kind of tree grows, in metres:
+//   1 oak    - a short trunk that divides into a few heavy scaffold limbs, lower limbs standing
+//              out wide, a broad dome (young ones keep one stem to the top)
+//   2 birch  - one slender stem to the top, many thin ascending branches, hanging twigs
+//   3 spruce - a straight leader, whorls of boughs: rising at the top, level in the middle,
+//              drooping below with the tips turned up; flat sprays to both sides of each bough
+//   4 pine   - a bare lower trunk, a few crooked limbs with up-turned ends, needle tufts at the
+//              shoot ends, the top rounding off with age
+// In all of them: branches sag under their weight and turn up to the light toward the tip, wander
+// a little, swell where they leave their parent (a collar), and only the twigs carry leaf cards -
+// so the crown is leafy outside and shows its limbs and the sky inside.
+struct TreeHabit {
+    int   kind = 0;
+    float age = 0.5f;        // 0 young .. 0.5 grown .. 1 old (stem thickness, clear trunk, limb weight, crown width)
+    float crown_w = 1.0f;    // crown width, relative to the kind's own
+    float lean = 0.0f;       // the trunk's lean (radians near the ground; it grows back toward the light)
+    float lean_az = 0.0f;
+    float asym = 0.0f;       // 0..0.5: the crown reaches further to one side
+    float asym_az = 0.0f;
+    float density = 1.0f;    // number of side branches and twigs (the triangle budget)
+};
+
 struct EzTreeOptions {
     uint32_t seed = 0;
+    TreeHabit habit;         // kind != 0: lengths below are not used, leaf_size is in metres
     bool evergreen = false;
     int levels = 3;
     float angle[4]      = { 0.0f, 70.0f, 60.0f, 60.0f };     // child branch angle (deg), per level

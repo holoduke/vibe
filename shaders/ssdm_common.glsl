@@ -10,7 +10,7 @@ layout(push_constant) uniform SsdmPC {
     mat4 vp;         // camera-relative world -> clip (this frame, as the scene was drawn)
     mat4 prev_vp;    // camera-relative world -> the clip space of the last frame (jitter difference taken out)
     vec4 size;       // render size in pixels, and 1 / it
-    vec4 rect;       // xy first pixel of the screen rectangle that holds displaced stonework; z strength of the joint shade
+    vec4 rect;       // xy first pixel of the screen rectangle that holds displaced stonework; z strength of the joint shade; w the height (m) a full ground value stands for (ssdm_ground.frag)
     vec4 par;        // x smoothing radius (m), y reference height (m), z debug view, w world size of a pixel at 1 m
     vec4 sun;        // xyz direction to the sun, w strength of the sun shadow the stones cast on each other (0 at night)
 } pc;

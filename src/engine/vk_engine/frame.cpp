@@ -434,6 +434,13 @@ void VulkanEngine::record_shadow_passes(FrameData& frame) {
         render_sun_shadow_pass(frame.command_buffer);
     }
     prof_mark(frame.command_buffer, "sun_shadow_map");
+    // The trail and the wind field, BEFORE anything draws a plant: the depth pre-pass, the
+    // plants' shadow maps and the colour pass must all move a leaf by the same wind (the colour
+    // pass tests depth EQUAL - when these ran after the pre-pass, leaves near a moving car
+    // dropped out in grey specks).
+    grass_trail_update(frame.command_buffer);   // where people and cars have just been, for the plants (grass_trail.cpp)
+    wind_fluid_update(frame.command_buffer);    // the air people and cars stir up, for the plants (wind_fluid.cpp)
+    prof_mark(frame.command_buffer, "trail_wind");
     render_clutter_shadow(frame.command_buffer);
     prof_mark(frame.command_buffer, "clutter_shadow");
 
@@ -581,9 +588,7 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     VkClearValue clear_depth{};
     clear_depth.depthStencil.depth = 1.0f;
     wm_cache_bake(frame.command_buffer);        // the world's slow fields, when the camera has moved on (wm_cache.cpp)
-    grass_trail_update(frame.command_buffer);   // where people and cars have just been, for the plants (grass_trail.cpp)
-    wind_fluid_update(frame.command_buffer);    // the air people and cars stir up, for the plants (wind_fluid.cpp)
-    prof_mark(frame.command_buffer, "trail_wind");
+    // (the trail and the wind field are brought up to date before the depth pre-pass: draw())
     // ---------- Pass 0.45: the terrain's low-resolution march ("march pre-pass") ----------
     // One ray per block of pixels finds how far it can go before the ground comes near;
     // the terrain pass - the full-resolution one in the world pass, or the low-resolution

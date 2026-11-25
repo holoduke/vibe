@@ -255,6 +255,13 @@ public:
     void     vehicle_impulse(glm::vec3 impulse, glm::vec3 at);
     void     vehicle_set_ground(std::vector<float> samples, int n, glm::vec2 origin, float cell);
     void     vehicle_set_obstacles(const OrientedBox* boxes, size_t count);
+    // THE OTHER CARS, as the vehicle meets them: bodies that are moved, not simulated (kinematic) -
+    // each a car's collision boxes at the place its owner says it is. Given every frame: a car
+    // that is new is made, one that is in the list again is moved there over `dt` (so the
+    // vehicle is struck by something that has a speed), one that is no longer in it is removed.
+    // The vehicle's wheels do not stand on them. `key`: the same car has the same number.
+    struct CarBody { uint32_t key = 0; glm::mat4 body{1.0f}; const StaticBox* boxes = nullptr; size_t n_boxes = 0; };
+    void     vehicle_set_cars(const CarBody* cars, size_t count, float dt);
 
 private:
     struct Impl;

@@ -1198,7 +1198,9 @@ void main() {
     outColor = vec4(col, 1.0);
 #ifndef VIBE_WATER
     outGBuffer0 = vec4(clamp(col, vec3(0.0), vec3(1.0)), 8.0 / 255.0);
-    outGBuffer1 = vec4(0.5, 0.5, 0.7, 0.0);
+    // (.b: 0.7 = the full-resolution ground, plus how far the material stands out of it - the
+    //  screen-space displacement reads it there: shaders/ssdm_ground.frag)
+    outGBuffer1 = vec4(0.5, 0.5, 0.7 + 0.3 * clamp(g_gnd_ssdm_h / kGndSsdmMax, 0.0, 1.0), 0.0);
 #else /* VIBE_WATER */
     // G-buffer pass-through. Water is already fully shaded; material_id 7
     // tells the deferred lighting pass to use albedo unmodified.

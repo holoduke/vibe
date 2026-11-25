@@ -10,7 +10,8 @@
 //   people   staff who work their shift, locals who sit outside and wander in for something,
 //            travellers who arrive in a car, fill up, pay, perhaps eat, and drive on;
 //   cars     traffic round the course in both directions (each keeps to its right-hand lane and
-//            to the car in front); some of those that pass the site pull in - to a pump or to a
+//            follows the car in front at a time gap and overtakes it when the other lane is free:
+//            npc.cpp "THE TRAFFIC"); some of those that pass the site pull in - to a pump or to a
 //            parking bay - wait for their people and leave again; a few stand parked.
 //
 // MULTIPLAYER. One machine is the AUTHORITY: it calls update(). It serialises the state a few
@@ -47,6 +48,19 @@ enum class Act : uint8_t { None = 0, SitDown = 1, StandUp = 2, CarEnter = 3, Car
 constexpr float kActTime[5] = { 0.0f, 3.2f, 2.6f, 3.6f, 3.4f };      // seconds each takes
 
 // What a renderer needs of one agent, blended to the present moment.
+// View::style of a CAR: what kind it is and what it is doing (bits).
+constexpr uint8_t kCarPolice = 1, kCarSiren = 2, kCarOvertaking = 4;
+
+// Something on or by the road that is not this world's: a player's car, driven or left standing.
+// The traffic keeps behind it, stops for it, and goes round it when the other lane is free.
+struct Obstacle {
+    uint32_t  id = 0;                 // the same thing has the same number from call to call
+    glm::vec3 pos{0.0f};
+    float     yaw = 0.0f;             // as a View's
+    glm::vec3 vel{0.0f};
+    float     half_w = 1.02f, half_l = 2.35f;
+};
+
 struct View {
     uint8_t   id = 0;
     Kind      kind = Kind::Person;
@@ -58,7 +72,7 @@ struct View {
     glm::vec3 pos{0.0f};
     Act       act = Act::None;   // a person: what it is in the middle of doing (it stands at `pos` meanwhile) ...
     float     act_t = 0.0f;      // ... for how long already (seconds; kActTime says how long it takes)
-    uint8_t   style = 0;         // which way of sitting / standing / working (kStyle*, below): the renderer's clip
+    uint8_t   style = 0;         // a person: which way of sitting / standing / working (below): the renderer's clip. A car: kCarPolice, kCarSiren, kCarOvertaking
     glm::vec3 aim{0.0f};         // ... and the seat it is sitting down on or getting up from (a car's seat: `car`, `seat`)
     float     yaw = 0.0f;        // radians; 0 looks toward -z, as the player's
     float     speed = 0.0f;      // m/s (negative: a car reversing)
@@ -71,7 +85,7 @@ struct View {
 // Working: 0 at a machine (a till's buttons), 1 a cashier, 2 at a pump.
 // How somebody walks: `look % 8` - 0 and 5..7 plainly, 1 briskly, 2 tired, 3 hands in the pockets, 4 at a
 // phone - and how fast that is, of the plain pace.
-constexpr float kPace[8] = { 1.0f, 0.85f, 0.42f, 0.67f, 0.81f, 1.0f, 1.0f, 1.0f };      // (the clips' own paces, a little quicker: they were made slow)
+constexpr float kPace[8] = { 1.0f, 0.85f, 0.42f, 0.67f, 0.81f, 0.82f, 1.0f, 1.0f };      // (the clips' own paces, a little quicker: they were made slow)
 constexpr int kSeatHeightCm[2] = { 45, 75 };      // a chair's seat above its floor, a bar stool's
 
 struct Road {
@@ -94,7 +108,12 @@ public:
     // Makes the people and the cars. Call after the site and the road are set.
     // The way the soldiers run, there and back (before populate; empty: none).
     void set_run_path(std::vector<glm::vec3> pts);
-    void populate(uint32_t seed);
+    // `traffic`: how many cars drive the road (tests make their own with add_car).
+    void populate(uint32_t seed, int traffic = 26);
+    // One more car on the road (tests and scenarios; the authority's, after populate): `s` metres
+    // along it, `dir` +1 / -1, wanting to drive `cruise` m/s. `style`: kCarPolice and kCarSiren.
+    // Its number, or -1.
+    int  add_car(float s, int dir, float cruise, uint8_t style = 0);
     // SHOT (the authority's): that person is dead - gone from the world (the renderer has the
     // body), and after a while somebody new walks on to the site. Somebody on foot, on a seat or
     // IN A CAR; and `id` may be a car that drives with nobody of this world at its wheel (the
@@ -114,6 +133,15 @@ public:
     // does not drive into them - on the road it brakes in good time and waits while one stands
     // on its lane, on the site it waits as it does for its own people.
     void set_walkers(const std::vector<glm::vec3>& feet);
+    // The players' cars near the road (the authority's, given every frame): see Obstacle.
+    void set_obstacles(const std::vector<Obstacle>& obs);
+    // STRUCK (the authority's): something hit that car - its velocity changes by `dv` (world,
+    // m/s) and it turns by `spin` (rad/s). What goes along the car changes its speed, the rest
+    // slides it sideways and dies away; after a hard knock its driver stands a few seconds
+    // before he drives on. A parked car is shoved and stays where it comes to rest.
+    bool push_car(int id, glm::vec3 dv, float spin);
+    // Tests: every police car's siren on (and it stays on), or off.
+    void set_sirens(bool on);
 
     // Authority: steps the world in fixed steps for the time passed. Replica: moves its clock.
     void update(float frame_dt);
@@ -135,6 +163,10 @@ public:
         float longest_visit = 0.0f;      // seconds the car that has been at the site longest (not the parked ones) has been there
     };
     Census census() const;
+    // The traffic: overtakes begun, how many of them were given up (somebody came), the kinds of
+    // driver on the road now, sirens on, and the fastest car's speed.
+    struct Traffic { int overtakes = 0, given_up = 0, overtaking = 0, slow = 0, speeders = 0, police = 0, sirens = 0; float fastest = 0.0f; };
+    Traffic traffic() const;
     // True when no seat, spot, bay or stop is held by two agents and no number is not finite.
     bool   sane() const;
     // One line a car at the site (what it is doing): for logs and for finding what stands still.

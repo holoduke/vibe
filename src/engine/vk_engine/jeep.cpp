@@ -22,11 +22,13 @@
 #include "engine/vk_engine/internal.h"
 #include "engine/highway.h"
 #include "engine/audio.h"
-#include "engine/car_sound_curve.h"
+#include "engine/sound_space.h"
 #include "engine/net/net.h"
 #include "engine/terrain.h"
 #include "engine/globe.h"
 #include "engine/vk_engine/state/environment.h"
+#include "engine/siren_synth.h"
+#include "engine/vk_engine/state/car_traffic.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
@@ -35,6 +37,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <future>
@@ -450,6 +453,7 @@ void VulkanEngine::destroy_jeep() {
     for (JeepState* c : jeep_all_) delete c;
     if (audio_) for (auto& kv : car_voices_) audio_->engine_stop(kv.second);
     car_voices_.clear();
+    if (audio_ && cars_x_) for (auto& b : cars_x_->bars) if (b.voice) { audio_->stop_voice(b.voice, 0.0f); b.voice = 0; }
     for (NpcCar& c : npc_cars_) delete c.car;
     npc_cars_.clear();
     jeep_all_.clear();
@@ -685,6 +689,7 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
             jeep_park(*jeep_all_[i], p, yaw);
         }
     }
+    cars_collide(dt);                       // (the other cars are solid to this one, and what is struck moves: CARS STRIKE CARS, below)
     if (!J.spawned) { if (J.net_owner) return; jeep_spawn(); if (!J.spawned) return; }      // (another player's machine simulates it: jeep_net_receive)
     if (!globe::current().home) return;                    // (another part of the planet: it waits where it was left)
     jeep_feed_world();
@@ -1193,27 +1198,33 @@ bool VulkanEngine::jeep_headlights(glm::vec4& pos, glm::vec4& dir, glm::vec4& co
 // CAR SOUND. Every car that runs has an engine (audio.h "ENGINES"; the loops come out of
 // an engine simulation - docs/ARCHITECTURE.md "Car sound"): the jeep a flat four, the sports
 // car a flat-plane V8 to 9000, the saloon a quiet four-cylinder, the pickup a V6. The player's car, the
-// NPC engine's traffic and the cars other players drive: the nearest kVoices of them within
-// 280 m sound.
+// NPC engine's traffic and the cars other players drive: the nearest kVoices of them that can
+// be heard sound.
 //   speed of the engine: the driven car's own (the physics); any other car's from its road
 //     speed through its gears, changed by the rule the driven car's box has
 //     (VehicleDesc::shift_up_rpm / shift_down_rpm: each kind of car its own).
 //   load: the driver's throttle; another car's from how it gains or loses speed.
-//   far away: quieter by the square of the distance, and duller - the low-pass comes down
-//     from 18 kHz to 600 Hz by 320 m (what is left of a car far off is its drone).
+//   where it is heard from: the spatialiser's (audio.h "SOUND IN SPACE", sound_space.h) -
+//     quieter and duller with the distance down to silence, Doppler, the side it is on, a hill
+//     or a wall in the way, the echo of the surroundings. This function only says where each
+//     car is, how fast it goes and how loud its engine is beside it.
 //   in the cabin (the driver's nearest view): the own engine through 2.4 kHz, everything
-//     outside through 1.4 kHz and at less than half.
+//     outside through 1.4 kHz and at less than half (sound_env.cpp: Space::outside_*).
 void VulkanEngine::car_audio_tick(float dt) {
     if (!audio_ || !audio_->ok() || dt <= 0.0f) return;
-    constexpr size_t kVoices = 6;           // cars heard at once (one that is let go fades out first: a few more may sound meanwhile)
-    // (the curves: engine/car_sound_curve.h. VIBE_CAR_SOUND_OLD=1: the ones before, to compare)
-    static const bool old_curve = std::getenv("VIBE_CAR_SOUND_OLD") != nullptr;
-    const float kHear = old_curve ? car_sound::kHearOld : car_sound::kHear;        // (beyond it a car is not heard)
-    if (static bool told = false; !told && std::getenv("VIBE_LOG_CAR_SOUND_CURVE")) {
+    constexpr size_t kVoices = 8;           // cars heard at once (one that is let go fades out first: a few more may sound meanwhile)
+    // What a car is as a source (sound_space.h): full loudness within about 6 m; from outside
+    // its top end is gone already beside it (exhaust and body, not the intake the driver hears).
+    constexpr sound_space::Shape kCarShape{ 6.0f, 4500.0f };
+    // VIBE_LOG_SOUND_CURVE=1: the curves as a table (the one in docs/ARCHITECTURE.md "Sound in space").
+    if (static bool told = false; !told && std::getenv("VIBE_LOG_SOUND_CURVE")) {
         told = true;
-        for (float d : { 0.0f, 2.0f, 5.0f, 12.0f, 25.0f, 50.0f, 75.0f, 100.0f, 125.0f, 150.0f, 170.0f, 180.0f, 240.0f })
-            log::infof("[car-sound] curve at %3.0f m: gain %.4f (%6.1f dB), low-pass %4.0f Hz   (before: gain %.4f, %4.0f Hz)", double(d), double(car_sound::gain(d)),
-                       car_sound::gain(d) > 0.0f ? 20.0 * std::log10(double(car_sound::gain(d))) : -999.0, double(car_sound::cutoff_hz(d)), double(car_sound::gain_old(d)), double(car_sound::cutoff_hz_old(d)));
+        for (float d : { 0.0f, 3.0f, 6.0f, 12.0f, 25.0f, 50.0f, 75.0f, 100.0f, 150.0f, 200.0f, 250.0f, 300.0f, 350.0f, 400.0f, 430.0f, 450.0f }) {
+            const float g = sound_space::gain(d, kCarShape.ref_m);
+            log::infof("[sound-space] curve at %3.0f m: gain %.5f (%6.1f dB), low-pass %4.0f Hz, reverb share %.4f (%6.1f dB); a car passing at 30 m/s there: Doppler %.3f coming, %.3f going", double(d), double(g),
+                       g > 0.0f ? 20.0 * std::log10(double(g)) : -999.0, double(sound_space::cutoff_hz(d, kCarShape.top_hz)), double(sound_space::send(g)),
+                       g > 0.0f ? 20.0 * std::log10(double(sound_space::send(g))) : -999.0, double(sound_space::doppler(30.0f, 0.0f, d)), double(sound_space::doppler(-30.0f, 0.0f, d)));
+        }
     }
     static const float kGain = std::getenv("VIBE_CAR_SOUND_GAIN") ? float(std::atof(std::getenv("VIBE_CAR_SOUND_GAIN"))) : 1.0f;
     static const bool off = std::getenv("VIBE_NO_CAR_SOUND") != nullptr;
@@ -1224,32 +1235,40 @@ void VulkanEngine::car_audio_tick(float dt) {
         car_ear_last_ = eye; car_ear_has_ = true;
         audio_->set_listener_velocity(car_ear_vel_);
     }
-    struct Cand { JeepState* J; float d; bool wanted = true; };
+    struct Cand { JeepState* J; float d; bool wanted = true; float rank = 0.0f; const NpcCar* npc = nullptr; };
     std::vector<Cand> cand;
     const bool home = globe::current().home;
+    const bool cabin = jeep_ && jeep_->driving && jeep_->cam_mode == 0;
+    sound_env_tick(dt, cabin);
     if (home && !off) {
         for (JeepState* c : jeep_all_) {
             c->snd_running = c->posed && (c->driving || (c->net_owner && c->net_driven));
             if (c->snd_running) cand.push_back({ c, c->driving ? 0.0f : glm::distance(glm::vec3(c->st.body[3]), eye) });
         }
         for (NpcCar& nc : npc_cars_)
-            if (nc.agent >= 0 && nc.car->posed && nc.car->snd_running) cand.push_back({ nc.car, glm::distance(glm::vec3(nc.car->st.body[3]), eye) });
+            if (nc.agent >= 0 && nc.car->posed && nc.car->snd_running) cand.push_back({ nc.car, glm::distance(glm::vec3(nc.car->st.body[3]), eye), true, 0.0f, &nc });
     }
-    std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
-    while (!cand.empty() && (cand.size() > kVoices || cand.back().d > kHear)) cand.pop_back();
+    // The nearest kVoices that can be heard at all. A car that has a voice counts as a little
+    // nearer than it is: two cars equally far do not take the last voice from each other in turn.
+    for (Cand& c : cand) c.rank = c.d * (car_voices_.count(c.J) ? 0.85f : 1.0f);
+    std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.rank < b.rank; });
+    // (heard at all: the distance alone leaves it above the floor - twice the floor to be given a voice)
+    cand.erase(std::remove_if(cand.begin(), cand.end(), [&](const Cand& c) {
+        return sound_space::gain(c.d, kCarShape.ref_m) < (car_voices_.count(c.J) ? 1.0f : 2.0f) * sound_space::kFloor; }), cand.end());
+    if (cand.size() > kVoices) cand.resize(kVoices);
     // NOTHING STOPS AT ONCE. A voice whose car is no longer one of the heard (it parked and
     // switched off, a nearer car took its place, it left the reach) is turned down to nothing
-    // first - a third of a second - and only then let go: a voice cut while it sounds is a click
-    // and a hole in the traffic's noise.
+    // first (the spatialiser follows its loudness down) and only then let go, once it is under
+    // the floor and not mixed any more: a voice cut while it sounds is a click and a hole in
+    // the traffic's noise.
     for (auto it = car_voices_.begin(); it != car_voices_.end();) {
         bool keep = false;
         for (const Cand& c : cand) if (c.J == it->first) { keep = true; break; }
         if (keep) { ++it; continue; }
-        if (it->first->snd_vol < 0.0008f || !home || off || car_voices_.size() > kVoices + 4) { it->first->snd_vol = 0.0f; audio_->engine_stop(it->second); it = car_voices_.erase(it); continue; }
+        if (it->first->snd_vol < sound_space::kFloor || !home || off || car_voices_.size() > kVoices + 6) { it->first->snd_vol = 0.0f; audio_->engine_stop(it->second); it = car_voices_.erase(it); continue; }
         cand.push_back({ it->first, glm::distance(glm::vec3(it->first->st.body[3]), eye), false });
         ++it;
     }
-    const bool cabin = jeep_ && jeep_->driving && jeep_->cam_mode == 0;
     for (const Cand& c : cand) {
         JeepState& J = *c.J;
         if (J.snd_set == -2) {
@@ -1259,13 +1278,18 @@ void VulkanEngine::car_audio_tick(float dt) {
         if (J.snd_set < 0) continue;
         auto it = car_voices_.find(&J);
         if (it == car_voices_.end()) {
-            const uint32_t h = audio_->engine_start(J.snd_set);
+            const uint32_t h = audio_->engine_start(J.snd_set, kCarShape);
             if (!h) continue;
             it = car_voices_.emplace(&J, h).first;
             J.snd_has_last = false; J.snd_rpm = 900.0f; J.snd_load = 0.0f; J.snd_vol = 0.0f; J.snd_far = false;
         }
         const glm::vec3 pos = glm::vec3(J.st.body * glm::vec4(0.0f, 0.7f, -1.2f, 1.0f));       // (the engine: ahead of the cabin)
-        const glm::vec3 vel_now = J.snd_has_last ? (pos - J.snd_last) / dt : glm::vec3(0.0f);
+        // How fast it goes. A car of the NPC engine: the speed the NPC engine drives it at, along
+        // its nose - exact. (From where it was a frame ago, as for the others, its speed came out
+        // up to a quarter wrong for a frame now and then: heard as a flutter in the engine's
+        // note and in the Doppler shift.)
+        glm::vec3 vel_now = J.snd_has_last ? (pos - J.snd_last) / dt : glm::vec3(0.0f);
+        if (c.npc) vel_now = -glm::normalize(glm::vec3(J.st.body[2])) * c.npc->last_speed;
         const float sp_prev = glm::length(J.snd_vel);
         J.snd_vel += ((glm::length(vel_now) < 120.0f ? vel_now : glm::vec3(0.0f)) - J.snd_vel) * std::min(1.0f, dt * 8.0f);
         J.snd_last = pos; J.snd_has_last = true;
@@ -1294,34 +1318,33 @@ void VulkanEngine::car_audio_tick(float dt) {
         J.snd_load += (load_t - J.snd_load) * std::min(1.0f, dt * 9.0f);
         const bool own = J.driving && &J == jeep_;
         const float d = own ? glm::distance(pos, eye) : c.d;
-        // Loudness: half at 14 m, an eighth at 50 m, a twentieth at 100 m, and from 100 m on down to
-        // nothing at kHear - one even slope all the way (it was inverse-square from 9 m: at 100 m
-        // under what is played at all, so a car leaving went quiet fast and then cut out). Tone: the further, the duller -
-        // from outside a car you hear its exhaust and little of its top end (7 kHz at arm's
-        // length on foot, 12 kHz for the own car seen from behind), down to 350 Hz far off.
-        //
-        // Fourth pass (2026-11-25, "muffling when you stand outside or far away ... more silent the
-        // further away"): a car the listener is not in goes by car_sound_curve.h - half at 12 m and
-        // then by the square of the distance, nothing at 180 m; through 4.5 kHz at arm's length,
-        // 2.2 kHz at 12 m, 730 Hz at 62 m, 300 Hz from 170 m. The car the player drives is as it was.
-        const float dist_gain = old_curve ? car_sound::gain_old(d) : car_sound::gain(d);
-        float vol = 0.62f * (0.50f + 0.50f * J.snd_load) * (0.60f + 0.40f * std::clamp(J.snd_rpm / limit, 0.0f, 1.0f)) * dist_gain * kGain * J.tune.engine_loudness;
-        if (own) vol = 0.62f * (0.50f + 0.50f * J.snd_load) * (0.60f + 0.40f * std::clamp(J.snd_rpm / limit, 0.0f, 1.0f)) * 0.42f * kGain * J.tune.engine_loudness;       // (the own car: the camera's distance is not the driver's)
-        float hz = own ? 12000.0f : old_curve ? car_sound::cutoff_hz_old(d) : car_sound::cutoff_hz(d);
-        if (cabin) { if (own) { hz = 2400.0f * (0.55f + 0.45f * J.tune.engine_loudness); vol *= 0.9f; } else { hz = std::min(hz, 1400.0f); vol *= 0.45f; } }
-        if (!c.wanted) vol = 0.0f;
-        // (the loudness follows: up in a tenth of a second, down in a third - also when the
-        //  player gets out of the car, or a car is let go)
-        J.snd_vol += (vol - J.snd_vol) * std::min(1.0f, dt / (vol > J.snd_vol ? 0.10f : 0.33f));
+        // How loud the engine is beside it: its load and its speed, the kind of car. What is heard
+        // of that from where the listener is - distance, tone, Doppler, side, a hill in the way,
+        // the echo - is the spatialiser's (audio.h "SOUND IN SPACE"; before 2026-11-25's fifth pass
+        // this function had its own loudness and low-pass curves against the distance).
+        // The car the player drives is not a source in space: the camera's distance is not the
+        // driver's. It is in the middle, through the chase view's 12 kHz or the cabin's low-pass.
+        float level = 0.62f * (0.50f + 0.50f * J.snd_load) * (0.60f + 0.40f * std::clamp(J.snd_rpm / limit, 0.0f, 1.0f)) * kGain * J.tune.engine_loudness;
+        float ridden_hz = 0.0f;
+        if (own) { level *= 0.42f; ridden_hz = 12000.0f; if (cabin) { ridden_hz = 2400.0f * (0.55f + 0.45f * J.tune.engine_loudness); level *= 0.9f; } }
+        if (!c.wanted) level = 0.0f;
         // A quiet car plays one loop instead of four (the blend is not heard under the others).
         // By loudness, not by distance, and with a margin: the change is made where it is
         // quietest and not back and forth. It is brought up to date every frame all the same -
         // every fourth frame made its fading a staircase.
         if (own) J.snd_far = false; else if (J.snd_vol < 0.006f) J.snd_far = true; else if (J.snd_vol > 0.010f) J.snd_far = false;
-        audio_->engine_update(it->second, pos, J.snd_vel, J.snd_rpm, J.snd_load, J.snd_vol, hz, J.snd_far);
+        const AudioEngine::Heard heard = audio_->engine_update(it->second, pos, J.snd_vel, J.snd_rpm, J.snd_load, level, ridden_hz, J.snd_far);
+        J.snd_vol = heard.gain;       // (the loudness its voice has now: followed by the spatialiser, never jumps)
         if (static const bool lg = std::getenv("VIBE_LOG_CAR_SOUND") != nullptr; lg && frame_number_ % 90 == 0)
-            log::infof("[car-sound] %s%s: %.0f m, %.1f m/s, gear %d, %.0f rpm, load %.2f, volume %.4f (wanted %.4f)%s%s, low-pass %.0f Hz", J.dir.c_str(), own ? " (driven)" : "", double(d), double(sp),
-                       J.snd_gear + 1, double(J.snd_rpm), double(J.snd_load), double(J.snd_vol), double(vol), J.snd_far ? " far voice" : "", c.wanted ? "" : " fading out", double(hz));
+            log::infof("[car-sound] %s%s: %.0f m, %.1f m/s, gear %d, %.0f rpm, load %.2f, level %.3f, heard %.4f%s%s, low-pass %.0f Hz", J.dir.c_str(), own ? " (driven)" : "", double(d), double(sp),
+                       J.snd_gear + 1, double(J.snd_rpm), double(J.snd_load), double(level), double(heard.gain), J.snd_far ? " far voice" : "", c.wanted ? "" : " fading out", double(heard.cutoff_hz));
+        // VIBE_LOG_SOUND_SPACE=1: what is heard of every car that has a voice, six times a second
+        // - a pass-by read as numbers (VIBE_LOG_SOUND_SPACE=<n>, n > 1: every n-th frame; 1: every tenth).
+        static const int every = [] { const char* e = std::getenv("VIBE_LOG_SOUND_SPACE"); const int n = e ? std::atoi(e) : 0; return !e ? 0 : n > 1 ? n : 10; }();
+        if (every > 0 && frame_number_ % every == 0 && !own)
+            log::infof("[sound-space] car %p %s: %6.1f m, gain %.5f (%6.1f dB), low-pass %4.0f Hz, doppler %.4f, pan %+.2f, reverb %.5f, blocked %.2f, %.1f m/s%s", static_cast<void*>(&J),
+                       J.dir.substr(J.dir.find_last_of("/\\") + 1).c_str(), double(heard.distance), double(heard.gain), heard.gain > 0.0f ? 20.0 * std::log10(double(heard.gain)) : -999.0,
+                       double(heard.cutoff_hz), double(heard.doppler), double(heard.pan), double(heard.send), double(heard.occlusion), double(sp), c.wanted ? "" : " (let go)");
     }
     // VIBE_LOG_AUDIO_COST=1: every 300 frames, what the mixer cost since the last line (all the
     // engine's sound, on the audio thread) and how many engine voices and loops were in it.
@@ -1371,6 +1394,11 @@ void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puff
                 flare(glm::vec3(B * glm::vec4(c->tail[s], 1.0f)) - f * 0.05f, -f, braking ? 0.30f : 0.20f, glm::vec3(1.0f, 0.06f, 0.04f) * (braking ? 2.6f : 0.9f));
         }
     }
+    // (the police cars' light bars: the lamp that is lit, seen from all round)
+    if (cars_x_)
+        for (const CarTrafficState::Bar& b : cars_x_->bars)
+            for (int s = 0; s < 2 && b.agent >= 0; ++s)
+                if (b.lit[s]) { const glm::vec3 to = eye - b.lamp[s]; if (glm::dot(to, to) > 1e-4f) flare(b.lamp[s], glm::normalize(to), 0.50f, (s == 0 ? glm::vec3(0.10f, 0.28f, 1.0f) : glm::vec3(1.0f, 0.06f, 0.05f)) * 3.4f); }
     for (const JeepState* c : jeep_all_) {
         if (c->posed) {
             const glm::mat4& B = c->st.body;
@@ -1442,7 +1470,9 @@ void VulkanEngine::jeep_net_send(float dt) {
     for (size_t i = 0; i < jeep_all_.size() && i < size_t(net::kMaxCars); ++i) {
         JeepState& J = *jeep_all_[i];
         if (!J.net_mine || !J.posed) continue;
-        const bool live = &J == jeep_ && J.spawned && (J.driving || glm::length(J.st.velocity) > 0.15f);
+        // (live: it moves - driven or rolling here, or struck and sliding: cars_collide)
+        const bool live = (&J == jeep_ && J.spawned && (J.driving || glm::length(J.st.velocity) > 0.15f)) ||
+                          (&J != jeep_ && cars_x_ && cars_x_->shove.count(&J) && glm::length(J.st.velocity) > 0.05f);
         J.net_send -= dt;
         if (live) J.net_send = std::min(J.net_send, 1.0f / 30.0f);
         if (J.net_send > 0.0f) continue;
@@ -1507,6 +1537,7 @@ void VulkanEngine::jeep_net_receive(float dt) {
             // passed over. Otherwise whoever sits in it has it; both sitting in it (they got in
             // in the same moment): the lower id, the same answer on both machines.
             if (rc.age > 3.0) continue;
+            if (cars_x_) { const auto sh = cars_x_->shove.find(&J); if (sh != cars_x_->shove.end() && sh->second.claim > 0.0f) continue; }      // (struck and taken over a moment ago: cars_collide)
             if (J.driving && (!driven || net_->id() < rc.sender)) continue;
             J.net_mine = false;
             if (J.driving && &J == jeep_) jeep_use();                  // (out of it)
@@ -1777,6 +1808,7 @@ namespace {
 const glm::vec3 kNpcPaint[10] = {
     { 0.55f, 0.56f, 0.58f }, { 0.03f, 0.03f, 0.035f }, { 0.70f, 0.70f, 0.68f }, { 0.36f, 0.02f, 0.02f }, { 0.02f, 0.06f, 0.20f },
     { 0.10f, 0.11f, 0.12f }, { 0.04f, 0.14f, 0.08f }, { 0.45f, 0.32f, 0.16f }, { 0.30f, 0.33f, 0.37f }, { 0.62f, 0.40f, 0.05f } };
+const glm::vec3 kPolicePaint(0.075f, 0.095f, 0.055f);      // the military police's: olive drab (THE MILITARY POLICE, below)
 }
 
 bool VulkanEngine::npc_take_car(float reach) {
@@ -1992,6 +2024,7 @@ void VulkanEngine::npc_cars_init() {
     constexpr int kCars = 15;
     for (int k = 0; k < kCars; ++k)
         npc_car_add(*jeep_all_[1 + size_t(k) % std::min<size_t>(3, jeep_all_.size() - 1)]);      // sports car, saloon, pickup
+    police_init();                          // (the light bars of the police cars among them)
 }
 
 // One more car without physics in the pool lent to the NPC cars: a copy of a loaded kind (the
@@ -2056,7 +2089,7 @@ void VulkanEngine::npc_cars_place(const std::vector<npc::View>& views, float dt)
         NpcCar& c = npc_cars_[size_t(pick)];
         c.agent = w.second; c.roll = 0.0f; c.pitch = 0.0f; c.steer = 0.0f; c.last = v.pos; c.last_yaw = v.yaw; c.last_speed = v.speed;
         c.car->posed = false;                                  // (it jumps there: no motion from where it was)
-        const glm::vec3 paint = kPaint[(v.look / 3) % 10];
+        const glm::vec3 paint = (v.style & npc::kCarPolice) ? kPolicePaint : kPaint[(v.look / 3) % 10];      // (the military police: olive drab)
         for (size_t i = 0; i < c.car->painted.size(); ++i)
             if (c.car->painted[i]) { CastleMeshGpu& g = jeep_draw_[c.car->draw_first + i]; g.tint = paint; g.fallback = paint; }
     }
@@ -2140,6 +2173,465 @@ void VulkanEngine::jeep_positions(std::vector<glm::vec3>& out) const {
     out.clear();
     for (const JeepState* c : jeep_all_)
         if (c->posed) out.push_back(glm::vec3(c->st.body[3]));
+}
+
+// =======================================================================================
+// CARS STRIKE CARS. One car is simulated on this machine (jeep_); every other car - the
+// players' cars that stand, the ones other players drive, the NPC engine's traffic - is a
+// place somebody else decides. So that they are solid to each other:
+//   * every other car near the simulated one is given to the physics as a body that is moved,
+//     not simulated (PhysicsWorld::vehicle_set_cars): the simulated car runs into it, is
+//     struck by it and bounces off it as off anything else. In multiplayer every machine does
+//     this for its own car against where the others are said to be - two drivers who meet
+//     each bounce off the other on their own machine;
+//   * a car that is struck must move too, and whoever owns it moves it. A players' car that
+//     nobody simulates (it stands where it was left) is this machine's when this machine left
+//     it there, or nobody's - then the machine whose car struck it takes it over (it tells the
+//     others of it from then on: jeep_net_send). It slides and turns on the ground, less and
+//     less, and stops at a wall. An NPC car is the NPC engine's: the blow is handed to it
+//     (npc::World::push_car) - by the host directly, by a client as Event::NpcCarPush;
+//   * the blow itself: outlines on the ground plan (the car's box between its wheels), the
+//     gap between two of them and the speed they close at. What is struck goes off with the
+//     striker's share of that speed by weight - what a blow without bounce gives.
+// And the NPC engine's traffic is told where the players' cars are (npc_feed_obstacles): it
+// keeps behind them, stops for them, and goes round one left on the road when it can.
+// Hooks: VIBE_LOG_CARS=1 (every blow), VIBE_NO_CAR_COLLIDE=1 (as before: nothing is solid),
+// VIBE_TEST_CAR_CRASH=<frame>[,<metres>] (at that frame another car is stood in the simulated
+// car's way), VIBE_NPC_NO_OBSTACLES=1 (the traffic does not see the players' cars).
+void VulkanEngine::cars_collide(float dt) {
+    if (!jeep_ || !physics_ || !cars_x_ || dt <= 0.0f) return;
+    CarTrafficState& X = *cars_x_;
+    static const bool off = std::getenv("VIBE_NO_CAR_COLLIDE") != nullptr;
+    static const bool lg = std::getenv("VIBE_LOG_CARS") != nullptr;
+    JeepState& me = *jeep_;
+    const bool home = globe::current().home;
+    const bool sim = me.spawned && me.posed && home;
+    for (auto& kv : X.shove) { kv.second.cool = std::max(0.0f, kv.second.cool - dt); kv.second.claim = std::max(0.0f, kv.second.claim - dt); }
+    for (float& t : X.npc_cool) t = std::max(0.0f, t - dt);
+    if (off || !home) { if (me.spawned) physics_->vehicle_set_cars(nullptr, 0, dt); return; }
+    const float wl = rt_.water_level;
+    // (what a car stands on: the ground, or a bridge's deck over it)
+    auto surface = [wl](float x, float z) {
+        float h = world_ground_height(x, z, wl, 9), dh = 0.0f;
+        if (highway::deck(x, z, dh)) h = std::max(h, dh);
+        return h;
+    };
+    if (static const char* tc = std::getenv("VIBE_TEST_CAR_CRASH"); tc && sim) {
+        int at = 0; float ahead = 45.0f;
+        std::sscanf(tc, "%d,%f", &at, &ahead);
+        if (int(frame_number_) == at && jeep_all_.size() > 1) {
+            JeepState* t = jeep_all_[jeep_all_[0] == jeep_ ? 1 : 0];
+            const glm::vec3 f = -glm::vec3(me.st.body[2]);
+            glm::vec3 p = glm::vec3(me.st.body[3]) + glm::normalize(glm::vec3(f.x, 0.0f, f.z)) * ahead;
+            p.y = surface(p.x, p.z);
+            jeep_park(*t, p, std::atan2(-f.x, -f.z) + 0.6f);
+            log::infof("[cars] test: %s stood %.0f m ahead of the simulated car, at (%.1f, %.1f, %.1f)", t->dir.c_str(), double(ahead), p.x, p.y, p.z);
+        }
+    }
+
+    // A car's outline on the ground plan: its middle, its two axes, half its width and length.
+    struct Box2 { glm::vec2 c{0.0f}, ax{1.0f, 0.0f}, az{0.0f, 1.0f}; float hx = 1.0f, hz = 2.3f; };
+    auto box_of = [](const JeepState& J) {
+        float hx, z0, z1; J.body_box(hx, z0, z1);
+        const glm::mat4& B = J.st.body;
+        const glm::vec3 c(B * glm::vec4(0.0f, 0.0f, 0.5f * (z0 + z1), 1.0f));
+        Box2 b;
+        b.c = glm::vec2(c.x, c.z);
+        const glm::vec2 ax(B[0].x, B[0].z), az(B[2].x, B[2].z);
+        if (glm::dot(ax, ax) > 1e-6f) b.ax = glm::normalize(ax);
+        if (glm::dot(az, az) > 1e-6f) b.az = glm::normalize(az);
+        b.hx = hx; b.hz = 0.5f * (z1 - z0);
+        return b;
+    };
+    // How far apart two outlines are (under 0: how deep in each other) and the way from a to b.
+    auto box_gap = [](const Box2& a, const Box2& b, glm::vec2& n) {
+        float best = -1e9f;
+        const glm::vec2 d = b.c - a.c;
+        for (const glm::vec2& axis : { a.ax, a.az, b.ax, b.az }) {
+            const float ra = a.hx * std::abs(glm::dot(a.ax, axis)) + a.hz * std::abs(glm::dot(a.az, axis));
+            const float rb = b.hx * std::abs(glm::dot(b.ax, axis)) + b.hz * std::abs(glm::dot(b.az, axis));
+            const float along = glm::dot(d, axis);
+            const float sep = std::abs(along) - ra - rb;
+            if (sep > best) { best = sep; n = along >= 0.0f ? axis : -axis; }
+        }
+        return best;
+    };
+    auto shoving = [&](const JeepState* c) {
+        const auto it = X.shove.find(c);
+        return it != X.shove.end() && (glm::dot(it->second.v, it->second.v) > 0.0025f || std::abs(it->second.w) > 0.05f);
+    };
+
+    // ---- everything that has an outline here: the players' cars, and the NPC cars that are shown
+    struct Car { JeepState* J = nullptr; int agent = -1; uint32_t key = 0; glm::vec2 v{0.0f}; Box2 box; bool mover = false, target = false; float mass = 1500.0f; };
+    std::vector<Car> cars;
+    const glm::vec3 at = sim ? glm::vec3(me.st.body[3]) : player_.position;
+    for (size_t i = 0; i < jeep_all_.size(); ++i) {
+        JeepState* c = jeep_all_[i];
+        if (!c->posed || !c->loaded) continue;
+        Car k; k.J = c; k.key = uint32_t(i); k.box = box_of(*c); k.mass = c->tune.mass;
+        const bool mine_sim = c == jeep_ && sim;
+        const bool slides = shoving(c);
+        if (mine_sim || c->net_owner != 0) k.v = glm::vec2(c->st.velocity.x, c->st.velocity.z);
+        else if (slides) k.v = X.shove[c].v;
+        k.mover = mine_sim || (c->net_owner != 0 && c->net_driven) || slides;
+        // (to be moved here: nobody simulates it, and it is this machine's - or nobody's)
+        k.target = !mine_sim && !c->driving && !(c == jeep_ && c->spawned) && (c->net_mine || c->net_owner == 0);
+        cars.push_back(k);
+    }
+    for (const NpcCar& nc : npc_cars_) {
+        if (nc.agent < 0 || !nc.car->posed || size_t(nc.agent) >= npc_views_.size()) continue;
+        const glm::vec3 p(nc.car->st.body[3]);
+        if (std::abs(p.x - at.x) > 90.0f || std::abs(p.z - at.z) > 90.0f) continue;
+        const npc::View& v = npc_views_[size_t(nc.agent)];
+        Car k; k.J = nc.car; k.agent = nc.agent; k.key = 1000u + uint32_t(nc.agent); k.box = box_of(*nc.car); k.mass = nc.car->tune.mass;
+        k.v = glm::vec2(std::sin(v.yaw), -std::cos(v.yaw)) * v.speed;
+        k.mover = std::abs(v.speed) > 0.5f;
+        cars.push_back(k);
+    }
+
+    // ---- 1. the others as bodies for the simulated car
+    if (sim) {
+        std::vector<PhysicsWorld::CarBody> bodies;
+        for (const Car& k : cars) {
+            if (k.J == jeep_ || k.J->boxes.empty()) continue;
+            const glm::vec3 p(k.J->st.body[3]);
+            if (std::abs(p.x - at.x) > 70.0f || std::abs(p.z - at.z) > 70.0f || std::abs(p.y - at.y) > 30.0f) continue;
+            PhysicsWorld::CarBody b;
+            b.key = k.key; b.body = k.J->st.body; b.boxes = k.J->boxes.data(); b.n_boxes = k.J->boxes.size();
+            bodies.push_back(b);
+        }
+        physics_->vehicle_set_cars(bodies.data(), bodies.size(), dt);
+    }
+
+    // ---- 2. who strikes whom
+    const bool authority = !npc_ || !npc_->replica();
+    for (size_t a = 0; a < cars.size(); ++a) {
+        const Car A = cars[a];
+        if (!A.mover) continue;
+        const bool a_mine = A.J == jeep_ && sim;
+        if (A.agent >= 0 && !authority) continue;                  // (what an NPC car strikes is the host's to say)
+        for (size_t b = 0; b < cars.size(); ++b) {
+            if (a == b) continue;
+            Car& T = cars[b];
+            const bool t_npc = T.agent >= 0;
+            if (t_npc ? !a_mine : !T.target) continue;             // (an NPC car is pushed by this machine's own car only)
+            if (glm::distance(A.box.c, T.box.c) > 9.0f || std::abs(A.J->st.body[3].y - T.J->st.body[3].y) > 2.5f) continue;
+            glm::vec2 n(0.0f);
+            const float gap = box_gap(A.box, T.box, n);
+            const float closing = glm::dot(A.v - T.v, n);
+            if (gap > 0.14f + std::max(closing, 0.0f) * dt * 2.0f) continue;
+            // (nobody's car: the machine whose car struck it takes it over)
+            const bool a_ours = a_mine || A.agent >= 0 || A.J->net_mine;
+            if (!t_npc && !T.J->net_mine && !a_ours) continue;
+            auto take_over = [&](CarTrafficState::Shove& S) {
+                if (T.J->net_mine) return;
+                T.J->net_mine = true; T.J->net_owner = 0; T.J->net_driven = false; T.J->net_send = 0.0f;
+                S.claim = 1.5f;
+            };
+            if (closing > 0.6f) {
+                if (t_npc ? X.npc_cool[size_t(T.agent) % 100] > 0.0f : X.shove[T.J].cool > 0.0f) continue;
+                const glm::vec2 dv = n * (closing * A.mass / (A.mass + T.mass) * 1.05f);
+                // (where it is struck: the point of its outline nearest the striker - off its middle, it turns)
+                const glm::vec2 rel = A.box.c - T.box.c;
+                const glm::vec2 hit = T.box.ax * std::clamp(glm::dot(rel, T.box.ax), -T.box.hx, T.box.hx) + T.box.az * std::clamp(glm::dot(rel, T.box.az), -T.box.hz, T.box.hz);
+                const float spin = std::clamp((hit.y * dv.x - hit.x * dv.y) / 2.4f, -2.0f, 2.0f);      // about +y
+                if (t_npc) {
+                    X.npc_cool[size_t(T.agent) % 100] = 0.3f;
+                    // (the NPC engine's yaw turns the other way round)
+                    if (authority) { if (npc_) npc_->push_car(T.agent, glm::vec3(dv.x, 0.0f, dv.y), -spin); }
+                    else if (net_) {
+                        net::Event e{};
+                        e.kind = net::Event::NpcCarPush; e.from = net_->id(); e.to = uint32_t(T.agent);
+                        e.a[0] = dv.x; e.a[2] = dv.y; e.b[0] = -spin;
+                        net_->send_event(e);
+                    }
+                } else {
+                    CarTrafficState::Shove& S = X.shove[T.J];
+                    take_over(S);
+                    S.v += dv; S.w = std::clamp(S.w + spin, -2.5f, 2.5f); S.cool = 0.25f;
+                    T.v = S.v;
+                }
+                ++X.strikes;
+                if (lg) log::infof("[cars] %s%s struck %s%s at %.1f m/s (gap %.2f m): it goes off at %.1f m/s, turning %.2f rad/s", A.J->dir.c_str(), a_mine ? " (simulated here)" : A.agent >= 0 ? " (NPC)" : "",
+                                   T.J->dir.c_str(), t_npc ? " (NPC)" : "", double(closing), double(gap), double(glm::length(dv)), double(spin));
+            } else if (a_mine && !t_npc && gap < 0.10f && me.driving && me.throttle_in > 0.2f) {
+                // (leaning on it under power: it gives way slowly)
+                glm::vec3 f = -glm::vec3(me.st.body[2]);
+                if (me.st.gear < 0) f = -f;
+                if (glm::dot(glm::vec2(f.x, f.z), n) < 0.5f) continue;
+                CarTrafficState::Shove& S = X.shove[T.J];
+                take_over(S);
+                if (glm::dot(S.v, n) < 1.8f) S.v += n * (9.0f * dt);
+                T.v = S.v;
+            }
+        }
+    }
+
+    // ---- 3. the struck cars slide, less and less
+    for (auto it = X.shove.begin(); it != X.shove.end();) {
+        CarTrafficState::Shove& S = it->second;
+        JeepState* c = nullptr;
+        for (JeepState* k : jeep_all_) if (k == it->first) c = k;
+        const float sp = glm::length(S.v);
+        const bool simulated = c && c == jeep_ && c->spawned;
+        if (!c || simulated || c->driving || c->net_owner != 0 || (sp < 0.03f && std::abs(S.w) < 0.03f)) {
+            S.v = glm::vec2(0.0f); S.w = 0.0f;
+            if (c && !simulated && c->net_owner == 0 && c->posed) {    // (at rest: no speed, and drawn where it stands)
+                c->st.velocity = c->st.angular_velocity = glm::vec3(0.0f);
+                c->body_prev = c->st.body;
+                jeep_place(*c, c->st, dt);
+            }
+            if (S.claim <= 0.0f && S.cool <= 0.0f) { it = X.shove.erase(it); continue; }
+            ++it;
+            continue;
+        }
+        const PhysicsWorld::VehicleState prev = c->st;
+        const glm::vec3 p0(prev.body[3]);
+        glm::vec3 p1 = p0 + glm::vec3(S.v.x, 0.0f, S.v.y) * dt;
+        // (not through a wall, a tree or a rock: it stops there)
+        bool blocked = false;
+        {
+            float hx, z0, z1; c->body_box(hx, z0, z1);
+            const glm::vec3 mid = glm::vec3(prev.body * glm::vec4(0.0f, 0.0f, 0.5f * (z0 + z1), 1.0f)) + (p1 - p0) + glm::vec3(S.v.x, 0.0f, S.v.y) * (0.9f / std::max(sp, 0.1f));
+            auto in = [&](const collision::AABB& a) {
+                if (a.max.y < p0.y + 0.45f || a.min.y > p0.y + 1.6f) return false;
+                if (a.max.x - a.min.x > 800.0f || a.max.z - a.min.z > 800.0f) return false;
+                return mid.x > a.min.x - 0.9f && mid.x < a.max.x + 0.9f && mid.z > a.min.z - 0.9f && mid.z < a.max.z + 0.9f;
+            };
+            for (const auto& a : wv_cols_) if (in(a)) { blocked = true; break; }
+            if (!blocked) for (const auto& a : world_.aabbs) if (in(a)) { blocked = true; break; }
+        }
+        if (blocked) { S.v = glm::vec2(0.0f); S.w = 0.0f; p1 = p0; }
+        p1.y += surface(p1.x, p1.z) - surface(p0.x, p0.z);
+        const glm::mat4 M = glm::translate(glm::mat4(1.0f), p1) * glm::rotate(glm::mat4(1.0f), S.w * dt, glm::vec3(0.0f, 1.0f, 0.0f)) * glm::translate(glm::mat4(1.0f), -p0);
+        c->st.body = M * prev.body;
+        for (int w = 0; w < 4; ++w) c->st.wheel[w] = M * prev.wheel[w];
+        c->st.velocity = glm::vec3(S.v.x, 0.0f, S.v.y);
+        c->st.angular_velocity = glm::vec3(0.0f, S.w, 0.0f);
+        c->body_prev = prev.body;
+        jeep_place(*c, prev, dt);
+        const float left = glm::length(S.v);
+        S.v = left > 6.0f * dt ? S.v * ((left - 6.0f * dt) / left) : glm::vec2(0.0f);
+        S.w = std::abs(S.w) > 4.0f * dt ? S.w - (S.w > 0.0f ? 4.0f : -4.0f) * dt : 0.0f;
+        if (lg && frame_number_ % 30 == 0) log::infof("[cars] %s slides: at (%.1f, %.2f, %.1f), %.1f m/s", c->dir.c_str(), p1.x, p1.y, p1.z, double(left));
+        ++it;
+    }
+    if (lg && sim && frame_number_ % 60 == 0)
+        log::infof("[cars] the simulated car: %.1f m/s at (%.1f, %.1f); %zu cars with an outline here, %d blows dealt so far", double(glm::length(me.st.velocity)), at.x, at.z, cars.size(), X.strikes);
+}
+
+// (the host's) a client's car struck an NPC car.
+void VulkanEngine::npc_car_push(const net::Event& e) {
+    if (!npc_ || npc_->replica() || e.to >= 100u) return;
+    glm::vec3 dv(e.a[0], 0.0f, e.a[2]);
+    if (!std::isfinite(dv.x + dv.z + e.b[0])) return;
+    const float l = glm::length(dv);
+    if (l > 30.0f) dv *= 30.0f / l;
+    npc_->push_car(int(e.to), dv, std::clamp(e.b[0], -2.5f, 2.5f));
+}
+
+// The players' cars on or by the road, for the NPC engine's traffic (the machine that steps it).
+void VulkanEngine::npc_feed_obstacles() {
+    if (!npc_ || npc_->replica()) return;
+    static const bool off = std::getenv("VIBE_NPC_NO_OBSTACLES") != nullptr;
+    std::vector<npc::Obstacle> obs;
+    for (size_t i = 0; !off && i < jeep_all_.size(); ++i) {
+        const JeepState& J = *jeep_all_[i];
+        if (!J.loaded || !J.posed) continue;
+        float hx, z0, z1; J.body_box(hx, z0, z1);
+        const glm::vec3 c(J.st.body * glm::vec4(0.0f, 0.0f, 0.5f * (z0 + z1), 1.0f));
+        if (highway::distance(c.x, c.z) > 20.0f) continue;
+        npc::Obstacle o;
+        o.id = uint32_t(i) + 1u; o.pos = c;
+        const glm::vec3 f = -glm::vec3(J.st.body[2]);
+        o.yaw = std::atan2(f.x, -f.z);
+        const bool moves = (&J == jeep_ && J.spawned) || J.net_owner != 0 || (cars_x_ && cars_x_->shove.count(&J));
+        if (moves && std::isfinite(J.st.velocity.x + J.st.velocity.z)) o.vel = J.st.velocity;
+        o.half_w = hx; o.half_l = 0.5f * (z1 - z0);
+        obs.push_back(o);
+    }
+    npc_->set_obstacles(obs);
+}
+
+// =======================================================================================
+// THE MILITARY POLICE. Two of the NPC engine's cars are the police's (npc.cpp make_driver):
+// saloons in olive drab with a light bar on the roof. They patrol with the traffic; now and
+// then the siren goes on - then they drive fast, the bar flashes blue and red, and the others
+// make way (all of that is the NPC engine's: View::style says which car is the police's and
+// whether its siren is on, on every machine).
+//   the bar    three small parts made here (a base and two lamps), drawn on the roof of the
+//              model lent to a police car; the lamps are lit in turn while the siren is on
+//              and throw a glow (jeep_fx);
+//   the siren  engine/siren_synth.h makes the sound - wail and yelp, no recording - and
+//              siren_audio_tick plays it from the car.
+// Hooks: VIBE_LOG_TRAFFIC=1 (who pulls out to pass, who is back, sirens on and off, what is
+// heard), VIBE_TEST_SIREN=1 (every siren on), VIBE_NO_SIREN=1 (no sound), VIBE_SIREN_GAIN=<x>,
+// VIBE_NPC_CAM=police / passing (the eye goes with a police car / a car that is passing).
+namespace {
+// The bar's three boxes in its own frame (the roof's middle at 0): middle and half size.
+const glm::vec3 kBarC[3] = { { 0.0f, 0.03f, 0.0f }, { -0.30f, 0.10f, 0.0f }, { 0.30f, 0.10f, 0.0f } };
+const glm::vec3 kBarH[3] = { { 0.58f, 0.03f, 0.15f }, { 0.24f, 0.05f, 0.12f }, { 0.24f, 0.05f, 0.12f } };
+const glm::vec3 kBarLamp[2] = { { 0.05f, 0.16f, 1.0f }, { 1.0f, 0.05f, 0.04f } };      // blue on the left, red on the right
+}
+
+void VulkanEngine::police_init() {
+    if (!cars_x_ || npc_cars_.empty()) return;
+    std::vector<CastleMeshGpu> made;
+    for (int p = 0; p < 3; ++p) {
+        game::LevelMesh lm;
+        for (int k = 0; k < 3; ++k)
+            for (int s = -1; s <= 1; s += 2) {
+                glm::vec3 n(0.0f), u(0.0f), v(0.0f);
+                n[k] = float(s); u[(k + 1) % 3] = 1.0f; v[(k + 2) % 3] = 1.0f;
+                const float hu = kBarH[p][(k + 1) % 3], hv = kBarH[p][(k + 2) % 3];
+                const glm::vec3 o = kBarC[p] + n * kBarH[p][k];
+                glm::vec3 a = o - u * hu - v * hv, b = o + u * hu - v * hv, c = o + u * hu + v * hv, d = o - u * hu + v * hv;
+                if (glm::dot(glm::cross(b - a, d - a), n) < 0.0f) std::swap(b, d);
+                const uint32_t i0 = uint32_t(lm.verts.size());
+                lm.verts.push_back({ a, n, 0.0f, 0.0f }); lm.verts.push_back({ b, n, 1.0f, 0.0f });
+                lm.verts.push_back({ c, n, 1.0f, 1.0f }); lm.verts.push_back({ d, n, 0.0f, 1.0f });
+                lm.idx.insert(lm.idx.end(), { i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3 });
+            }
+        lm.tex_albedo = lm.tex_normal = -1;
+        lm.tint = lm.fallback = p == 0 ? glm::vec3(0.03f, 0.03f, 0.035f) : kBarLamp[p - 1] * 0.45f;
+        if (p > 0) { lm.emissive = kBarLamp[p - 1]; lm.full_emissive = true; }
+        lm.relief = 0.0f;
+        lm.bmin = kBarC[p] - kBarH[p]; lm.bmax = kBarC[p] + kBarH[p];
+        made.push_back(make_mesh_part(lm));
+    }
+    build_mesh_part_blas(made);
+    for (auto& g : made) jeep_owned_.push_back(g);
+    const glm::mat4 away = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -20000.0f, 0.0f));
+    for (int k = 0; k < 2; ++k) {
+        CarTrafficState::Bar b;
+        b.first = jeep_draw_.size();
+        for (int p = 0; p < 3; ++p) {
+            CastleMeshGpu g = made[size_t(p)];
+            g.xf = g.xf_prev = away; g.bmin = g.bmax = glm::vec3(0.0f, -20000.0f, 0.0f); g.emissive = glm::vec4(0.0f);
+            jeep_draw_.push_back(g);
+        }
+        cars_x_->bars.push_back(b);
+    }
+}
+
+void VulkanEngine::police_place(float dt) {
+    if (!cars_x_) return;
+    CarTrafficState& X = *cars_x_;
+    X.flash_t += dt;
+    static const bool lg = std::getenv("VIBE_LOG_TRAFFIC") != nullptr;
+    // (the log: what changed about a car since the last frame)
+    for (size_t i = 0; i < npc_views_.size() && i < 100; ++i) {
+        const npc::View& v = npc_views_[i];
+        const uint8_t st = v.kind == npc::Kind::Car && !v.hidden ? v.style : uint8_t(0);
+        const uint8_t ch = uint8_t(st ^ X.style_was[i]);
+        if (lg && ch) {
+            if (ch & npc::kCarOvertaking) log::infof("[traffic] car %d %s at (%.0f, %.0f), %.1f m/s%s", int(i), (st & npc::kCarOvertaking) ? "pulls out to pass" : "is back in its lane", v.pos.x, v.pos.z, double(v.speed), (st & npc::kCarPolice) ? " (police)" : "");
+            if (ch & npc::kCarSiren) log::infof("[traffic] police car %d: siren %s at (%.0f, %.0f), %.0f m from the eye", int(i), (st & npc::kCarSiren) ? "ON" : "off", v.pos.x, v.pos.z, double(glm::distance(v.pos, player_.eye_position())));
+        }
+        X.style_was[i] = st;
+    }
+    if (lg && npc_ && !npc_->replica() && frame_number_ % 600 == 0) {
+        const npc::World::Traffic t = npc_->traffic();
+        log::infof("[traffic] on the road: %d slow, %d speeders, %d police (%d with the siren on), %d passing now; overtakes so far %d, given up %d; the fastest drives %.1f m/s",
+                   t.slow, t.speeders, t.police, t.sirens, t.overtaking, t.overtakes, t.given_up, double(t.fastest));
+    }
+    // ---- the light bars: one on each police car that is shown
+    const glm::mat4 away = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -20000.0f, 0.0f));
+    std::vector<int> was;
+    for (CarTrafficState::Bar& b : X.bars) { was.push_back(b.agent); b.agent = -1; b.lit[0] = b.lit[1] = false; }
+    size_t k = 0;
+    for (const NpcCar& nc : npc_cars_) {
+        if (k >= X.bars.size()) break;
+        if (nc.agent < 0 || !nc.car->posed || size_t(nc.agent) >= npc_views_.size()) continue;
+        const npc::View& v = npc_views_[size_t(nc.agent)];
+        if (v.kind != npc::Kind::Car || v.hidden || !(v.style & npc::kCarPolice)) continue;
+        const JeepState& J = *nc.car;
+        CarTrafficState::Bar& b = X.bars[k];
+        b.agent = nc.agent; b.siren = (v.style & npc::kCarSiren) != 0;
+        float top = 0.0f;
+        for (size_t i = 0; i < J.n_body && i < J.local.size(); ++i) top = std::max(top, J.local[i].second.y);
+        const glm::mat4 on_roof = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, top - 0.012f, J.seat.z + 0.12f));
+        const glm::mat4 M = J.st.body * on_roof, Mp = was[k] == nc.agent ? J.body_prev * on_roof : M;
+        // (the siren on: the two lamps in turn, each a double flash)
+        if (b.siren) {
+            const float ph = X.flash_t * 1.7f - std::floor(X.flash_t * 1.7f);
+            const float sub = ph * 8.0f - std::floor(ph * 8.0f);
+            b.lit[0] = ph < 0.5f && sub < 0.62f;
+            b.lit[1] = ph >= 0.5f && sub < 0.62f;
+        }
+        for (int p = 0; p < 3; ++p) {
+            CastleMeshGpu& g = jeep_draw_[b.first + size_t(p)];
+            g.xf_prev = Mp; g.xf = M;
+            world_aabb_of_box(M * glm::translate(glm::mat4(1.0f), kBarC[p]), kBarH[p], g.bmin, g.bmax);
+            if (p > 0) g.emissive = b.lit[p - 1] ? glm::vec4(kBarLamp[p - 1] * 9.0f, 2.0f) : glm::vec4(0.0f);
+        }
+        for (int s = 0; s < 2; ++s) b.lamp[s] = glm::vec3(M * glm::vec4(kBarC[s + 1] + glm::vec3(0.0f, 0.06f, 0.0f), 1.0f));
+        ++k;
+    }
+    for (size_t i = k; i < X.bars.size(); ++i)
+        for (int p = 0; p < 3; ++p) {
+            CastleMeshGpu& g = jeep_draw_[X.bars[i].first + size_t(p)];
+            g.xf = g.xf_prev = away; g.bmin = g.bmax = glm::vec3(0.0f, -20000.0f, 0.0f); g.emissive = glm::vec4(0.0f);
+        }
+    siren_audio_tick(dt);
+}
+
+// THE SIREN'S SOUND, apart from the engines' (car_audio_tick): one tracked voice
+// (AudioEngine::play_tracked / set_voice / set_voice_rate) for each police car that is shown
+// with its siren on. The clip is engine/siren_synth.h's, written to
+// assets/sounds/siren_wail.wav the first time it is needed and not there; it is started again
+// when it has run out (it begins and ends at the same pitch). Here, not in the audio engine:
+// how loud by distance (half at 40 m, then by the square of the distance, nothing from 650 m),
+// the Doppler shift (the car's speed toward the listener against the listener's own - the
+// rate of the voice), and the fades (up in an eighth of a second, down in a third).
+void VulkanEngine::siren_audio_tick(float dt) {
+    if (!cars_x_ || !audio_ || !audio_->ok() || dt <= 0.0f) return;
+    CarTrafficState& X = *cars_x_;
+    static const bool off = std::getenv("VIBE_NO_SIREN") != nullptr;
+    static const bool lg = std::getenv("VIBE_LOG_TRAFFIC") != nullptr;
+    static const float kGain = std::getenv("VIBE_SIREN_GAIN") ? float(std::atof(std::getenv("VIBE_SIREN_GAIN"))) : 1.0f;
+    const glm::vec3 eye = player_.eye_position();
+    const bool cabin = jeep_ && jeep_->driving && jeep_->cam_mode == 0;
+    int k = 0;
+    for (CarTrafficState::Bar& b : X.bars) {
+        ++k;
+        const bool on = !off && b.agent >= 0 && b.siren && globe::current().home;
+        const glm::vec3 pos = 0.5f * (b.lamp[0] + b.lamp[1]);
+        float want = 0.0f, rate = b.rate, d = 0.0f;
+        if (on) {
+            if (X.siren_clip == 0) {
+                const char* path = "assets/sounds/siren_wail.wav";
+                std::error_code ec;
+                const bool made = !std::filesystem::exists(path, ec) && siren::write_siren_wav(path);
+                X.siren_clip = std::filesystem::exists(path, ec) ? 1 : -1;
+                if (X.siren_clip > 0) audio_->load_clip(ClipID::Siren, path);
+                log::infof("[traffic] the siren's sound: %s%s", X.siren_clip > 0 ? path : "could not be written - no siren", made ? " (made now: 16 s, engine/siren_synth.h)" : "");
+            }
+            if (X.siren_clip > 0) {
+                const glm::vec3 v_now = b.has_last ? (pos - b.last) / dt : glm::vec3(0.0f);
+                b.vel += ((glm::length(v_now) < 120.0f ? v_now : glm::vec3(0.0f)) - b.vel) * std::min(1.0f, dt * 8.0f);
+                b.last = pos; b.has_last = true;
+                d = glm::distance(pos, eye);
+                want = 0.50f * kGain / (1.0f + (d / 40.0f) * (d / 40.0f)) * (1.0f - glm::smoothstep(450.0f, 650.0f, d)) * (cabin ? 0.6f : 1.0f);
+                const glm::vec3 to = d > 1.0f ? (eye - pos) / d : glm::vec3(0.0f);
+                rate = std::clamp(343.0f / (343.0f - std::clamp(glm::dot(b.vel - car_ear_vel_, to), -90.0f, 90.0f)), 0.78f, 1.36f);
+                b.rate = rate;
+                if (want > 0.0006f && (!b.voice || !audio_->voice_playing(b.voice))) {
+                    const bool again = b.voice != 0;                 // (it ran out: on from the start, as loud as it was)
+                    b.voice = audio_->play_tracked(ClipID::Siren, pos, again ? b.vol : 0.0f, rate, again ? 0.0f : float(k) * 2.3f);
+                    if (!again) b.vol = 0.0f;
+                }
+            }
+        } else b.has_last = false;
+        b.vol += (want - b.vol) * std::min(1.0f, dt / (want > b.vol ? 0.125f : 0.33f));
+        if (b.voice) {
+            if (want <= 0.0f && b.vol < 0.0006f) { audio_->stop_voice(b.voice, 0.05f); b.voice = 0; b.vol = 0.0f; b.rate = 1.0f; }
+            else { audio_->set_voice(b.voice, pos, b.vol); audio_->set_voice_rate(b.voice, rate); }
+        }
+        if (lg && on && frame_number_ % 120 == 0)
+            log::infof("[traffic] siren of police car %d: %.0f m from the eye, volume %.4f, pitch x%.3f, voice %s, lamps %d%d", b.agent, double(d), double(b.vol), double(rate),
+                       b.voice && audio_->voice_playing(b.voice) ? "playing" : "silent", int(b.lit[0]), int(b.lit[1]));
+    }
 }
 
 }  // namespace vibe

@@ -8,6 +8,7 @@
 #include "engine/vk_engine/state/multiplayer.h"
 #include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/vk_engine/state/spacejets.h"
+#include "engine/vk_engine/state/aim_spread.h"
 #include "engine/audio.h"
 #include "engine/voxel/voxel_world.h"   // VoxelWorld::raycast for bullet carving
 
@@ -84,6 +85,61 @@ void VulkanEngine::apply_player_pushes(glm::vec3 pre_velocity) {
         glm::vec3 impulse = dir * (into_box * kPlayerMass);
         physics_->apply_impulse_h(dp.jolt_handle, impulse);
     }
+}
+
+// Weapon spread (game/aim_spread.h): the cone's angle this frame from what the player is doing,
+// the cooling of the burst, and the eased angle the crosshair draws (ui_hud.cpp).
+// VIBE_LOG_SPREAD=1: writes the angle at every shot, and once, at the start, what the model
+// gives for a few set bursts of the rifle.
+void VulkanEngine::spread_tick(float dt) {
+    static const bool kLog = std::getenv("VIBE_LOG_SPREAD") != nullptr;
+    if (kLog && !spread_->logged_demo) {
+        spread_->logged_demo = true;
+        const game::SpreadDef& d = game::kRifleSpread;
+        const float step = 1.0f / 240.0f, gap = 1.0f / kRifleRps;
+        auto run = [&](const char* name, float aim, int shots, float pause, int shots2) {
+            game::AimSpread m; game::SpreadInput in; in.aim = aim;
+            char line[512]; int n = std::snprintf(line, sizeof(line), "[spread] rifle, %s:", name);
+            auto burst = [&](int count) {
+                for (int i = 0; i < count; ++i) {
+                    n += std::snprintf(line + n, sizeof(line) - size_t(n), " %.2f", double(m.angle_deg(d, in)));
+                    m.on_shot(d);
+                    for (float t = 0.0f; t < gap; t += step) m.tick(d, step, 0.0f);
+                }
+            };
+            burst(shots);
+            for (float t = 0.0f; t < pause; t += step) m.tick(d, step, 0.0f);
+            n += std::snprintf(line + n, sizeof(line) - size_t(n), " | %.2f s rest |", double(pause));
+            burst(shots2);
+            log::infof("%s  (degrees at each shot)", line);
+        };
+        run("from the hip, 14 held, rest, 3", 0.0f, 14, 0.30f, 3);
+        run("aimed, 14 held, rest, 3", 1.0f, 14, 0.30f, 3);
+        run("aimed, bursts of 3", 1.0f, 3, 0.25f, 3);
+    }
+    const game::SpreadDef& d = weapon_ == 2 ? game::kRifleSpread : game::kLaserSpread;
+    game::SpreadInput in;
+    in.aim = glm::smoothstep(0.0f, 1.0f, aim_zoom_);                 // (the same easing as the zoom of the view)
+    in.move = glm::length(glm::vec2(player_.velocity.x, player_.velocity.z)) / game::kPlayerMove.max_walk_speed;
+    in.airborne = !player_.on_ground && !fly_mode_ && !player_swimming_ && jeep_ride_ < 0;
+    in.crouch = player_.crouch_factor;
+    spread_->now_deg = spread_->model.angle_deg(d, in);
+    // No gun in the hand (the tablet, the lamp, the editor): the crosshair is closed.
+    const bool gun = state_ == State::Playing && gun_in_hand() && !terrain_edit_mode_ && game_.weapons_enabled;
+    spread_->model.tick(d, std::clamp(dt, 0.0f, 0.1f), gun ? spread_->now_deg : 0.0f);
+}
+
+glm::vec3 VulkanEngine::spread_shot_dir(glm::vec3 forward, bool rifle) {
+    const game::SpreadDef& d = rifle ? game::kRifleSpread : game::kLaserSpread;
+    const float deg = spread_->now_deg;
+    const float u = frand(spawn_rng_state_), v = frand(spawn_rng_state_);
+    const glm::vec3 dir = game::AimSpread::perturb(glm::normalize(forward), deg, u, v);
+    spread_->model.on_shot(d);
+    static const bool kLog = std::getenv("VIBE_LOG_SPREAD") != nullptr;
+    if (kLog) log::infof("[spread] shot %s: cone %.2f deg, off by %.2f deg, heat %.1f", rifle ? "rifle" : "laser", double(deg),
+                         double(glm::degrees(std::acos(std::clamp(glm::dot(dir, glm::normalize(forward)), -1.0f, 1.0f)))),
+                         double(spread_->model.heat));
+    return dir;
 }
 
 void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction, bool rifle) {

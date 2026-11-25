@@ -135,6 +135,9 @@
         nor = normalize(mix(nor, rn_s, rm_road.x));
     }
     float rm_road_lod = 0.0;
+    float rm_cob_h = 0.0;              // the cobbles' height 0..1 at this pixel
+    float rm_road_wx = rm_road.x;      // the share of cobbles in the colour (by height at the paving's edge)
+    float gnd_det_h = 0.0, gnd_rockw = 0.0;      // the soil / rock scan's height 0..1 here, and the share of rock
     float rm_road_vis = 1.0;   // cobble relief self-shadow (sun visibility)
     if (rm_road.x > 0.001) {
         // Mip from the pixel footprint (no screen derivatives: road_uv is
@@ -151,6 +154,9 @@
         // layered march + bisection, then a short self-shadow march
         // toward the sun so the joints between stones go dark.
         float pom_D = 0.035 * (1.0 - smoothstep(35.0, 70.0, t)) * smoothstep(0.3, 0.9, rm_road.x);
+        // (close by the stones are lifted in screen space instead - GND_SSDM, below - and shade
+        //  each other there: ssdm_solve.frag)
+        if (GND_SSDM) pom_D *= smoothstep(16.0, 24.0, t);
         if (pom_D > 0.002) {
             vec3 Vt = vec3(dot(-rd, rT), dot(-rd, rB), dot(-rd, nor));
             Vt.z = max(Vt.z, 0.22);
@@ -189,8 +195,13 @@
                 rm_road_vis = mix(1.0, 1.0 - smoothstep(0.0, 0.16, occ), clamp(pom_D / 0.035 * 1.5, 0.0, 1.0));
             }
         }
-        vec3 rn = textureLod(u_normal[kRmMatRoad], rm_road_uv, rm_road_lod).xyz * 2.0 - 1.0;
+        vec4 rn4 = textureLod(u_normal[kRmMatRoad], rm_road_uv, rm_road_lod);
+        vec3 rn = rn4.xyz * 2.0 - 1.0;
         nor = normalize(mix(nor, rT * rn.x + rB * rn.y + nor * rn.z, rm_road.x));
+        rm_cob_h = rn4.a;
+        // Where the paving ends the earth lies in the joints first and the stones' tops stand
+        // clear of it, instead of the two fading through each other (rm_height_blend).
+        if (GND_SSDM && rm_road.x < 0.999) rm_road_wx = mix(rm_height_blend(0.45, rm_cob_h, rm_road.x), rm_road.x, smoothstep(20.0, 45.0, t));
     }
     // ---- Close-up ground detail --------------------------------------
     // The procedural palette is flat colour; within ~45 m the photo-scanned
@@ -232,6 +243,7 @@
                 vec3 pB = cross(nor, pT);
                 vec2 vts = vec2(dot(-rd, pT), dot(-rd, pB)) / max(dot(-rd, nor), 0.25);
                 float pk = 0.045 * (1.0 - smoothstep(14.0, 30.0, t));          // 10 cm of relief per 2 m tile
+                if (GND_SSDM) pk *= smoothstep(16.0, 24.0, t);                 // (close by: lifted in screen space instead, below)
                 float lodP = log2(max(t * 2.0 * scene.viewport.w * 0.45 * float(textureSize(u_albedo[kSoil], 0).x), 1.0));
                 for (int pi = 0; pi < 2; ++pi)
                     uvS = pos.xz * 0.45 + vts * ((textureLod(u_normal[kSoil], uvS, lodP).a - 0.5) * pk);
@@ -265,8 +277,10 @@
                     aR /= mR;
                 }
                 aK += aR * wb;
-                nD += mix(nS, nR, rockw) * wb;
-                aD += mix(aS, aR, rockw) * wb;
+                // (soil against rock by their heights: the rock's ribs come through the soil first)
+                float rwb = (GND_SSDM && rockw > 0.01 && rockw < 0.99) ? rm_height_blend(nS.a, nR.a, rockw) : rockw;
+                nD += mix(nS, nR, rwb) * wb;
+                aD += mix(aS, aR, rwb) * wb;
             }
             // Fine layer under the camera.
             float fw = 1.0 - smoothstep(3.0, 12.0, t);
@@ -297,6 +311,7 @@
             vec3 dB = cross(nor, dT);
             nor = normalize(mix(nor, normalize(dT * dn.x + dB * dn.y + nor * dn.z), dw));
             float cav = mix(0.62, 1.10, smoothstep(0.15, 0.85, nD.a));  // pits darker, bumps a touch brighter
+            gnd_det_h = clamp(nD.a, 0.0, 1.0) * dw; gnd_rockw = rockw;
             rm_det_tint = mix(vec3(1.0), clamp(mix(vec3(1.0), aD, 0.55), vec3(0.6), vec3(1.5)) * cav, dw);
         }
     }
@@ -399,6 +414,26 @@
                 nor = normalize(mix(nor, n_s, snow_cov));
             }
         }
+    }
+    // ---- How far this pixel's material stands out of the marched surface (GND_SSDM) ----
+    // Written to the G-buffer by main(); shaders/ssdm_ground.frag and the screen-space
+    // displacement passes move the pixel by it. Metres, never negative: the ground only rises.
+    if (GND_SSDM && t < 24.0 && !water_only) {
+        // the scan of soil / rock: what stands above its middle - stones, clods, ribs
+        float h = mix(0.07, 0.09, gnd_rockw) * max(gnd_det_h - 0.4, 0.0) / 0.6;
+        // (not under a lawn: the blades stand on the marched ground and hide it)
+        if (h > 0.0) h *= 1.0 - smoothstep(0.30, 0.65, grassEligibility(pos.xz, pos.y));
+        h = mix(h, 0.04 * rm_cob_h, rm_road_wx);                               // cobbles: 4 cm from joint to top
+        h *= 1.0 - sand_cov;                                                    // (sand lies over them; its own shape is marched)
+        if (hw_pave + hw_verge > 0.001) h = mix(h, hw_hgt * mix(0.03, 0.004, hw_pave), max(hw_pave, hw_verge));   // roadside gravel 3 cm, asphalt grain
+        h *= 1.0 - snow_cov;
+        if (scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 0.03) h = 0.0;
+        // (never more than a twelfth of the way to the eye: a bank the camera leans against came
+        //  out in front of the weapon in the hands)
+        h = min(h, 0.08 * t);
+        // (never quite 0 within reach: every ground pixel there is on the displacement's grid,
+        //  moved or not - a grid with holes where the height happens to be 0 came out stippled)
+        g_gnd_ssdm_h = max(min(h, kGndSsdmMax) * (1.0 - smoothstep(16.0, 24.0, t)), 0.006 * kGndSsdmMax);
     }
     float dif = clamp(dot(nor, sunDir), 0.0, 1.0);
 

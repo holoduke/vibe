@@ -100,13 +100,14 @@ bool AnimationSet::init(const AnimAsset& asset, std::string* why) {
     stand_hips = s.rest_pos[size_t(rt->rig()[Role::Hips])].y;
     if (!ys.empty()) { std::nth_element(ys.begin(), ys.begin() + ptrdiff_t(ys.size() / 2), ys.end()); stand_hips = ys[ys.size() / 2]; }
     runtime = std::move(rt);
+    build_masks();
     return true;
 }
 
 CharacterAnimator::CharacterAnimator(const AnimationSet& set) : set_(set) {
     tuning.move = game::kPlayerMove;
     const size_t n = size_t(set_.runtime->skeleton().size());
-    ctx_ = set_.runtime->create_context(2);
+    ctx_ = set_.runtime->create_context(3);       // (0: what plays, 1: where it goes next, 2: the clip layer)
     pose_.resize(n); src_.resize(n); next_.resize(n); scratch_.resize(n); good_.resize(n);
     model_.resize(n); good_model_.resize(n);
     reset();
@@ -146,6 +147,12 @@ void CharacterAnimator::reset() {
     blink_left_ = 2.0f; blink_t_ = -1.0f; lid_ = 0.0f; blinks_ = 0;
     eye_yaw_ = eye_pitch_ = dart_yaw_ = dart_pitch_ = 0.0f; dart_left_ = 1.0f;
     jaw_ = jaw_v_ = brow_ = brow_v_ = 0.0f; gaze_want_yaw_ = gaze_want_pitch_ = 0.0f;
+    style_ = PersonStyle{}; style_of_ = 0; action_mirror_ = false;
+    layer_clip_ = kNoClip; layer_mask_ = LayerMask::UpperBody; layer_t_ = layer_w_ = layer_wv_ = layer_eff_ = 0.0f;
+    gest_ = Gesture::None; gest_side_ = 1; gest_t_ = gest_dur_ = gest_w_ = 0.0f; fidget_left_ = 6.0f;
+    gesture_seq_ = look_id_ = 0; gest_look_yaw_ = gest_look_pitch_ = hips_shift_ = 0.0f;
+    layer_prev_eff_ = gest_prev_w_ = 0.0f;
+    layer_pa_.assign(pose_.size(), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)); layer_pb_ = layer_pa_;
     weapon_fire_offset_ = glm::mat4(1.0f);
     stand_hips_ = set_.stand_hips;
     weapon_offset_ = glm::mat4(1.0f);
@@ -233,7 +240,7 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
         yaw_rate_ = 0.0f;
         accel_ = glm::vec3(0.0f);
         for (Lock& l : lock_) l = Lock{};
-        if (!started_) { shot_seq_ = in.shot_seq; reload_seq_ = in.reload_seq; hit_seq_ = in.hit_seq; held_ = in.held; }
+        if (!started_) { shot_seq_ = in.shot_seq; reload_seq_ = in.reload_seq; hit_seq_ = in.hit_seq; held_ = in.held; gesture_seq_ = in.gesture_seq; look_id_ = in.look_id; }
     }
     if (dt > 1e-4f) {
         const float yr = std::clamp(wrap_angle(in.facing_yaw - prev_yaw_) / dt, -12.0f, 12.0f);
@@ -409,12 +416,21 @@ void CharacterAnimator::seated(const CharacterAnimationInput& in) {
         trunk(back);
     }
     const float ph = float(in.variation % 1024u) * 0.0061f;
+    // Somebody who sits somewhere (not at a wheel) and stays: the life layers - the posture of
+    // this person, breathing, the look (life_layers.cpp). At a wheel: as it was.
+    const bool alive = in.life_on_clip && !in.seat_wheel;
+    if (alive) {
+        turn(Role::Neck, -back * 0.8f, X);                                     // the head stays level
+        life_layers(in, 1);
+        face_layer(in);
+    } else {
     turn(Role::Spine1, 0.5f * std::sin(time_ * 1.6f + ph), X);                 // breathing
     turn(Role::Neck, -back * 0.8f, X);                                         // the head stays level
     // (the head: into the bend with the wheel, and never quite still)
     turn(Role::Neck, -in.seat_steer * 7.0f + 1.5f * std::sin(time_ * 0.31f + ph), Y);
     turn(Role::Head, -in.seat_steer * 11.0f + 2.5f * std::sin(time_ * 0.23f + ph * 2.0f), Y);
     turn(Role::Head, 1.2f * std::sin(time_ * 0.41f + ph * 3.0f), X);
+    }
     rt.local_to_model(*ctx_, pose_, model_);
     // THE LEGS. Where the feet have places (seat_feet): the heel on the floor, the sole from
     // there to where the ball of the foot presses, the knee up between. A leg too short for
@@ -446,10 +462,14 @@ void CharacterAnimator::seated(const CharacterAnimationInput& in) {
             rt.local_to_model(*ctx_, pose_, model_);
         }
     } else {
+        // (how this person places the feet: wider or closer, out in front or tucked under the seat)
+        const float own = std::clamp(in.individuality, 0.0f, 1.0f);
+        const float apart = 7.0f + std::clamp(style_.feet_apart * 130.0f, -5.0f, 6.0f) * own;
+        const float out = std::clamp(style_.feet_fwd * 150.0f, -11.0f, 15.0f) * own;
         turn(Role::LeftUpLeg, thigh, X);  turn(Role::RightUpLeg, thigh, X);
-        turn(Role::LeftUpLeg, 7.0f, Y);   turn(Role::RightUpLeg, -7.0f, Y);        // knees a little apart
+        turn(Role::LeftUpLeg, apart, Y);  turn(Role::RightUpLeg, -apart, Y);       // knees a little apart
         rt.local_to_model(*ctx_, pose_, model_);
-        turn(Role::LeftLeg, shin, X);     turn(Role::RightLeg, shin, X);
+        turn(Role::LeftLeg, shin + out, X); turn(Role::RightLeg, shin + out * 0.8f, X);
         rt.local_to_model(*ctx_, pose_, model_);
         turn(Role::LeftFoot, -(thigh + shin) * 0.6f, X); turn(Role::RightFoot, -(thigh + shin) * 0.6f, X);
         rt.local_to_model(*ctx_, pose_, model_);
@@ -459,6 +479,9 @@ void CharacterAnimator::seated(const CharacterAnimationInput& in) {
         const int a = rig[arm[s][0]], b = rig[arm[s][1]], c = rig[arm[s][2]];
         if (a < 0 || b < 0 || c < 0) continue;
         const glm::vec3 pole(s == 0 ? -0.55f : 0.55f, -1.0f, 0.25f);
+        // (an arm a clip layer has - somebody on a bench with a phone - belongs to the layer, not to the knee)
+        const float layered = grip[s] ? 0.0f : layer_eff_ * set_.mask[int(layer_mask_)][size_t(a)];
+        const glm::quat la = pose_[size_t(a)].r, lb = pose_[size_t(b)].r, lc = pose_[size_t(c)].r;
         fit_limb(a, b, c, wrist[s], &pole, grip[s]);
         rt.local_to_model(*ctx_, pose_, model_);
         if (grip[s]) {
@@ -484,8 +507,15 @@ void CharacterAnimator::seated(const CharacterAnimationInput& in) {
             const float sl = glm::length(ax), cl = glm::dot(cur, want);
             if (sl > 1e-5f) rotate_in_model(c, glm::angleAxis(std::atan2(sl, cl), ax / sl));
         }
+        if (layered > 1e-3f) {
+            pose_[size_t(a)].r = glm::normalize(glm::slerp(pose_[size_t(a)].r, la, layered));
+            pose_[size_t(b)].r = glm::normalize(glm::slerp(pose_[size_t(b)].r, lb, layered));
+            pose_[size_t(c)].r = glm::normalize(glm::slerp(pose_[size_t(c)].r, lc, layered));
+        }
         rt.local_to_model(*ctx_, pose_, model_);
     }
+    // (a hand to the head, a look at the wrist: over the arms as they were just placed)
+    if (alive && in.lod <= 1) gesture_layer(in, std::clamp(in.dt, 0.0f, 0.1f), in.dying <= 0.0f, true, false);
     // (through the inertialiser: no pop from the end of "sitting down" into this, or out of it)
     src_ = pose_;
     if (last_mode_ != 1 && started_ && !in.teleported) inert_.transition(src_, src_, 0.0f);
@@ -510,6 +540,7 @@ void CharacterAnimator::action(const CharacterAnimationInput& in) {
     auto sample_at = [&](int slot, float tt, std::vector<Transform>& p) {
         rt.sample(*ctx_, slot, in.action_clip, tt, p);
         p[0] = rt.root_motion(*ctx_, in.action_clip, 0.0f, tt);          // (the clip's travel since its first frame)
+        if (in.action_mirror) mirror_pose(rig, p, scratch_);             // (left for right, its travel too)
         if (in.action_in_place) p[0] = Transform{};
     };
     sample_at(0, t, src_);
@@ -517,12 +548,13 @@ void CharacterAnimator::action(const CharacterAnimationInput& in) {
     if (in.action_end_at_origin) {
         const Transform all = rt.root_motion(*ctx_, in.action_clip, 0.0f, last);
         const float k = smooth01(u);
-        src_[0].t.x -= all.t.x * k; src_[0].t.z -= all.t.z * k;
+        src_[0].t.x -= (in.action_mirror ? -all.t.x : all.t.x) * k; src_[0].t.z -= all.t.z * k;
     }
     const bool looped = last_mode_ == 2 && action_clip_ == in.action_clip && t < action_last_t_ - 0.25f;
     action_last_t_ = t;
     if (looped && started_) inert_.transition(src_, src_, 0.0f);
-    if (last_mode_ != 2 || action_clip_ != in.action_clip) {
+    if (last_mode_ != 2 || action_clip_ != in.action_clip || action_mirror_ != in.action_mirror) {
+        action_mirror_ = in.action_mirror;
         const float h = 1.0f / 30.0f;
         sample_at(1, std::min(t + h, last), next_);
         if (started_ && !in.teleported) inert_.transition(src_, next_, h);
@@ -537,33 +569,47 @@ void CharacterAnimator::action(const CharacterAnimationInput& in) {
     inert_.apply(src_, dt, tuning.inertial_halflife, pose_);
     started_ = true;
     rt.local_to_model(*ctx_, pose_, model_);
-    if (in.action_warp && hips >= 0) {
+    // The feet as the clip has them, before anything moves the hips: a foot that stands (an
+    // ankle near the ground) stays there through the shifts of weight of the life layers and
+    // through the warp.
+    const Role leg[2][3] = { { Role::LeftUpLeg, Role::LeftLeg, Role::LeftFoot }, { Role::RightUpLeg, Role::RightLeg, Role::RightFoot } };
+    glm::vec3 foot[2]{};
+    bool stands[2] = { false, false };
+    for (int s = 0; s < 2; ++s) {
+        const int f = rig[leg[s][2]];
+        if (f < 0) continue;
+        foot[s] = glm::vec3(model_[size_t(f)][3]);
+        stands[s] = foot[s].y < 0.24f;
+    }
+    // The life layers (life_layers.cpp): posture always; the rest for somebody who stays.
+    life_layers(in, 2);
+    if (in.life_on_clip) face_layer(in);
+    rt.local_to_model(*ctx_, pose_, model_);
+    glm::vec3 delta(0.0f);
+    const bool warp = in.action_warp && hips >= 0;
+    if (warp) {
         float w = smooth01(u);
         if (in.action_warp_from_start) w = 1.0f - w;
         if (in.action_warp_full) w = 1.0f;
-        const glm::vec3 delta = (in.action_hips - action_ref_hips_) * w;
-        const Role leg[2][3] = { { Role::LeftUpLeg, Role::LeftLeg, Role::LeftFoot }, { Role::RightUpLeg, Role::RightLeg, Role::RightFoot } };
-        glm::vec3 foot[2]{};
-        bool stands[2] = { false, false };
-        for (int s = 0; s < 2; ++s) {
-            const int f = rig[leg[s][2]];
-            if (f < 0) continue;
-            foot[s] = glm::vec3(model_[size_t(f)][3]);
-            stands[s] = foot[s].y < 0.24f;                             // (an ankle near the ground: that foot stands)
-        }
+        delta = (in.action_hips - action_ref_hips_) * w;
         const int par = sk.parents[size_t(hips)];
         const glm::mat3 P = par >= 0 ? glm::mat3(model_[size_t(par)]) : glm::mat3(1.0f);
         pose_[size_t(hips)].t += glm::transpose(P) * delta;
         rt.local_to_model(*ctx_, pose_, model_);
+    }
+    if (warp || (std::abs(hips_shift_) > 1e-4f && !in.action_in_place)) {
+        // (on a seat for good: how this person places the feet)
+        const float own = in.action_warp_full ? std::clamp(in.individuality, 0.0f, 1.0f) : 0.0f;
         for (int s = 0; s < 2; ++s) {
             const int a = rig[leg[s][0]], b = rig[leg[s][1]], c = rig[leg[s][2]];
             if (!stands[s] || a < 0 || b < 0 || c < 0) continue;
             // (A foot stays where the clip put it while the hips are moved a little - sitting
-            //  down on a chair a hand further back. Moved far - into a car's seat a metre to
+            //  down on a chair a hand further back. Moved far - into a car seat a metre to
             //  the side - the feet go with the body: pinned, a leg stayed outside the car,
             //  through the door.)
             const float go = glm::smoothstep(0.18f, 0.55f, glm::length(glm::vec2(delta.x, delta.z)));
-            fit_limb(a, b, c, foot[s] + delta * go, nullptr);
+            const glm::vec3 place((s == 0 ? -1.0f : 1.0f) * style_.feet_apart * own, 0.0f, -style_.feet_fwd * own);
+            fit_limb(a, b, c, foot[s] + delta * go + place, nullptr);
             rt.local_to_model(*ctx_, pose_, model_);
         }
     }
@@ -843,121 +889,10 @@ void CharacterAnimator::upper_body(const CharacterAnimationInput& in) {
             rotate_in_model(rig[Role::Head], glm::angleAxis(-0.12f * sight, glm::vec3(0.0f, 0.0f, 1.0f)) * rot_x(-0.07f * sight));
         }
     }
-    // Not aiming, a character is not a statue: the head looks about - at somebody near, off to
-    // a side, up or down, or nowhere for a while - and standing it breathes and shifts its
-    // weight from time to time. All of it stops the moment the aim comes up or a shot is fired.
-    if (!in.first_person && in.lod <= 1) {
-        const float dt = std::clamp(in.dt, 0.0f, 0.1f);
-        if (!rng_seeded_) {
-            rng_seeded_ = true;
-            rng_ = 0x9E3779B9u ^ (in.variation * 0x85EBCA6Bu + 0x1234567u);
-            if (rng_ == 0) rng_ = 1;
-            for (int i = 0; i < 4; ++i) rnd();
-            gaze_left_ = 0.5f + 2.5f * rnd();
-            shift_left_ = 2.0f + 5.0f * rnd();
-        }
-        const float speed = glm::length(glm::vec2(in.velocity.x, in.velocity.z));
-        const bool moving = speed > 0.6f;
-        const bool busy = in.dying > 0.0f || in.aiming || since_shot_ < 1.6f || reload_w_ > 0.05f || held_ != in.held || in.swimming || !in.grounded;
-        const float want = busy ? 0.0f : 1.0f;
-        gaze_w_ += (want - gaze_w_) * (1.0f - std::exp(-dt / (busy ? 0.08f : 0.35f)));
-        // what to look at next
-        gaze_left_ -= dt;
-        // (where somebody worth a look is, from the head)
-        float at_yaw = 0.0f, at_pitch = 0.0f;
-        bool can_see = false;
-        if (in.has_look_at) {
-            const glm::vec3 d = in.look_at - glm::vec3(model_[size_t(rig[Role::Head])][3]);
-            const float flat = std::sqrt(d.x * d.x + d.z * d.z);
-            at_yaw = std::atan2(d.x, -d.z);
-            at_pitch = std::atan2(d.y, std::max(flat, 1e-3f)) - 0.8f * pitch;       // (the aim's pitch is in the neck already)
-            can_see = flat > 0.4f && flat < 30.0f && std::abs(at_yaw) < 1.75f;
-        }
-        // A head is heavy and mostly in no hurry. Small shifts of attention are made with the
-        // eyes; the head follows the larger ones, slowly, and holds for seconds. So: long rests,
-        // unhurried turns (a quick one only now and then, when something catches the eye), slow
-        // sweeps across the view, and small angles far more often than large ones.
-        if (gaze_left_ <= 0.0f || (gaze_mode_ == 2 && !can_see)) {
-            const float r = rnd();
-            const float p_look = can_see ? (moving ? 0.16f : 0.28f) : 0.0f;
-            const float p_side = moving ? 0.14f : 0.20f;
-            const float p_sweep = moving ? 0.10f : 0.18f;
-            // how quickly: mostly slow, sometimes ordinary, rarely quick
-            const float q = rnd();
-            const float slow = 0.45f + 0.25f * rnd(), ordinary = 0.27f + 0.10f * rnd(), quick = 0.13f + 0.04f * rnd();
-            gaze_sweep_ = 0.0f;
-            if (r < p_look) {
-                gaze_mode_ = 2;                                             // somebody: a little more alert
-                gaze_half_ = q < 0.40f ? slow : q < 0.88f ? ordinary : quick;
-                gaze_left_ = moving ? 2.0f + 2.5f * rnd() : 3.5f + 5.0f * rnd();
-            } else if (r < p_look + p_side) {
-                gaze_mode_ = 1;
-                gaze_half_ = q < 0.68f ? slow : q < 0.94f ? ordinary : quick;
-                const float side = rnd() < 0.5f ? -1.0f : 1.0f;
-                const float far_look = rnd() < 0.2f ? 0.45f * rnd() : 0.0f;  // now and then well round
-                gaze_yaw_t_ = side * (0.20f + 0.40f * rnd() + far_look) * (moving ? 0.75f : 1.0f);
-                // level most of the time; sometimes up at the sky or down at the ground
-                const float v = rnd();
-                gaze_pitch_t_ = v < 0.27f ? 0.15f + 0.22f * rnd() : v < 0.52f ? -0.14f - 0.22f * rnd() : (rnd() - 0.5f) * 0.12f;
-                if (moving) gaze_pitch_t_ *= 0.5f;
-                gaze_left_ = moving ? 1.8f + 2.2f * rnd() : 2.5f + 4.0f * rnd();
-            } else if (r < p_look + p_side + p_sweep) {
-                gaze_mode_ = 3;                                             // a slow look across, from where the head is
-                gaze_half_ = 0.30f;
-                const float side = gaze_yaw_ > 0.05f ? -1.0f : gaze_yaw_ < -0.05f ? 1.0f : (rnd() < 0.5f ? -1.0f : 1.0f);
-                gaze_sweep_to_ = side * (0.30f + 0.45f * rnd()) * (moving ? 0.7f : 1.0f);
-                gaze_sweep_ = 0.10f + 0.16f * rnd();                        // 6 - 15 degrees a second
-                gaze_yaw_t_ = gaze_yaw_;
-                gaze_pitch_t_ = (rnd() - 0.5f) * 0.10f;
-                gaze_left_ = std::abs(gaze_sweep_to_ - gaze_yaw_) / gaze_sweep_ + 0.8f + 1.5f * rnd();
-            } else {
-                gaze_mode_ = 0;
-                gaze_half_ = q < 0.75f ? slow : ordinary;
-                gaze_left_ = moving ? 4.0f + 6.0f * rnd() : 3.0f + 6.0f * rnd();
-            }
-        }
-        if (gaze_mode_ == 3) {
-            const float step = gaze_sweep_ * dt, d = gaze_sweep_to_ - gaze_yaw_t_;
-            gaze_yaw_t_ += std::clamp(d, -step, step);
-        }
-        float ty = 0.0f, tp = 0.0f;
-        if (gaze_mode_ == 2) { ty = at_yaw; tp = at_pitch; }
-        else if (gaze_mode_ == 1 || gaze_mode_ == 3) { ty = gaze_yaw_t_; tp = gaze_pitch_t_; }
-        // (never quite still: a degree or two of drift)
-        const float ph = float(in.variation & 15u);
-        ty += 0.022f * std::sin(time_ * 0.31f + ph) + 0.012f * std::sin(time_ * 0.73f + 2.0f * ph);
-        tp += 0.010f * std::sin(time_ * 0.43f + 3.0f * ph);
-        ty = std::clamp(ty, -1.05f, 1.05f) * gaze_w_ * tuning.idle_look;
-        tp = std::clamp(tp, -0.45f, 0.45f) * gaze_w_ * tuning.idle_look;
-        // (the aim, a shot: the head is back on it at once, whatever its pace was)
-        const float half = busy ? 0.09f : gaze_half_;
-        gaze_want_yaw_ = ty;
-        gaze_want_pitch_ = tp;
-        spring_to(gaze_yaw_, gaze_yaw_v_, ty, half, dt);
-        spring_to(gaze_pitch_, gaze_pitch_v_, tp, half * 1.15f, dt);
-        if (std::abs(gaze_yaw_) + std::abs(gaze_pitch_) > 1e-4f) {
-            // the eyes lead, the neck follows, the chest gives a little (+yaw looks right: about -Y)
-            const glm::vec3 kY(0.0f, 1.0f, 0.0f);
-            rotate_in_model(rig[Role::Spine2], glm::angleAxis(-0.12f * gaze_yaw_, kY));
-            rotate_in_model(rig[Role::Neck], glm::angleAxis(-0.33f * gaze_yaw_, kY) * rot_x(0.35f * gaze_pitch_));
-            rotate_in_model(rig[Role::Head], glm::angleAxis(-0.55f * gaze_yaw_, kY) * rot_x(0.65f * gaze_pitch_));
-        }
-        // standing: breathing, and the weight goes from one leg to the other now and then
-        const float still = gaze_w_ * (moving ? 0.0f : 1.0f) * tuning.idle_sway;
-        shift_left_ -= dt;
-        if (shift_left_ <= 0.0f) {
-            const float r = rnd();
-            shift_t_ = r < 0.38f ? -1.0f : r < 0.76f ? 1.0f : 0.0f;
-            shift_left_ = 3.5f + 6.0f * rnd();
-        }
-        spring_to(shift_, shift_v_, shift_t_ * still, 0.40f, dt);
-        if (std::abs(shift_) > 1e-4f) {
-            pose_[size_t(rig[Role::Hips])].t.x += 0.022f * shift_;          // (the feet stay: they are locked to the ground)
-            rotate_in_model(rig[Role::Hips], glm::angleAxis(-0.035f * shift_, glm::vec3(0.0f, 0.0f, 1.0f)));
-            rotate_in_model(rig[Role::Spine1], glm::angleAxis(0.045f * shift_, glm::vec3(0.0f, 0.0f, 1.0f)));
-        }
-        if (still > 1e-3f) rotate_in_model(rig[Role::Spine2], rot_x(0.012f * still * std::sin(time_ * 1.7f + float(in.variation & 7u))));
-    }
+    // Not aiming, a character is not a statue: its own posture, breathing, the weight from one
+    // leg to the other, a hand to the head, the head looking about (life_layers.cpp). All of it
+    // stops the moment the aim comes up or a shot is fired.
+    life_layers(in, 0);
     if (in.dying > 0.0f) {
         const float d = smooth01(std::clamp(in.dying, 0.0f, 1.0f));
         glm::vec2 hd(in.hit_dir.x, in.hit_dir.z);

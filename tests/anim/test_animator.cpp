@@ -1260,3 +1260,276 @@ TEST_CASE("real asset: at the wheel the body is fitted to the car's seat, wheel 
         CHECK(head.y > c.hip.y + 0.45f);
     }
 }
+
+// ---- the life layers (src/anim/life_layers.cpp, docs/animation/actions.md "Life layers") ----
+namespace {
+
+bool load_real(AnimationSet& set) {
+    std::string why;
+    if (set.load((std::string(VIBE_SOURCE_DIR) + "/assets/character/soldier.qanim").c_str(), &why)) return true;
+    WARN("assets/character/soldier.qanim not loaded (" << why << "): skipped");
+    return false;
+}
+// The first of these clips the cooked set has (a set cooked before the later ones were made).
+ClipId first_clip(const AnimationSet& set, std::initializer_list<const char*> names) {
+    for (const char* n : names) { const ClipId c = set.runtime->find_clip(n); if (c >= 0) return c; }
+    return kNoClip;
+}
+// Which way a joint faces, flat: 0 ahead (-Z), + to the right.
+float facing(const CharacterAnimator& a, int joint) {
+    const glm::vec3 f = glm::mat3(a.model()[size_t(joint)]) * glm::vec3(0.0f, 0.0f, -1.0f);
+    return std::atan2(f.x, -f.z);
+}
+// Somebody of the station on a clip that goes round and round, as npc_world.cpp asks for it.
+CharacterAnimationInput somebody(uint32_t id, ClipId clip, float t) {
+    CharacterAnimationInput in;
+    in.dt = 1.0f / 60.0f;
+    in.held = HeldItem::None;
+    in.aiming = false;
+    in.action_clip = clip;
+    in.action_time = t;
+    in.variation = id * 7919u;
+    in.individuality = 1.0f;
+    in.life_on_clip = true;
+    return in;
+}
+
+}  // namespace
+
+TEST_CASE("real asset: two people on the same clip are not the same picture, and each is the same person every time", "[anim][animator][asset][life]") {
+    AnimationSet set;
+    if (!load_real(set)) return;
+    const Rig& rig = set.runtime->rig();
+    const ClipId clip = first_clip(set, { "table_eat", "sit_idle", "stand_idle" });
+    REQUIRE(clip >= 0);
+    const float dur = set.runtime->clip(clip).duration;
+    // who they are: all of it from the number, and different numbers are different people
+    const PersonStyle s3 = person_style(3u * 7919u), s4 = person_style(4u * 7919u), s3b = person_style(3u * 7919u);
+    CHECK(s3.phase == s3b.phase);
+    CHECK(s3.slouch == s3b.slouch);
+    CHECK(std::abs(s3.phase - s4.phase) > 1e-3f);
+    CHECK(std::abs(s3.slouch - s4.slouch) + std::abs(s3.head_tilt - s4.head_tilt) + std::abs(s3.shoulders - s4.shoulders) > 1e-3f);
+    CHECK(s3.rate > 0.92f); CHECK(s3.rate < 1.08f);
+    const PersonStyle nobody = person_style(0);
+    CHECK(nobody.slouch == 0.0f); CHECK(nobody.rate == 1.0f); CHECK(!nobody.mirror);
+
+    // the same clip at the same moment (so the difference is the layers', not the phase's)
+    CharacterAnimator a(set), b(set), a2(set), plain(set);
+    Watch wa(set), wb(set), wp(set);
+    float most_head = 0.0f, most_any = 0.0f, same = 0.0f, from_plain = 0.0f;
+    for (int i = 0; i < 600; ++i) {
+        const float t = std::fmod(float(i) / 60.0f, dur - 0.05f);
+        CharacterAnimationInput ia = somebody(3, clip, t), ib = somebody(4, clip, t), ip = somebody(0, clip, t);
+        ia.fidgets = ib.fidgets = 1.0f;
+        ip.individuality = 0.0f; ip.life_on_clip = false;
+        a.update(ia); b.update(ib); a2.update(ia); plain.update(ip);
+        // (the loop's wrap is a change of pose the inertialiser takes up: not a frame to judge speeds by)
+        if (t > 0.3f) { wa.see(a, ia.dt); wb.see(b, ib.dt); wp.see(plain, ip.dt); }
+        else wa.have = wb.have = wp.have = false;
+        REQUIRE(pose_is_valid(a.model()));
+        REQUIRE(pose_is_valid(b.model()));
+        if (i < 60) continue;
+        for (size_t j = 0; j < a.model().size(); ++j) {
+            most_any = std::max(most_any, glm::length(glm::vec3(a.model()[j][3]) - glm::vec3(b.model()[j][3])));
+            same = std::max(same, glm::length(glm::vec3(a.model()[j][3]) - glm::vec3(a2.model()[j][3])));
+            from_plain = std::max(from_plain, glm::length(glm::vec3(a.model()[j][3]) - glm::vec3(plain.model()[j][3])));
+        }
+        most_head = std::max(most_head, glm::length(glm::vec3(a.model()[size_t(rig[Role::Head])][3]) - glm::vec3(b.model()[size_t(rig[Role::Head])][3])));
+    }
+    INFO("two people: the head up to " << most_head << " m apart, some joint " << most_any << " m; the same person twice " << same << " m; from the bare clip " << from_plain << " m");
+    CHECK(most_head > 0.01f);              // not the same picture
+    CHECK(most_any > 0.03f);
+    CHECK(same < 1e-5f);                   // the same person is the same every time
+    CHECK(from_plain > 0.01f);
+    CHECK(from_plain < 0.80f);             // ... and still the clip (an arm up at the head is the furthest anything goes)
+    // nobody is torn or twisted: bones keep their length, nothing whips round
+    CHECK(wa.max_bone_err < 0.01f);
+    CHECK(wb.max_bone_err < 0.01f);
+    INFO("fastest joint " << wa.max_ang_rate << " rad/s (" << wa.worst_joint << "), the other " << wb.max_ang_rate << " (" << wb.worst_joint << "); the bare clip " << wp.max_ang_rate << " (" << wp.worst_joint << ")");
+    CHECK(wa.max_ang_rate < std::max(20.0f, wp.max_ang_rate * 1.5f));
+    CHECK(wb.max_ang_rate < std::max(20.0f, wp.max_ang_rate * 1.5f));
+
+    // left for right: the hips go the other way, and coming back to the clip is not a jump
+    CharacterAnimator m(set), n(set);
+    CharacterAnimationInput im = somebody(0, clip, 1.0f), in_ = somebody(0, clip, 1.0f);
+    im.individuality = in_.individuality = 0.0f; im.life_on_clip = in_.life_on_clip = false;
+    im.action_mirror = true;
+    for (int i = 0; i < 30; ++i) { m.update(im); n.update(in_); }
+    for (Role r : { Role::LeftHand, Role::Head, Role::LeftFoot }) {
+        const Role o = r == Role::LeftHand ? Role::RightHand : r == Role::LeftFoot ? Role::RightFoot : r;
+        const glm::vec3 pm(m.model()[size_t(rig[r])][3]), pn(n.model()[size_t(rig[o])][3]);
+        CHECK(glm::length(pm - glm::vec3(-pn.x, pn.y, pn.z)) < 0.02f);
+    }
+}
+
+TEST_CASE("real asset: the look goes to what is worth one, at a head's pace, and no further than a neck turns", "[anim][animator][asset][life]") {
+    AnimationSet set;
+    if (!load_real(set)) return;
+    const Rig& rig = set.runtime->rig();
+    const int head = rig[Role::Head], chest = rig[Role::Spine1];
+    const float dt = 1.0f / 60.0f;
+    auto target = [](float deg, float dist) { const float r = glm::radians(deg); return glm::vec3(std::sin(r) * dist, 1.62f, -std::cos(r) * dist); };
+    auto rel = [&](const CharacterAnimator& a) { return wrap_angle(facing(a, head) - facing(a, chest)); };
+
+    // ---- standing (locomotion underneath): fixed on something 40 degrees to the right ----
+    {
+        CharacterAnimator a(set);
+        CharacterAnimationInput in;
+        in.dt = dt; in.held = HeldItem::None; in.aiming = false; in.variation = 5u * 7919u;
+        in.has_look_at = true; in.look_weight = 10.0f; in.look_at = target(40.0f, 3.0f);
+        float fastest = 0.0f, prev = 0.0f;
+        for (int i = 0; i < 480; ++i) {
+            a.update(in);
+            const float y = facing(a, head);
+            if (i > 30) fastest = std::max(fastest, std::abs(wrap_angle(y - prev)) / dt);
+            prev = y;
+        }
+        CHECK(a.gaze_mode() == 2);
+        INFO("the head faces " << glm::degrees(facing(a, head)) << " degrees; fastest " << fastest << " rad/s");
+        CHECK(std::abs(facing(a, head) - glm::radians(40.0f)) < 0.14f);
+        CHECK(fastest < 4.5f);                                     // a head, not an eye
+        // ... 95 degrees: seen, but the head stops where a neck does (the eyes do the rest)
+        in.look_at = target(95.0f, 3.0f); in.look_id = 2;
+        float most = 0.0f;
+        for (int i = 0; i < 480; ++i) { a.update(in); most = std::max(most, std::abs(rel(a))); }
+        INFO("95 degrees: the head " << glm::degrees(rel(a)) << " degrees from the chest, at most " << glm::degrees(most));
+        CHECK(rel(a) > 0.80f);
+        CHECK(most < a.tuning.look_yaw_max + 0.06f);
+        // ... behind: not looked at, and whatever the head does by itself stays inside the limit
+        in.look_at = target(170.0f, 3.0f); in.look_id = 3;
+        most = 0.0f;
+        int looked = 0;
+        for (int i = 0; i < 1800; ++i) { a.update(in); most = std::max(most, std::abs(rel(a))); looked += a.gaze_mode() == 2 ? 1 : 0; }
+        CHECK(looked == 0);
+        CHECK(most < a.tuning.look_yaw_max + 0.06f);
+        // ... high above: no further up than a neck bends
+        in.look_at = glm::vec3(0.0f, 9.0f, -1.5f); in.look_id = 4;
+        for (int i = 0; i < 480; ++i) a.update(in);
+        const glm::vec3 f = glm::mat3(a.model()[size_t(head)]) * glm::vec3(0.0f, 0.0f, -1.0f);
+        INFO("looking up: " << glm::degrees(std::asin(f.y)) << " degrees");
+        CHECK(std::asin(std::clamp(f.y, -1.0f, 1.0f)) < a.tuning.look_pitch_up + 0.08f);
+        CHECK(std::asin(std::clamp(f.y, -1.0f, 1.0f)) > 0.20f);
+    }
+    // ---- on a clip that turns the head itself: the look is added to it, and the sum keeps the limit ----
+    const ClipId clip = first_clip(set, { "look_around", "look_crossed", "stand_idle" });
+    if (clip >= 0) {
+        const float dur = set.runtime->clip(clip).duration;
+        CharacterAnimator a(set), bare(set);
+        float over = 0.0f, turned = 0.0f, clip_most = 0.0f;
+        for (int i = 0; i < 1200; ++i) {
+            const float t = std::fmod(float(i) * dt, dur - 0.05f);
+            CharacterAnimationInput in = somebody(0, clip, t), ib = somebody(0, clip, t);
+            in.individuality = ib.individuality = 0.0f;
+            ib.life_on_clip = false;
+            in.has_look_at = true; in.look_weight = 10.0f; in.look_at = target(75.0f, 4.0f);
+            a.update(in); bare.update(ib);
+            if (t < 0.5f || i < 120) continue;                     // (the wrap is blended: the two are not at the same pose there)
+            const float own = std::abs(rel(bare));
+            clip_most = std::max(clip_most, own);
+            over = std::max(over, std::abs(rel(a)) - std::max(a.tuning.look_yaw_max, own));
+            turned = std::max(turned, rel(a) - rel(bare));
+        }
+        INFO("the clip turns the head up to " << glm::degrees(clip_most) << " degrees by itself; the look added up to " << glm::degrees(turned) << "; over the limit by " << glm::degrees(over));
+        CHECK(over < 0.06f);
+        CHECK(turned > 0.25f);                                     // it did look
+    }
+}
+
+TEST_CASE("real asset: a gesture and a clip over part of the body come and go without a jump, and leave the rest alone", "[anim][animator][asset][life]") {
+    AnimationSet set;
+    if (!load_real(set)) return;
+    const Rig& rig = set.runtime->rig();
+    const float dt = 1.0f / 60.0f;
+    // ---- a wave, asked for, on somebody who stands on a clip ----
+    const ClipId stand = first_clip(set, { "look_hips", "stand_idle" });
+    REQUIRE(stand >= 0);
+    {
+        CharacterAnimator a(set), bare(set);
+        const float dur = set.runtime->clip(stand).duration;
+        float top = -1.0f, fastest = 0.0f, feet = 0.0f;
+        glm::vec3 prev(0.0f);
+        bool seen = false;
+        for (int i = 0; i < 420; ++i) {
+            CharacterAnimationInput in = somebody(6, stand, std::min(float(i) * dt, dur - 0.1f));
+            in.gesture = Gesture::Wave;
+            in.gesture_seq = i >= 60 ? 1u : 0u;
+            a.update(in);
+            CharacterAnimationInput ib = in;
+            ib.individuality = 0.0f; ib.life_on_clip = false;
+            bare.update(ib);
+            const glm::vec3 wrist(a.model()[size_t(rig[Role::RightHand])][3]), shoulder(a.model()[size_t(rig[Role::RightArm])][3]);
+            if (i > 30) fastest = std::max(fastest, glm::length(wrist - prev) / dt);
+            prev = wrist;
+            if (a.gesture() == Gesture::Wave) { seen = true; top = std::max(top, wrist.y - shoulder.y); }
+            // (a weight shifted or not, the feet stay where the clip has them)
+            for (Role r : { Role::LeftFoot, Role::RightFoot })
+                feet = std::max(feet, glm::length(glm::vec3(a.model()[size_t(rig[r])][3]) - glm::vec3(bare.model()[size_t(rig[r])][3])));
+        }
+        INFO("the wrist " << top << " m over the shoulder at most, " << fastest << " m/s at most; a foot is " << feet << " m from where the bare clip has it at most");
+        CHECK(seen);
+        CHECK(top > 0.15f);                        // the hand was up
+        CHECK(fastest < 7.0f);                     // and got there and back without a jump
+        CHECK(a.gesture() == Gesture::None);       // done
+        CHECK(a.gesture_weight() < 1e-3f);
+        CHECK(feet < 0.03f);
+    }
+    // ---- every gesture, standing and on a seat, by either hand: no joint whips round ----
+    for (const ClipId base : { stand, first_clip(set, { "table_eat", "sit_idle" }) }) {
+        if (base < 0) continue;
+        const float dur = set.runtime->clip(base).duration;
+        Watch bare_w(set);
+        {
+            CharacterAnimator bare(set);
+            for (int i = 0; i < 300; ++i) { CharacterAnimationInput ib = somebody(0, base, std::min(float(i) * dt, dur - 0.1f)); ib.individuality = 0.0f; ib.life_on_clip = false; bare.update(ib); if (i > 30) bare_w.see(bare, dt); }
+        }
+        for (int g = 1; g < int(Gesture::Count); ++g)
+            for (uint8_t hands : { uint8_t(1), uint8_t(2) }) {
+                CharacterAnimator a(set);
+                Watch w(set);
+                for (int i = 0; i < 300; ++i) {
+                    CharacterAnimationInput in = somebody(9, base, std::min(float(i) * dt, dur - 0.1f));
+                    in.gesture = Gesture(g); in.gesture_seq = i >= 40 ? 1u : 0u; in.fidget_arms = hands;
+                    a.update(in);
+                    if (i > 30) w.see(a, dt);
+                }
+                INFO(set.runtime->clip(base).name << ", gesture " << g << ", hands " << int(hands) << ": fastest joint " << w.max_ang_rate << " rad/s (" << w.worst_joint << "); the bare clip " << bare_w.max_ang_rate);
+                CHECK(w.max_ang_rate < std::max(20.0f, bare_w.max_ang_rate * 1.5f));
+                CHECK(w.max_bone_err < 0.01f);
+            }
+    }
+    // ---- an upper body from one clip on the seat pose: the legs are the seat's, the arms the clip's ----
+    const ClipId upper = first_clip(set, { "look_phone", "sit_idle", "table_talk" });
+    REQUIRE(upper >= 0);
+    {
+        CharacterAnimator a(set), bare(set);
+        CharacterAnimationInput in;
+        in.dt = dt; in.seated = true; in.held = HeldItem::None; in.aiming = false;
+        const glm::vec3 hips = set.runtime->skeleton().rest_pos[size_t(rig[Role::Hips])];
+        in.seat_hand_l = hips + glm::vec3(-0.17f, 0.14f, -0.36f); in.seat_hand_r = hips + glm::vec3(0.17f, 0.14f, -0.36f);
+        in.life_on_clip = true;
+        CharacterAnimationInput il = in;
+        il.layer_clip = upper; il.layer_mask = LayerMask::UpperBody;
+        float w_prev = 0.0f, w_step = 0.0f, w_top = 0.0f, legs = 0.0f, arms = 0.0f;
+        for (int i = 0; i < 150; ++i) {
+            a.update(il); bare.update(in);
+            w_step = std::max(w_step, std::abs(a.layer_weight() - w_prev));
+            w_prev = a.layer_weight();
+            w_top = std::max(w_top, a.layer_weight());
+            if (i < 100) continue;
+            for (Role r : { Role::LeftLeg, Role::RightLeg, Role::LeftFoot, Role::RightFoot })
+                legs = std::max(legs, glm::length(glm::vec3(a.model()[size_t(rig[r])][3]) - glm::vec3(bare.model()[size_t(rig[r])][3])));
+            for (Role r : { Role::LeftHand, Role::RightHand })
+                arms = std::max(arms, glm::length(glm::vec3(a.model()[size_t(rig[r])][3]) - glm::vec3(bare.model()[size_t(rig[r])][3])));
+        }
+        INFO("the layer came in to " << w_top << " by at most " << w_step << " a frame; legs differ " << legs << " m, hands " << arms << " m");
+        CHECK(w_top > 0.9f);
+        CHECK(w_step < 0.08f);
+        CHECK(legs < 1e-3f);
+        CHECK(arms > 0.03f);
+        // ... and let go, it goes out as it came
+        il.layer_clip = kNoClip;
+        for (int i = 0; i < 120; ++i) { a.update(il); w_step = std::max(w_step, std::abs(a.layer_weight() - w_prev)); w_prev = a.layer_weight(); }
+        CHECK(a.layer_weight() < 0.02f);
+        CHECK(w_step < 0.08f);
+    }
+}

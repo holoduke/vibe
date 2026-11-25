@@ -52,7 +52,7 @@ layout(set = 0, binding = 45) uniform sampler3D u_wind;                // the wi
 void main() {
     // Leaf blades (part 3) pack sway base + along-leaf coordinate in uv.y.
     float plant_sway = inUv.y;
-    if (int(inUv.x + 0.5) >= 8) plant_sway = fract(inUv.y * 32.0) / 0.98;        // grass blade: free tip
+    if (int(inUv.x + 0.5) == 8 || int(inUv.x + 0.5) == 10) plant_sway = fract(inUv.y * 32.0) / 0.98;        // grass blade: free tip
     else if (int(inUv.x + 0.5) >= 3) plant_sway = floor(inUv.y * 32.0) / 32.0 + 0.25 * fract(inUv.y * 32.0) / 0.98;
     vec3  base  = inPosScale.xyz;
     float scale = inPosScale.w;
@@ -60,7 +60,7 @@ void main() {
     vec3  tint  = inRotTint.yzw;
     // Grass tufts. Those placed on the GPU (tuft_place.comp) come with a negative size - they
     // are already faded by the placement - and with their dissolve packed into the red.
-    bool  tuft = pc.grass_params.y > 0.5 && int(inUv.x + 0.5) >= 8;        // (8 = a blade, 9 = a flowering stalk)
+    bool  tuft = pc.grass_params.y > 0.5 && (int(inUv.x + 0.5) == 8 || int(inUv.x + 0.5) == 10);        // (8 = a blade, 10 = a flowering stalk; 9 is the water lily's pad)
     bool  placed = tuft && scale < 0.0;
     float dissolve = 1.0;
     if (tuft) {

@@ -29,6 +29,79 @@ struct Leaf { glm::vec3 origin; glm::quat q; float size; float prio; };
 
 glm::quat axis_q(glm::vec3 axis, float ang) { return glm::angleAxis(ang, axis); }
 
+// ---- Habit growth: helpers ----
+// The shortest rotation that takes unit `a` to unit `b`.
+glm::quat arc(glm::vec3 a, glm::vec3 b) {
+    const float d = glm::dot(a, b);
+    if (d < -0.9999f) {
+        const glm::vec3 other = std::abs(a.x) < 0.9f ? glm::vec3(1, 0, 0) : glm::vec3(0, 0, 1);
+        return glm::angleAxis(kPi, glm::normalize(glm::cross(a, other)));
+    }
+    const glm::vec3 c = glm::cross(a, b);
+    return glm::normalize(glm::quat(1.0f + d, c.x, c.y, c.z));
+}
+// A direction leaving a parent that runs along `pd`: `ang` away from it, at `az` round it.
+// az 0 / pi = the two level sides, pi/2 = the upper side, -pi/2 = underneath.
+glm::vec3 side_dir(glm::vec3 pd, float az, float ang) {
+    glm::vec3 u = glm::cross(pd, glm::vec3(0, 1, 0));
+    u = glm::dot(u, u) < 1e-4f ? glm::vec3(1, 0, 0) : glm::normalize(u);
+    const glm::vec3 v = glm::cross(u, pd);
+    return glm::normalize(pd * std::cos(ang) + (u * std::cos(az) + v * std::sin(az)) * std::sin(ang));
+}
+// Place, direction and radius at fraction `f` of a branch's length.
+void point_at(const std::vector<Section>& s, float f, glm::vec3& p, glm::vec3& d, float& r) {
+    const size_t n = s.size();
+    if (n < 2) { p = s[0].origin; d = glm::vec3(0, 1, 0); r = s[0].radius; return; }
+    float total = 0.0f;
+    for (size_t i = 0; i + 1 < n; ++i) total += glm::length(s[i + 1].origin - s[i].origin);
+    float t = glm::clamp(f, 0.0f, 1.0f) * total;
+    for (size_t i = 0; i + 1 < n; ++i) {
+        const glm::vec3 e = s[i + 1].origin - s[i].origin;
+        const float L = glm::length(e);
+        if (t <= L || i + 2 == n) {
+            const float a = L > 1e-6f ? glm::clamp(t / L, 0.0f, 1.0f) : 0.0f;
+            p = s[i].origin + e * a;
+            r = glm::mix(s[i].radius, s[i + 1].radius, a);
+            d = L > 1e-6f ? e / L : glm::vec3(0, 1, 0);
+            return;
+        }
+        t -= L;
+    }
+}
+// What a branch is asked to be (metres, radians).
+struct Axis {
+    glm::vec3 origin{0.0f}, dir{0.0f, 1.0f, 0.0f};
+    float length = 1.0f, radius = 0.05f;
+    int level = 0, sections = 4, segments = 4;
+    float prio = 0.0f;
+    float sag = 0.0f;        // turned down by its weight, most near the base (in all, for a level branch)
+    float lift = 0.0f;       // turned up to the light, most at the tip (negative: the tip hangs)
+    float wander = 0.0f;     // random curvature a section
+    float tip = 0.2f;        // radius at the tip / radius at the base
+    float collar = 0.0f;     // > 0: how far along it leaves the parent's bark - it swells there
+    glm::vec3 kick{0.0f};    // trunk: the lean it takes on above its first section
+    bool cap = false;        // close the end (a stem that ends where it divides)
+};
+// The crown's outline: half an ellipsoid above its middle, another below.
+struct Crown { glm::vec3 c{0.0f}; float rx = 1.0f, up = 1.0f, dn = 1.0f; };
+float reach(const Crown& e, glm::vec3 p, glm::vec3 d) {
+    const glm::vec3 R(e.rx, d.y >= 0.0f ? e.up : e.dn, e.rx);
+    const glm::vec3 P = (p - e.c) / R, D = d / R;
+    const float dd = glm::dot(D, D), pd = glm::dot(P, D);
+    const float disc = pd * pd - dd * (glm::dot(P, P) - 1.0f);
+    return disc > 0.0f ? std::max(0.0f, (-pd + std::sqrt(disc)) / dd) : 0.0f;
+}
+// The twigs of a tree: what carries its leaf cards.
+struct Twig {
+    float len = 0.5f, rad = 0.008f, ang = 0.8f;
+    float hang = 0.0f;       // how much they leave pointing down (birch)
+    float sag = 0.1f, lift = 0.2f;
+    int   sections = 2;
+    int   leaves = 5;        // cards along it (one more at its end)
+    float leaf_ang = 0.75f, leaf_droop = 0.1f;
+    float plo = 0.18f, phi = 0.55f;      // priority after its branch
+};
+
 struct Gen {
     const EzTreeOptions& o;
     Rng rng;
@@ -158,6 +231,390 @@ struct Gen {
             grow(b);
         }
     }
+
+    // =================================================================================
+    // Habit growth (this engine's own; eztree.h TreeHabit). Everything in metres. The
+    // skeleton is laid down branch by branch, each one an Axis: it starts on its parent's
+    // centre line, swells where it leaves the bark, then runs out in sections that wander,
+    // sag and turn up. Leaf cards hang on the twigs only.
+    // =================================================================================
+    float rr(float a, float b) { return a + (b - a) * rng.u(); }
+    float pr(float base, float lo, float hi) { return std::min(0.9f, base + lo + (hi - lo) * prng.u()); }
+    static Axis mk(glm::vec3 p, glm::vec3 d, float len, float rad, int level, int sections, int segments, float prio) {
+        Axis a;
+        a.origin = p; a.dir = d; a.length = len; a.radius = rad; a.level = level;
+        a.sections = sections; a.segments = segments; a.prio = prio;
+        return a;
+    }
+
+    std::vector<Section> grow_axis(const Axis& a) {
+        const glm::vec3 Y(0.0f, 1.0f, 0.0f);
+        std::vector<Section> sec;
+        glm::vec3 dir = glm::normalize(a.dir), pos = a.origin;
+        glm::quat q = arc(Y, dir);
+        float len = a.length, flare = 1.0f;
+        if (a.collar > 0.0f) {
+            // The join: two rings more, the widest where the branch comes out of the parent.
+            const float e = a.collar, w = 1.8f * a.radius;
+            if (len > 2.5f * (e + w)) {
+                sec.push_back({ pos, q, a.radius * 1.25f });
+                sec.push_back({ pos + dir * e, q, a.radius * 1.42f });
+                pos += dir * (e + w); len -= e + w; flare = 1.08f;
+            }
+        }
+        const int n = std::max(a.sections, 1);
+        const float step = len / float(n);
+        glm::vec3 kv(0.0f);
+        float r = a.radius;
+        for (int i = 0; i <= n; ++i) {
+            const float f = float(i) / float(n);
+            r = std::max(a.radius * glm::mix(1.0f, a.tip, std::pow(f, 0.85f)) * (i == 0 ? flare : 1.0f), 0.0015f);
+            sec.push_back({ pos, q, r });
+            if (i == n) break;
+            pos += dir * step;
+            glm::vec3 nd = dir;
+            const glm::vec3 rv(rng.u() - 0.5f, rng.u() - 0.5f, rng.u() - 0.5f);
+            if (i == 0 && a.level == 0) nd += a.kick;            // (the foot stands straight: the root flare is built round it)
+            else {
+                kv = glm::mix(kv, rv * 2.0f, 0.6f);
+                nd += (kv - dir * glm::dot(kv, dir)) * a.wander;
+                const glm::vec3 up = Y - dir * dir.y;            // toward the sky, square to the branch: a level branch bends most
+                const float fm = (float(i) + 0.5f) / float(n);
+                nd += up * ((a.lift * 3.0f * fm * fm - a.sag * 2.0f * (1.0f - fm)) / float(n));
+            }
+            nd = glm::normalize(nd);
+            q = glm::normalize(arc(dir, nd) * q);
+            dir = nd;
+        }
+        if (a.cap) sec.push_back({ pos + dir * (r * 0.8f), q, 0.003f });
+        branches.push_back({ sec, a.segments, a.level, a.prio });
+        return sec;
+    }
+
+    // A leaf card growing from `p` along `d`; `roll` turns its face about that line (0 = facing up).
+    void add_leaf(glm::vec3 p, glm::vec3 d, float roll) {
+        d = glm::normalize(d);
+        glm::vec3 x = glm::cross(d, glm::vec3(0, 1, 0));
+        x = glm::dot(x, x) < 1e-4f ? glm::vec3(1, 0, 0) : glm::normalize(x);
+        glm::vec3 z = glm::cross(x, d);
+        x = glm::normalize(x * std::cos(roll) + z * std::sin(roll));
+        z = glm::cross(x, d);
+        record_leaf(p, glm::normalize(glm::quat_cast(glm::mat3(x, d, z))));
+    }
+    // Cards along a twig, to both sides in turn, and one at its end.
+    void bear_leaves(const std::vector<Section>& s, float f0, int n, float ang, float droop) {
+        float side = rng.u() < 0.5f ? 0.0f : kPi;
+        glm::vec3 p, d; float r;
+        for (int k = 0; k < n; ++k) {
+            point_at(s, f0 + (1.0f - f0) * (float(k) + rng.u()) / float(n), p, d, r);
+            glm::vec3 ld = side_dir(d, side + rr(-0.7f, 0.7f), ang * rr(0.7f, 1.25f));
+            side += kPi;
+            ld.y -= droop;
+            add_leaf(p, ld, rr(-1.15f, 1.15f));
+        }
+        point_at(s, 1.0f, p, d, r);
+        d.y -= droop * 0.6f;
+        add_leaf(p, d, rr(-1.15f, 1.15f));
+    }
+    // A tuft: cards standing round the end of a shoot (pine).
+    void tuft(glm::vec3 p, glm::vec3 d, int n) {
+        const float a0 = rng.u() * 6.2832f;
+        for (int k = 0; k < n; ++k)
+            add_leaf(p - d * (o.leaf_size * 0.18f), side_dir(d, a0 + 6.2832f * (float(k) + rr(-0.25f, 0.25f)) / float(n), rr(0.35f, 0.75f)),
+                     rr(-1.5f, 1.5f));
+        add_leaf(p - d * (o.leaf_size * 0.25f), d, rr(-1.5f, 1.5f));
+    }
+    // Twigs along a branch between f0 and f1, each with its leaves.
+    void bear_twigs(const std::vector<Section>& s, float base_prio, float f0, float f1, int n, const Twig& t, int level) {
+        float side = rng.u() < 0.5f ? 0.0f : kPi, gold = rng.u() * 6.2832f;
+        for (int k = 0; k < n; ++k) {
+            glm::vec3 p, d; float r;
+            const float f = f0 + (f1 - f0) * (float(k) + rng.u()) / float(n);
+            point_at(s, f, p, d, r);
+            float az;
+            if (std::abs(d.y) > 0.85f) { gold += 2.39996f; az = gold; }       // on an upright shoot: all round
+            else { az = side + rr(-0.6f, 0.6f); side += kPi; }                // on a leaning one: to both sides, a flat spray
+            glm::vec3 td = side_dir(d, az, t.ang * rr(0.75f, 1.25f));
+            td.y -= t.hang;
+            Axis a = mk(p, td, t.len * (1.0f - 0.4f * f) * rr(0.7f, 1.15f), std::min(t.rad, r * 0.7f), level, t.sections, 3,
+                        pr(base_prio, t.plo, t.phi));
+            a.sag = t.sag; a.lift = t.lift; a.wander = 0.15f; a.tip = 0.3f;
+            const auto ts = grow_axis(a);
+            bear_leaves(ts, 0.2f, t.leaves, t.leaf_ang, t.leaf_droop);
+        }
+    }
+
+    // ---- Oak (1) and birch (2) ----
+    void grow_broadleaf(float H) {
+        const TreeHabit& h = o.habit;
+        const glm::vec3 Y(0.0f, 1.0f, 0.0f);
+        const bool  birch = h.kind == 2;
+        const float age = glm::clamp(h.age, 0.0f, 1.0f);
+        const bool  one_stem = birch || age < 0.2f;                  // the stem runs to the top
+        const float dens = std::max(h.density, 0.3f);
+        const float r0 = std::min(0.9f, H * (birch ? 0.013f : 0.019f) * (0.7f + 0.9f * age) + 0.03f);
+        const float hb = H * (birch ? rr(0.26f, 0.34f) : glm::mix(rr(0.26f, 0.33f), rr(0.15f, 0.21f), age));   // clear trunk
+        const float Lt = one_stem ? H * 0.96f
+                                  : std::max(hb + 0.08f * H, H * glm::mix(0.50f, 0.36f, age) * rr(0.94f, 1.06f));
+        const glm::vec3 lean_v = glm::vec3(std::cos(h.lean_az), 0.0f, std::sin(h.lean_az)) * h.lean;
+        const glm::vec3 asym_v = glm::vec3(std::cos(h.asym_az), 0.0f, std::sin(h.asym_az)) * h.asym;
+
+        Axis ta = mk(glm::vec3(0.0f), Y, Lt, r0, 0, one_stem ? 9 : 6, age > 0.75f ? 10 : 8, 0.0f);
+        ta.kick = lean_v; ta.lift = h.lean * (one_stem ? 1.3f : 0.6f);
+        ta.wander = birch ? 0.05f : 0.03f + 0.04f * age;
+        ta.tip = one_stem ? 0.07f : 0.66f; ta.cap = !one_stem;
+        const auto trunk = grow_axis(ta);
+        const glm::vec3 top = trunk.back().origin;
+
+        Crown env;
+        env.rx = H * (birch ? 0.20f : glm::mix(0.30f, 0.42f, age)) * h.crown_w;
+        const float yc = glm::mix(hb, H, birch ? 0.45f : 0.36f);
+        env.c = glm::vec3(top.x * 0.7f, yc, top.z * 0.7f) + asym_v * env.rx;
+        env.up = H - yc; env.dn = (yc - hb) * 1.2f;
+
+        Twig tw;
+        tw.len = H * (birch ? 0.085f : 0.070f); tw.rad = 0.003f + 0.0005f * H; tw.ang = 0.8f;
+        tw.hang = birch ? 0.9f : 0.0f; tw.sag = birch ? 0.7f : 0.1f; tw.lift = birch ? 0.0f : 0.25f;
+        tw.leaves = std::max(o.leaf_count, 1); tw.leaf_ang = 0.75f; tw.leaf_droop = birch ? 0.7f : 0.15f;
+
+        // A limb off the stem: out to the crown's outline, side branches along its outer three quarters,
+        // twigs on those and on its own end.
+        auto limb = [&](glm::vec3 p, glm::vec3 d, float rad, float collar, int segs, float sag, float lift, float prio) {
+            const float len = std::max(0.10f * H, reach(env, p, d) * rr(0.82f, 1.02f));
+            Axis a = mk(p, d, len, rad, 1, std::clamp(int(len / (0.085f * H)) + 3, 4, 8), segs, prio);
+            a.sag = sag; a.lift = lift; a.wander = birch ? 0.07f : 0.10f + 0.06f * age; a.tip = 0.16f; a.collar = collar;
+            const auto ls = grow_axis(a);
+            const int n2 = std::clamp(int(len / (0.07f * H) * dens + 0.5f), 2, 9);
+            float gold = rng.u() * 6.2832f;
+            for (int k = 0; k < n2; ++k) {
+                glm::vec3 p2, d2; float r2;
+                const float f = 0.26f + 0.66f * (float(k) + rng.u()) / float(n2);
+                point_at(ls, f, p2, d2, r2);
+                gold += 2.39996f;
+                float az = gold;
+                if (std::sin(az) < -0.35f) az = -az;                      // few branches leave a limb underneath
+                const float ang = rr(0.6f, 1.0f);
+                glm::vec3 sd = side_dir(d2, az, ang);
+                if (birch) sd = glm::normalize(sd - glm::vec3(0.0f, 0.25f, 0.0f));
+                float l2 = std::min(len * (0.50f - 0.22f * f) * rr(0.8f, 1.15f), reach(env, p2, sd) * 1.05f);
+                l2 = std::max(l2, 0.05f * H);
+                Axis sa = mk(p2, sd, l2, std::max(0.004f, r2 * rr(0.45f, 0.6f)), 2, l2 > 0.1f * H ? 4 : 3, 3, pr(prio, 0.10f, 0.42f));
+                sa.sag = birch ? 0.2f : 0.15f; sa.lift = birch ? -0.9f : 0.30f; sa.wander = 0.12f; sa.tip = 0.22f;
+                if (r2 > 0.035f) sa.collar = std::min(r2 / std::max(std::sin(ang), 0.5f), 2.0f * r2);
+                const auto ss = grow_axis(sa);
+                bear_twigs(ss, sa.prio, 0.22f, 1.0f, std::clamp(int(l2 / (0.036f * H) * dens) + 1, 2, 8), tw, 3);
+            }
+            bear_twigs(ls, prio, 0.70f, 1.0f, 3, tw, 3);
+        };
+
+        glm::vec3 p, d; float r;
+        float gold = rng.u() * 6.2832f;
+        if (!one_stem) {
+            // The trunk divides: two to four limbs share its top ...
+            const float rt = trunk[trunk.size() - 2].radius;
+            const int   nt = (age > 0.6f ? 3 : 2) + int(rng.u() * 1.99f);
+            const float a0 = rng.u() * 6.2832f;
+            point_at(trunk, 0.97f, p, d, r);
+            for (int j = 0; j < nt; ++j) {
+                const glm::vec3 ld = side_dir(d, a0 + 6.2832f * (float(j) + rr(-0.2f, 0.2f)) / float(nt), rr(0.40f, 0.72f));
+                limb(p, ld, rt * (nt == 2 ? 0.80f : nt == 3 ? 0.70f : 0.62f) * rr(0.9f, 1.05f), 0.0f, 6,
+                     0.10f + 0.20f * age, 0.30f, pr(0.0f, 0.0f, 0.04f));
+            }
+            // ... and lower limbs stand out from it, the lowest the widest.
+            const int ns = 2 + int(age * 3.0f + rng.u() * 2.0f);
+            for (int j = 0; j < ns; ++j) {
+                const float t = (float(j) + rng.u()) / float(ns);
+                point_at(trunk, glm::mix(hb / Lt, 0.88f, t), p, d, r);
+                gold += 2.39996f;
+                const float ang = glm::mix(1.30f, 0.90f, t) + rr(-0.12f, 0.12f);
+                limb(p, side_dir(d, gold, ang), r * rr(0.36f, 0.50f), std::min(r / std::sin(ang), 2.0f * r), 5,
+                     0.15f + 0.35f * age, 0.35f, pr(0.0f, 0.0f, 0.10f));
+            }
+        } else {
+            const int nl = int((birch ? 12.0f + 6.0f * age : 9.0f) * dens + rng.u() * 3.0f);
+            for (int j = 0; j < nl; ++j) {
+                const float t = (float(j) + rng.u()) / float(nl);
+                point_at(trunk, glm::mix(hb / Lt, 0.92f, t), p, d, r);
+                gold += 2.39996f;
+                const float ang = birch ? rr(0.55f, 0.85f) : rr(0.8f, 1.1f);
+                limb(p, side_dir(d, gold, ang), std::max(0.006f, r * rr(0.32f, 0.45f)),
+                     r > 0.035f ? std::min(r / std::sin(ang), 2.0f * r) : 0.0f, 4,
+                     birch ? 0.0f : 0.15f, birch ? -0.45f : 0.30f, pr(0.0f, 0.0f, 0.50f));      // (many thin limbs: they thin out with distance)
+            }
+            bear_twigs(trunk, 0.0f, 0.86f, 1.0f, 4, tw, 3);
+        }
+    }
+
+    // ---- Spruce (3) ----
+    void grow_spruce(float H) {
+        const TreeHabit& h = o.habit;
+        const glm::vec3 Y(0.0f, 1.0f, 0.0f);
+        const float age = glm::clamp(h.age, 0.0f, 1.0f);
+        const float dens = std::max(h.density, 0.3f);
+        const float r0 = std::min(0.9f, H * 0.012f * (0.8f + 0.6f * age) + 0.03f);
+        const glm::vec3 asym_v = glm::vec3(std::cos(h.asym_az), 0.0f, std::sin(h.asym_az)) * h.asym;
+        Axis ta = mk(glm::vec3(0.0f), Y, H * 0.97f, r0, 0, 10, 8, 0.0f);
+        ta.kick = glm::vec3(std::cos(h.lean_az), 0.0f, std::sin(h.lean_az)) * h.lean;
+        ta.lift = h.lean * 1.3f; ta.wander = 0.012f; ta.tip = 0.04f;
+        const auto trunk = grow_axis(ta);
+
+        const float bare = glm::mix(0.07f, 0.30f, age) * rr(0.8f, 1.2f);
+        const float Rmax = H * 0.27f * h.crown_w;
+        const int   nwh = std::clamp(int((1.0f - bare) / 0.058f * dens), 7, 18);
+        const int   leaves = std::max(o.leaf_count, 1);
+        float az0 = rng.u() * 6.2832f;
+        glm::vec3 p, d; float r;
+        for (int w = 0; w < nwh; ++w) {
+            const float t = (float(w) + 0.5f) / float(nwh);                  // 0 = the lowest whorl, 1 = the top
+            const int   nb = t > 0.85f ? 3 : 4 + (rng.u() < 0.5f ? 1 : 0);
+            az0 += 2.39996f;
+            for (int b = 0; b < nb; ++b) {
+                const float az = az0 + 6.2832f * (float(b) + rr(-0.18f, 0.18f)) / float(nb);
+                point_at(trunk, bare + (0.985f - bare) * t + rr(-0.010f, 0.010f), p, d, r);
+                const glm::vec3 out(std::cos(az), 0.0f, std::sin(az));
+                // Longest at the bottom of the crown, a spire at the top; the lowest, shaded whorls fall short.
+                const float len = Rmax * (std::pow(1.0f - t, 0.8f) * 0.96f + 0.05f) * rr(0.82f, 1.10f) * (t < 0.12f ? 0.8f : 1.0f) *
+                                  (1.0f + glm::dot(out, asym_v));
+                // Rising at the top, level in the middle, drooping below - and every tip turns up.
+                const float ang = glm::mix(1.58f + 0.32f * age, 0.90f, glm::smoothstep(0.0f, 1.0f, t)) + rr(-0.08f, 0.08f);
+                const glm::vec3 bd = glm::normalize(out * std::sin(ang) + Y * std::cos(ang));
+                Axis a = mk(p, bd, len, std::max(0.006f, std::min(r * 0.34f, 0.010f + 0.022f * len)), 1, len > 0.12f * H ? 5 : 3, 4,
+                            pr(0.0f, 0.02f, 0.85f));
+                a.sag = glm::mix(0.45f, 0.0f, t) * (0.5f + age); a.lift = glm::mix(0.55f, 0.15f, t); a.wander = 0.04f; a.tip = 0.12f;
+                const auto bs = grow_axis(a);
+                // Side shoots to the left and right of the bough, hanging a little: a flat spray.
+                const int nl = std::clamp(int(len / (0.06f * H) * dens + 0.5f), 1, 5);
+                float side = rng.u() < 0.5f ? 0.0f : kPi;
+                for (int k = 0; k < nl; ++k) {
+                    glm::vec3 p2, d2; float r2;
+                    const float f = 0.18f + 0.72f * (float(k) + rng.u()) / float(nl);
+                    point_at(bs, f, p2, d2, r2);
+                    glm::vec3 sd = side_dir(d2, side + rr(-0.25f, 0.25f), rr(0.75f, 1.05f));
+                    side += kPi;
+                    sd.y -= 0.18f + 0.25f * age;
+                    const float l2 = len * (0.42f - 0.20f * f) * rr(0.8f, 1.15f);
+                    Axis sa = mk(p2, sd, l2, std::min(0.004f + 0.0004f * H, r2 * 0.7f), 2, l2 > 0.06f * H ? 2 : 1, 3, pr(a.prio, 0.05f, 0.60f));
+                    sa.sag = 0.25f; sa.wander = 0.08f; sa.tip = 0.3f;
+                    const auto ss = grow_axis(sa);
+                    bear_leaves(ss, 0.12f, leaves, 0.5f, 0.12f + 0.2f * age);
+                }
+                bear_leaves(bs, 0.35f, std::min(leaves, 3), 0.5f, 0.1f);
+            }
+        }
+        bear_leaves(trunk, 0.93f, 3, 0.6f, 0.0f);           // the leader
+    }
+
+    // ---- Pine (4) ----
+    void grow_pine(float H) {
+        const TreeHabit& h = o.habit;
+        const glm::vec3 Y(0.0f, 1.0f, 0.0f);
+        const float age = glm::clamp(h.age, 0.0f, 1.0f);
+        const bool  young = age < 0.3f;                              // still a cone with a leader
+        const float dens = std::max(h.density, 0.3f);
+        const float r0 = std::min(0.9f, H * 0.014f * (0.8f + 0.6f * age) + 0.03f);
+        const glm::vec3 asym_v = glm::vec3(std::cos(h.asym_az), 0.0f, std::sin(h.asym_az)) * h.asym;
+        const float bare = (young ? 0.22f : glm::mix(0.36f, 0.58f, age)) * rr(0.92f, 1.08f);
+        const float lt = young ? 0.95f : 0.84f;                      // the stem's length / H
+        Axis ta = mk(glm::vec3(0.0f), Y, H * lt, r0, 0, 10, 8, 0.0f);
+        ta.kick = glm::vec3(std::cos(h.lean_az), 0.0f, std::sin(h.lean_az)) * h.lean;
+        ta.lift = h.lean * 1.2f; ta.wander = 0.035f; ta.tip = young ? 0.06f : 0.30f; ta.cap = !young;
+        const auto trunk = grow_axis(ta);
+
+        const float Rmax = H * (young ? 0.26f : glm::mix(0.30f, 0.38f, age)) * h.crown_w;
+        const int   cards = std::max(o.leaf_count, 1);
+        glm::vec3 p, d; float r;
+        // A limb: crooked, its end turned up; side branches all round but underneath, each with
+        // short shoots, and a tuft of needles at every shoot's end.
+        auto limb = [&](glm::vec3 lp, glm::vec3 ld, float len, float rad, float collar, float sag, float prio) {
+            Axis a = mk(lp, ld, len, rad, 1, len > 0.14f * H ? 6 : 4, 5, prio);
+            a.sag = sag; a.lift = rr(0.5f, 0.8f); a.wander = 0.10f; a.tip = 0.14f; a.collar = collar;
+            const auto ls = grow_axis(a);
+            const int n2 = std::clamp(int(len / (0.050f * H) * dens + 0.5f), 2, 6);
+            const int nsh = age > 0.5f ? 3 : 2;
+            float gold = rng.u() * 6.2832f;
+            auto shoots = [&](const std::vector<Section>& s, float base, int n, float f0) {
+                float g2 = rng.u() * 6.2832f;
+                for (int k = 0; k < n; ++k) {
+                    glm::vec3 p3, d3; float r3;
+                    point_at(s, f0 + (0.95f - f0) * (float(k) + rng.u()) / float(n), p3, d3, r3);
+                    g2 += 2.39996f;
+                    float az = g2;
+                    if (std::sin(az) < -0.3f) az = -az;
+                    Axis t = mk(p3, side_dir(d3, az, rr(0.6f, 0.95f)), H * rr(0.030f, 0.050f), std::min(0.004f + 0.0004f * H, r3 * 0.7f),
+                                3, 1, 3, pr(base, 0.18f, 0.50f));
+                    t.lift = 0.5f; t.tip = 0.4f;
+                    const auto ts = grow_axis(t);
+                    tuft(ts.back().origin, glm::normalize(ts.back().origin - ts.front().origin), cards);
+                }
+                glm::vec3 pe, de; float re;
+                point_at(s, 1.0f, pe, de, re);
+                tuft(pe, de, cards);
+            };
+            for (int k = 0; k < n2; ++k) {
+                glm::vec3 p2, d2; float r2;
+                const float f = 0.30f + 0.65f * (float(k) + rng.u()) / float(n2);
+                point_at(ls, f, p2, d2, r2);
+                gold += 2.39996f;
+                float az = gold;
+                if (std::sin(az) < -0.3f) az = -az;
+                const float l2 = len * (0.42f - 0.15f * f) * rr(0.8f, 1.15f);
+                Axis sa = mk(p2, side_dir(d2, az, rr(0.6f, 0.9f)), l2, std::max(0.004f, r2 * rr(0.45f, 0.6f)), 2, 3, 3, pr(prio, 0.10f, 0.50f));
+                sa.lift = 0.5f; sa.wander = 0.10f; sa.tip = 0.25f;
+                const auto ss = grow_axis(sa);
+                shoots(ss, sa.prio, nsh, 0.40f);
+            }
+            shoots(ls, prio, 2, 0.72f);
+        };
+
+        const int nwh = std::clamp(int((lt - bare) / glm::mix(0.070f, 0.050f, age) * dens), 3, young ? 7 : 9);
+        float az0 = rng.u() * 6.2832f;
+        for (int w = 0; w < nwh; ++w) {
+            const float t = (float(w) + 0.5f) / float(nwh);
+            const int   nb = (young ? 3 : 2) + int(rng.u() * (young ? 1.5f : 2.4f));
+            az0 += 2.39996f;
+            for (int b = 0; b < nb; ++b) {
+                const float az = az0 + 6.2832f * (float(b) + rr(-0.25f, 0.25f)) / float(nb);
+                point_at(trunk, (bare + (lt * 0.97f - bare) * t) / lt + rr(-0.012f, 0.012f), p, d, r);
+                const glm::vec3 out(std::cos(az), 0.0f, std::sin(az));
+                const float shape = young ? std::pow(1.0f - t, 0.7f) * 0.95f + 0.08f
+                                          : 0.55f + 0.45f * std::sin(kPi * std::min(t * 1.15f, 1.0f));
+                const float len = Rmax * shape * rr(0.75f, 1.10f) * (1.0f + glm::dot(out, asym_v));
+                const float ang = glm::mix(1.45f, 0.75f, t) + rr(-0.12f, 0.12f);
+                const glm::vec3 ld = glm::normalize(out * std::sin(ang) + Y * std::cos(ang));
+                limb(p, ld, len, std::max(0.008f, r * rr(0.32f, 0.44f)), std::min(r / std::sin(ang), 2.0f * r),
+                     0.30f * (1.0f - t) * (0.4f + age), pr(0.0f, 0.0f, 0.75f));
+            }
+        }
+        if (!young) {
+            // The top: the stem ends in a few rising limbs - the rounded head of a grown pine.
+            const float rt = trunk[trunk.size() - 2].radius;
+            const int   nt = 3 + int(rng.u() * 1.5f);
+            const float a0 = rng.u() * 6.2832f;
+            point_at(trunk, 0.97f, p, d, r);
+            for (int j = 0; j < nt; ++j)
+                limb(p, side_dir(d, a0 + 6.2832f * (float(j) + rr(-0.2f, 0.2f)) / float(nt), rr(0.35f, 0.80f)),
+                     Rmax * rr(0.50f, 0.75f), rt * 0.62f, 0.0f, 0.0f, pr(0.0f, 0.0f, 0.06f));
+            // Dead stubs on the bare stem.
+            const int nd = 2 + int(age * 4.0f * rng.u() + 0.5f);
+            for (int j = 0; j < nd; ++j) {
+                point_at(trunk, bare / lt * rr(0.45f, 0.95f), p, d, r);
+                Axis s = mk(p, side_dir(d, rng.u() * 6.2832f, rr(1.1f, 1.5f)), r + H * rr(0.02f, 0.05f), std::max(0.006f, r * 0.14f), 2, 2, 3,
+                            pr(0.0f, 0.30f, 0.60f));
+                s.sag = 0.3f; s.wander = 0.15f; s.tip = 0.35f;
+                grow_axis(s);
+            }
+        } else {
+            tuft(trunk.back().origin, Y, cards);
+        }
+    }
+
+    void run_habit(float H) {
+        switch (o.habit.kind) {
+            case 3:  grow_spruce(H); break;
+            case 4:  grow_pine(H); break;
+            default: grow_broadleaf(H); break;
+        }
+    }
 };
 
 void push(game::LevelMesh& m, glm::vec3 p, glm::vec3 n, float u, float v) {
@@ -255,7 +712,8 @@ EzTreeOptions ez_preset_river_shrub() {
 void build_ez_tree(
 game::LevelMesh& m, const EzTreeOptions& o, float max_detail, float target_height) {
     Gen g{ o, Rng{ o.seed * 2654435761u + 977u }, {}, {}, {} };
-    g.run();
+    if (o.habit.kind != 0) g.run_habit(target_height);
+    else g.run();
     float top = 1e-3f;
     for (const auto& b : g.branches) for (const auto& s : b.sections) top = std::max(top, s.origin.y);
     for (const auto& l : g.leaves) top = std::max(top, l.origin.y);
