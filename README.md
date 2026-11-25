@@ -2,7 +2,8 @@
 
 Vibe is a 3D game engine and first-person game in C++20 and Vulkan 1.3, written
 entirely by AI (vibe coding with Claude Code): hardware ray tracing, a ray-marched procedural
-planet, motion-matched characters and LAN multiplayer.
+planet, motion-matched characters, cars to drive, a world with its own people and traffic, and
+LAN multiplayer.
 
 The goal is see how far you can get with AI. Feel free to let your agent work on this game. Create pull requests if you want.
 
@@ -27,8 +28,8 @@ Important: This engine was written by AI for humans. No code was (and never will
 
 ## The technology
 
-A native C++20 application on Vulkan 1.3, with no game engine underneath: about 57,000 lines of
-C++ and 22,000 lines of GLSL in 69 shader files. Windowing, math, physics, audio and networking
+A native C++20 application on Vulkan 1.3, with no game engine underneath: about 85,000 lines of
+C++ and 26,000 lines of GLSL in 101 shader files, with 160 unit tests. Windowing, math, physics, audio and networking
 come from small libraries; the renderer, the world and the tools are written here.
 
 The lists below name each technique and, where it follows published work, its source. Most are
@@ -58,13 +59,13 @@ through a formula.
 
 | Technique | What it does |
 |---|---|
-| Terrain | A fractal height formula marched in the fragment shader; the number of noise octaves falls with distance; pebbles, puddles, snow, footprints and ice are shading detail |
+| Terrain | A fractal height formula (layered noise with erosion) marched in the fragment shader; the number of noise octaves falls with distance; pebbles, puddles, snow, footprints and ice are shading detail |
+| Terrain upscaling | The ground is marched at reduced resolution and rebuilt by its own temporal upscaler; the slow fields of the world (continents, ranges, forest) are cached in two textures round the camera |
 | Water | Sea, lake and river surface with waves, flow, foam, a visible bed and an underwater view |
-| Grass | A field of individual blades as a signed distance field, standing on the real terrain |
 | Volumetric clouds | Marched in a compute shader, grown from a 2D weather map |
 | Atmosphere | Physically based sky from look-up tables (Hillaire 2020): transmittance, multiple scattering, sky view and an aerial-perspective volume |
 | Volumetric fog | 160 x 90 x 64 camera-aligned froxels (Wronski 2014, Frostbite 2015), with mist that lies on the lake |
-| Wall relief | Stonework marched into flat wall faces (parallax occlusion with silhouettes) |
+| Stonework | Screen-space displacement mapping: walls are drawn flat, then a per-pixel grid moves every pixel out by the height of its stone, with real outlines and the stones shading each other (the method of Crimson Desert); parallax relief as the fallback |
 | Explosions | Fireballs and smoke columns as marched noise volumes with a blackbody colour ramp |
 | Voxels | A destructible tower traversed per pixel with a brick DDA |
 
@@ -89,7 +90,8 @@ The world is a real sphere with a radius of 6360 km. Fly on round it and you com
 | Levels of detail | Four mesh levels and an impostor per tree, picked on the GPU, with dithered cross-fades |
 | Cluster LOD (Nanite-style) | Rocks and static meshes are cut into clusters of up to 128 triangles in a hierarchy (meshoptimizer); per cluster the level with under one pixel of error is drawn |
 | Geometry streaming | The finest cluster level is read from disk on a background thread when the camera comes near |
-| Procedural trees and plants | Trees are grown at load time, plants and their simplified levels are generated in code |
+| Grass | No list of grass exists: every frame a compute shader places turf, long tufts and flowering meadow round the camera from rules of the ground, culls them and draws them as instances. Blades bend to a wind field simulated as a fluid round the camera and lie down where somebody walked or drove |
+| Procedural trees and plants | Trees are grown at load time, plants and their simplified levels are generated in code; far trees are impostors with depth |
 | Mesh terrain | A second terrain renderer with continuous distance-dependent LOD (CDLOD), next to the raymarched one |
 
 ### Image
@@ -103,14 +105,38 @@ The world is a real sphere with a radius of 6360 km. Fly on round it and you com
 | Auto-exposure | Eye adaptation from the scene's average luminance |
 | Bloom and lens flare | 13-tap downsample and tent upsample chain (Call of Duty: Advanced Warfare), ghosts and halo |
 | Decals | Deferred decals that wrap laser burns over any surface |
+| Glass | A refractive glass pass for windows and windscreens: what lies behind is bent, tinted and reflected over |
+| Shading rate | The ground is shaded more coarsely where the picture moves fast |
 | Colour grading | Temperature, vibrance, split toning, film grain and vignette |
+
+### Characters
+
+| Technique | What it does |
+|---|---|
+| Motion matching | Every frame the next pose of the soldier is searched in a database of motion capture by where the player is heading; legs, hips and stride are fitted to the real speed and ground |
+| Hands and aim | The arms are placed on the weapon by inverse kinematics every frame; the head and eyes look where the player looks |
+| Action clips | Sitting down, eating, getting into a car, serving at a counter: clips made from text with a motion model, played on the same skeleton |
+| Death | Somebody who is shot first reacts - a clip chosen by where the shot struck and what they were doing - and as the body loses its balance the physics takes it over as a ragdoll |
+| Many at once | Animation levels of detail by distance, poses computed on worker threads, skinning on the GPU, ray-traced shadows for the nearest |
+
+### A world with life in it
+
+| | What it does |
+|---|---|
+| Cars | A jeep, sports cars, saloons and pickups to drive: suspension, tyre grip, traction control, turbo, tyre marks and smoke, lights, a passenger seat. Each kind has its own engine and gearbox - a V8 that revs to 9000, a low-revving V6, a quiet four-cylinder |
+| Sound in space | The sound of every car is recorded from a physical engine simulation at steps of engine speed and mixed by revs and load. One spatialiser gives every moving source its distance, Doppler shift, muffling behind what stands in the way and the echo of its surroundings |
+| Roads | A coast highway and a river lane are built from a centre line: surface, markings, guard rails, signs, lamps and bridges, with the terrain cut to fit |
+| People and traffic | An NPC engine runs a hundred agents: cars drive the highway, pull in at the service station, fuel up and park; people get out, shop, eat in the diner and drive on. Drivers differ - slow, fast, overtaking, a speeder with the military police behind him. Any standing car can be taken |
+| Places | A castle on a lake, a chapel, a launch site with a rocket and a glass operations pavilion, a service station with fuel pumps, a shop and a diner - modelled by script in Blender, with interiors |
+| Sites | Hand-made places are data, laid over the procedural planet; the design is meant for thousands of them |
+| Weapons | A laser rifle, an automatic assault rifle and an airstrike called in on a tablet; bolts are physical bodies that knock things over |
 
 ### Simulation and tools
 
 | Technique | What it does |
 |---|---|
-| Physics | Rigid bodies with Jolt |
-| LAN multiplayer | Instances find each other, elect a host and share players, shots, weather, season and clock (ENet); other players are interpolated 100 ms in the past |
+| Physics | Rigid bodies, vehicles and ragdolls with Jolt |
+| LAN multiplayer | Up to eight instances find each other, elect a host and share players, shots, cars, the people and traffic of the world, weather, season and clock (ENet); other players and cars are interpolated 100 ms in the past. Characters are sent as position, direction and action - each machine animates them itself |
 | Orbital mechanics | The rocket flies a real mission in double precision: gravity turn, 180 km circular orbit, one revolution, a retrograde burn and a powered landing on its mount |
 | Day, seasons and weather | A sun, moon with phases and stars; four seasons and eleven kinds of weather that change the land and the light |
 | Job system | Background threads for world generation and streaming |
@@ -143,19 +169,26 @@ Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMa
 | W A S D, mouse | Move, look |
 | Space / Shift / Ctrl | Jump / sprint / crawl. In water: rise / swim fast / dive |
 | Left mouse | Fire, or mark the airstrike target |
+| Right mouse | Aim down the sights |
+| R | Reload |
 | 1 / 2 / 3 | Laser rifle / airstrike tablet / assault rifle |
 | V | Fly |
 | H | Back to the start |
-| E | World editor; at the launch button: start the count |
+| E | Get into or out of a car; at the launch button: start the count; elsewhere: world editor |
+| In a car | W A S D drive, Space handbrake, Shift turbo, L lights, middle mouse changes the view |
 | C | During a launch: ride along with the rocket (mouse turns the camera) |
 | F | Flashlight |
 | F12 | Save a screenshot |
-| Esc | Menu with all settings |
+| Esc | Menu with all settings and key bindings (a controller works too) |
 
 ## Code
 
 - `src/engine/` — the Vulkan engine
+- `src/anim/` — character animation (motion matching, hands, action clips)
+- `src/npc/` — the people and traffic that live in the world
 - `src/game/` — player, collision, level
+- `tools/` — the Blender scripts that build the places, the animation cooker, benchmarks
+- `tests/` — unit tests
 - `shaders/` — GLSL 4.60
 - `docs/ARCHITECTURE.md` — the code map, with the details behind every technique above
 
@@ -165,8 +198,11 @@ Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMa
   [leoawen/volumetric_cloud_atmosphere_scattering](https://github.com/leoawen/volumetric_cloud_atmosphere_scattering) (MIT).
 - Procedural trees: a C++ port of [dgreenheck/ez-tree](https://github.com/dgreenheck/ez-tree) (MIT).
 - Sea waves: after "Seascape" by Alexander Alekseev (TDM), [shadertoy.com/view/Ms2SD1](https://www.shadertoy.com/view/Ms2SD1) (CC BY-NC-SA 3.0).
-- Screen-space displacement (in the code, not currently used): after
+- Screen-space displacement mapping: the method of Crimson Desert (Pearl Abyss), written after reading the shaders of the game; a first attempt was after
   [TechArtAlex](https://www.patreon.com/TechArtAlex/posts/screen-space-171617266).
+- Car engine sound: recorded from [ange-yaghi/engine-sim](https://github.com/ange-yaghi/engine-sim) (MIT).
+- Action and death clips: made with Tencent HY-Motion 1.0 (text to motion), under its community licence, which excludes the EU, the UK and South Korea.
+- Weapon models (LR-9 laser rifle, MR-7 rifle): original, made for this project in Blender.
 - Player character: [MakeHuman / MPFB](https://static.makehumancommunity.org/) community assets;
   tactical vest by MindFront (CC-BY).
 - Character movement: motion capture from the 100STYLE dataset by Ian Mason, Sebastian Starke and Taku Komura
