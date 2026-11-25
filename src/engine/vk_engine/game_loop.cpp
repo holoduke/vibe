@@ -297,14 +297,15 @@ void VulkanEngine::loop_handle_keys(InputFrame& in, float frame_dt) {
     // as the E key above. Only fires while playing so a 9 in the
     // pause menu / chat input wouldn't flip it.
     // (fly mode stays as it was through the pause menu)
-    // Weapon select: 1 = laser gun, 2 = airstrike tablet.
+    // Weapon select: 1 = laser gun, 2 = airstrike tablet, 3 = rifle.
     if (state_ == State::Playing && !terrain_edit_mode_) {      // (edit mode: the number keys pick what to draw)
         if (in.weapon1 && !prev_weapon_key_[0]) { weapon_ = 0; flashlight_on_ = false; }
         if (in.weapon2 && !prev_weapon_key_[1]) { weapon_ = 1; flashlight_on_ = false; }
+        if (in.weapon3 && !prev_weapon_key_[2]) { weapon_ = 2; flashlight_on_ = false; }
     }
-    prev_weapon_key_[0] = in.weapon1; prev_weapon_key_[1] = in.weapon2;
-    // R: reload. Cosmetic (the laser has no magazine): it is shown and replicated, and firing ends it.
-    if (state_ == State::Playing && !terrain_edit_mode_ && in.brush_mode_next && !prev_reload_key_ && weapon_ == 0 && !flashlight_on_ &&
+    prev_weapon_key_[0] = in.weapon1; prev_weapon_key_[1] = in.weapon2; prev_weapon_key_[2] = in.weapon3;
+    // R: reload. Cosmetic (no ammunition is counted): it is shown and replicated, and firing ends it.
+    if (state_ == State::Playing && !terrain_edit_mode_ && in.brush_mode_next && !prev_reload_key_ && gun_in_hand() &&
         body_reload_left_ <= 0.0f && body_animator_) {
         ++body_reload_seq_;
         body_reload_left_ = body_animator_->weapon.reload_time;
@@ -312,7 +313,7 @@ void VulkanEngine::loop_handle_keys(InputFrame& in, float frame_dt) {
     prev_reload_key_ = in.brush_mode_next;
     // Right mouse: aim. (Test hook: VIBE_TEST_AIM=1 holds it.)
     static const bool kTestAim = std::getenv("VIBE_TEST_AIM") != nullptr;
-    body_aim_ = state_ == State::Playing && !terrain_edit_mode_ && weapon_ == 0 && !flashlight_on_ && (in.alt_fire_held || kTestAim);
+    body_aim_ = state_ == State::Playing && !terrain_edit_mode_ && gun_in_hand() && (in.alt_fire_held || kTestAim);
     if (state_ != State::Playing) last_pin_ = game::PlayerInput{};
     if (in.fly_key && !prev_fly_key_ && state_ == State::Playing) {
         fly_mode_ = !fly_mode_;
@@ -518,15 +519,17 @@ void VulkanEngine::loop_weapons_and_edit(InputFrame& in, float frame_dt) {
             airstrike_click_ = in.fire;
             fire_cooldown_ = 0.0f;
         } else {
-            float rps = std::max(0.0f, game_.fire_rate_rps);
+            // The laser fires at the game's rate (0: one bolt per click); the rifle is automatic.
+            const bool rifle = weapon_ == 2;
+            float rps = rifle ? kRifleRps : std::max(0.0f, game_.fire_rate_rps);
             if (rps <= 0.0f) {
                 if (in.fire) {
-                    fire_projectile(player_.eye_position(), player_.forward());
+                    fire_projectile(player_.eye_position(), player_.forward(), rifle);
                 }
             } else if (in.fire_held) {
                 float interval = 1.0f / rps;
                 if (fire_cooldown_ <= 0.0f) {
-                    fire_projectile(player_.eye_position(), player_.forward());
+                    fire_projectile(player_.eye_position(), player_.forward(), rifle);
                     fire_cooldown_ += interval;
                 }
             } else {

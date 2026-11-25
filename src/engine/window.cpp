@@ -104,8 +104,9 @@ const ActionInfo kActionInfo[kActionCount] = {
     { "Use / edit mode",          "use",        GLFW_KEY_E,             GLFW_GAMEPAD_BUTTON_Y },
     { "Reload / next brush",      "reload",     GLFW_KEY_R,             GLFW_GAMEPAD_BUTTON_X },
     { "Flashlight",               "flashlight", GLFW_KEY_F,             GLFW_GAMEPAD_BUTTON_RIGHT_THUMB },
-    { "Weapon 1: rifle",          "weapon1",    GLFW_KEY_1,             GLFW_GAMEPAD_BUTTON_LEFT_BUMPER },
+    { "Weapon 1: laser",          "weapon1",    GLFW_KEY_1,             GLFW_GAMEPAD_BUTTON_LEFT_BUMPER },
     { "Weapon 2: airstrike",      "weapon2",    GLFW_KEY_2,             GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER },
+    { "Weapon 3: rifle",          "weapon3",    GLFW_KEY_3,             GLFW_GAMEPAD_BUTTON_DPAD_RIGHT },
     { "Fly mode",                 "fly",        GLFW_KEY_V,             GLFW_GAMEPAD_BUTTON_DPAD_UP },
     { "Rocket camera",            "camera",     GLFW_KEY_C,             GLFW_GAMEPAD_BUTTON_BACK },
     { "Back to the start",        "home",       GLFW_KEY_H,             GLFW_GAMEPAD_BUTTON_DPAD_DOWN },
@@ -280,6 +281,7 @@ InputFrame Window::consume_input(const InputBindings& b) {
     f.home_key        = act(Action::Home);
     f.weapon1         = act(Action::Weapon1);
     f.weapon2         = act(Action::Weapon2);
+    f.weapon3         = act(Action::Weapon3);
     f.flashlight      = act(Action::Flashlight);
     // The menu: Esc, and the controller's Start (neither can be rebound).
     {

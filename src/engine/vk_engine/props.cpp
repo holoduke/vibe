@@ -85,64 +85,48 @@ void VulkanEngine::init_viewmodel() {
         grip,
     });
 
-    // Try the user-droppable single-file path first, then the multi-file
-    // scene layout (matches the spacejet asset). Either format works.
-    GltfModel gltf = load_gltf("assets/gun.glb");
-    if (gltf.primitives.empty()) {
-        gltf = load_gltf("assets/gun/scene.gltf");
-    }
-    if (!gltf.primitives.empty()) {
+    // A gun model: centred on its bounding box, the longest side (barrel to butt) scaled to
+    // 0.85 m, turned so the barrel (glTF -X, up +Y) points along camera -Z, then placed at
+    // `place`. Each model's `place` is measured so its pistol grip lands on WeaponDef::grip_r
+    // and its fore-end near grip_l (the hands are fitted there) - another model needs it
+    // measured again. Returns false when the file is missing.
+    auto load_gun = [&](const char* path, glm::vec3 place, std::vector<ViewmodelMesh>& meshes,
+                        glm::mat4& root, glm::vec3& muzzle) {
+        GltfModel gltf = load_gltf(path);
+        if (gltf.primitives.empty()) return false;
         glm::vec3 center = (gltf.aabb_min + gltf.aabb_max) * 0.5f;
         glm::vec3 extent = gltf.aabb_max - gltf.aabb_min;
         float max_side = std::max({extent.x, extent.y, extent.z, 1e-3f});
-        // 0.55m max side reads better at first-person scale than the
-        // earlier 0.30m. The 180° Y-rotation flips the gun's nose to
-        // point forward (camera -Z); without it the assets/gun model
-        // points back at the player.
-        // m254 asset orientation walk-through: bare → pointed UP, pitch
-        // -90°X → pointed LEFT on its side. The asset's barrel axis
-        // turned out to be -X (not +X as previously assumed) — yaw
-        // +90° around Y mapped that to +Z (toward the player) and the
-        // gun pointed backwards. Yaw -90° flips it the other way so
-        // the barrel ends up along -Z (camera forward).
         float scale = 0.85f / max_side;
-        glm::mat4 rot_yaw = glm::rotate(glm::mat4(1.0f),
-                                         glm::radians(-90.0f),
-                                         glm::vec3(0.0f, 1.0f, 0.0f));
-
-        // Z = -0.22 (was -0.35) pulls the gun back toward the camera
-        // a bit so a slightly larger model still fits comfortably in
-        // the lower-right corner of the frame.
-        viewmodel_root_offset_ =
-            glm::translate(glm::mat4(1.0f), glm::vec3(0.16f, -0.20f, -0.22f)) *
-            glm::scale(glm::mat4(1.0f), glm::vec3(scale)) *
-            rot_yaw *
-            glm::translate(glm::mat4(1.0f), -center);
+        glm::mat4 rot_yaw = glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        root = glm::translate(glm::mat4(1.0f), place) *
+               glm::scale(glm::mat4(1.0f), glm::vec3(scale)) *
+               rot_yaw *
+               glm::translate(glm::mat4(1.0f), -center);
 
         {   // The muzzle: the model's foremost point (most negative z in view space); where the
             // gun has more than one barrel, the top one - of what lies within 2 cm of the front,
             // the upper third.
             float zmin = 1e9f;
             for (const auto& prim : gltf.primitives)
-                for (const auto& v : prim.vertices) zmin = std::min(zmin, (viewmodel_root_offset_ * glm::vec4(v.position, 1.0f)).z);
+                for (const auto& v : prim.vertices) zmin = std::min(zmin, (root * glm::vec4(v.position, 1.0f)).z);
             float ylo = 1e9f, yhi = -1e9f;
             for (const auto& prim : gltf.primitives)
                 for (const auto& v : prim.vertices) {
-                    const glm::vec3 p(viewmodel_root_offset_ * glm::vec4(v.position, 1.0f));
+                    const glm::vec3 p(root * glm::vec4(v.position, 1.0f));
                     if (p.z < zmin + 0.02f) { ylo = std::min(ylo, p.y); yhi = std::max(yhi, p.y); }
                 }
             glm::vec3 acc(0.0f); float n = 0.0f;
             for (const auto& prim : gltf.primitives)
                 for (const auto& v : prim.vertices) {
-                    const glm::vec3 p(viewmodel_root_offset_ * glm::vec4(v.position, 1.0f));
+                    const glm::vec3 p(root * glm::vec4(v.position, 1.0f));
                     if (p.z < zmin + 0.02f && p.y > glm::mix(ylo, yhi, 0.66f)) { acc += p; n += 1.0f; }
                 }
-            if (n > 0.0f) viewmodel_muzzle_ = glm::vec3(acc.x / n, acc.y / n, zmin);
-            log::infof("viewmodel: muzzle at (%.3f, %.3f, %.3f) in view space", viewmodel_muzzle_.x, viewmodel_muzzle_.y, viewmodel_muzzle_.z);
+            if (n > 0.0f) muzzle = glm::vec3(acc.x / n, acc.y / n, zmin);
+            log::infof("viewmodel: %s muzzle at (%.3f, %.3f, %.3f) in view space", path, muzzle.x, muzzle.y, muzzle.z);
         }
         for (const auto& prim : gltf.primitives) {
             ViewmodelMesh vm{};
-
             vm.mesh = create_mesh_from_data(device_, allocator_, graphics_queue_,
                                             graphics_queue_family_,
                                             prim.vertices.data(),
@@ -150,15 +134,22 @@ void VulkanEngine::init_viewmodel() {
                                             prim.indices.data(),
                                             static_cast<uint32_t>(prim.indices.size()));
             vm.base_color = prim.base_color;
-            viewmodel_gltf_.push_back(std::move(vm));
+            vm.emissive = prim.emissive;
+            meshes.push_back(std::move(vm));
         }
-        log::infof("viewmodel: glTF loaded with %zu primitives (placeholder hidden)",
-                   viewmodel_gltf_.size());
+        log::infof("viewmodel: %s loaded with %zu primitives", path, meshes.size());
+        return true;
+    };
+
+    // Weapon 0: the LR-9 laser rifle. Weapon 2: the MR-7 rifle.
+    if (load_gun("assets/gun.glb", glm::vec3(0.1615f, -0.2270f, -0.2782f), viewmodel_gltf_, viewmodel_root_offset_, viewmodel_muzzle_)) {
         viewmodel_proc_parts_.clear();
     } else {
         log::info("viewmodel: using procedural placeholder "
                   "(drop assets/gun.glb to override)");
     }
+    if (!load_gun("assets/rifle.glb", glm::vec3(0.1617f, -0.2798f, -0.2809f), rifle_gltf_, rifle_root_offset_, rifle_muzzle_))
+        log::info("viewmodel: no assets/rifle.glb - weapon 3 draws the laser gun");
 }
 
 void VulkanEngine::destroy_viewmodel() {
@@ -168,6 +159,8 @@ void VulkanEngine::destroy_viewmodel() {
     destroy_static_clusters();
     for (auto& vm : viewmodel_gltf_) destroy_mesh(allocator_, vm.mesh);
     viewmodel_gltf_.clear();
+    for (auto& vm : rifle_gltf_) destroy_mesh(allocator_, vm.mesh);
+    rifle_gltf_.clear();
     viewmodel_proc_parts_.clear();
 }
 
@@ -1174,12 +1167,16 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
                                   glm::scale(glm::mat4(1.0f), glm::vec3(0.028f, 0.105f, 0.050f)),
                       glm::vec4(0.09f, 0.10f, 0.11f, 1.0f), glm::vec3(0.0f), false);
     }
-    if (!viewmodel_gltf_.empty()) {
-        glm::mat4 root = view_inv_recoil * viewmodel_root_offset_;
-        for (const auto& vm : viewmodel_gltf_) {
-            draw_part(vm.mesh, root, vm.base_color, glm::vec3(0.0f), false);
+    {   // weapon 2 is the rifle (when its model is there), otherwise the laser gun
+        const bool rifle = weapon_ == 2 && !rifle_gltf_.empty();
+        const auto& meshes = rifle ? rifle_gltf_ : viewmodel_gltf_;
+        if (!meshes.empty()) {
+            glm::mat4 root = view_inv_recoil * (rifle ? rifle_root_offset_ : viewmodel_root_offset_);
+            for (const auto& vm : meshes) {
+                draw_part(vm.mesh, root, vm.base_color, vm.emissive, false);
+            }
+            return;
         }
-        return;
     }
 
     for (const auto& p : viewmodel_proc_parts_) {

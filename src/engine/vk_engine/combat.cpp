@@ -86,7 +86,7 @@ void VulkanEngine::apply_player_pushes(glm::vec3 pre_velocity) {
     }
 }
 
-void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
+void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction, bool rifle) {
     if (!physics_) return;
     glm::vec3 dir = glm::normalize(direction);
 
@@ -109,7 +109,8 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
         if (rh.hit) return;
     }
 
-    float speed = std::max(10.0f, game_.bullet_speed);
+    // A rifle bullet flies faster than a laser bolt (and is drawn shorter, below).
+    float speed = std::max(10.0f, game_.bullet_speed) * (rifle ? kRifleSpeedScale : 1.0f);
     uint32_t id = physics_->add_dynamic_cylinder_ccd(
         spawn, kProjectileRad, kProjectileHalf, orient,
         // + the shooter's own velocity, as any projectile has: fired while
@@ -118,7 +119,7 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
         dir * speed + player_.velocity, std::max(0.1f, game_.bullet_mass));
     if (id == 0) return;
 
-    mp_on_local_fire(origin, direction);   // multiplayer: tell the others (no-op for a replayed remote shot)
+    mp_on_local_fire(origin, direction, rifle);   // multiplayer: tell the others (no-op for a replayed remote shot)
     if (!mp_->remote_shot) {                // (a remote shot: their avatar kicks, the sound comes from there)
         ++body_shot_seq_;                  // the body's recoil; replicated, so others see it too
         body_reload_left_ = 0.0f;          // firing ends a reload at once: it never holds a shot back
@@ -129,7 +130,8 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
         // Shot is "local" — happens at the camera, mostly bypasses 3D
         // attenuation. Light pitch jitter so rapid fire doesn't sound
         // mechanical.
-        audio_->play_local(ClipID::Laser, 0.7f, 0.05f, 0.06f);
+        if (rifle) audio_->play_local(ClipID::Shot, 0.75f, 0.06f, 0.08f);
+        else       audio_->play_local(ClipID::Laser, 0.7f, 0.05f, 0.06f);
     }
 
     Projectile p{};
@@ -140,7 +142,8 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
     // bolts ran together into one continuous beam. Full length up to 6
     // shots a second, down to a quarter at 24 and above (the look only -
     // the physics body keeps its size).
-    p.half_length = kProjectileHalf * std::clamp(6.0f / std::max(game_.fire_rate_rps, 0.1f), 0.25f, 1.0f);
+    p.half_length = rifle ? kProjectileHalf * 0.22f
+                          : kProjectileHalf * std::clamp(6.0f / std::max(game_.fire_rate_rps, 0.1f), 0.25f, 1.0f);
     p.ttl = kProjectileTtl;
     p.initial_speed = speed;
     p.initial_dir = dir;
@@ -155,6 +158,10 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
     // trail.
     p.color    = glm::vec4(1.0f, 0.20f, 0.55f, 1.0f);  // red-magenta core
     p.emissive = glm::vec3(2.20f, 0.30f, 1.80f);        // HDR bloom feed
+    if (rifle) {                                        // a rifle bullet: a short warm tracer
+        p.color    = glm::vec4(1.0f, 0.78f, 0.35f, 1.0f);
+        p.emissive = glm::vec3(2.40f, 1.50f, 0.45f);
+    }
     // Tracer tail starts at the BARREL tip, not the eye: camera-space
     // (0.18, -0.18, -0.72) — the same anchor the muzzle flash uses —
     // mapped to world via the camera basis. The first trail segment then
@@ -167,7 +174,7 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction) {
         glm::vec3 up = glm::cross(right, dir);
         // ... of the weapon as it is held: at the ready it is lower than when aimed, and somebody
         // else's is in their shoulder. (Same frame the weapon is drawn in: view x offset.)
-        glm::vec3 m = viewmodel_muzzle_;                 // (the top barrel's tip: props.cpp)
+        glm::vec3 m = held_muzzle(rifle);                // (the top barrel's tip: props.cpp)
         const glm::mat4* wo = shot_weapon_offset_ ? shot_weapon_offset_
                             : (!mp_->remote_shot && body_animator_ && game_.player_body ? &body_fire_offset_ : nullptr);
         if (wo) m = glm::vec3(*wo * glm::vec4(m, 1.0f));

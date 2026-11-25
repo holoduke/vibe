@@ -15,3 +15,4 @@
 *.hdr binary
 *.dds binary
 *.ktx2 binary
+*.glb binary

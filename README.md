@@ -134,7 +134,7 @@ Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMa
 | W A S D, mouse | Move, look |
 | Space / Shift / Ctrl | Jump / sprint / crawl. In water: rise / swim fast / dive |
 | Left mouse | Fire, or mark the airstrike target |
-| 1 / 2 | Laser rifle / airstrike tablet |
+| 1 / 2 / 3 | Laser rifle / airstrike tablet / assault rifle |
 | V | Fly |
 | H | Back to the start |
 | E | World editor; at the launch button: start the count |

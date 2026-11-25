@@ -20,7 +20,7 @@ struct WindowConfig {
 // list in the menu (Controls); the names in window.cpp (kActionInfo) follow it.
 enum class Action : int {
     Fwd, Back, Left, Right, Jump, Sprint, Crouch, Fire, Aim, Use, Reload, Flashlight,
-    Weapon1, Weapon2, Fly, Camera, Home, Screenshot, BrushPrev, BrushSmaller, BrushLarger, Wireframe,
+    Weapon1, Weapon2, Weapon3, Fly, Camera, Home, Screenshot, BrushPrev, BrushSmaller, BrushLarger, Wireframe,
     Count
 };
 inline constexpr int kActionCount = static_cast<int>(Action::Count);
@@ -76,7 +76,7 @@ struct InputFrame {
     bool home_key = false;        // H; engine edge-detects: back to the home spot
     bool cam_key = false;         // C; engine edge-detects: the rocket camera
     bool fly_key = false;         // V; engine edge-detects to toggle fly mode
-    bool weapon1 = false, weapon2 = false;   // 1 / 2: laser gun / airstrike tablet
+    bool weapon1 = false, weapon2 = false, weapon3 = false;   // 1 / 2 / 3: laser gun / airstrike tablet / rifle
     bool fire = false;      // left mouse, edge-triggered (one click = one)
     bool fire_held = false; // left mouse, level (true while button is down)
     bool alt_fire_held = false; // right mouse, level (true while button is down)

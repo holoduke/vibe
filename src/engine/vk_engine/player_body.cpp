@@ -325,7 +325,7 @@ void VulkanEngine::update_player_body(float dt) {
     for (int& c : anim_lod_count_) c = 0;
     // The cosmetic reload runs out by itself; firing ends it at once (combat.cpp).
     if (body_reload_left_ > 0.0f) body_reload_left_ = std::max(0.0f, body_reload_left_ - glm::clamp(dt, 0.0f, 0.1f));
-    if (weapon_ != 0 || flashlight_on_) body_reload_left_ = 0.0f;
+    if (!gun_in_hand()) body_reload_left_ = 0.0f;
     if (body_bones_.empty() || !body_animator_ || !game_.player_body) return;
     CPU_SCOPE("player body");
     dt = glm::clamp(dt, 0.0f, 0.05f);
@@ -415,7 +415,9 @@ void VulkanEngine::update_player_body(float dt) {
     in.teleported = glm::length(feet - last_feet) > 6.0f + 2.0f * glm::length(player_.velocity) * dt;
     last_feet = feet;
 
+    // Aiming brings the held gun's sight onto the crosshair: each model's sight sits elsewhere.
     // (VIBE_ADS="x,y,z": where the aimed weapon goes in the player's own view, metres from its usual place)
+    body_animator_->weapon.ads_shift_fp = weapon_ == 2 && !rifle_gltf_.empty() ? kRifleAdsShift : anim::default_rifle().ads_shift_fp;
     if (static const char* e = std::getenv("VIBE_ADS"); e) {
         glm::vec3 v = body_animator_->weapon.ads_shift_fp;
         if (std::sscanf(e, "%f,%f,%f", &v.x, &v.y, &v.z) == 3) body_animator_->weapon.ads_shift_fp = v;
