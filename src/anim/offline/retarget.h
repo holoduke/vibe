@@ -42,6 +42,11 @@ RetargetParams style100_params();
 // (+Z forward, +X left, units of about 5.6 cm; the scale comes from the legs).
 RetargetParams cmu_params();
 
+// The mapping for motions written by tools outside the repo as the SMPL-H body (22 joints named
+// Hips, L_Hip, L_Knee ... as C:/Users/.../hy-motion/vibe_generate.py writes them: metres, +Z
+// forward, +X the body's left, 30 Hz). See docs/animation/actions.md.
+RetargetParams smplh_params();
+
 // Frames [first, end) of the capture, resampled to params.out_rate. `skel` in metres.
 bool retarget_bvh(const Bvh& bvh, int first, int end, const SkeletonDef& skel, const RetargetParams& params, RawClip& out,
                   std::string* why = nullptr);

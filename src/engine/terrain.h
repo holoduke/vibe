@@ -84,9 +84,19 @@ float raymarch_ground_relief(float x, float z, float h, float water_level);
 float world_ground_height(float x, float z, float water_level, int octaves);
 // The same without the highways' shelf (engine/highway.h builds its lines from this).
 float world_ground_height_natural(float x, float z, float water_level, int octaves);
+// While set (on the calling thread), the ground is worked out WITHOUT the service station's
+// terrace. The highway plans its route and takes its heights from the land (highway.cpp
+// build): with the terrace in that land, moving the station by a few metres sent the road 20 m
+// off its course. The road was there first; the station is built beside it.
+void world_ground_without_station(bool on);
 // The landscape formula's land / sea value at a place in home's chart (0 at the waterline,
 // rising inland).
 float world_continent_home(float x, float z);
+// The river (the formula's wm::river): its course from the spring by the castle to its mouth,
+// and the slow sideways wander of the whole channel - the channel's middle lies at a course
+// point less the wander there. For what is laid out along it (highway.cpp: the castle lane).
+int       world_river_course(const glm::vec2*& pts);
+glm::vec2 world_river_wander(glm::vec2 wp);
 
 // The natural ground at a point of the planet (unit vector G), by the sphere's formula and
 // without any site's shaping: for choosing where a site goes.
@@ -104,6 +114,19 @@ float world_highway_distance(float x, float z);
 bool world_site_clearing(float x, float z);
 // The launch site: the centre and level of its terrace (shaders/world_map.glsl wm_pad_c / wm_pad_h).
 constexpr float kLaunchSiteX = 1600.0f, kLaunchSiteZ = 830.0f, kLaunchSiteH = 36.0f;
+// The service station on the coast highway (tools/gasstation; vk_engine/gasstation.cpp): the
+// middle of its plot and the level of its terrace, and the terrace's rectangle (x0, z0, x1,
+// z1) - shaders/world_map.glsl wm_st_rect / wm_st_h: keep in step.
+// The car park at the castle lane's end (highway.cpp build_castle_lane; world.cpp cuts its
+// terrace into the home tile; rocket.cpp place_castle_parking builds it): on the knoll east
+// of the stone bridge's far end. x0, z0, x1, z1.
+constexpr float kCastlePark[4] = { 100.0f, 324.0f, 126.0f, 346.0f };
+constexpr float kStationX = 1616.0f, kStationZ = 545.0f, kStationH = 41.825f;
+constexpr float kStationRect[4] = { 1586.0f, 507.0f, 1643.0f, 583.0f };
+// East of this x (the plot's edge and its kerb) the ground leaves the terrace's level and runs
+// as a straight ramp to the road's verge: highway.cpp ground(), terrain_rm_noise_road.glsl
+// rm_highway, tools/gasstation/make_gasstation.py ground_east - keep in step.
+constexpr float kStationEdge = 1642.6f;
 
 // The river's cut applied to a ground height h at (x, z) (shaders/world_map.glsl wm_river):
 // h itself away from the river. For heights that did not come from the formula (a saved sculpt).

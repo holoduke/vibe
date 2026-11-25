@@ -241,6 +241,11 @@ void VulkanEngine::update_projectiles(float dt) {
                         drop = true;
                     }
                 }
+                // The station's people (npc_world.cpp).
+                if (!drop && !it->remote) {
+                    glm::vec3 np_hit;
+                    if (npc_bolt_hits(std::isnan(it->prev_pos.x) ? it->spawn_origin : it->prev_pos, bp, np_hit)) drop = true;
+                }
                 // Pre-compute segment midpoint + half-length for the
                 // cheap sphere-vs-sphere distance gate below.
                 const glm::vec3 seg_mid = 0.5f * (bp + b_prev);

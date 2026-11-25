@@ -1,0 +1,370 @@
+# gasstation: where people sit, stand and walk and where cars park, stop and drive - game space (x east, y up, z south), from its origin
+seat stool -18.450 1.000 -6.300 -1.5708
+seat stool -18.450 1.000 -7.560 -1.5708
+seat stool -18.450 1.000 -8.820 -1.5708
+seat stool -18.450 1.000 -10.080 -1.5708
+seat stool -18.450 1.000 -11.340 -1.5708
+seat stool -18.450 1.000 -12.600 -1.5708
+seat stool -18.450 1.000 -13.860 -1.5708
+seat stool -18.450 1.000 -15.120 -1.5708
+seat stool -18.450 1.000 -16.380 -1.5708
+seat stool -18.450 1.000 -17.640 -1.5708
+seat chair -13.965 0.720 -5.153 2.5038
+seat chair -13.691 0.720 -6.125 1.2274
+seat chair -14.902 0.720 -6.397 -0.5703
+seat chair -15.111 0.720 -5.479 -1.8979
+seat chair -14.494 0.720 -9.934 2.7311
+seat chair -14.301 0.720 -11.099 0.9871
+seat chair -15.299 0.720 -11.270 -0.4121
+seat chair -15.472 0.720 -10.069 -2.2944
+seat chair -13.871 0.720 -14.827 2.3744
+seat chair -13.736 0.720 -15.810 0.9931
+seat chair -14.727 0.720 -16.108 -0.4739
+seat chair -14.970 0.720 -14.867 -2.3912
+seat chair -14.656 0.720 -19.041 2.3700
+seat chair -14.587 0.720 -20.082 0.9949
+seat chair -15.733 0.720 -20.170 -0.7174
+seat chair -15.874 0.720 -19.208 -1.9882
+seat booth -8.950 0.680 -2.860 0.0000
+seat booth -8.950 0.680 -4.340 3.1416
+seat booth -10.000 0.680 -2.860 0.0000
+seat booth -10.000 0.680 -4.340 3.1416
+seat booth -8.950 0.680 -5.360 0.0000
+seat booth -8.950 0.680 -6.840 3.1416
+seat booth -10.000 0.680 -5.360 0.0000
+seat booth -10.000 0.680 -6.840 3.1416
+seat booth -8.950 0.680 -7.860 0.0000
+seat booth -8.950 0.680 -9.340 3.1416
+seat booth -10.000 0.680 -7.860 0.0000
+seat booth -10.000 0.680 -9.340 3.1416
+seat booth -8.950 0.680 -10.360 0.0000
+seat booth -8.950 0.680 -11.840 3.1416
+seat booth -10.000 0.680 -10.360 0.0000
+seat booth -10.000 0.680 -11.840 3.1416
+seat booth -8.950 0.680 -12.860 0.0000
+seat booth -8.950 0.680 -14.340 3.1416
+seat booth -10.000 0.680 -12.860 0.0000
+seat booth -10.000 0.680 -14.340 3.1416
+seat booth -8.950 0.680 -15.360 0.0000
+seat booth -8.950 0.680 -16.840 3.1416
+seat booth -10.000 0.680 -15.360 0.0000
+seat booth -10.000 0.680 -16.840 3.1416
+seat booth -8.950 0.680 -17.860 0.0000
+seat booth -8.950 0.680 -19.340 3.1416
+seat booth -10.000 0.680 -17.860 0.0000
+seat booth -10.000 0.680 -19.340 3.1416
+seat bench -7.600 0.670 -3.700 1.5708
+seat bench -7.600 0.670 -4.700 1.5708
+seat bench -7.600 0.670 -13.100 1.5708
+seat bench -7.600 0.670 -14.100 1.5708
+seat picnic -22.386 0.660 -26.838 -0.1000
+seat picnic -21.490 0.660 -26.928 -0.1000
+seat picnic -22.510 0.660 -28.072 3.0416
+seat picnic -21.614 0.660 -28.162 3.0416
+seat picnic -16.564 0.660 -29.982 0.2000
+seat picnic -15.682 0.660 -29.803 0.2000
+seat picnic -16.318 0.660 -31.197 -2.9416
+seat picnic -15.436 0.660 -31.018 -2.9416
+seat picnic -10.747 0.660 -26.275 -0.3000
+seat picnic -9.887 0.660 -26.541 -0.3000
+seat picnic -11.113 0.660 -27.459 2.8416
+seat picnic -10.253 0.660 -27.725 2.8416
+node w_s -6.200 0.200 21.000
+node w_mart -6.200 0.200 12.000
+node w_mid -6.200 0.200 5.000
+node w_diner -6.200 0.200 -0.100
+node w_n -6.200 0.200 -12.000
+node w_ne -6.200 0.200 -23.000
+node t_a -10.500 0.200 -24.600
+node t_b -16.000 0.200 -27.600
+node t_c -22.000 0.200 -24.800
+node t_d -13.000 0.200 -31.500
+node gap_w -4.500 0.200 0.400
+node gap_e 2.200 0.060 0.400
+node fc_n 2.400 0.060 -8.000
+node fc_s 2.400 0.060 8.000
+node l5_n 5.600 0.060 -8.000
+node l5_s 5.600 0.060 8.000
+node l5_c 5.600 0.060 -0.000
+node l13_n 13.000 0.060 -8.000
+node l13_s 13.000 0.060 8.000
+node l13_c 13.000 0.060 -0.000
+node l20_n 20.600 0.060 -8.000
+node l20_s 20.600 0.060 8.000
+node l20_c 20.600 0.060 -0.000
+node air 9.000 0.060 28.200
+node smoke -6.600 0.200 23.500
+node pump13a 10.000 0.060 -3.300
+node pump13b 10.000 0.060 1.500
+node pump20a 18.000 0.060 -3.300
+node pump20b 18.000 0.060 1.500
+node m_door -8.150 0.220 12.000
+node m_in -8.950 0.220 12.000
+node m_x -11.700 0.220 11.000
+node a0w -23.300 0.220 20.000
+node a0e -12.300 0.220 20.000
+node a1w -23.300 0.220 16.600
+node a1e -12.300 0.220 16.600
+node a2w -23.300 0.220 13.000
+node a2e -12.300 0.220 13.000
+node a3w -23.300 0.220 9.600
+node a3e -12.300 0.220 9.600
+node m_n -17.000 0.220 4.600
+node till_c -12.850 0.220 7.500
+node pd_s -13.400 0.220 3.000
+node pd_n -13.400 0.220 1.000
+node d_door -8.150 0.220 -0.100
+node d_in -9.500 0.220 -0.100
+node d_a -12.000 0.220 -1.100
+node b0 -11.500 0.220 -3.600
+node b1 -11.500 0.220 -6.100
+node b2 -11.500 0.220 -8.600
+node b3 -11.500 0.220 -11.100
+node b4 -11.500 0.220 -13.600
+node b5 -11.500 0.220 -16.100
+node b6 -11.500 0.220 -18.600
+node d_w -16.900 0.220 -1.600
+node c0 -17.100 0.220 -5.000
+node c1 -17.100 0.220 -8.400
+node c2 -17.100 0.220 -11.800
+node c3 -17.100 0.220 -15.200
+node c4 -17.100 0.220 -18.600
+node k_out -20.450 0.220 -4.600
+node k_in -22.700 0.220 -4.600
+node bar0 -20.420 0.220 -6.200
+node bar1 -20.420 0.220 -9.900
+node bar2 -20.420 0.220 -13.600
+node bar3 -20.420 0.220 -17.300
+node k_a -23.600 0.220 -7.500
+node k_b -24.250 0.220 -11.500
+node bay1 2.000 0.060 16.100
+node bay2 2.000 0.060 13.500
+node bay3 2.000 0.060 10.900
+node bay4 2.000 0.060 8.300
+node bay5 2.000 0.060 5.700
+node bay6 2.000 0.060 3.100
+node bay7 2.000 0.060 -2.100
+node bay8 2.000 0.060 -4.700
+node bay9 2.000 0.060 -7.300
+node bay10 2.000 0.060 -9.900
+node bay11 2.000 0.060 -12.500
+node bay12 2.000 0.060 -15.100
+node bay13 2.000 0.060 -17.700
+node bay14 2.000 0.060 -20.300
+link w_s w_mart
+link w_mart w_mid
+link w_mid w_diner
+link w_diner w_n
+link w_n w_ne
+link w_ne t_a
+link t_a t_b
+link t_b t_c
+link t_b t_d
+link t_a t_d
+link w_diner gap_w
+link gap_w gap_e
+link fc_n gap_e
+link gap_e fc_s
+link l5_n l5_c
+link l5_c l5_s
+link l13_n l13_c
+link l13_c l13_s
+link l20_n l20_c
+link l20_c l20_s
+link fc_n l5_n
+link l5_n l13_n
+link l13_n l20_n
+link fc_s l5_s
+link l5_s l13_s
+link l13_s l20_s
+link l13_s air
+link w_s smoke
+link pump13a l13_c
+link pump13b l13_c
+link pump20a l20_c
+link pump20b l20_c
+link w_mart m_door
+link m_door m_in
+link m_in m_x
+link a0w a0e
+link a1w a1e
+link a2w a2e
+link a3w a3e
+link a0w a1w
+link a1w a2w
+link a2w a3w
+link a0e a1e
+link a1e a2e
+link a2e a3e
+link m_x a2e
+link m_x a3e
+link a3w m_n
+link a3e m_n
+link a3e till_c
+link m_n pd_s
+link pd_s pd_n
+link w_diner d_door
+link d_door d_in
+link d_in d_a
+link pd_n d_a
+link d_a b0
+link b0 b1
+link b1 b2
+link b2 b3
+link b3 b4
+link b4 b5
+link b5 b6
+link pd_n d_w
+link d_a d_w
+link d_w c0
+link c0 c1
+link c1 c2
+link c2 c3
+link c3 c4
+link c0 k_out
+link k_out k_in
+link k_out bar0
+link bar0 bar1
+link bar1 bar2
+link bar2 bar3
+link k_in k_a
+link k_a k_b
+link bay1 fc_s
+link bay2 fc_s
+link bay3 fc_s
+link bay4 fc_s
+link bay5 fc_s
+link bay6 fc_s
+link bay7 fc_n
+link bay8 fc_n
+link bay9 fc_n
+link bay10 fc_n
+link bay11 fc_n
+link bay12 fc_n
+link bay13 fc_n
+link bay14 fc_n
+spot pump13a 10.000 0.060 -3.300 -1.9513
+spot pump13b 10.000 0.060 1.500 -1.9513
+spot pump20a 18.000 0.060 -3.300 -1.9513
+spot pump20b 18.000 0.060 1.500 -1.9513
+spot browse -20.261 0.220 20.550 3.1416
+spot browse -17.680 0.220 20.550 3.1416
+spot browse -15.284 0.220 20.550 3.1416
+spot browse -13.040 0.220 20.550 3.1416
+spot browse -21.254 0.220 16.050 0.0000
+spot browse -20.354 0.220 17.150 3.1416
+spot browse -18.454 0.220 16.050 0.0000
+spot browse -17.554 0.220 17.150 3.1416
+spot browse -16.352 0.220 16.050 0.0000
+spot browse -15.452 0.220 17.150 3.1416
+spot browse -13.713 0.220 16.050 0.0000
+spot browse -12.813 0.220 17.150 3.1416
+spot browse -20.956 0.220 12.450 0.0000
+spot browse -20.056 0.220 13.550 3.1416
+spot browse -18.897 0.220 12.450 0.0000
+spot browse -17.997 0.220 13.550 3.1416
+spot browse -16.388 0.220 12.450 0.0000
+spot browse -15.488 0.220 13.550 3.1416
+spot browse -13.785 0.220 12.450 0.0000
+spot browse -12.885 0.220 13.550 3.1416
+spot browse -21.106 0.220 9.050 0.0000
+spot browse -18.323 0.220 9.050 0.0000
+spot browse -16.358 0.220 9.050 0.0000
+spot browse -13.734 0.220 9.050 0.0000
+spot browse -24.600 0.220 20.400 -1.5708
+spot browse -24.600 0.220 18.350 -1.5708
+spot browse -24.600 0.220 16.300 -1.5708
+spot browse -24.600 0.220 14.250 -1.5708
+spot browse -24.600 0.220 12.200 -1.5708
+spot browse -19.900 0.220 20.250 3.1416
+spot browse -17.000 0.220 20.250 3.1416
+spot browse -18.500 0.220 3.300 0.0000
+spot browse -16.200 0.220 3.300 0.0000
+spot pay -12.850 0.220 7.500 1.3258
+spot cashier -10.500 0.220 5.700 -1.5708
+spot serve -20.420 0.220 -6.200 1.5708
+spot serve -20.420 0.220 -9.900 1.5708
+spot serve -20.420 0.220 -13.600 1.5708
+spot serve -20.420 0.220 -17.300 1.5708
+spot cook -24.250 0.220 -9.000 -1.5708
+spot cook -24.250 0.220 -11.500 -1.5708
+spot cook -24.250 0.220 -14.000 -1.5708
+spot host -10.600 0.220 -1.400 1.8623
+bay -1.250 0.060 16.100 -1.5708
+bay -1.250 0.060 13.500 -1.5708
+bay -1.250 0.060 10.900 -1.5708
+bay -1.250 0.060 8.300 -1.5708
+bay -1.250 0.060 5.700 -1.5708
+bay -1.250 0.060 3.100 -1.5708
+bay -1.250 0.060 -2.100 -1.5708
+bay -1.250 0.060 -4.700 -1.5708
+bay -1.250 0.060 -7.300 -1.5708
+bay -1.250 0.060 -9.900 -1.5708
+bay -1.250 0.060 -12.500 -1.5708
+bay -1.250 0.060 -15.100 -1.5708
+bay -1.250 0.060 -17.700 -1.5708
+bay -1.250 0.060 -20.300 -1.5708
+stop pump13a 13.000 0.060 -2.400 3.1416
+stop pump13b 13.000 0.060 2.400 3.1416
+stop pump20a 20.500 0.060 -2.400 3.1416
+stop pump20b 20.500 0.060 2.400 3.1416
+path in13 39.136 1.389 -16.000
+path in13 37.164 0.720 -9.000
+path in13 31.500 0.328 -6.200
+path in13 26.500 0.100 -5.400
+path in13 23.000 0.060 -8.400
+path in13 19.000 0.060 -10.800
+path in13 16.400 0.060 -10.800
+path in13 14.200 0.060 -9.800
+path in13 13.050 0.060 -7.200
+path in13 13.000 0.060 -2.400
+path mid13 13.000 0.060 -2.400
+path mid13 13.000 0.060 2.400
+path out13 13.000 0.060 2.400
+path out13 13.000 0.060 7.000
+path out13 14.600 0.060 10.200
+path out13 18.000 0.060 11.200
+path out13 22.600 0.060 8.600
+path out13 26.500 0.100 5.200
+path out13 31.500 -0.356 6.000
+path out13 39.140 -0.951 10.000
+path out13 42.568 -1.512 17.000
+path in20 39.136 1.389 -16.000
+path in20 37.164 0.720 -9.000
+path in20 31.500 0.328 -6.200
+path in20 26.500 0.100 -5.400
+path in20 24.200 0.060 -8.400
+path in20 22.600 0.060 -9.300
+path in20 21.100 0.060 -8.400
+path in20 20.550 0.060 -6.400
+path in20 20.500 0.060 -2.400
+path mid20 20.500 0.060 -2.400
+path mid20 20.500 0.060 2.400
+path out20 20.500 0.060 2.400
+path out20 20.500 0.060 6.600
+path out20 21.300 0.060 8.800
+path out20 23.400 0.060 8.400
+path out20 26.500 0.100 5.200
+path out20 31.500 -0.356 6.000
+path out20 39.140 -0.951 10.000
+path out20 42.568 -1.512 17.000
+path inpark 39.136 1.389 -16.000
+path inpark 37.164 0.720 -9.000
+path inpark 31.500 0.328 -6.200
+path inpark 26.500 0.100 -5.400
+path inpark 23.000 0.060 -9.600
+path inpark 19.000 0.060 -14.600
+path inpark 8.500 0.060 -15.600
+path inpark 4.600 0.060 -14.600
+path inpark 3.300 0.060 -11.500
+path aisle 3.300 0.060 -11.500
+path aisle 3.300 0.060 11.500
+path outpark 3.300 0.060 11.500
+path outpark 4.200 0.060 14.200
+path outpark 7.000 0.060 15.400
+path outpark 18.000 0.060 14.200
+path outpark 23.200 0.060 9.600
+path outpark 26.500 0.100 5.200
+path outpark 31.500 -0.356 6.000
+path outpark 39.140 -0.951 10.000
+path outpark 42.568 -1.512 17.000

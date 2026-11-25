@@ -24,6 +24,7 @@
 #include "engine/vk_pipelines.h"
 #include <cstdlib>
 #include <VkBootstrap.h>
+#include "engine/highway.h"
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -138,6 +139,46 @@ void VulkanEngine::loop_test_input(InputFrame& in, float frame_dt, bool autodemo
             else if (t < 4.5f) in.right = true;
             else if (t < 6.0f) in.back = true;
             else if (t < 8.5f) { in.fwd = true; in.left = t > 7.2f; in.mouse_dx = 6.0; in.jump = t > 7.9f && t < 8.0f; }
+        }
+        // VIBE_LOG_LOOK=1: once, the ground point the camera looks at, the ground round it and
+        // the highway beside it (for placing things "where I am looking").
+        if (static const bool log_look = std::getenv("VIBE_LOG_LOOK") != nullptr; log_look && frame_number_ == 30) {
+            const glm::vec3 e = player_.eye_position(), f = player_.forward();
+            glm::vec3 hit = e; bool found = false;
+            for (float t = 1.0f; t < 2000.0f; t += 0.5f) {
+                const glm::vec3 p = e + f * t;
+                if (p.y <= sample_terrain_height(p.x, p.z)) { hit = p; found = true; break; }
+            }
+            log::infof("[look] eye (%.1f, %.1f, %.1f) forward (%.3f, %.3f, %.3f) -> ground (%.1f, %.1f, %.1f)%s",
+                       double(e.x), double(e.y), double(e.z), double(f.x), double(f.y), double(f.z),
+                       double(hit.x), double(sample_terrain_height(hit.x, hit.z)), double(hit.z), found ? "" : " (none within 2 km)");
+            // (VIBE_LOG_LOOK=<metres>: the spacing of the grid of ground heights; 20 m when it is just set)
+            const float look_step = std::max(1.0f, float(std::atof(std::getenv("VIBE_LOG_LOOK")))) > 1.5f ? float(std::atof(std::getenv("VIBE_LOG_LOOK"))) : 20.0f;
+            for (int j = -3; j <= 3; ++j) {
+                char row[256]; int o = 0;
+                for (int i = -3; i <= 3; ++i)
+                    o += std::snprintf(row + o, sizeof(row) - size_t(o), "%7.1f", double(sample_terrain_height(hit.x + look_step * float(i), hit.z + look_step * float(j))));
+                log::infof("[look] ground, z %+6.1f m, x %.0f m apart, -3..+3: %s", double(look_step * float(j)), double(look_step), row);
+            }
+            float d = 0.0f, h = 0.0f, s = 0.0f;
+            if (highway::nearest(hit.x, hit.z, 400.0f, d, h, s)) {
+                glm::vec3 hp; glm::vec2 hd;
+                highway::point_along(s, hp, hd);
+                log::infof("[look] highway: %.1f m away, at %.1f m along it: point (%.1f, %.1f, %.1f) direction (%.3f, %.3f)",
+                           double(d), double(s), double(hp.x), double(hp.y), double(hp.z), double(hd.x), double(hd.y));
+                for (float ds = -80.0f; ds <= 80.0f; ds += 40.0f) {
+                    highway::point_along(s + ds, hp, hd);
+                    log::infof("[look] highway at %+.0f m: (%.1f, %.1f, %.1f) direction (%.3f, %.3f)", double(ds), double(hp.x), double(hp.y), double(hp.z), double(hd.x), double(hd.y));
+                }
+            }
+        }
+        // VIBE_TEST_WALK=1: the forward key held (walk into something; with it the player's
+        // place is logged once a second).
+        static const bool test_walk = std::getenv("VIBE_TEST_WALK") != nullptr;
+        if (test_walk) {
+            in.fwd = true;
+            if (frame_number_ % 60 == 0)
+                log::infof("[walk] pos (%.2f, %.2f, %.2f)", double(player_.position.x), double(player_.position.y), double(player_.position.z));
         }
         // VIBE_TEST_HOLD=1: pin the camera at the restored settings
         // pose (no gravity) for aerial / overview captures.
@@ -746,9 +787,12 @@ void VulkanEngine::loop_simulate(InputFrame& in, float frame_dt) {
         // from the user-configurable cubes-per-minute setting.
         float interval = 60.0f / std::max(1.0f, float(game_.cubes_per_minute));
         spawn_timer_ += frame_dt;
+        // (2026-11-25: nothing falls on the castle any more - the user asked for it to stop.
+        //  VIBE_BOX_RAIN=1 brings it back.)
+        static const bool box_rain = std::getenv("VIBE_BOX_RAIN") != nullptr;
         while (spawn_timer_ >= interval) {
             spawn_timer_ -= interval;
-            spawn_random_box();
+            if (box_rain) spawn_random_box();
         }
 
         pos_log_timer_ += frame_dt;
@@ -965,6 +1009,7 @@ void VulkanEngine::loop_upkeep(InputFrame& in, float frame_dt) {
     // also runs here so the active-voice list stays small.
     if (audio_) {
         audio_->set_listener(player_.eye_position(), player_.forward());
+        car_audio_tick(last_frame_dt_);
     }
 }
 

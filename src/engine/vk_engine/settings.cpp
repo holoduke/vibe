@@ -350,6 +350,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("tonemap_mode", s.rt_.tonemap_mode);
     f("hdr_output", s.rt_.hdr_output);
     f("radiance_cache", s.rt_.radiance_cache);
+    f("irradiance_cache", s.rt_.irradiance_cache);
     f("hdr_paper_nits", s.rt_.hdr_paper_nits);
     f("hdr_peak_nits", s.rt_.hdr_peak_nits);
     f("fog_volumetric", s.rt_.fog_volumetric);
@@ -677,7 +678,7 @@ void VulkanEngine::save_settings() const {
     // VIBE_TEST_* hooks) pin or move the camera and tweak modes - never let
     // them overwrite the player's saved cfg (pose, toggles).
     static const bool test_run = [this] {
-        for (const char* e : { "VIBE_TEST_HOLD", "VIBE_TEST_MOVE", "VIBE_TEST_FLIGHT", "VIBE_TEST_GROUND", "VIBE_TEST_PAN", "VIBE_TEST_SHOOTDOWN",
+        for (const char* e : { "VIBE_TEST_HOLD", "VIBE_TEST_MOVE", "VIBE_TEST_WALK", "VIBE_TEST_FLIGHT", "VIBE_TEST_GROUND", "VIBE_TEST_PAN", "VIBE_TEST_SHOOTDOWN",
                                "VIBE_TEST_BOOM", "VIBE_TEST_BLAST", "VIBE_TEST_FIRE", "VIBE_TEST_CHUTE", "VIBE_TEST_SAM",
                                "VIBE_TEST_CRAWL", "VIBE_TEST_FLARE", "VIBE_TEST_STRIKE", "VIBE_TEST_ROCKS", "VIBE_TEST_AAFIRE", "VIBE_TEST_ZONE", "VIBE_TEST_EDIT", "VIBE_TEST_MENU", "VIBE_TEST_FLASHLIGHT" })
             if (std::getenv(e)) return true;

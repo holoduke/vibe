@@ -22,6 +22,9 @@
 
 #include <algorithm>
 #include <list>
+#include <cmath>
+#include <fstream>
+#include <vector>
 #include <random>
 #include <string>
 #include <string_view>
@@ -75,6 +78,19 @@ struct AudioEngine::Impl {
 
     // (loops removed — see comment in start_loop deletion below.)
 
+    // Engines: see audio.h.
+    struct EngineSet { std::vector<float> rpm; std::vector<std::string> on, off; };
+    std::vector<EngineSet> engine_sets;
+    struct EngineVoice {
+        int set = -1;
+        std::vector<ma_sound>  snd;        // per band: on, off
+        std::vector<uint8_t>   ok, playing;
+        ma_lpf_node lpf{};
+        bool  has_lpf = false;
+        float lpf_hz = 18000.0f;
+    };
+    std::unordered_map<uint32_t, EngineVoice*> engines;
+
     std::default_random_engine rng{ std::random_device{}() };
 };
 
@@ -98,7 +114,109 @@ AudioEngine::~AudioEngine() {
         ma_sound_uninit(&e.sound);
         if (e.has_lpf) ma_lpf_node_uninit(&e.lpf, nullptr);
     }
+    while (!impl_->engines.empty()) engine_stop(impl_->engines.begin()->first);
     ma_engine_uninit(&impl_->engine);
+}
+
+// ---------------------------------------------------------------------------------------
+// Engine voices (audio.h "ENGINES").
+int AudioEngine::engine_set_load(std::string_view list_file) {
+    if (!impl_->ok) return -1;
+    const std::string path(list_file);
+    std::ifstream f(path);
+    if (!f) { log::warnf("[audio] engine set %s missing - that car is silent", path.c_str()); return -1; }
+    const std::string dir = path.substr(0, path.find_last_of("/\\") + 1);
+    Impl::EngineSet es;
+    float rpm; std::string on, off;
+    while (f >> rpm >> on >> off) { es.rpm.push_back(rpm); es.on.push_back(dir + on); es.off.push_back(dir + off); }
+    if (es.rpm.size() < 2) return -1;
+    impl_->engine_sets.push_back(std::move(es));
+    return int(impl_->engine_sets.size()) - 1;
+}
+
+uint32_t AudioEngine::engine_start(int set) {
+    if (!impl_->ok || set < 0 || size_t(set) >= impl_->engine_sets.size()) return 0;
+    const Impl::EngineSet& es = impl_->engine_sets[size_t(set)];
+    auto* v = new Impl::EngineVoice();
+    v->set = set;
+    const size_t n = es.rpm.size() * 2;
+    v->snd.resize(n); v->ok.assign(n, 0); v->playing.assign(n, 0);
+    ma_lpf_node_config lc = ma_lpf_node_config_init(ma_engine_get_channels(&impl_->engine), ma_engine_get_sample_rate(&impl_->engine), 18000.0, 2);
+    if (ma_lpf_node_init(ma_engine_get_node_graph(&impl_->engine), &lc, nullptr, &v->lpf) == MA_SUCCESS) {
+        v->has_lpf = true;
+        ma_node_attach_output_bus(&v->lpf, 0, ma_engine_get_endpoint(&impl_->engine), 0);
+    }
+    for (size_t i = 0; i < n; ++i) {
+        const std::string& p = (i & 1) ? es.off[i / 2] : es.on[i / 2];
+        if (ma_sound_init_from_file(&impl_->engine, p.c_str(), MA_SOUND_FLAG_DECODE, nullptr, nullptr, &v->snd[i]) != MA_SUCCESS) continue;
+        v->ok[i] = 1;
+        ma_sound_set_looping(&v->snd[i], MA_TRUE);
+        ma_sound_set_attenuation_model(&v->snd[i], ma_attenuation_model_none);
+        ma_sound_set_volume(&v->snd[i], 0.0f);
+        if (v->has_lpf) ma_node_attach_output_bus(&v->snd[i], 0, &v->lpf, 0);
+    }
+    const uint32_t h = impl_->next_handle++;
+    impl_->engines[h] = v;
+    return h;
+}
+
+void AudioEngine::engine_update(uint32_t h, glm::vec3 pos, glm::vec3 vel, float rpm, float load, float volume, float lpf_hz, bool simple) {
+    if (!impl_->ok) return;
+    const auto it = impl_->engines.find(h);
+    if (it == impl_->engines.end()) return;
+    Impl::EngineVoice& v = *it->second;
+    const Impl::EngineSet& es = impl_->engine_sets[size_t(v.set)];
+    const size_t K = es.rpm.size();
+    rpm = std::clamp(rpm, es.rpm.front() * 0.7f, es.rpm.back() * 1.08f);
+    load = std::clamp(load, 0.0f, 1.0f);
+    size_t b = 0;
+    while (b + 2 < K && rpm > es.rpm[b + 1]) ++b;
+    const float w = std::clamp((rpm - es.rpm[b]) / (std::max)(es.rpm[b + 1] - es.rpm[b], 1.0f), 0.0f, 1.0f);
+    // (equal power: the sum of two unlike loops keeps its loudness through the fade)
+    const float g_lo0 = std::cos(w * 1.5707963f), g_hi0 = std::sin(w * 1.5707963f);
+    float g_on = std::sqrt(load), g_off = std::sqrt(1.0f - load);
+    float g_lo = g_lo0, g_hi = g_hi0;
+    if (simple) {       // one loop instead of four: a quarter of the mixing and resampling (nobody hears the blend at that distance)
+        if (w < 0.5f) { g_lo = 1.0f; g_hi = 0.0f; } else { g_lo = 0.0f; g_hi = 1.0f; }
+        if (load > 0.35f) { g_on = 1.0f; g_off = 0.0f; } else { g_on = 0.0f; g_off = 1.0f; }
+    }
+    if (volume < 0.0015f) g_lo = g_hi = 0.0f;       // inaudible: nothing plays
+    for (size_t i = 0; i < v.snd.size(); ++i) {
+        if (!v.ok[i]) continue;
+        const size_t band = i / 2;
+        const float g = (band == b ? g_lo : band == b + 1 ? g_hi : 0.0f) * ((i & 1) ? g_off : g_on) * volume;
+        if (g > 0.002f) {
+            ma_sound_set_pitch(&v.snd[i], std::clamp(rpm / es.rpm[band], 0.35f, 2.6f));
+            ma_sound_set_volume(&v.snd[i], g);
+            ma_sound_set_position(&v.snd[i], pos.x, pos.y, pos.z);
+            ma_sound_set_velocity(&v.snd[i], vel.x, vel.y, vel.z);
+            if (!v.playing[i]) { ma_sound_start(&v.snd[i]); v.playing[i] = 1; }
+        } else if (v.playing[i]) {
+            ma_sound_stop(&v.snd[i]);
+            v.playing[i] = 0;
+        }
+    }
+    lpf_hz = std::clamp(lpf_hz, 120.0f, 18000.0f);
+    if (v.has_lpf && std::abs(lpf_hz - v.lpf_hz) > 0.04f * v.lpf_hz) {
+        v.lpf_hz = lpf_hz;
+        const ma_lpf_config c = ma_lpf_config_init(ma_format_f32, ma_engine_get_channels(&impl_->engine), ma_engine_get_sample_rate(&impl_->engine), lpf_hz, 2);
+        ma_lpf_node_reinit(&c, &v.lpf);
+    }
+}
+
+void AudioEngine::engine_stop(uint32_t h) {
+    if (!impl_->ok) return;
+    const auto it = impl_->engines.find(h);
+    if (it == impl_->engines.end()) return;
+    Impl::EngineVoice* v = it->second;
+    for (size_t i = 0; i < v->snd.size(); ++i) if (v->ok[i]) ma_sound_uninit(&v->snd[i]);
+    if (v->has_lpf) ma_lpf_node_uninit(&v->lpf, nullptr);
+    delete v;
+    impl_->engines.erase(it);
+}
+
+void AudioEngine::set_listener_velocity(glm::vec3 v) {
+    if (impl_->ok) ma_engine_listener_set_velocity(&impl_->engine, 0, v.x, v.y, v.z);
 }
 
 bool AudioEngine::ok() const { return impl_ && impl_->ok; }

@@ -775,6 +775,25 @@
                 }
             }
             albedo = textureGrad(u_albedo[ai], muv, du1, du2).rgb * vColor * mesh_pom_shade;
+            // Plain surfaces (asphalt, concrete) from a distance: a texture a few metres wide,
+            // repeated over a forecourt or a 40 m wall, shows as a grid of the same stains. Once
+            // a repeat is under a few hundred pixels its picture goes over into its own mean
+            // colour, and the mean carries slow patches instead - the same texture read two
+            // times much larger and turned, so that no two of the three grids line up. Close
+            // by nothing changes. (Not for textures with a pattern: bricks, tiles, pavers.)
+            if (ai == 38 || ai == 28 || ai == 24) {
+                float foot = max(length(du1), length(du2));                 // repeats per pixel
+                float far  = smoothstep(0.0022, 0.011, foot);               // from 450 px a repeat to 90
+                vec3  mean = textureLod(u_albedo[ai], muv, 16.0).rgb;
+                float ml   = max(dot(mean, vec3(0.299, 0.587, 0.114)), 1e-3);
+                vec2  ra   = vec2(muv.x * 0.799 - muv.y * 0.602, muv.x * 0.602 + muv.y * 0.799) * 0.137;
+                vec2  rb   = vec2(muv.x * 0.326 + muv.y * 0.945, -muv.x * 0.945 + muv.y * 0.326) * 0.0291 + 0.37;
+                float pa   = dot(textureGrad(u_albedo[ai], ra, du1 * 0.137, du2 * 0.137).rgb, vec3(0.299, 0.587, 0.114)) / ml;
+                float pb   = dot(textureLod(u_albedo[ai], rb, 2.0).rgb, vec3(0.299, 0.587, 0.114)) / ml;
+                float patch_ = clamp(mix(1.0, pa, 0.75) * mix(1.0, pb, 0.9), 0.72, 1.3);
+                vec3  plain = mean * vColor * mesh_pom_shade;
+                albedo = mix(albedo, plain, far) * mix(1.0, patch_, 0.35 + 0.65 * far);
+            }
             if (use_normal) {
                 int  ni = clamp(normal_idx_raw, 0, kTextureCount - 1);
                 vec3 nt = textureGrad(u_normal[ni], muv, du1, du2).xyz * 2.0 - 1.0;

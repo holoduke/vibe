@@ -11,6 +11,10 @@
 //           acc   uvec4[N]         rgb fixed-point sum (x256) + sample count
 //           res   vec4[N]          resolved radiance rgb + age (frames)
 // rc_resolve.comp averages acc into res (EMA), clears acc, ages and evicts.
+//
+// Since 2026-11-24 the same grid also holds IRRADIANCE entries (key bit 1; acc and res have two
+// slots an entry): the bounce light arriving at a cell, which a pixel reads instead of tracing
+// its own rays (deferred_lighting.frag ic_lookup; rt_.irradiance_cache).
 
 #include "engine/vk_engine/internal.h"
 #include "engine/vk_initializers.h"
@@ -23,7 +27,7 @@ namespace vibe {
 
 void VulkanEngine::init_radiance_cache() {
     const VkDeviceSize n = kRadianceCacheEntries;
-    const VkDeviceSize sizes[3] = { n * 4, n * 16, n * 16 };
+    const VkDeviceSize sizes[3] = { n * 4, n * 32, n * 32 };      // (acc and res: two slots an entry)
     for (int i = 0; i < 3; ++i) {
         VkBufferCreateInfo bci{};
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -88,7 +92,7 @@ void VulkanEngine::init_radiance_cache() {
              "rc pipeline");
     vkDestroyShaderModule(device_, m, nullptr);
     log::infof("[rcache] world-space radiance cache ready (%u entries, %.0f MB)",
-               kRadianceCacheEntries, double(n * 36) / (1024.0 * 1024.0));
+               kRadianceCacheEntries, double(n * 68) / (1024.0 * 1024.0));
 }
 
 void VulkanEngine::destroy_radiance_cache() {

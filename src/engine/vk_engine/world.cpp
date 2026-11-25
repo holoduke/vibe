@@ -241,6 +241,39 @@ void VulkanEngine::init_world() {
                     h = world_river_cut(h, hm.origin_x + float(x) * hm.cell, hm.origin_z + float(z) * hm.cell, rt_.water_level);
                 }
         }
+        // A road's shelf inside the home tile (the castle lane: engine/highway.h). The tile's
+        // ground is these baked heights, so the shelf is cut into them - and into the BASELINE
+        // by the same rule: the shader makes the shelf itself from the road's field
+        // (rm_highway) and adds (ground - baseline) from the bake. Cut into the ground only,
+        // the shelf would be there twice.
+        // It is done HERE, after a saved sculpt has been taken in. (First it was done before
+        // the baseline was taken, ahead of the load: the saved heights - the land as it was
+        // sculpted, with no road in it - then came back as a difference from a baseline that
+        // had the road, and took the shelf out again: the lane was level outside the home
+        // tile and followed the bare hillside inside it, with its stones in the air.)
+        {
+            const int Wv = hm.width();
+            size_t cut = 0;
+            const bool base_ok = terrain_baseline_heights_.size() == hm.heights.size();
+            for (int li = 0; li < highway::line_count(); ++li) {
+                const std::vector<glm::vec3>& P = highway::line_points(li);
+                const float reach = highway::kBlend * highway::line_width(li) + 2.0f;
+                glm::vec2 lo(1e9f), hi(-1e9f);
+                for (const glm::vec3& p : P) if (std::abs(p.x) < 1040.0f && std::abs(p.z) < 1040.0f) { lo = glm::min(lo, glm::vec2(p.x, p.z)); hi = glm::max(hi, glm::vec2(p.x, p.z)); }
+                if (hi.x < lo.x) continue;
+                const int x0 = std::max(0, int((lo.x - reach - hm.origin_x) / hm.cell)), x1 = std::min(Wv - 1, int((hi.x + reach - hm.origin_x) / hm.cell) + 1);
+                const int z0 = std::max(0, int((lo.y - reach - hm.origin_z) / hm.cell)), z1 = std::min(Wv - 1, int((hi.y + reach - hm.origin_z) / hm.cell) + 1);
+                for (int z = z0; z <= z1; ++z)
+                    for (int x = x0; x <= x1; ++x) {
+                        const size_t k = size_t(z) * Wv + x;
+                        const float wx = hm.origin_x + float(x) * hm.cell, wz = hm.origin_z + float(z) * hm.cell;
+                        const float nh = highway::ground(hm.heights[k], wx, wz);
+                        if (nh != hm.heights[k]) { hm.heights[k] = nh; ++cut; }
+                        if (base_ok) terrain_baseline_heights_[k] = highway::ground(terrain_baseline_heights_[k], wx, wz);
+                    }
+            }
+            if (cut) log::infof("[road] a road's shelf cut into %zu cells of the home tile", cut);
+        }
         // Castle-courtyard visual sink. The physics path already clamps
         // its own copy (see init_physics' kCastleSink), but the VISUAL
         // heights kept sculpt residue — with the CLOD terrain sampling
@@ -272,7 +305,108 @@ void VulkanEngine::init_world() {
         const glm::vec2 chapel_door(35.2f, 118.8f);
         castle_road_ = make_castle_road(hm, rt_.water_level, hp.plateau_height + 0.05f, &chapel_door);
         carve_heights(castle_road_, hm);
+        castle_road_.paved_bb_min = castle_road_.bb_min; castle_road_.paved_bb_max = castle_road_.bb_max;
+        castle_road_.with_highways = true;        // (from here on: what is scattered keeps off the castle lane too)
+        for (int li = 0; li < highway::line_count(); ++li)
+            for (const glm::vec3& p : highway::line_points(li)) {
+                if (std::abs(p.x) > 1040.0f || std::abs(p.z) > 1040.0f) continue;
+                castle_road_.bb_min = glm::min(castle_road_.bb_min, glm::vec2(p.x, p.z) - glm::vec2(26.0f));
+                castle_road_.bb_max = glm::max(castle_road_.bb_max, glm::vec2(p.x, p.z) + glm::vec2(26.0f));
+            }
+        // The car park at the castle lane's end (terrain.h kCastlePark): a terrace at the
+        // height the lane arrives at, eased into the knoll over 8 m. (After the baseline: the
+        // shader gets it as the bake's difference.)
+        if (glm::vec3 le, ld; highway::lane_end(le, ld)) {
+            const glm::vec2 c(0.5f * (kCastlePark[0] + kCastlePark[2]), 0.5f * (kCastlePark[1] + kCastlePark[3]));
+            const glm::vec2 half(0.5f * (kCastlePark[2] - kCastlePark[0]) + 1.5f, 0.5f * (kCastlePark[3] - kCastlePark[1]) + 1.5f);
+            // (The ground lies 45 cm under the slab's top: drawn close by, the ground carries
+            //  its own relief and grass, and level with the slab it stood up through the asphalt.
+            //  Not under the lane where it comes in: there the road's own shelf stays.)
+            const float blend = 8.0f, pad = le.y - 0.45f;
+            const int Wv = hm.width();
+            for (int z = 0; z < Wv; ++z) {
+                const float wz = hm.origin_z + float(z) * hm.cell;
+                const float ez = std::abs(wz - c.y) - half.y;
+                if (ez > blend) continue;
+                for (int x = 0; x < Wv; ++x) {
+                    const float wx = hm.origin_x + float(x) * hm.cell;
+                    const float ex = std::abs(wx - c.x) - half.x;
+                    if (ex > blend) continue;
+                    const float d = glm::length(glm::vec2(std::max(ex, 0.0f), std::max(ez, 0.0f)));
+                    float& hv = hm.heights[size_t(z) * Wv + x];
+                    const float on_lane = 1.0f - glm::smoothstep(highway::kVerge, highway::kVerge + 7.0f, highway::distance(wx, wz));
+                    // (inside the car park the terrace is the ground, whatever the lane's banks say;
+                    //  round it, the lane's own shelf is left alone)
+                    hv = glm::mix(hv, pad, d <= 0.0f ? 1.0f : (1.0f - glm::smoothstep(0.0f, blend, d)) * (1.0f - on_lane));
+                }
+            }
+            log::infof("[lane] the car park's terrace at %.2f m (%.0f..%.0f, %.0f..%.0f); the lane ends at (%.1f, %.1f)", pad, kCastlePark[0], kCastlePark[2], kCastlePark[1], kCastlePark[3], le.x, le.z);
+        }
         log::infof("[road] %zu centreline points carved", castle_road_.pts.size());
+        // VIBE_DUMP_MAP=<file.ppm>[,x0,z0,x1,z1[,metres per pixel]]: a plan of the land as it is
+        // now - heights shaded, 10 m contours, water, the highways' lines (red), the castle road
+        // (yellow) - for laying out what is built on it. Default: from the castle to the river's mouth.
+        if (const char* dm = std::getenv("VIBE_DUMP_MAP")) {
+            char file[512] = "map.ppm";
+            float x0 = -200.0f, z0 = -150.0f, x1 = 2100.0f, z1 = 1000.0f, mpp = 2.0f;
+            std::sscanf(dm, "%511[^,],%f,%f,%f,%f,%f", file, &x0, &z0, &x1, &z1, &mpp);
+            const int W = int((x1 - x0) / mpp), H = int((z1 - z0) / mpp);
+            std::vector<uint8_t> img(size_t(W) * H * 3);
+            auto ground = [&](float x, float z) {
+                return (std::abs(x) < 1020.0f && std::abs(z) < 1020.0f) ? hm.sample_world(x, z) : world_ground_height(x, z, rt_.water_level, 9);
+            };
+            for (int j = 0; j < H; ++j)
+                for (int i = 0; i < W; ++i) {
+                    const float x = x0 + (float(i) + 0.5f) * mpp, z = z0 + (float(j) + 0.5f) * mpp;
+                    const float h = ground(x, z), hx = ground(x + mpp, z), hz = ground(x, z + mpp);
+                    const float slope = glm::length(glm::vec2(hx - h, hz - h)) / mpp;
+                    float shade = glm::clamp(0.75f + 0.9f * ((h - hx) + (h - hz)) / mpp, 0.25f, 1.25f);
+                    glm::vec3 c = glm::mix(glm::vec3(0.35f, 0.55f, 0.28f), glm::vec3(0.75f, 0.70f, 0.60f), glm::clamp((h - rt_.water_level) / 90.0f, 0.0f, 1.0f)) * shade;
+                    if (slope > 0.7f) c = glm::mix(c, glm::vec3(0.45f, 0.30f, 0.25f), 0.6f);          // steep: over 35 degrees
+                    if (int(std::floor(h / 10.0f)) != int(std::floor(hx / 10.0f)) || int(std::floor(h / 10.0f)) != int(std::floor(hz / 10.0f))) c *= 0.7f;
+                    if (h < rt_.water_level) c = glm::vec3(0.20f, 0.38f, 0.70f);
+                    float hd, hh, hs;
+                    if (highway::nearest(x, z, 40.0f, hd, hh, hs) && std::abs(hd) < 5.5f) c = glm::vec3(0.9f, 0.1f, 0.1f);
+                    if (!castle_road_.empty() && castle_road_.distance(x, z) < 2.0f) c = glm::vec3(0.95f, 0.85f, 0.1f);
+                    if (std::abs(std::fmod(x + 10000.0f, 100.0f)) < mpp || std::abs(std::fmod(z + 10000.0f, 100.0f)) < mpp) c *= (std::abs(std::fmod(x + 10000.0f, 500.0f)) < mpp || std::abs(std::fmod(z + 10000.0f, 500.0f)) < mpp) ? 0.55f : 0.88f;
+                    uint8_t* p = &img[(size_t(j) * W + i) * 3];
+                    for (int k = 0; k < 3; ++k) p[k] = uint8_t(glm::clamp(c[k], 0.0f, 1.0f) * 255.0f);
+                }
+            if (x1 - x0 <= 800.0f) {                      // (a small plan: the heights as numbers too, every 25 m)
+                const float gstep = std::clamp(std::max(x1 - x0, z1 - z0) / 24.0f, 1.0f, 25.0f);      // (25 columns or rows at most; 25 m apart on a plan up to 600 m)
+                for (float z = z0; z <= z1 + 0.1f; z += gstep) {
+                    std::string row;
+                    char b[32];
+                    for (float x = x0; x <= x1 + 0.1f; x += gstep) { std::snprintf(b, sizeof(b), "%5.1f", double(ground(x, z))); row += b; }
+                    log::infof("[map] z %5.0f:%s", double(z), row.c_str());
+                }
+            }
+            if (FILE* f = std::fopen(file, "wb")) { std::fprintf(f, "P6\n%d %d\n255\n", W, H); std::fwrite(img.data(), 1, img.size(), f); std::fclose(f); }
+            log::infof("[map] %s: %d x %d px, x %.0f..%.0f, z %.0f..%.0f, %.1f m a pixel; water %.2f; castle road ends at (%.1f, %.1f, %.1f)", file, W, H, x0, x1, z0, z1, mpp,
+                       rt_.water_level, castle_road_.empty() ? 0.0f : castle_road_.pts.back().x, castle_road_.empty() ? 0.0f : castle_road_.pts.back().y, castle_road_.empty() ? 0.0f : castle_road_.pts.back().z);
+            for (int b = 0; b < highway::span_count(); ++b) {
+                int li; float s0, s1; highway::span(b, li, s0, s1);
+                glm::vec3 pa, pb; glm::vec2 d;
+                if (highway::point_on(li, s0, pa, d) && highway::point_on(li, s1, pb, d))
+                    log::infof("[map] bridge %d on line %d: from (%.1f, %.1f, %.1f) to (%.1f, %.1f, %.1f), s %.0f..%.0f", b, li, pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, s0, s1);
+            }
+            for (int li = 1; li < highway::line_count(); ++li) {
+                const std::vector<glm::vec3>& P = highway::line_points(li);
+                float len = 0.0f, steep = 0.0f, lowest = 1e9f, highest = -1e9f; int wet = 0; size_t steep_at = 0;
+                for (size_t i = 1; i < P.size(); ++i) {
+                    const float dl = glm::distance(glm::vec2(P[i].x, P[i].z), glm::vec2(P[i - 1].x, P[i - 1].z));
+                    len += dl; if (dl > 0.1f && std::abs(P[i].y - P[i - 1].y) / dl > steep) { steep = std::abs(P[i].y - P[i - 1].y) / dl; steep_at = i; }
+                    lowest = std::min(lowest, P[i].y); highest = std::max(highest, P[i].y);
+                    if (world_ground_height_natural(P[i].x, P[i].z, rt_.water_level, 9) < rt_.water_level) ++wet;
+                }
+                log::infof("[map] line %d: %zu points, %.0f m, heights %.1f..%.1f, steepest %.1f %%, %d points over water; from (%.1f, %.1f, %.1f) to (%.1f, %.1f, %.1f)", li, P.size(), len, lowest, highest,
+                           steep * 100.0f, wet, P.front().x, P.front().y, P.front().z, P.back().x, P.back().y, P.back().z);
+                log::infof("[map]   steepest at point %zu (%.1f, %.1f, %.1f)", steep_at, P[steep_at].x, P[steep_at].y, P[steep_at].z);
+                for (size_t i = (steep_at > 12 ? steep_at - 12 : 0); i < std::min(P.size(), steep_at + 12); i += 3) log::infof("[map]     %zu: (%.1f, %.2f, %.1f)", i, P[i].x, P[i].y, P[i].z);
+                for (size_t i = 0; i < P.size(); i += 100)
+                    log::infof("[map]   %4zu: (%.1f, %.1f, %.1f) ground %.1f", i, P[i].x, P[i].y, P[i].z, world_ground_height_natural(P[i].x, P[i].z, rt_.water_level, 9));
+            }
+        }
         // Chapel site: a level pad cut into the SOURCE heights (so the drawn
         // ground, physics and plants all agree), easing back into the slope
         // over 9 m.
@@ -518,8 +652,13 @@ void VulkanEngine::init_world() {
                        std::chrono::duration<double, std::milli>(t1 - t0).count(),
                        std::chrono::duration<double, std::milli>(t2 - t1).count());
         }
-        // Lift player's default spawn point above the new ground.
-        player_.position.y += hp.plateau_height;
+        // Where a game starts that has no saved place (vibe_settings.cfg restores the player's
+        // own after this): at the service station, by the mart's north end, looking south
+        // along the building - where the user stood on 2026-11-25 when asking for this.
+        // (Until then: by the castle, at (0, 1.5 + plateau, 12).)
+        player_.position = glm::vec3(1610.13f, 43.1f, 521.11f);
+        player_.yaw = 3.33548f;
+        player_.pitch = -0.264327f;
 
         // Now that brushes are at their final positions, pre-bake the
         // static model matrices used every frame by the depth pre-pass,

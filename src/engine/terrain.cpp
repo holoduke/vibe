@@ -161,10 +161,13 @@ inline float river(float h, glm::vec2 wp, float wl) {
     }
     if (d2 > 120.0f * 120.0f) return h;
     const float e = std::max(std::sqrt(d2) - (7.0f + 9.0f * sstep(1450.0f, 1900.0f, wp.x) + 4.0f * pool), 0.0f);
-    const float cap = bed + glm::mix(e * 0.45f + std::max(e - 8.0f, 0.0f) * 0.35f + std::max(e - 40.0f, 0.0f) * 0.5f,
+    // (one even slope and a 12 m rounding where the valley's side meets the land: shaders/world_map.glsl wm_river)
+    const float rim = std::max(e - 70.0f, 0.0f);          // (the cut runs out into the land by 120 m: wm_river)
+    const float cap = bed + glm::mix(e * 0.45f + std::max(e - 8.0f, 0.0f) * 0.35f + rim * rim * 0.15f,
                                      std::min(e, 6.0f) * 0.45f + std::max(e - 6.0f, 0.0f) * 1.3f, pool);
-    const float t = std::clamp(0.5f + 0.125f * (cap - h), 0.0f, 1.0f);
-    return glm::mix(cap, h, t) - 4.0f * t * (1.0f - t);
+    const float kr = glm::mix(12.0f, 4.0f, pool);
+    const float t = std::clamp(0.5f + 0.5f * (cap - h) / kr, 0.0f, 1.0f);
+    return glm::mix(cap, h, t) - kr * t * (1.0f - t);
 }
 // Distance (m) from the edge of the river's channel at wp (negative inside it), as river()
 // above measures it - the same wandering course, the same widening toward the sea. 1e9 when
@@ -229,7 +232,21 @@ inline float pad(float h, glm::vec2 wp) {
     if (r2 > 270.0f * 270.0f) return h;
     return glm::mix(kLaunchSiteH, h, sstep(150.0f, 270.0f, std::sqrt(r2)));
 }
-inline float height(float a, glm::vec2 wp, float wl) { return river(pad(height_land(a, wp, wl), wp), wp, wl); }
+// The service station's terrace (shaders/world_map.glsl wm_station: keep in step).
+inline float station_out(glm::vec2 wp) {
+    const glm::vec2 c(0.5f * (kStationRect[0] + kStationRect[2]), 0.5f * (kStationRect[1] + kStationRect[3]));
+    const glm::vec2 e(0.5f * (kStationRect[2] - kStationRect[0]), 0.5f * (kStationRect[3] - kStationRect[1]));
+    const glm::vec2 q = glm::max(glm::abs(wp - c) - e, glm::vec2(0.0f));
+    const float dx = q.x / (wp.x > c.x ? 5.0f : 22.0f), dz = q.y / 22.0f;
+    return std::min(std::sqrt(dx * dx + dz * dz), 1.0f);
+}
+inline thread_local bool t_no_station = false;       // (world_ground_without_station)
+inline float station(float h, glm::vec2 wp) {
+    if (t_no_station) return h;
+    if (std::abs(wp.x - 1614.5f) > 51.0f || std::abs(wp.y - 545.0f) > 61.0f) return h;
+    return glm::mix(kStationH, h, sstep(0.0f, 1.0f, station_out(wp)));
+}
+inline float height(float a, glm::vec2 wp, float wl) { return river(station(pad(height_land(a, wp, wl), wp), wp), wp, wl); }
 // (shaders/world_map.glsl wm_forest: keep in step)
 inline float forest(glm::vec2 wp, float h, float ny, float wl) {
     const float alt  = h - wl;
@@ -238,7 +255,9 @@ inline float forest(glm::vec2 wp, float h, float ny, float wl) {
     float m = noise(wp * 0.0011f + glm::vec2(3.7f)) * 0.55f + noise(wp * 0.0043f + glm::vec2(17.0f)) * 0.30f + noise(wp * 0.017f + glm::vec2(5.0f)) * 0.15f;
     m += 0.10f * (1.0f - sstep(4.0f, 25.0f, alt));
     m += (noise(wp * 0.00013f + glm::vec2(41.0f)) - 0.5f) * 0.35f;
-    return band * sstep(0.37f, 0.53f, m) * sstep(150.0f, 230.0f, glm::distance(wp, glm::vec2(kLaunchSiteX, kLaunchSiteZ)));
+    float band2 = band;
+    if (std::abs(wp.x - 1614.5f) < 51.0f && std::abs(wp.y - 545.0f) < 61.0f) band2 *= sstep(0.3f, 1.0f, station_out(wp));      // (nor on the service station's plot)
+    return band2 * sstep(0.37f, 0.53f, m) * sstep(150.0f, 230.0f, glm::distance(wp, glm::vec2(kLaunchSiteX, kLaunchSiteZ)));
 }
 inline float forest_globe(glm::vec2 hp, const glm::dvec3& G, float h, float ny, float wl) {
     const float wT = sstep(float(globe::kBlend0), float(globe::kBlend1), glm::length(hp));
@@ -388,7 +407,7 @@ float world_forest(float x, float z, float h, float ny, float water_level) {
     const globe::Chart& C = globe::current();
     glm::dvec2 hpd;
     const bool at_home = home_coords(x, z, hpd);
-    if (at_home && highway::ready() && highway::distance(float(hpd.x), float(hpd.y)) < highway::kVerge + 6.0f) return 0.0f;      // (no woods on a highway)
+    if (at_home && highway::ready() && highway::distance(float(hpd.x), float(hpd.y)) < highway::kVerge + 12.0f) return 0.0f;      // (no woods on a highway)
     if (at_home && glm::dot(hpd, hpd) < globe::kBlend0 * globe::kBlend0) {
         if (!C.home && site_clearing(globe::to_planet(C, x, z))) return 0.0f;
         return wm::forest(glm::vec2(hpd), h, ny, water_level);
@@ -422,8 +441,13 @@ float world_natural_height(const glm::dvec3& G, float water_level, int octaves) 
     return natural_height_impl(G, water_level, octaves);
 }
 
+void world_ground_without_station(bool on) { wm::t_no_station = on; }
 float world_ground_height_natural(float x, float z, float water_level, int octaves) {
     return world_ground_height_impl(x, z, water_level, octaves);
+}
+int world_river_course(const glm::vec2*& pts) { pts = wm::kRiv; return 26; }
+glm::vec2 world_river_wander(glm::vec2 wp) {
+    return 12.0f * glm::vec2(std::sin(wp.y * 0.043f + 1.3f), std::sin(wp.x * 0.037f + 0.4f)) + 5.0f * glm::vec2(std::sin(wp.y * 0.113f), std::sin(wp.x * 0.097f + 2.0f));
 }
 float world_continent_home(float x, float z) { return wm::continent(glm::vec2(x, z) * 0.001f); }
 

@@ -454,6 +454,7 @@ void VulkanEngine::prof_sweep_tick() {
         { "light: every leaf tested (mode 0)", 0, [](R& r) { r.foliage_ray_mode = 0; } },
         { "light: reflections off", 0, [](R& r) { r.reflections_enabled = false; r.water_rt_reflections = false; r.water_tlas_reflections = false; } },
         { "light: radiance cache off", 0, [](R& r) { r.radiance_cache = 0; } },
+        { "light: bounce light traced, not from the cache", 0, [](R& r) { r.irradiance_cache = 0; } },
         // -- sky, air, lens, water --
         { "sky: clouds off", 0, [](R& r) { r.clouds_enabled = 0; } },
         { "air: volumetric fog off", 0, [](R& r) { r.fog_volumetric = 0; } },

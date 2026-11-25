@@ -45,11 +45,20 @@ float rm_ground_detail(vec2 wp, float t, float h) {
         keep = smoothstep(5.4, 8.4, abs(rm_hw_dh(wp).x));
         if (keep <= 0.0) return 0.0;
     }
+    // No rills and stones under the service station's paving and its way in (terrain.h kStation*):
+    // the paving lies a hand above the level ground, and the relief stood up through it.
+    {
+        float st = max(max(1585.0 - wp.x, wp.x - (abs(wp.y - 545.0) < 17.0 ? 1662.0 : 1643.6)), max(507.5 - wp.y, wp.y - 582.5));
+        if (st < 1.0) { keep *= smoothstep(0.0, 1.0, st); if (keep <= 0.0) return 0.0; }
+    }
     return rm_ground_detail_raw(wp, t, h) * keep;
 }
 float rm_ground_detail_raw(vec2 wp, float t, float h) {
     float w = 1.0 - smoothstep(10.0, 26.0, t);
     if (w <= 0.0 || RMDBG(1024) || g_rm_no_relief) return 0.0;
+#ifndef VIBE_LITE
+    if (g_rm_ray_y > -1e8 && RMDBG(128)) return 0.0;       // profiling: the march without the relief (before any of its work: this measures what the relief costs the march)
+#endif
     // Not on the road: the paving is flat (crouching on it showed the
     // rills as noise in the cobbles). In winter the snow still lies on it.
     float road_keep = 1.0;
@@ -75,9 +84,6 @@ float rm_ground_detail_raw(vec2 wp, float t, float h) {
     // instead of three plus a texture fetch on every near-ground step. The
     // hit point lands within ~5 cm of the full surface; the normal and the
     // shading (called without the flag) still use the full relief.
-#ifndef VIBE_LITE
-    if (g_rm_ray_y > -1e8 && RMDBG(128)) return 0.0;       // profiling: the march without the relief
-#endif
     if (g_rm_ray_y > -1e8) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
                                               (RMDBG(32768) ? 0.0 : rm_pebbles_march(wp, t))) * road_keep + rsand, wp, h, road_keep) * w;
     if (g_rm_relief_lite) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045) * road_keep + rsand, wp, h, road_keep) * w;

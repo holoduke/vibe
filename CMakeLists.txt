@@ -288,6 +288,7 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan glfw)
 
 # vibe_core: pure logic with no Vulkan/GLFW deps. Tests link this directly.
 add_library(vibe_core STATIC
+    src/npc/npc.cpp
     src/engine/site_store.cpp
     src/engine/globe.cpp
     src/game/physics.cpp
@@ -384,6 +385,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/veg_zones.cpp
     src/engine/vk_engine/veg_stream.cpp
     src/engine/vk_engine/wm_cache.cpp
+    src/engine/vk_engine/grass_trail.cpp
     src/engine/vk_engine/ssdm.cpp
     src/engine/vk_engine/flashlight.cpp
     src/engine/vk_engine/player_body.cpp
@@ -394,6 +396,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/cluster_draw.cpp
     src/engine/vk_engine/plant_gpu.cpp
     src/engine/vk_engine/multiplayer.cpp
+    src/engine/vk_engine/npc_world.cpp
     src/engine/vk_engine/ui_gamehud.cpp
     src/engine/cpu_prof.cpp
     src/engine/jobs.cpp
@@ -639,47 +642,6 @@ add_custom_command(
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${CLOUDS_OVER_SPV})
 
-# Screen-space displacement mapping: the three full-screen passes of ssdm_resolve.frag.
-set(SSDM_GBUFFER_SPV "${SHADER_OUTPUT_DIR}/ssdm_gbuffer.frag.spv")
-add_custom_command(
-    OUTPUT ${SSDM_GBUFFER_SPV}
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DSSDM_GBUFFER=1 -fshader-stage=frag
-            ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag -o ${SSDM_GBUFFER_SPV}
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag ${SHADER_INCLUDES}
-    COMMENT "Compiling shader ssdm_gbuffer.frag (ssdm_resolve: the whole G-buffer)"
-    VERBATIM)
-list(APPEND COMPILED_SHADERS ${SSDM_GBUFFER_SPV})
-set(SSDM_COLOR_SPV "${SHADER_OUTPUT_DIR}/ssdm_color.frag.spv")
-add_custom_command(
-    OUTPUT ${SSDM_COLOR_SPV}
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DSSDM_COLOR=1 -fshader-stage=frag
-            ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag -o ${SSDM_COLOR_SPV}
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag ${SHADER_INCLUDES}
-    COMMENT "Compiling shader ssdm_color.frag (ssdm_resolve: colour + resolve map)"
-    VERBATIM)
-list(APPEND COMPILED_SHADERS ${SSDM_COLOR_SPV})
-set(SSDM_DEPTH_SPV "${SHADER_OUTPUT_DIR}/ssdm_depth.frag.spv")
-add_custom_command(
-    OUTPUT ${SSDM_DEPTH_SPV}
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DSSDM_DEPTH=1 -fshader-stage=frag
-            ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag -o ${SSDM_DEPTH_SPV}
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag ${SHADER_INCLUDES}
-    COMMENT "Compiling shader ssdm_depth.frag (ssdm_resolve: displaced depth)"
-    VERBATIM)
-list(APPEND COMPILED_SHADERS ${SSDM_DEPTH_SPV})
-set(SSDM_VELOCITY_SPV "${SHADER_OUTPUT_DIR}/ssdm_velocity.frag.spv")
-add_custom_command(
-    OUTPUT ${SSDM_VELOCITY_SPV}
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DSSDM_VELOCITY=1 -fshader-stage=frag
-            ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag -o ${SSDM_VELOCITY_SPV}
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/ssdm_resolve.frag ${SHADER_INCLUDES}
-    COMMENT "Compiling shader ssdm_velocity.frag (ssdm_resolve: motion vectors)"
-    VERBATIM)
-list(APPEND COMPILED_SHADERS ${SSDM_VELOCITY_SPV})
 
 # Sky-fill variant of compose.frag: writes the real sky into the render-res
 # scene colour BEFORE DLSS (exact colour/alpha alignment), so DLSS upscales

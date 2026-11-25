@@ -190,6 +190,19 @@ void main() {
             albedo = vColor * mix(0.42, 1.12, smoothstep(0.0, 0.75, t));
             albedo = mix(albedo, albedo * vec3(1.25, 1.18, 0.80), smoothstep(0.6, 1.0, t) * 0.6);
             albedo *= 1.0 + 0.18 * mid;
+            // One surface with the ground (Crimson Desert's foliage tint, read from its compiled
+            // tree.hlsl pixel shader): the blade takes the HUE of the ground it stands on and
+            // keeps its own brightness - albedo -> sqrt(ground * albedo), scaled back to the
+            // albedo's luminance. Wholly at the root (where blade and turf meet), partly above.
+            {
+                const vec3 kLum = vec3(0.212671, 0.71516, 0.072169);
+                vec3  gcol = scene.grass_color_ground.rgb;
+                vec3  g    = sqrt(max(gcol * albedo, vec3(0.0)));
+                vec3  hued = g * (dot(albedo, kLum) / max(dot(g, kLum), 0.001));
+                albedo = mix(albedo, hued, mix(0.9, 0.4, smoothstep(0.0, 0.3, t)));
+            }
+            // (the game brightens the face turned from the camera a little: thin blades let light through)
+            if (!gl_FrontFacing) albedo *= 1.1;
         }
         if (part == 3) {
             // Leaf blade with real leaf-space coordinates: u across (-1..1),
@@ -280,7 +293,10 @@ void main() {
     // Plants: flagged as leaves so the deferred pass lights them with the
     // foliage scattering model (wrap + transmission).
     // Mushrooms (parts 6 / 7) are solid vegetation: no leaf transmission.
-    outGBuffer1 = vec4(_octa_encode(N), 0.6, plant ? ((part == 6 || part == 7) ? 1.0 / 3.0 : 1.0) : 0.0);
+    // Grass blades: glossier close by, matt with distance (the game's rule - a field of small
+    // highlights far off turns to noise).
+    float rough = part == 8 ? min(vDistToCam * 0.005 + 0.45, 0.99) : 0.6;
+    outGBuffer1 = vec4(_octa_encode(N), rough, plant ? ((part == 6 || part == 7) ? 1.0 / 3.0 : 1.0) : 0.0);
     {
         vec2 current_uv = gl_FragCoord.xy * scene.viewport.zw;
         if (vPrevClip.w > 0.0) {

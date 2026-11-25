@@ -13,23 +13,27 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <filesystem>
+#include <vector>
 
 using namespace vibe;
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        std::fprintf(stderr, "usage: vibe_animcook <100STYLE dir> <soldier_fp.qchar> <out.qanim> [--cmu <dir of CMU .bvh>] [--no-reversed] [--rate HZ] [--no-optimize]\n");
+        std::fprintf(stderr, "usage: vibe_animcook <100STYLE dir> <soldier_fp.qchar> <out.qanim> [--cmu <dir of CMU .bvh>] [--actions <dir of action .bvh>] [--no-reversed] [--rate HZ] [--no-optimize]\n");
         return 2;
     }
     const std::string dir = argv[1], qchar = argv[2], out = argv[3];
     anim::offline::RetargetParams rp = anim::offline::style100_params();
     anim::offline::CompressParams cp;
-    std::string cmu_dir;
+    std::string cmu_dir, act_dir;
     bool reversed = true;
     for (int i = 4; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--rate") && i + 1 < argc) rp.out_rate = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--no-optimize")) cp.optimize = false;
         else if (!std::strcmp(argv[i], "--cmu") && i + 1 < argc) cmu_dir = argv[++i];
+        else if (!std::strcmp(argv[i], "--actions") && i + 1 < argc) act_dir = argv[++i];
         else if (!std::strcmp(argv[i], "--no-reversed")) reversed = false;
         else { std::fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
     }
@@ -53,6 +57,26 @@ int main(int argc, char** argv) {
         crp.out_rate = rp.out_rate;
         if (!anim::offline::cook_takes(cmu_dir, anim::offline::default_cmu_sources(reversed), skel, crp, cp, "CMU Graphics Lab Motion Capture Database",
                                        "free to use and to include in products (mocap.cs.cmu.edu; created with funding from NSF EIA-0196217)",
+                                       asset, cooked, log, &why)) {
+            std::fprintf(stderr, "cook failed: %s\n", why.c_str());
+            return 1;
+        }
+    }
+    // Actions: every .bvh in the directory is a clip of its file's name (sit_down.bvh -> "sit_down"),
+    // tagged kTagAction - played by name, never found by the locomotion search. (SMPL-H motions:
+    // docs/animation/actions.md.)
+    if (!act_dir.empty()) {
+        std::vector<anim::offline::TakeSource> acts;
+        std::error_code ec;
+        for (const auto& e : std::filesystem::directory_iterator(act_dir, ec)) {
+            if (!e.is_regular_file() || e.path().extension() != ".bvh") continue;
+            acts.push_back({ e.path().filename().string(), e.path().stem().string(), anim::kTagAction, false });
+        }
+        std::sort(acts.begin(), acts.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+        anim::offline::RetargetParams arp = anim::offline::smplh_params();
+        arp.out_rate = rp.out_rate;
+        if (!anim::offline::cook_takes(act_dir, acts, skel, arp, cp, "Tencent HY-Motion 1.0 (text to motion), generated locally",
+                                       "Tencent HY-Motion 1.0 Community License (territory-limited: see License.txt of the model)",
                                        asset, cooked, log, &why)) {
             std::fprintf(stderr, "cook failed: %s\n", why.c_str());
             return 1;

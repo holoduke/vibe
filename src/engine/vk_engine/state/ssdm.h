@@ -10,15 +10,15 @@
 namespace vibe {
 
 struct VulkanEngine::SsdmState {
-    SsdmImage disp, ray, hitz, shell_z, color, resolve, scene_z, mv, g0, g1;
-    VkPipeline gbuffer_pipeline = VK_NULL_HANDLE;
-    VkShaderModule gbuffer_frag = VK_NULL_HANDLE;
+    // hn: normal + height of the displaced stonework (ssdm_height); off: the displacement
+    // vector per pixel (ssdm_solve); color / g0 / g1 / scene_z: the main pass's attachments
+    // as they were before displacement (what the grid reads while it writes the live ones).
+    SsdmImage hn, off, color, g0, g1, scene_z;
     VkExtent2D extent{ 0, 0 };
-    VkPipeline mesh_pipeline = VK_NULL_HANDLE, color_pipeline = VK_NULL_HANDLE,
-               depth_pipeline = VK_NULL_HANDLE, velocity_pipeline = VK_NULL_HANDLE;
-    VkShaderModule mesh_vert = VK_NULL_HANDLE, mesh_frag = VK_NULL_HANDLE, color_frag = VK_NULL_HANDLE,
-                   depth_frag = VK_NULL_HANDLE, velocity_frag = VK_NULL_HANDLE;
-    VkPipelineLayout fs_layout = VK_NULL_HANDLE;
+    VkPipeline height_pipeline = VK_NULL_HANDLE, solve_pipeline = VK_NULL_HANDLE, grid_pipeline = VK_NULL_HANDLE;
+    VkShaderModule height_vert = VK_NULL_HANDLE, height_frag = VK_NULL_HANDLE, solve_frag = VK_NULL_HANDLE,
+                   grid_vert = VK_NULL_HANDLE, grid_frag = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkDescriptorPool pool = VK_NULL_HANDLE;
     VkDescriptorSet  set = VK_NULL_HANDLE;

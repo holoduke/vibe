@@ -21,9 +21,11 @@
 // and ray traced like everything else. Home's chart only (the course lies within it).
 #include "engine/vk_engine/internal.h"
 #include "engine/highway.h"
+#include "engine/audio.h"
 #include "engine/net/net.h"
 #include "engine/terrain.h"
 #include "engine/globe.h"
+#include "engine/vk_engine/state/environment.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
@@ -61,9 +63,17 @@ struct VulkanEngine::JeepState {
     // Lights: head lights on / off (L), brake lights by the pedal. Where they are (the car's
     // frame), and which drawn parts are lamps (1 head, 2 tail).
     bool      lights_on = false, prev_l = false, prev_mm = false;
+    // Its sound (car_audio_tick): the sample set, and what the engine does.
+    int       snd_set = -2;            // -2: not asked for yet; -1: none
+    bool      snd_running = false, snd_has_last = false;
+    float     snd_rpm = 900.0f, snd_load = 0.0f, throttle_in = 0.0f;
+    int       snd_gear = 0;
+    glm::vec3 snd_last{0.0f}, snd_vel{0.0f};
+    bool      dusk_lit = false;        // its lights were put on by the dusk (once: L still switches them)
     float     brake_in = 0.0f;
     glm::vec3 head[2]{ { -0.4f, 0.85f, -1.8f }, { 0.4f, 0.85f, -1.8f } }, tail[2]{ { -0.6f, 0.6f, 1.8f }, { 0.6f, 0.6f, 1.8f } };
     std::vector<uint8_t> kind;
+    std::vector<uint8_t> painted;      // which drawn parts carry the body's paint
     int       cam_mode = 1;            // the view: 0 near, 1 medium, 2 far (middle mouse button)
     float     cam_h = 1.45f;
     // The driver: where his hips are (the car's frame), how far his legs are stretched
@@ -73,6 +83,19 @@ struct VulkanEngine::JeepState {
     // What is drawn: the body's parts, four wheels' and the steering wheel's - in this order
     // in jeep_draw_. `local`: each part's bounds in its own frame.
     size_t n_body = 0, n_wheel = 0, n_steer = 0;
+    // THE FRONT DOORS open. The models have no doors of their own - a body is one skin with
+    // the gaps drawn on it - so the two front doors are cut out of body.mesh when the car is
+    // loaded: every triangle whose middle lies in the door's box (beside the front seat, from
+    // the sill up, from the windscreen pillar back to the one behind the seat) is the door's,
+    // outer skin, glass, mirror and inner trim alike. Each turns on a hinge down its front
+    // edge. Shut, it is the same triangles in the same place: nothing shows. After the
+    // steering wheel in jeep_draw_: the left door's parts, then the right's.
+    size_t    n_door[2] = { 0, 0 };
+    glm::vec3 door_hinge[2]{};
+    float     door[2] = { 0.0f, 0.0f };        // 0 shut .. 1 open
+    float     door_want[2] = { 0.0f, 0.0f };   // what somebody getting in or out asks (npc_cars_place)
+    float     door_hold = 0.0f;                // the player got in or out: the driver's door stands open this long yet
+    bool      was_driving = false;
     std::vector<std::pair<glm::vec3, glm::vec3>> local;
     // From jeep.json.
     glm::vec3 wheel_pos[4]{};
@@ -255,6 +278,7 @@ void VulkanEngine::init_jeep() {
     if (jeep_all_.empty()) return;
     const int pick = std::getenv("VIBE_TEST_CAR") ? std::atoi(std::getenv("VIBE_TEST_CAR")) : 0;      // (tests: which one is simulated first)
     jeep_ = jeep_all_[size_t(std::clamp(pick, 0, int(jeep_all_.size()) - 1))];
+    npc_cars_init();
 }
 
 VulkanEngine::JeepState* VulkanEngine::jeep_load(const std::string& dir, const std::string& json, const glm::vec3* paint) {
@@ -293,12 +317,38 @@ VulkanEngine::JeepState* VulkanEngine::jeep_load(const std::string& dir, const s
     }
     if (J.boxes.empty()) J.boxes.push_back({ glm::vec3(0.0f, 0.75f, 0.0f), glm::vec3(0.8f, 0.35f, 1.8f) });
 
-    auto add_file = [&](const std::string& path, int copies) -> size_t {
+    // `part`: 0 the whole file but the doors, 1 / 2 the left / right front door alone, -1 everything.
+    const bool has_doors = dir.find("jeep") == std::string::npos && !std::getenv("VIBE_NO_CAR_DOORS");      // (the jeep is open-sided)
+    auto door_of = [&](const glm::vec3& c) -> int {
+        if (!has_doors) return 0;
+        const float sx = std::abs(J.seat.x);
+        if (c.y < 0.30f || c.y > 2.4f || c.z < J.seat.z - 1.05f || c.z > J.seat.z + 0.50f) return 0;
+        return c.x < -(sx + 0.30f) ? 1 : c.x > sx + 0.30f ? 2 : 0;
+    };
+    auto add_file = [&](const std::string& path, int copies, int part = -1) -> size_t {
         auto groups = game::load_mesh_groups(path.c_str());
+        if (part >= 0)
+            for (auto& g : groups) {
+                // keep only this part's triangles (and the corners they use)
+                game::LevelMesh& lm = g.mesh;
+                std::vector<uint32_t> idx, remap(lm.verts.size(), 0xFFFFFFFFu);
+                std::vector<game::LevelVertex> verts;
+                for (size_t t = 0; t + 2 < lm.idx.size(); t += 3) {
+                    const glm::vec3 c = (lm.verts[lm.idx[t]].p + lm.verts[lm.idx[t + 1]].p + lm.verts[lm.idx[t + 2]].p) / 3.0f;
+                    if (door_of(c) != part) continue;
+                    for (int k = 0; k < 3; ++k) {
+                        uint32_t& r = remap[lm.idx[t + size_t(k)]];
+                        if (r == 0xFFFFFFFFu) { r = uint32_t(verts.size()); verts.push_back(lm.verts[lm.idx[t + size_t(k)]]); }
+                        idx.push_back(r);
+                    }
+                }
+                lm.verts.swap(verts); lm.idx.swap(idx);
+            }
         size_t n = 0;
         std::vector<CastleMeshGpu> made;
         std::vector<std::pair<glm::vec3, glm::vec3>> bounds;
         std::vector<uint8_t> kinds;
+        std::vector<uint8_t> paints;
         for (auto& g : groups) {
             if (g.mesh.idx.empty()) continue;
             const JMat* m = jmat(g.name);
@@ -313,15 +363,16 @@ VulkanEngine::JeepState* VulkanEngine::jeep_load(const std::string& dir, const s
             made.push_back(make_mesh_part(lm));
             kinds.push_back(g.name.find("light_red") != std::string::npos ? 2 : (g.name.size() > 6 && g.name.compare(g.name.size() - 6, 6, "_light") == 0) ? 1 : 0);
             bounds.push_back({ lm.bmin, lm.bmax });
+            paints.push_back(g.name == "s_paint" ? 1 : 0);
             ++n;
         }
         build_mesh_part_blas(made);
         for (auto& g : made) jeep_owned_.push_back(g);
         for (int c = 0; c < copies; ++c)
-            for (size_t i = 0; i < made.size(); ++i) { jeep_draw_.push_back(made[i]); J.local.push_back(bounds[i]); J.kind.push_back(kinds[i]); }
+            for (size_t i = 0; i < made.size(); ++i) { jeep_draw_.push_back(made[i]); J.local.push_back(bounds[i]); J.kind.push_back(kinds[i]); J.painted.push_back(paints[i]); }
         return n;
     };
-    J.n_body = add_file(dir + "/body.mesh", 1);
+    J.n_body = add_file(dir + "/body.mesh", 1, 0);
     J.n_wheel = add_file(dir + "/wheel.mesh", 4);
     J.n_steer = add_file(dir + "/steering.mesh", 1);
     if (!J.n_body || !J.n_wheel) { log::warnf("[jeep] %s/*.mesh missing - no such car", dir.c_str()); jeep_draw_.resize(J.draw_first); delete jp; return nullptr; }
@@ -336,6 +387,14 @@ VulkanEngine::JeepState* VulkanEngine::jeep_load(const std::string& dir, const s
             r = std::max({ r, std::abs(J.local[i].first.x), std::abs(J.local[i].second.x) });
         if (r > 0.08f) J.rim_r = r - 0.015f;
     }
+    for (int sd = 0; sd < 2 && has_doors; ++sd) {
+        const size_t first = J.local.size();
+        J.n_door[sd] = add_file(dir + "/body.mesh", 1, sd + 1);
+        glm::vec3 lo(1e9f), hi(-1e9f);
+        for (size_t i = first; i < J.local.size(); ++i) { lo = glm::min(lo, J.local[i].first); hi = glm::max(hi, J.local[i].second); }
+        // (the hinge: down the door's front edge - forward is -z - a little inside its outer skin)
+        if (J.n_door[sd]) J.door_hinge[sd] = glm::vec3(sd == 0 ? lo.x + 0.06f : hi.x - 0.06f, 0.0f, lo.z + 0.02f);
+    }
     for (int i = 0; i < 4; ++i) J.tune.wheel_pos[i] = J.wheel_pos[i];
     J.tune.wheel_radius = J.wheel_radius; J.tune.wheel_width = J.wheel_width;
     J.tune.boxes = J.boxes;
@@ -349,6 +408,10 @@ void VulkanEngine::destroy_jeep() {
     jeep_draw_.clear();
     destroy_mesh_parts(jeep_owned_);
     for (JeepState* c : jeep_all_) delete c;
+    if (audio_) for (auto& kv : car_voices_) audio_->engine_stop(kv.second);
+    car_voices_.clear();
+    for (NpcCar& c : npc_cars_) delete c.car;
+    npc_cars_.clear();
     jeep_all_.clear();
     jeep_ = nullptr;
 }
@@ -435,7 +498,7 @@ void VulkanEngine::jeep_feed_world() {
         }
     }
     // -- what stands near --
-    const size_t sig = wv_cols_.size() * 31u + world_.aabbs.size();
+    const size_t sig = wv_cols_.size() * 31u + world_.aabbs.size() + lane_rock_cols_.size() * 7u;
     if (glm::distance(p2, J.obst_centre) > 22.0f || sig != J.obst_sig) {
         J.obst_centre = p2; J.obst_sig = sig;
         std::vector<PhysicsWorld::OrientedBox> ob;
@@ -448,6 +511,7 @@ void VulkanEngine::jeep_feed_world() {
             ob.push_back({ c, h, 0.0f });
         };
         for (const auto& a : wv_cols_) take(a);
+        for (const auto& a : lane_rock_cols_) take(a);
         for (const auto& a : world_.aabbs) take(a);
         hw_rail_boxes(pos, reach, ob);
         if (ob.size() > 900) ob.resize(900);
@@ -482,6 +546,8 @@ bool VulkanEngine::jeep_use() {
         }
         if (best_i >= 0) { jeep_ride_ = best_i; fly_mode_ = false; return true; }
     }
+    // Somebody else's car that stands with nobody in it (the station's traffic): it is taken.
+    if (!jeep_->driving) npc_take_car(3.6f);
     if (!jeep_->driving) {
         // The nearest car within reach. One that is not the simulated one becomes it; the
         // other stays where it stands.
@@ -545,6 +611,9 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
         in.fwd = in.back = in.left = in.right = in.jump = in.sprint = in.crawl = false;
         in.move_x = in.move_y = 0.0f;
     }
+    // VIBE_TEST_USE=<frame>: the use key at that frame (tests: into the car the player stands at).
+    if (static const int use_at = std::getenv("VIBE_TEST_USE") ? std::atoi(std::getenv("VIBE_TEST_USE")) : -1; use_at >= 0 && int(frame_number_) == use_at)
+        log::infof("[jeep] test: use -> %d; driving %d, %zu cars", int(jeep_use()), int(jeep_->driving), jeep_all_.size());
     JeepState& J = *jeep_;
     if (!J.posed) {
         // Parked outside the pavilion: on the concrete in front of its terrace, in a row.
@@ -596,6 +665,9 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
         const bool l = glfwGetKey(w, GLFW_KEY_L) == GLFW_PRESS;
         if (l && !J.prev_l) J.lights_on = !J.lights_on;
         J.prev_l = l;
+        // (Dusk: a car that is driven puts its lights on by itself - once; after that L is the driver's.)
+        if (cars_need_lights()) { if (!J.dusk_lit) { J.dusk_lit = true; J.lights_on = true; } }
+        else J.dusk_lit = false;
         const bool mm = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
         if (mm && !J.prev_mm) J.cam_mode = (J.cam_mode + 1) % 3;
         J.prev_mm = mm;
@@ -710,6 +782,7 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
             if (J.turbo >= 0.25f) J.turbo_dry = false;
         }
     }
+    J.throttle_in = std::abs(forward);       // (what the engine is asked for: its sound's load)
     physics_->vehicle_input(forward, J.steer, brake, hand);
     J.brake_in = std::max(brake, hand);
     // The driver's hands are full: no walking, shooting or jumping.
@@ -758,6 +831,21 @@ void VulkanEngine::jeep_place(JeepState& J, const PhysicsWorld::VehicleState& pr
                glm::rotate(glm::mat4(1.0f), a * 9.0f, glm::vec3(0.0f, 0.0f, 1.0f));
     };
     for (size_t i = 0; i < J.n_steer; ++i) place(at++, steer_m(B, J.steer_wheel), steer_m(J.body_prev, J.steer_wheel));
+    // The doors: the driver's stands open for a moment when the player gets in or out; either
+    // opens for an NPC getting in or out (door_want). Open and shut in under half a second.
+    if (J.driving != J.was_driving) { J.was_driving = J.driving; J.door_hold = 1.0f; }
+    J.door_hold = std::max(0.0f, J.door_hold - dt);
+    for (int sd = 0; sd < 2; ++sd) {
+        const float want = std::max(J.door_want[sd], sd == 0 && J.door_hold > 0.0f ? 1.0f : 0.0f);
+        J.door[sd] += std::clamp(want - J.door[sd], -dt / 0.45f, dt / 0.40f);
+        const float k = J.door[sd] * J.door[sd] * (3.0f - 2.0f * J.door[sd]);
+        const float ang = (sd == 0 ? -1.0f : 1.0f) * 1.12f * k;                    // 64 degrees, outward
+        auto door_m = [&](const glm::mat4& body) {
+            return body * glm::translate(glm::mat4(1.0f), J.door_hinge[sd]) * glm::rotate(glm::mat4(1.0f), ang, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                   glm::translate(glm::mat4(1.0f), -J.door_hinge[sd]);
+        };
+        for (size_t i = 0; i < J.n_door[sd]; ++i) place(at++, door_m(B), door_m(J.body_prev));
+    }
 
 }
 
@@ -954,6 +1042,12 @@ uint64_t VulkanEngine::jeep_signature() const {
         for (float v : { B[3].x * 16.0f, B[3].y * 16.0f, B[3].z * 16.0f, B[0].x * 64.0f, B[2].x * 64.0f, B[1].y * 64.0f, c->st.steer * 32.0f })
             h = (h ^ uint64_t(int64_t(hash_f(v)))) * 1099511628211ull;
     }
+    for (const NpcCar& c : npc_cars_) {
+        if (c.agent < 0) continue;
+        const glm::mat4& B = c.car->st.body;
+        for (float v : { B[3].x * 16.0f, B[3].y * 16.0f, B[3].z * 16.0f, B[0].x * 64.0f, B[2].x * 64.0f, float(c.agent) })
+            h = (h ^ uint64_t(int64_t(hash_f(v)))) * 1099511628211ull;
+    }
     return h;
 }
 
@@ -1022,10 +1116,126 @@ bool VulkanEngine::jeep_headlights(glm::vec4& pos, glm::vec4& dir, glm::vec4& co
     const glm::vec3 f = -glm::normalize(glm::vec3(B[2])), up = glm::normalize(glm::vec3(B[1]));
     const glm::vec3 p = glm::vec3(B * glm::vec4(0.5f * (best->head[0] + best->head[1]), 1.0f)) + f * 0.12f;
     // Dipped: aimed a little down, wide and flat as far as one cone can be.
-    pos = glm::vec4(p, 95.0f);
-    dir = glm::vec4(glm::normalize(f - up * 0.055f), std::cos(glm::radians(34.0f)));
+    pos = glm::vec4(p, 270.0f);        // (was 95 m: the road was dark a few car lengths ahead)
+    dir = glm::vec4(glm::normalize(f - up * 0.030f), std::cos(glm::radians(34.0f)));
     col = glm::vec4(glm::vec3(1.0f, 0.96f, 0.88f) * 52.0f, std::cos(glm::radians(13.0f)));
     return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// CAR SOUND. Every car that runs has an engine (audio.h "ENGINES"; the loops come out of
+// an engine simulation - docs/ARCHITECTURE.md "Car sound"): the jeep a flat four, the sports
+// car a flat-plane V8, the saloon a straight six, the pickup a big V8. The player's car, the
+// NPC engine's traffic and the cars other players drive: the nearest kVoices of them within
+// 280 m sound.
+//   speed of the engine: the driven car's own (the physics); any other car's from its road
+//     speed through its gears (it changes up at 72 % of its limit, down at 32 %).
+//   load: the driver's throttle; another car's from how it gains or loses speed.
+//   far away: quieter by the square of the distance, and duller - the low-pass comes down
+//     from 18 kHz to 600 Hz by 320 m (what is left of a car far off is its drone).
+//   in the cabin (the driver's nearest view): the own engine through 2.4 kHz, everything
+//     outside through 1.4 kHz and at less than half.
+void VulkanEngine::car_audio_tick(float dt) {
+    if (!audio_ || !audio_->ok() || dt <= 0.0f) return;
+    constexpr size_t kVoices = 5;
+    constexpr float  kHear = 170.0f;        // (beyond it a car is not heard)
+    static const float kGain = std::getenv("VIBE_CAR_SOUND_GAIN") ? float(std::atof(std::getenv("VIBE_CAR_SOUND_GAIN"))) : 1.0f;
+    static const bool off = std::getenv("VIBE_NO_CAR_SOUND") != nullptr;
+    const glm::vec3 eye = player_.eye_position();
+    {   // the listener's own speed (Doppler): the camera's, smoothed
+        const glm::vec3 v = car_ear_has_ ? (eye - car_ear_last_) / dt : glm::vec3(0.0f);
+        car_ear_vel_ += ((glm::length(v) < 150.0f ? v : glm::vec3(0.0f)) - car_ear_vel_) * std::min(1.0f, dt * 6.0f);
+        car_ear_last_ = eye; car_ear_has_ = true;
+        audio_->set_listener_velocity(car_ear_vel_);
+    }
+    struct Cand { JeepState* J; float d; };
+    std::vector<Cand> cand;
+    const bool home = globe::current().home;
+    if (home && !off) {
+        for (JeepState* c : jeep_all_) {
+            c->snd_running = c->posed && (c->driving || (c->net_owner && c->net_driven));
+            if (c->snd_running) cand.push_back({ c, c->driving ? 0.0f : glm::distance(glm::vec3(c->st.body[3]), eye) });
+        }
+        for (NpcCar& nc : npc_cars_)
+            if (nc.agent >= 0 && nc.car->posed && nc.car->snd_running) cand.push_back({ nc.car, glm::distance(glm::vec3(nc.car->st.body[3]), eye) });
+    }
+    std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
+    while (!cand.empty() && (cand.size() > kVoices || cand.back().d > kHear)) cand.pop_back();
+    // voices: kept by car; those whose car is no longer heard are let go
+    for (auto it = car_voices_.begin(); it != car_voices_.end();) {
+        bool keep = false;
+        for (const Cand& c : cand) if (c.J == it->first) { keep = true; break; }
+        if (!keep) { audio_->engine_stop(it->second); it = car_voices_.erase(it); } else ++it;
+    }
+    const bool cabin = jeep_ && jeep_->driving && jeep_->cam_mode == 0;
+    for (const Cand& c : cand) {
+        JeepState& J = *c.J;
+        if (J.snd_set == -2) {
+            const std::string kind = J.dir.substr(J.dir.find_last_of("/\\") + 1);
+            J.snd_set = audio_->engine_set_load("assets/sounds/engines/" + kind + ".txt");
+        }
+        if (J.snd_set < 0) continue;
+        auto it = car_voices_.find(&J);
+        if (it == car_voices_.end()) {
+            const uint32_t h = audio_->engine_start(J.snd_set);
+            if (!h) continue;
+            it = car_voices_.emplace(&J, h).first;
+            J.snd_has_last = false; J.snd_rpm = 900.0f; J.snd_load = 0.0f;
+        }
+        const glm::vec3 pos = glm::vec3(J.st.body * glm::vec4(0.0f, 0.7f, -1.2f, 1.0f));       // (the engine: ahead of the cabin)
+        const glm::vec3 vel_now = J.snd_has_last ? (pos - J.snd_last) / dt : glm::vec3(0.0f);
+        const float sp_prev = glm::length(J.snd_vel);
+        J.snd_vel += ((glm::length(vel_now) < 120.0f ? vel_now : glm::vec3(0.0f)) - J.snd_vel) * std::min(1.0f, dt * 8.0f);
+        J.snd_last = pos; J.snd_has_last = true;
+        const float sp = glm::length(J.snd_vel), limit = std::max(J.tune.engine_max_rpm, 3000.0f);
+        float rpm_t, load_t;
+        if (J.driving && &J == jeep_) {
+            rpm_t = std::max(std::abs(J.st.rpm), 850.0f);
+            load_t = std::clamp(J.throttle_in, 0.0f, 1.0f);
+        } else {
+            // through its gears
+            const size_t ng = std::max<size_t>(J.tune.gears.size(), 1);
+            auto rpm_in = [&](int g) {
+                const float ratio = J.tune.gears.empty() ? 1.5f : J.tune.gears[size_t(std::clamp(g, 0, int(ng) - 1))];
+                return sp / (6.2831853f * std::max(J.wheel_radius, 0.2f)) * 60.0f * ratio * J.tune.final_drive;
+            };
+            J.snd_gear = std::clamp(J.snd_gear, 0, int(ng) - 1);
+            // (as a driver changes: early when he is only keeping his speed, late when he is on it)
+            const float up = (0.30f + 0.42f * J.snd_load) * limit, down = 0.19f * limit;
+            if (rpm_in(J.snd_gear) > up && J.snd_gear + 1 < int(ng)) ++J.snd_gear;
+            else if (rpm_in(J.snd_gear) < down && J.snd_gear > 0) --J.snd_gear;
+            rpm_t = std::max(rpm_in(J.snd_gear), 850.0f);
+            const float accel = (sp - sp_prev) / dt;
+            load_t = std::clamp(0.24f + accel * 0.30f, 0.0f, 1.0f);
+        }
+        J.snd_rpm += (rpm_t - J.snd_rpm) * std::min(1.0f, dt * 7.0f);
+        J.snd_load += (load_t - J.snd_load) * std::min(1.0f, dt * 9.0f);
+        const bool own = J.driving && &J == jeep_;
+        const float d = own ? glm::distance(pos, eye) : c.d;
+        // Loudness: half at 9 m, a tenth at 27 m, gone by kHear. Tone: the further, the duller -
+        // from outside a car you hear its exhaust and little of its top end (7 kHz at arm's
+        // length on foot, 12 kHz for the own car seen from behind), down to 350 Hz far off.
+        const float fade = 1.0f - glm::smoothstep(0.75f * kHear, kHear, d);
+        float vol = 0.62f * (0.50f + 0.50f * J.snd_load) * (0.60f + 0.40f * std::clamp(J.snd_rpm / limit, 0.0f, 1.0f)) / (1.0f + (d / 9.0f) * (d / 9.0f)) * fade * kGain;
+        if (own) vol = 0.62f * (0.50f + 0.50f * J.snd_load) * (0.60f + 0.40f * std::clamp(J.snd_rpm / limit, 0.0f, 1.0f)) * 0.42f * kGain;       // (the own car: the camera's distance is not the driver's)
+        float hz = (own ? 12000.0f : 7000.0f) * std::pow(350.0f / 7000.0f, glm::smoothstep(3.0f, 120.0f, own ? 0.0f : d));
+        if (cabin) { if (own) { hz = 2400.0f; vol *= 0.9f; } else { hz = std::min(hz, 1400.0f); vol *= 0.45f; } }
+        // (a far car: its voice is brought up to date every fourth frame, and plays one loop)
+        const bool far_off = !own && d > 45.0f;
+        if (!far_off || ((frame_number_ + uint64_t(it->second)) & 3) == 0)
+            audio_->engine_update(it->second, pos, J.snd_vel, J.snd_rpm, J.snd_load, vol, hz, far_off);
+        if (static const bool lg = std::getenv("VIBE_LOG_CAR_SOUND") != nullptr; lg && frame_number_ % 90 == 0)
+            log::infof("[car-sound] %s%s: %.0f m, %.1f m/s, gear %d, %.0f rpm, load %.2f, volume %.3f, low-pass %.0f Hz", J.dir.c_str(), own ? " (driven)" : "", double(d), double(sp),
+                       J.snd_gear + 1, double(J.snd_rpm), double(J.snd_load), double(vol), double(hz));
+    }
+}
+
+// Evening: when a car that drives has its lights on. The clock's lantern factor when the day
+// runs (it comes up through the dusk), else the sun's height: on from when the sun is under
+// about 12 degrees.
+bool VulkanEngine::cars_need_lights() const {
+    const float night = env_->night >= 0.0f ? env_->night : 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
+    return night > 0.10f || rt_.sun_pitch_deg < 12.0f;
 }
 
 void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puffs, std::vector<Vertex>& glow, glm::vec3 eye, glm::vec3 R, glm::vec3 U) {
@@ -1042,6 +1252,19 @@ void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puff
         const Vertex q2{ p + a + b, t, { 1.0f, 1.0f } }, q3{ p - a + b, t, { -1.0f, 1.0f } };
         glow.insert(glow.end(), { q0, q1, q2, q0, q2, q3 });
     };
+    // (the NPC engine's cars: the same lamps - head lights when they are on, tail lights, brake lights)
+    for (const NpcCar& nc : npc_cars_) {
+        if (nc.agent < 0 || !nc.car->posed) continue;
+        const JeepState* c = nc.car;
+        const glm::mat4& B = c->st.body;
+        const glm::vec3 f = -glm::normalize(glm::vec3(B[2]));
+        const bool braking = c->braking();
+        for (int s = 0; s < 2; ++s) {
+            if (c->lights_on) flare(glm::vec3(B * glm::vec4(c->head[s], 1.0f)) + f * 0.05f, f, 0.42f, glm::vec3(1.0f, 0.95f, 0.85f) * 2.4f);
+            if (c->lights_on || braking)
+                flare(glm::vec3(B * glm::vec4(c->tail[s], 1.0f)) - f * 0.05f, -f, braking ? 0.30f : 0.20f, glm::vec3(1.0f, 0.06f, 0.04f) * (braking ? 2.6f : 0.9f));
+        }
+    }
     for (const JeepState* c : jeep_all_) {
         if (c->posed) {
             const glm::mat4& B = c->st.body;
@@ -1318,6 +1541,236 @@ void VulkanEngine::jeep_grass_press(glm::vec4 out[4]) const {
         out[2 * k]     = glm::vec4(mid.x, mid.z, f.x, f.y);
         out[2 * k + 1] = glm::vec4(half_w, half_l, glm::clamp(along * 1.5f, 0.0f, 25.0f), 1.0f);
     }
+}
+
+
+// The cars as obstacles for a player on foot (props.cpp, the per-tick collision list). The
+// player collides with axis-aligned boxes only and a car stands at any angle, so each of a
+// car's collision boxes is cut along its length into pieces about as long as it is wide, and
+// each piece's own axis-aligned bound goes in: a stair-stepped outline no more than a hand
+// wider than the car, instead of one bound of the whole car (which at 45 degrees is a square
+// of its length). Not the car this player sits in. Until 2026-11-24 a car was nothing to a
+// walker: one walked through it.
+void VulkanEngine::jeep_player_colliders(std::vector<collision::AABB>& out) const {
+    constexpr float kReach = 24.0f;
+    // (the cars of the NPC engine too: the ones shown)
+    std::vector<const JeepState*> cars;
+    for (size_t i = 0; i < jeep_all_.size(); ++i) {
+        const JeepState& J = *jeep_all_[i];
+        if (!J.loaded || !J.posed) continue;
+        if (J.driving || int(i) == jeep_ride_) continue;            // (the one this player is in)
+        cars.push_back(&J);
+    }
+    for (const NpcCar& c : npc_cars_) if (c.agent >= 0) cars.push_back(c.car);
+    for (const JeepState* jp : cars) {
+        const JeepState& J = *jp;
+        const glm::vec3 c(J.st.body[3]);
+        if (std::abs(c.x - player_.position.x) > kReach || std::abs(c.z - player_.position.z) > kReach) continue;
+        for (const auto& b : J.boxes) {
+            const glm::vec3 h = b.half_extents;
+            const bool along_z = h.z >= h.x;
+            const float len = along_z ? h.z : h.x, wid = along_z ? h.x : h.z;
+            const int n = glm::clamp(int(std::ceil(len / std::max(wid, 0.2f))), 1, 8);
+            const float seg = len / float(n);
+            for (int k = 0; k < n; ++k) {
+                const float off = -len + seg * (2.0f * float(k) + 1.0f);
+                glm::vec3 lc = b.center, lh = h;
+                if (along_z) { lc.z += off; lh.z = seg; } else { lc.x += off; lh.x = seg; }
+                glm::vec3 mn, mx;
+                world_aabb_of_box(J.st.body * glm::translate(glm::mat4(1.0f), lc), lh, mn, mx);
+                out.push_back({ mn, mx });
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The cars of the NPC engine (src/npc; npc_world.cpp steps it). They have no physics: a body
+// matrix on the road and wheels that roll, as another machine's car is shown. There can be
+// thirty of them round the course, so a few cars are made once (copies of the loaded kinds:
+// the same meshes, their own places) and lent each frame to the NPC cars nearest the eye.
+// One that is lent to nobody stands far under the ground.
+// EVERY CAR CAN BE DRIVEN. A car of the NPC engine's that stands (parked in a bay, or at a
+// pump with its people in the shop) and has nobody in it is taken by walking up to it and
+// getting in: the NPC engine lets it go (npc::World::take_car - its people stay behind on
+// foot, and later another car joins the traffic), and the car's model leaves the pool of
+// lent cars and becomes one of the player's own cars, where it stands. The host's only: a
+// client's NPC world is a copy. The taken car is not sent to other players (they have no car
+// of that number) - noted in docs/ARCHITECTURE.md.
+bool VulkanEngine::npc_take_car(float reach) {
+    if (!npc_ || npc_->replica() || npc_cars_.size() <= 4) return false;      // (four stay for the traffic's looks)
+    int best = -1; float bd = reach;
+    for (size_t k = 0; k < npc_cars_.size(); ++k) {
+        const NpcCar& c = npc_cars_[k];
+        if (c.agent < 0 || !c.car->posed || !npc_->can_take_car(c.agent)) continue;
+        const float dd = glm::distance(player_.eye_position(), glm::vec3(c.car->st.body[3]) + glm::vec3(0.0f, 1.0f, 0.0f));
+        if (dd < bd) { bd = dd; best = int(k); }
+    }
+    if (best < 0) return false;
+    // (not when one of the player's own cars is nearer: that one is meant)
+    for (const JeepState* c : jeep_all_)
+        if (c->posed && glm::distance(player_.eye_position(), glm::vec3(c->st.body[3]) + glm::vec3(0.0f, 1.0f, 0.0f)) < bd) return false;
+    JeepState* J = npc_cars_[size_t(best)].car;
+    if (!npc_->take_car(npc_cars_[size_t(best)].agent)) return false;
+    npc_cars_.erase(npc_cars_.begin() + best);
+    J->net_owner = 0; J->net_driven = false; J->snd_running = false; J->lights_on = false;
+    J->door_want[0] = J->door_want[1] = 0.0f; J->door_hold = 0.0f;
+    // (upright where it stands: the lean and dip it was shown with are the NPC engine's)
+    const glm::vec3 p(J->st.body[3]);
+    const glm::vec3 f = -glm::vec3(J->st.body[2]);
+    jeep_park(*J, p, std::atan2(-f.x, -f.z));
+    jeep_all_.push_back(J);
+    log::infof("[jeep] an NPC car (%s) at (%.1f, %.1f, %.1f) is the player's now: %zu cars", J->dir.c_str(), p.x, p.y, p.z, jeep_all_.size());
+    return true;
+}
+
+void VulkanEngine::npc_cars_init() {
+    if (jeep_all_.size() < 2 || std::getenv("VIBE_NO_NPC")) return;
+    constexpr int kCars = 15;
+    for (int k = 0; k < kCars; ++k) {
+        const JeepState& T = *jeep_all_[1 + size_t(k) % std::min<size_t>(3, jeep_all_.size() - 1)];      // sports car, saloon, pickup
+        JeepState* c = new JeepState();
+        c->loaded = true; c->dir = T.dir; c->tune = T.tune;
+        c->head[0] = T.head[0]; c->head[1] = T.head[1]; c->tail[0] = T.tail[0]; c->tail[1] = T.tail[1];
+        c->kind = T.kind; c->painted = T.painted; c->local = T.local;
+        c->hip = T.hip; c->legs = T.legs; c->rim_r = T.rim_r;
+        c->n_body = T.n_body; c->n_wheel = T.n_wheel; c->n_steer = T.n_steer;
+        for (int sd = 0; sd < 2; ++sd) { c->n_door[sd] = T.n_door[sd]; c->door_hinge[sd] = T.door_hinge[sd]; }
+        for (int w = 0; w < 4; ++w) c->wheel_pos[w] = T.wheel_pos[w];
+        c->wheel_radius = T.wheel_radius; c->wheel_width = T.wheel_width;
+        c->seat = T.seat; c->steering_hub = T.steering_hub; c->steering_tilt = T.steering_tilt;
+        c->boxes = T.boxes;
+        c->net_owner = ~0u;                                   // (so that its brake lights work: braking())
+        c->draw_first = jeep_draw_.size();
+        const size_t parts = T.n_body + 4 * T.n_wheel + T.n_steer + T.n_door[0] + T.n_door[1];
+        for (size_t i = 0; i < parts; ++i) { CastleMeshGpu g = jeep_draw_[T.draw_first + i]; jeep_draw_.push_back(g); }
+        NpcCar nc; nc.car = c;
+        npc_cars_.push_back(nc);
+        jeep_park(*c, glm::vec3(0.0f, -20000.0f, 0.0f), 0.0f);
+        c->posed = false;
+    }
+}
+
+void VulkanEngine::npc_cars_place(const std::vector<npc::View>& views, float dt) {
+    if (npc_cars_.empty()) return;
+    const glm::vec3 eye = player_.eye_position();
+    constexpr float kReach = 700.0f;
+    // ---- which NPC cars are shown: those lent a car already (while in reach), then the nearest
+    std::vector<std::pair<float, int>> want;
+    for (size_t i = 0; i < views.size(); ++i)
+        if (views[i].kind == npc::Kind::Car && !views[i].hidden) { const float d = glm::distance(views[i].pos, eye); if (d < kReach) want.push_back({ d, int(i) }); }
+    std::sort(want.begin(), want.end());
+    auto wanted = [&](int agent) { for (const auto& w : want) if (w.second == agent) return true; return false; };
+    for (NpcCar& c : npc_cars_) {
+        if (c.agent >= 0 && !(c.agent < int(views.size()) && wanted(c.agent))) {
+            c.agent = -1;
+            c.car->snd_running = false;
+            jeep_park(*c.car, glm::vec3(0.0f, -20000.0f, 0.0f), 0.0f);
+            c.car->posed = false;
+        }
+    }
+    static const glm::vec3 kPaint[10] = {
+        { 0.55f, 0.56f, 0.58f }, { 0.03f, 0.03f, 0.035f }, { 0.70f, 0.70f, 0.68f }, { 0.36f, 0.02f, 0.02f }, { 0.02f, 0.06f, 0.20f },
+        { 0.10f, 0.11f, 0.12f }, { 0.04f, 0.14f, 0.08f }, { 0.45f, 0.32f, 0.16f }, { 0.30f, 0.33f, 0.37f }, { 0.62f, 0.40f, 0.05f } };
+    for (const auto& w : want) {
+        bool has = false;
+        for (const NpcCar& c : npc_cars_) if (c.agent == w.second) { has = true; break; }
+        if (has) continue;
+        // a free car, of the kind its look asks for if there is one
+        const npc::View& v = views[size_t(w.second)];
+        int pick = -1;
+        for (size_t k = 0; k < npc_cars_.size(); ++k) {
+            if (npc_cars_[k].agent >= 0) continue;
+            if (pick < 0) pick = int(k);
+            if (int(k % 3) == int(v.look % 3)) { pick = int(k); break; }
+        }
+        if (pick < 0) break;                                   // (all lent: the far ones are not shown)
+        NpcCar& c = npc_cars_[size_t(pick)];
+        c.agent = w.second; c.roll = 0.0f; c.pitch = 0.0f; c.steer = 0.0f; c.last = v.pos; c.last_yaw = v.yaw; c.last_speed = v.speed;
+        c.car->posed = false;                                  // (it jumps there: no motion from where it was)
+        const glm::vec3 paint = kPaint[(v.look / 3) % 10];
+        for (size_t i = 0; i < c.car->painted.size(); ++i)
+            if (c.car->painted[i]) { CastleMeshGpu& g = jeep_draw_[c.car->draw_first + i]; g.tint = paint; g.fallback = paint; }
+    }
+    // ---- where they are
+    const bool dark = cars_need_lights();
+    dt = std::max(dt, 1e-4f);
+    for (NpcCar& c : npc_cars_) {
+        if (c.agent < 0) continue;
+        const npc::View& v = views[size_t(c.agent)];
+        JeepState& J = *c.car;
+        // What the body does on its springs, from how the car moves: it lies on the slope it
+        // climbs, leans out of a bend with the sideways pull, squats under power and dips its
+        // nose under the brakes. The front wheels point where the turn says they must.
+        const glm::vec3 d = v.pos - c.last;
+        const float dh = glm::length(glm::vec2(d.x, d.z));
+        const float dir = v.speed < 0.0f ? -1.0f : 1.0f;
+        if (dh > 0.02f && dh < 5.0f) c.pitch += (std::atan2(d.y * dir, dh) - c.pitch) * std::min(1.0f, dt * 5.0f);
+        float turn = v.yaw - c.last_yaw;
+        while (turn > 3.14159265f) turn -= 6.2831853f;
+        while (turn < -3.14159265f) turn += 6.2831853f;
+        const float yaw_rate = turn / dt;
+        const float wheelbase = std::abs(J.wheel_pos[2].z - J.wheel_pos[0].z);
+        const float steer = std::abs(v.speed) > 0.3f ? glm::clamp(-std::atan(yaw_rate * wheelbase / v.speed), -0.6f, 0.6f) : c.steer;
+        c.steer += (steer - c.steer) * std::min(1.0f, dt * 8.0f);
+        c.roll = std::remainder(c.roll - v.speed / std::max(J.wheel_radius, 0.1f) * dt, 6.2831853f);
+        const bool jump = !J.posed;
+        const float accel = jump ? 0.0f : glm::clamp((v.speed - c.last_speed) / dt, -8.0f, 8.0f) * dir;
+        const float lean_want = glm::clamp(v.speed * yaw_rate * 0.011f, -0.07f, 0.07f);
+        const float dip_want = glm::clamp(accel * 0.009f, -0.035f, 0.03f);
+        c.lean += (lean_want - c.lean) * std::min(1.0f, dt * 3.5f);
+        c.dip += (dip_want - c.dip) * std::min(1.0f, dt * 3.0f);
+        if (jump) { c.lean = 0.0f; c.dip = 0.0f; }
+        const PhysicsWorld::VehicleState prev = J.st;
+        // (the wheels stand on the road; the body turns about a line a little above the axles)
+        const glm::mat4 G = glm::translate(glm::mat4(1.0f), v.pos) * glm::rotate(glm::mat4(1.0f), -v.yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                            glm::rotate(glm::mat4(1.0f), c.pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+        const glm::vec3 pivot(0.0f, J.wheel_radius + 0.15f, 0.0f);
+        const glm::mat4 B = G * glm::translate(glm::mat4(1.0f), pivot) * glm::rotate(glm::mat4(1.0f), c.lean, glm::vec3(0.0f, 0.0f, 1.0f)) *
+                            glm::rotate(glm::mat4(1.0f), c.dip, glm::vec3(1.0f, 0.0f, 0.0f)) * glm::translate(glm::mat4(1.0f), -pivot);
+        J.st.body = B;
+        J.st.steer = c.steer;
+        for (int w = 0; w < 4; ++w) J.st.wheel[w] = jeep_wheel_from(J, G, w, c.steer, 0.0f, c.roll);
+        J.lights_on = dark && v.pose == npc::Pose::Drive;
+        J.snd_running = v.pose == npc::Pose::Drive;
+        // (its doors: open while somebody of its people gets in or out by them - shut again for the last half second)
+        J.door_want[0] = J.door_want[1] = 0.0f;
+        for (const npc::View& p : views) {
+            if (p.kind != npc::Kind::Person || int(p.car) != c.agent || (p.act != npc::Act::CarEnter && p.act != npc::Act::CarExit)) continue;
+            if (p.act_t > 0.05f && p.act_t < npc::kActTime[int(p.act)] - 0.55f) J.door_want[p.seat & 1] = 1.0f;
+        }
+        J.brake_in = (accel < -0.8f && std::abs(v.speed) > 0.2f) ? 1.0f : 0.0f;
+        J.body_prev = jump ? B : prev.body;
+        J.posed = true;
+        jeep_place(J, jump ? J.st : prev, dt);
+        c.last = v.pos; c.last_yaw = v.yaw; c.last_speed = v.speed;
+    }
+}
+
+// A seat of the car lent to an NPC car (0 the driver's, 1 beside): where the hips are and the
+// hands go - on the wheel, or on the knees. False when that car is not shown.
+bool VulkanEngine::npc_car_seat(int agent, int seat, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const {
+    for (const NpcCar& c : npc_cars_) {
+        if (c.agent != agent || !c.car->posed) continue;
+        const JeepState& J = *c.car;
+        if (seat == 0) { jeep_seat(J, hip, hand_l, hand_r, legs); return true; }
+        if (seat != 1) return false;
+        const glm::vec3 s(-J.hip.x, J.hip.y, J.hip.z);
+        hip = J.st.body * glm::translate(glm::mat4(1.0f), s);
+        hand_l = glm::vec3(J.st.body * glm::vec4(s + glm::vec3(-0.17f, 0.14f, -0.36f), 1.0f));
+        hand_r = glm::vec3(J.st.body * glm::vec4(s + glm::vec3( 0.17f, 0.14f, -0.36f), 1.0f));
+        legs = J.legs;
+        return true;
+    }
+    return false;
+}
+
+// Where the cars stand (their bodies' origins): the trail in the grass is pressed under them
+// (grass_trail.cpp).
+void VulkanEngine::jeep_positions(std::vector<glm::vec3>& out) const {
+    out.clear();
+    for (const JeepState* c : jeep_all_)
+        if (c->posed) out.push_back(glm::vec3(c->st.body[3]));
 }
 
 }  // namespace vibe

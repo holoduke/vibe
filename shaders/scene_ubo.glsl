@@ -293,7 +293,9 @@ vec3 flashlight_at(vec3 p, out vec3 to_lamp, out float dist) {
     float pat = flashlight_pattern(dot(-to_lamp, scene.flash_dir.xyz));
     if (pat <= 0.0) return vec3(0.0);
     float win = 1.0 - dist / range; win *= win;
-    return scene.flash_col.rgb * (pat * win / (1.0 + 0.02 * dist * dist));
+    // (a long beam - a car's - thins out as slowly as it reaches far: range 95 m is the old law)
+    float fk = 0.02 * min(1.0, (95.0 * 95.0) / (range * range));
+    return scene.flash_col.rgb * (pat * win / (1.0 + fk * dist * dist));
 }
 
 // The flashlight beam in the air: light scattered toward the eye by the
@@ -393,8 +395,8 @@ vec3 lamp_lights_unshadowed(vec3 p, vec3 n) {
         if (li < 1e-3) continue;
         vec3 to = scene.lamp_lights[i].xyz - p;
         float d = length(to);
-        if (d >= 13.0) continue;
-        float fall = 1.0 - d / 13.0; fall *= fall;
+        if (d >= 34.0) continue;
+        float fall = 1.0 - d / 34.0; fall = fall * fall * fall * fall * fall;      // (as bright near the lamp as when it reached 13 m, and a long thin tail)
         sum += vec3(1.0, 0.62, 0.28) * (li * fall * max(0.25 + 0.75 * dot(n, to / max(d, 1e-3)), 0.0));
     }
     return sum;
@@ -445,10 +447,15 @@ float cloud_shadow(vec3 wp) {
     vec3 L = scene.sun_direction.xyz;
     // The map is laid out on the y = 0 plane: slide down the sun ray to it.
     vec2 g = wp.xz - L.xz / max(L.y, 0.10) * wp.y;
-    vec2 uv = g / 6144.0 + 0.5;
-    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
-    float t = textureLod(CLOUD_SHADOW_MAP, uv, 0.0).r;
-    return 1.0 - k * (1.0 - clamp(t, 0.0, 1.0));
+    // The map wraps and covers kCloudShadowExtent round the camera (clouds.comp shadow_map):
+    // a point's texel is its place modulo the extent. Toward the map's edge the shadows fade
+    // out (beyond it the same texels would stand for other ground).
+    const float kCloudShadowExtent = 16384.0;      // m (keep in step: atmosphere.cpp kCloudShadowExtent)
+    vec2 dc = abs(g - scene.camera_pos.xz) / (0.5 * kCloudShadowExtent);
+    float edge = max(dc.x, dc.y);
+    if (edge >= 0.98) return 1.0;
+    float t = textureLod(CLOUD_SHADOW_MAP, fract(g / kCloudShadowExtent), 0.0).r;      // (fract: right whatever the sampler does outside 0..1)
+    return 1.0 - k * (1.0 - smoothstep(0.78, 0.98, edge)) * (1.0 - clamp(t, 0.0, 1.0));
 }
 #endif
 

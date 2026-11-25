@@ -334,6 +334,17 @@ void VulkanEngine::draw_skinned_shadows(VkCommandBuffer cmd, const glm::mat4& li
             if (a.id && a.drawn) draw(a.model, a.palette, a.mesh_lod);
     for (const Corpse& c : corpses_)
         if (c.rag && c.av.drawn) draw(c.av.model, c.av.palette, c.av.mesh_lod);
+    // The NPC engine's people: by distance - to 45 m the mesh they are drawn with one level
+    // down, to 90 m the coarsest, beyond that none (a shadow a few pixels long).
+    {
+        const glm::vec3 eye = current_frame_view_.eye_pos;
+        for (const MpAvatar& a : npc_bodies_) {
+            if (!a.id || !a.drawn) continue;
+            const float d = glm::distance(glm::vec3(a.model[3]), eye);
+            if (d > 90.0f) continue;
+            draw(a.model, a.palette, d < 45.0f ? a.mesh_lod : kBodyLods - 1);
+        }
+    }
 }
 
 } // namespace vibe

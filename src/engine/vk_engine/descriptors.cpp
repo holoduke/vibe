@@ -74,7 +74,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 25 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
+            kTextureCount * 2 + 27 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -94,7 +94,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[41]{};
+    VkDescriptorSetLayoutBinding bindings[43]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -363,11 +363,19 @@ void VulkanEngine::init_descriptors() {
     bindings[39].binding = 39;
     bindings[40] = bindings[31];
     bindings[40].binding = 40;
+    // Bindings 41, 42: the trail round the player - where people and cars have just been
+    // (grass_trail.cpp). 41 is read by the plants' vertex shader, 42 (last frame's) by the
+    // pass that draws the next one.
+    bindings[41] = bindings[31];
+    bindings[41].binding = 41;
+    bindings[41].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[42] = bindings[31];
+    bindings[42].binding = 42;
 
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 41, .pBindings = bindings,
+        .bindingCount = 43, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -485,6 +493,14 @@ void VulkanEngine::update_scene_ubo() {
         if (night <= 0.01f && !office_lights_.empty() && glm::distance(player_.eye_position(), office_pos_) < 110.0f)
             for (size_t k = 0; k < office_lights_.size() && k < 6; ++k)
                 data.lamp_lights[k] = glm::vec4(office_lights_[k], 3.4f);
+        // ... and the service station's, the six nearest the eye.
+        if (night <= 0.01f && !station_lights_.empty() && glm::distance(player_.eye_position(), station_pos_) < 110.0f) {
+            std::vector<std::pair<float, size_t>> st_near;
+            for (size_t k = 0; k < station_lights_.size(); ++k) st_near.push_back({ glm::distance(player_.eye_position(), station_lights_[k]), k });
+            std::sort(st_near.begin(), st_near.end());
+            for (size_t k = 0; k < st_near.size() && k < 6; ++k)
+                data.lamp_lights[k] = glm::vec4(station_lights_[st_near[k].second], 3.4f);
+        }
         // The launch site's own lights, day and night: the lamp in the control house, and the
         // rocket's exhaust while it burns nearby.
         if (launch_site_placed_) {
@@ -566,7 +582,7 @@ void VulkanEngine::update_scene_ubo() {
     // .x: 0 = RT shadows off, 1 = on, 3 = on + Ray Reconstruction quality
     // mode (deferred_lighting.frag: longer / rougher reflections, a second
     // GI bounce on every ray). Shaders test != 0 for "shadows on".
-    data.rt_flags = glm::ivec4(rt_.shadow_enabled ? ((rr_low ? 3 : 1) | (std::clamp(rt_.foliage_ray_mode, 0, 2) << 2) | (rt_.gi_leaf_lite ? 16 : 0)) : 0,   // bits 2-3: foliage ray mode; bit 4: one bounce-light ray on leaves
+    data.rt_flags = glm::ivec4(rt_.shadow_enabled ? ((rr_low ? 3 : 1) | (std::clamp(rt_.foliage_ray_mode, 0, 2) << 2) | (rt_.gi_leaf_lite ? 16 : 0) | (rt_.irradiance_cache && rt_.radiance_cache ? 32 : 0)) : 0,   // bits 2-3: foliage ray mode; bit 4: one bounce-light ray on leaves
                                shadow_samples_eff,
                                ao_samples_eff,
                                static_cast<int>(frame_number_));
@@ -816,7 +832,8 @@ void VulkanEngine::update_scene_ubo() {
     data.grass_side_lit_params = glm::vec4(
         glm::clamp(rt_.grass_side_lit_strength, 0.0f, 1.0f),
         rt_.grass_side_lit_enabled ? 1.0f : 0.0f,
-        static_cast<float>(rt_.spom_mode),
+        // (while the screen-space displacement is on - ssdm.cpp - the walls are drawn flat: it moves the stones)
+        static_cast<float>(ssdm_active() ? 0 : rt_.spom_mode),
         glm::clamp(rt_.grass_edge_softness, 0.0f, 1.0f));   // .w: grass patch edge softness
     // Ocean / water plane params. Time is derived from frame number
     // at a nominal 60 Hz — exact wall-clock isn't needed for waves
@@ -1021,7 +1038,7 @@ void VulkanEngine::update_scene_ubo() {
     if (flashlight_on_) {
         // Four brightness levels: low, medium, high, turbo (more light and more reach).
         const float kPower[4] = { 7.0f, 16.0f, 32.0f, 60.0f };
-        const float kReach[4] = { 30.0f, 42.0f, 56.0f, 75.0f };
+        const float kReach[4] = { 60.0f, 85.0f, 115.0f, 150.0f };
         const int lv = std::clamp(flash_level_, 0, 3);
         data.flash_pos = glm::vec4(flash_pos_ + flash_fwd_ * 0.118f, kReach[lv]);
         data.flash_dir = glm::vec4(flash_fwd_, std::cos(glm::radians(21.0f)));
@@ -1182,7 +1199,8 @@ void VulkanEngine::update_scene_ubo() {
         // .w: the side road's segments (first * 128 + one-past-last; 0 = none).
         data.road_info = glm::vec4(static_cast<float>(n), the_road.half_width,
                                    the_road.shoulder, float(road_spur.x * 128 + road_spur.y));
-        data.road_bbox = glm::vec4(the_road.bb_min, the_road.bb_max);
+        // (the old road's own bounds: its paving is drawn inside them - not the wider ones that take in the lane)
+        data.road_bbox = the_road.with_highways ? glm::vec4(the_road.paved_bb_min, the_road.paved_bb_max) : glm::vec4(the_road.bb_min, the_road.bb_max);
         for (int i = 0; i < n; ++i) data.road_pts[i] = road_gpu[size_t(i)];
     }
 

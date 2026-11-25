@@ -95,6 +95,29 @@ RetargetParams cmu_params() {
     return p;
 }
 
+RetargetParams smplh_params() {
+    RetargetParams p;
+    p.axes = glm::dmat3(-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0);       // +z forward, +x left -> -z forward, +x right
+    p.leg_upper = "L_Knee";             // (the joints whose offsets are the thigh and the shin)
+    p.leg_lower = "L_Ankle";
+    p.map = {
+        { "Hips", "Hips", "", "" }, { "Spine", "Spine1", "", "" }, { "Spine1", "Spine2", "", "" },
+        { "Spine2", "Spine3", "", "" }, { "Neck", "Neck", "", "" }, { "Head", "Head", "", "" },
+    };
+    for (const char* S : { "Left", "Right" }) {
+        const std::string s(S), c(S[0] == 'L' ? "L_" : "R_");
+        p.map.push_back({ s + "Shoulder", c + "Collar", s + "Arm", c + "Shoulder" });
+        p.map.push_back({ s + "Arm", c + "Shoulder", s + "ForeArm", c + "Elbow" });
+        p.map.push_back({ s + "ForeArm", c + "Elbow", s + "Hand", c + "Wrist" });
+        p.map.push_back({ s + "Hand", c + "Wrist", s + "HandMiddle1", "END" });
+        p.map.push_back({ s + "UpLeg", c + "Hip", s + "Leg", c + "Knee" });
+        p.map.push_back({ s + "Leg", c + "Knee", s + "Foot", c + "Ankle" });
+        p.map.push_back({ s + "Foot", c + "Ankle", s + "ToeBase", c + "Foot" });
+        p.map.push_back({ s + "ToeBase", c + "Foot", "TAIL", "END" });
+    }
+    return p;
+}
+
 bool retarget_bvh(const Bvh& bvh, int first, int end,
  const SkeletonDef& skel, const RetargetParams& params, RawClip& out,
                   std::string* why) {

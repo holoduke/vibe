@@ -188,6 +188,9 @@ WorldPropParams VulkanEngine::veg_place_params() const {
             wp.keep_out.push_back(glm::vec3(church_pos_.x + dx, church_pos_.z + 10.0f, 7.0f));    // the graveyard
         }
     for (const auto& l : lamp_lights_) wp.keep_out.push_back(glm::vec3(l.x, l.z, 2.5f));
+    // (the castle lane's car park, and the banks of its terrace: terrain.h kCastlePark)
+    for (float z = kCastlePark[1] - 2.0f; z <= kCastlePark[3] + 2.1f; z += 6.5f)
+        for (float x = kCastlePark[0] - 2.0f; x <= kCastlePark[2] + 2.1f; x += 6.0f) wp.keep_out.push_back(glm::vec3(x, z, 7.5f));
     if (bridge_placed_)                              // nothing grows through the bridge or over its ends
         for (float t = -0.08f; t <= 1.081f; t += 0.04f) {
             const glm::vec3 p = glm::mix(bridge_a_, bridge_b_, t);
@@ -353,6 +356,7 @@ void VulkanEngine::build_scatter_from(const Heightmap& hm) {
     sp.rock_band_h = rt_.terrain_h_dirt_rock_start;
     sp.snow_band_h = rt_.terrain_h_rock_snow_start;
     sp.road = &castle_road_;
+    sp.keep_rects.push_back(glm::vec4(kCastlePark[0] - 1.0f, kCastlePark[1] - 1.0f, kCastlePark[2] + 4.0f, kCastlePark[3] + 1.0f));      // the castle lane's car park
     // (also no tall tufts / flowers between the graves)
     if (bridge_placed_)                              // no tufts, ferns or flowers up through the stone bridge
         for (float t = -0.06f; t <= 1.061f; t += 0.03f) {

@@ -281,6 +281,7 @@ void VulkanEngine::pose_characters_for_frame() {
     if (flashlight_on_) flash_pos_ = current_frame_view_.eye_pos + flash_off_;   // ride on the interpolated camera
     update_player_body(last_frame_dt_);
     mp_pose_avatars(last_frame_dt_);       // the other players (multiplayer)
+    npc_tick(last_frame_dt_);              // the station's people and the traffic (npc_world.cpp)
     corpses_update(last_frame_dt_);        // the fallen (ragdoll.cpp)
 }
 
@@ -580,6 +581,7 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     VkClearValue clear_depth{};
     clear_depth.depthStencil.depth = 1.0f;
     wm_cache_bake(frame.command_buffer);        // the world's slow fields, when the camera has moved on (wm_cache.cpp)
+    grass_trail_update(frame.command_buffer);   // where people and cars have just been, for the plants (grass_trail.cpp)
     // ---------- Pass 0.45: the terrain's low-resolution march ("march pre-pass") ----------
     // One ray per block of pixels finds how far it can go before the ground comes near;
     // the terrain pass - the full-resolution one in the world pass, or the low-resolution
@@ -1180,8 +1182,10 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
     // here, before the upscaler - exactly as the sky's clouds do in the sky fill - so
     // they are the same clouds, as sharp and as steady. (Pasted in after the upscaler
     // they were the raw low-resolution buffer: blocks, or a blur to hide the blocks.)
+    // (From below the layer as well: a mountain that stands above the cloud base has cloud in
+    //  front of it. The pass discards every pixel clouds.comp left empty.)
     if (clouds_over_pipeline_ != VK_NULL_HANDLE && rt_.clouds_enabled && rt_.sky_mode == 1 && atmo_->pipeline &&
-        current_frame_view_.eye_pos.y > glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f)) {
+        rt_.cloud_coverage > 0.001f) {
         VkCommandBuffer cmd = frame.command_buffer;
         vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);

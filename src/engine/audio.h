@@ -96,6 +96,19 @@ public:
     void     stop_voice(uint32_t h, float fade_s);
     bool     voice_playing(uint32_t h) const;
 
+    // ENGINES (a car's sound). A set is a list of loops recorded at steady engine speeds, each
+    // twice: under load and coasting (assets/sounds/engines/<name>.txt: `rpm on.wav off.wav`
+    // a line - rendered from an engine simulation by C:/Users/.../engine-sim/vibe, see
+    // docs/ARCHITECTURE.md "Car sound"). A voice plays the two loops either side of the
+    // engine's speed, each pitched to it, cross-faded by speed and by load, through its own
+    // low-pass (the caller's: distance, a cabin). Panned by position, Doppler from the two
+    // velocities, no distance law of its own (the caller sets the volume).
+    int      engine_set_load(std::string_view list_file);        // -1: not there
+    uint32_t engine_start(int set);                              // 0: failed
+    void     engine_update(uint32_t h, glm::vec3 pos, glm::vec3 vel, float rpm, float load, float volume, float lpf_hz, bool simple = false);   // simple: one loop only (a car far off)
+    void     engine_stop(uint32_t h);
+    void     set_listener_velocity(glm::vec3 v);
+
     // Master volume (0..1). Persisted via settings.cpp.
     void set_master_volume(float v);
 

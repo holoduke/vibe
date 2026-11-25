@@ -200,6 +200,12 @@
     // displacement as cavity darkening. Two scales - a ~2 m tile and a
     // ~0.5 m one that takes over right under the camera.
     vec3 rm_det_tint = vec3(1.0);
+    // A steep face is ROCK: its colour is the scanned rock itself, laid on the wall (not the
+    // flat palette with the scan as a tint - that palette is worked out from the ground plan,
+    // and on a face that stands up it smeared into streaks and blotches of moss). Beds run
+    // across it, level; it is darker in its clefts and paler where it weathers.
+    float rm_cliff = 0.0;
+    vec3  rm_cliff_alb = vec3(0.0);
     {
         // The ground sets carry on into the distance. A photo tiled at one size reads as a grid
         // as soon as a dozen repeats are in view, and is gone (averaged out by the mips) a little
@@ -237,7 +243,7 @@
             vec3 mS = max(textureLod(u_albedo[kSoil], vec2(0.5), 12.0).rgb, vec3(0.02));
             vec3 mR = max(textureLod(u_albedo[kRock], vec2(0.5), 12.0).rgb, vec3(0.02));
             vec4 nD = vec4(0.0);
-            vec3 aD = vec3(0.0);
+            vec3 aD = vec3(0.0), aK = vec3(0.0);
             for (int b = 0; b < 2; ++b) {
                 float sc = b == 0 ? sA : sA * 0.25, wb = b == 0 ? 1.0 - bw : bw;
                 if (wb < 0.004) continue;
@@ -258,6 +264,7 @@
                     }
                     aR /= mR;
                 }
+                aK += aR * wb;
                 nD += mix(nS, nR, rockw) * wb;
                 aD += mix(aS, aR, rockw) * wb;
             }
@@ -271,6 +278,19 @@
                 nD.xy = mix(nD.xy, (nD.xy - 0.5) + (nF.xy - 0.5) * 1.2 + 0.5, fw * (1.0 - rockw));
                 nD.a  = mix(nD.a, nD.a * (0.5 + nF.a), fw * (1.0 - rockw));
                 aD = mix(aD, aD * aF, fw * (1.0 - rockw) * 0.8);
+            }
+            {
+                float steep = smoothstep(0.56, 0.78, 1.0 - nor.y);
+                if (steep > 0.01) {
+                    // beds: level bands a metre or two thick, their line wandering along the face
+                    float along = dot(pos.xz, vec2(0.071, 0.053));
+                    float bed = pos.y * 0.42 + 1.7 * tile_noise2(pos.xz, 0.021, vec2(3.0)) + 0.35 * sin(along);
+                    float bands = mix(0.80, 1.14, smoothstep(0.25, 0.75, fract(bed))) * mix(0.90, 1.08, fract(bed * 3.1 + 0.37));
+                    float patchy = mix(0.82, 1.16, tile_noise2(pos.xz + pos.y * 0.6, 0.045, vec2(9.0)));
+                    vec3  tone = mix(vec3(0.150, 0.140, 0.128), vec3(0.205, 0.188, 0.165), tile_noise2(pos.xz - pos.y * 0.4, 0.011, vec2(1.0)));
+                    rm_cliff_alb = tone * clamp(aK, vec3(0.45), vec3(1.9)) * bands * patchy;
+                    rm_cliff = steep * dw;
+                }
             }
             vec3 dn = vec3((nD.xy * 2.0 - 1.0) * mix(1.35, 0.95, smoothstep(80.0, 600.0, t)), 1.0);     // (the big far tiles: a little flatter)
             vec3 dT = normalize(vec3(1.0, 0.0, 0.0) - nor * nor.x);
@@ -328,7 +348,7 @@
     }
     // A highway (engine/highway.h): asphalt to about 5.5 m from the centre line, gravel under
     // its edge and out to 8 m. The surface's relief comes from the scans' normal maps.
-    float hw_pave = 0.0, hw_verge = 0.0, hw_d = 0.0, hw_s = 0.0, hw_lod = 0.0, hw_hgt = 0.5, hw_gloss = 0.0;
+    float hw_pave = 0.0, hw_verge = 0.0, hw_d = 0.0, hw_s = 0.0, hw_lod = 0.0, hw_hgt = 0.5, hw_gloss = 0.0, hw_wk = 1.0;
     vec2  hw_uv = vec2(0.0);
     if (rm_hw_in(pos.xz)) {
         hw_d = rm_hw_dh(pos.xz).x;
@@ -340,6 +360,7 @@
         hw_verge = 1.0 - smoothstep(6.8, 8.6, ad + (tile_noise2(pos.xz, 0.9, vec2(0.0)) - 0.5) * 1.6);
         if (hw_pave + hw_verge > 0.001) {
             hw_s = rm_hw_s(pos.xz);
+            hw_wk = rm_hw_width(pos.xz);
             float fp = t * 2.0 / max(scene.viewport.y, 1.0);
             hw_uv = pos.xz / TILE_CELL(2.6);
             hw_lod = log2(max(fp / TILE_CELL(2.6) * float(textureSize(u_albedo[kRmMatAsphalt], 0).x), 1.0));

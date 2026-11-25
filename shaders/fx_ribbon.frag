@@ -117,6 +117,17 @@ void main() {
         vec3 lit = vec3(0.95, 0.97, 1.0) * (sun * 0.20 + scene.sky_color.rgb * 0.42 + 0.02) * vTint.y;
         a = clamp(a * inten, 0.0, 1.0);
         outColor = vec4(lit * a, a);
+    } else if (kind == 7) {
+        // Blood (npc_world.cpp; uv in [-1,1]^2): a drop, a stain on the ground or a thin red
+        // mist - a soft disc with a ragged edge. vTint = (alpha, brightness, seed).
+        float r2 = dot(vUv, vUv);
+        if (r2 > 1.0) discard;
+        float n = vnoise(vec3(vUv * 2.3, vTint.z)) * 0.6 + vnoise(vec3(vUv * 6.1, vTint.z + 3.0)) * 0.4;
+        float a = vTint.x * (1.0 - smoothstep(0.30, 1.0, r2 + (n - 0.5) * 0.7));
+        vec3 sun = scene.sun_color.rgb * scene.sun_color.a;
+        vec3 lit = vec3(0.34, 0.008, 0.006) * (sun * 0.55 + scene.sky_color.rgb * 0.45 + 0.03) * vTint.y;
+        a = clamp(a * inten, 0.0, 1.0);
+        outColor = vec4(lit * a, a);
     } else if (kind == 3) {
         // Cloth flag: flat normal from screen derivatives, two-sided
         // Lambert + sun shining THROUGH the cloth when back-lit (thin

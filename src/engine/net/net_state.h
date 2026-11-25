@@ -14,7 +14,7 @@
 
 namespace vibe::net {
 
-constexpr uint8_t  kProtocolVersion = 4;       // 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in
+constexpr uint8_t  kProtocolVersion = 6;       // 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in. 5: the NPC world (kMsgNpc). 6: its wire format 4 (styles, runners)
 constexpr uint32_t kInterpDelayMs = 100;       // remote players are shown at least this far in the past
 constexpr uint32_t kMaxInterpDelayMs = 500;    // ... and at most this far, however slow the link
 constexpr uint32_t kMaxExtrapolateMs = 250;    // nothing newer: carry on along the last velocity this long at most

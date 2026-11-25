@@ -1104,6 +1104,10 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
             PushConstants ppc = spc;
             ppc.grass_params = glm::vec4(std::max(45.0f, rt_.grass_distance * 0.9f), 1.0f,
                                          anim_time_, rt_.terrain_raymarch_enabled ? 1.0f : 0.0f);
+            // Grass tufts (scatter.vert): the trail window they lean away from, and the wind
+            // (direction x, z; strength 0..1).
+            ppc.emissive = grass_trail_window();
+            ppc.color = glm::vec4(0.871f, 0.490f, glm::clamp(rt_.grass_wind * 12.5f, 0.0f, 1.0f), 0.0f);      // (the grass wind setting's default 0.04 = half strength)
             vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages,
                                0, sizeof(PushConstants), &ppc);
             for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp) {
@@ -1296,6 +1300,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // glm::inverse(fv.view) here -- a full 4x4 mat inverse is ~80 fmuls).
     prof_mark(cmd, "w_grass_rm");
     draw_remote_players(cmd, vp);          // multiplayer: the other players, with their guns
+    draw_npc_bodies(cmd, vp);              // the station's people (npc_world.cpp)
     draw_corpses(cmd, vp);
     draw_viewmodel(cmd, vp, fv.inv_view);
     prof_mark(cmd, "w_viewmodel");

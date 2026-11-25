@@ -109,10 +109,20 @@ float wm_river(float h, vec2 wp, float wl) {
     }
     if (d2 > 120.0 * 120.0) return h;
     float e = max(sqrt(d2) - (7.0 + 9.0 * smoothstep(1450.0, 1900.0, wp.x) + 4.0 * pool), 0.0);      // (wider toward its mouth)
-    float cap = bed + mix(e * 0.45 + max(e - 8.0, 0.0) * 0.35 + max(e - 40.0, 0.0) * 0.5,
+    // (The valley's sides were 0.8 to 40 m out and 1.3 beyond, met by the land in a 4 m
+    //  rounding: where the land is high - at the mouth, along the lower river - that left a
+    //  rock ledge a few metres wide running along the valley's rim. Now one even slope and a
+    //  12 m rounding: a valley's shoulder.)
+    // (The cut ends 120 m from the channel. Whatever stood higher than the valley's side
+    //  there was sliced off along that line - a wall in the mountain, with the uncut land
+    //  overhanging it. From 70 m out the side now climbs ever faster, so that by 120 m it is
+    //  above any mountain and the cut has run out into the land as it is.)
+    float rim = max(e - 70.0, 0.0);
+    float cap = bed + mix(e * 0.45 + max(e - 8.0, 0.0) * 0.35 + rim * rim * 0.15,
                           min(e, 6.0) * 0.45 + max(e - 6.0, 0.0) * 1.3, pool);
-    float t = clamp(0.5 + 0.125 * (cap - h), 0.0, 1.0);                                  // smooth minimum, 4 m
-    return mix(cap, h, t) - 4.0 * t * (1.0 - t);
+    float kr = mix(12.0, 4.0, pool);                                                      // smooth minimum: 12 m (4 at the pool)
+    float t = clamp(0.5 + 0.5 * (cap - h) / kr, 0.0, 1.0);
+    return mix(cap, h, t) - kr * t * (1.0 - t);
 }
 
 // Ground height (m) at world position wp (m from home) for the landscape
@@ -148,7 +158,24 @@ float wm_pad(float h, vec2 wp) {
     if (r2 > 270.0 * 270.0) return h;
     return mix(wm_pad_h, h, smoothstep(150.0, 270.0, sqrt(r2)));
 }
-float wm_height(float a, vec2 wp, float wl) { return wm_river(wm_pad(wm_height_land(a, wp, wl), wp), wp, wl); }
+// The service station on the coast highway north of the launch site: a level rectangle
+// (src/engine/terrain.cpp wm::station and kStation* in terrain.h - keep in step). Toward the
+// road, on its east side, the ground comes back to the natural slope within a few metres - the
+// road's own shelf takes over there, and the ground under the road's centre line (which the
+// road's height is taken from) is not touched.
+const vec4  wm_st_rect = vec4(1586.0, 507.0, 1643.0, 583.0);       // x0, z0, x1, z1
+const float wm_st_h = 41.825;
+float wm_st_out(vec2 wp) {            // 0 on the rectangle .. 1 where the natural ground is back
+    vec2 c = 0.5 * (wm_st_rect.xy + wm_st_rect.zw), e = 0.5 * (wm_st_rect.zw - wm_st_rect.xy);
+    vec2 q = max(abs(wp - c) - e, vec2(0.0));
+    float dx = q.x / (wp.x > c.x ? 5.0 : 22.0), dz = q.y / 22.0;
+    return min(sqrt(dx * dx + dz * dz), 1.0);
+}
+float wm_station(float h, vec2 wp) {
+    if (abs(wp.x - 1614.5) > 51.0 || abs(wp.y - 545.0) > 61.0) return h;
+    return mix(wm_st_h, h, smoothstep(0.0, 1.0, wm_st_out(wp)));
+}
+float wm_height(float a, vec2 wp, float wl) { return wm_river(wm_station(wm_pad(wm_height_land(a, wp, wl), wp), wp), wp, wl); }
 
 // Where woods grow (0 = open ground, 1 = closed forest) at world position wp (m), for ground
 // height h, the ground normal's y, and the water level. One rule for the whole world: the far
@@ -167,6 +194,7 @@ float wm_forest(vec2 wp, float h, float ny, float wl) {
     float m = WM_NOISE(wp * 0.0011 + 3.7) * 0.55 + WM_NOISE(wp * 0.0043 + 17.0) * 0.30 + WM_NOISE(wp * 0.017 + 5.0) * 0.15;
     m += 0.10 * (1.0 - smoothstep(4.0, 25.0, alt));
     m += (WM_NOISE(wp * 0.00013 + 41.0) - 0.5) * 0.35;
+    if (abs(wp.x - 1614.5) < 51.0 && abs(wp.y - 545.0) < 61.0) band *= smoothstep(0.3, 1.0, wm_st_out(wp));      // (nor on the service station's plot)
     return band * smoothstep(0.37, 0.53, m) * smoothstep(150.0, 230.0, distance(wp, wm_pad_c));      // (no woods at the launch site)
 }
 

@@ -111,6 +111,51 @@ const Mat kMats[] = {
     { "o_light",     -1, { 1.0f, 0.95f, 0.84f }, 1.0f, { 2.8f, 2.55f, 2.1f }, true },
     { "o_screen",    36, { 1.25f, 1.25f, 1.25f }, 1.0f, { 0.0f, 0.0f, 0.0f }, true },        // (pictures: slot 36, an atlas - cube.frag)
     { "o_screen_b",  -1, { 1.0f, 0.62f, 0.20f }, 1.0f, { 0.95f, 0.50f, 0.10f }, true },
+    // The service station (tools/gasstation/make_gasstation.py). Texture slots 37..42.
+    { "g_brick",     37, { 1.05f, 1.00f, 0.97f }, 1.6f, {}, false },
+    { "g_asphalt",   38, { 0.85f, 0.85f, 0.87f }, 3.0f, {}, false },
+    { "g_checker",   39, { 1.05f, 1.05f, 1.05f }, 2.4f, { 0.05f, 0.05f, 0.05f }, false },
+    { "g_clad",      40, { 1.05f, 1.04f, 1.00f }, 2.0f, {}, false },
+    { "g_paver",     41, { 1.00f, 1.00f, 1.00f }, 1.8f, {}, false },
+    { "g_subway",    42, { 1.05f, 1.05f, 1.05f }, 1.2f, { 0.10f, 0.10f, 0.10f }, false },
+    { "g_kerb",      -1, { 0.52f, 0.52f, 0.50f }, 1.0f, {}, false },
+    { "g_conc",      -1, { 0.46f, 0.46f, 0.44f }, 1.0f, {}, false },
+    { "g_line",      -1, { 0.82f, 0.82f, 0.80f }, 1.0f, {}, false },
+    { "g_steel",     -1, { 0.050f, 0.052f, 0.058f }, 1.0f, {}, false },
+    { "g_metal",     -2, { 0.52f, 0.54f, 0.56f }, 1.0f, {}, false },
+    { "g_chrome",    -2, { 0.82f, 0.83f, 0.85f }, 1.0f, {}, false },
+    { "g_roof",      -2, { 0.22f, 0.23f, 0.25f }, 1.0f, {}, false },
+    { "g_white",     -1, { 0.86f, 0.86f, 0.84f }, 1.0f, {}, false },
+    { "g_black",     -1, { 0.018f, 0.018f, 0.020f }, 1.0f, {}, false },
+    { "g_red",       -1, { 0.62f, 0.035f, 0.030f }, 1.0f, {}, false },
+    { "g_yellow",    -1, { 0.86f, 0.62f, 0.03f }, 1.0f, {}, false },
+    { "g_wall",      -1, { 0.74f, 0.73f, 0.70f }, 1.0f, { 0.20f, 0.195f, 0.18f }, false },
+    { "g_ceiling",   -1, { 0.82f, 0.82f, 0.80f }, 1.0f, { 0.22f, 0.215f, 0.20f }, false },
+    { "g_door",      -1, { 0.16f, 0.20f, 0.24f }, 1.0f, {}, false },
+    { "g_table",     -1, { 0.78f, 0.76f, 0.70f }, 1.0f, { 0.04f, 0.04f, 0.035f }, false },
+    { "g_seat",      -1, { 0.60f, 0.045f, 0.040f }, 1.0f, { 0.035f, 0.003f, 0.003f }, false },
+    { "g_wood",      26, { 0.95f, 0.90f, 0.82f }, 1.6f, {}, false },
+    { "g_soil",      -1, { 0.050f, 0.038f, 0.028f }, 1.0f, {}, false },
+    { "g_plant",     -1, { 0.075f, 0.23f, 0.060f }, 1.0f, {}, false },
+    { "g_plant_d",   -1, { 0.040f, 0.135f, 0.045f }, 1.0f, {}, false },
+    { "g_bun",       -1, { 0.62f, 0.40f, 0.16f }, 1.0f, {}, false },
+    { "g_glass",     -3, { 0.055f, 0.085f, 0.095f }, 1.0f, {}, false },
+    { "g_p_red",     -1, { 0.66f, 0.05f, 0.04f }, 1.0f, { 0.02f, 0.0f, 0.0f }, false },
+    { "g_p_yellow",  -1, { 0.88f, 0.70f, 0.06f }, 1.0f, { 0.02f, 0.016f, 0.0f }, false },
+    { "g_p_blue",    -1, { 0.05f, 0.18f, 0.58f }, 1.0f, { 0.0f, 0.004f, 0.016f }, false },
+    { "g_p_green",   -1, { 0.06f, 0.42f, 0.12f }, 1.0f, { 0.0f, 0.01f, 0.002f }, false },
+    { "g_p_orange",  -1, { 0.86f, 0.32f, 0.04f }, 1.0f, { 0.02f, 0.008f, 0.0f }, false },
+    { "g_p_purple",  -1, { 0.34f, 0.10f, 0.46f }, 1.0f, { 0.008f, 0.002f, 0.012f }, false },
+    { "g_p_brown",   -1, { 0.20f, 0.10f, 0.045f }, 1.0f, {}, false },
+    { "g_light",     -1, { 1.0f, 0.97f, 0.90f }, 1.0f, { 2.6f, 2.5f, 2.25f }, true },
+    { "g_fridge",    -1, { 0.92f, 0.95f, 1.0f }, 1.0f, { 0.55f, 0.60f, 0.66f }, false },
+    { "g_light_c",   -1, { 0.9f, 0.97f, 1.0f }, 1.0f, { 1.9f, 2.1f, 2.3f }, true },
+    { "g_lcd",       -1, { 0.5f, 0.8f, 1.0f }, 1.0f, { 0.28f, 0.55f, 0.75f }, true },
+    { "g_neon_r",    -1, { 1.0f, 0.12f, 0.08f }, 1.0f, { 3.2f, 0.22f, 0.12f }, true },
+    { "g_neon_w",    -1, { 1.0f, 0.98f, 0.94f }, 1.0f, { 2.4f, 2.35f, 2.2f }, true },
+    { "g_neon_b",    -1, { 0.2f, 0.5f, 1.0f }, 1.0f, { 0.25f, 0.9f, 3.0f }, true },
+    { "g_neon_g",    -1, { 0.2f, 1.0f, 0.3f }, 1.0f, { 0.2f, 2.6f, 0.4f }, true },
+    { "g_neon_y",    -1, { 1.0f, 0.85f, 0.2f }, 1.0f, { 2.8f, 2.1f, 0.2f }, true },
 };
 const Mat* find_mat(const std::string& n) {
     for (const auto& m : kMats) if (n == m.name) return &m;
@@ -124,7 +169,7 @@ void dress(game::LevelMesh& m, const std::string& name, glm::vec3 base) {
     m.tex_albedo = m.tex_normal = mt->tex;
     m.tint = mt->tint; m.fallback = mt->tex >= 0 ? mt->tint * 0.5f : mt->tint;
     m.emissive = mt->emissive; m.full_emissive = mt->full_emissive;
-    m.lit_by_day = mt->full_emissive && name.rfind("o_", 0) == 0;       // (the pavilion's screens and room lights)
+    m.lit_by_day = mt->full_emissive && (name.rfind("o_", 0) == 0 || name.rfind("g_", 0) == 0);       // (the pavilion's and the station's screens, signs and room lights)
     m.relief = 0.0f;
     m.bmin = glm::vec3(1e9f); m.bmax = glm::vec3(-1e9f);
     for (auto& v : m.verts) {
@@ -215,8 +260,11 @@ void VulkanEngine::place_launch_site() {
     place_house(world_, hp);
 
     place_office();
+    place_gasstation();
     place_parking();
     place_bridges();
+    place_lane_rocks();
+    place_castle_parking();
 
     launch_pad_ = pad;
     launch_house_ = hp;
@@ -358,6 +406,105 @@ void VulkanEngine::place_parking() {
     finish(asphalt); finish(paint); finish(kerb); finish(steel); finish(lamp);
 }
 
+// The car park at the castle lane's end (terrain.h kCastlePark; its terrace: world.cpp): 26 x
+// 22 m of asphalt on the knoll east of the stone bridge's far end - a row of bays along each
+// long side, the aisle between, a kerb all round but for the gate in the north side where the
+// lane comes in, two lamps.
+void VulkanEngine::place_castle_parking() {
+    glm::vec3 le, ld;
+    if (!highway::lane_end(le, ld)) return;
+    const float X0 = kCastlePark[0], Z0 = kCastlePark[1], X1 = kCastlePark[2], Z1 = kCastlePark[3];
+    const float T = le.y + 0.03f;                              // (the terrace lies 45 cm under this: world.cpp)
+    auto start = [](int tex, glm::vec3 tint, glm::vec4 emissive = glm::vec4(0.0f)) {
+        game::LevelMesh m;
+        m.tex_albedo = m.tex_normal = tex;
+        m.tint = tint; m.fallback = tex >= 0 ? tint * 0.25f : tint;
+        m.relief = 0.0f;
+        m.emissive = glm::vec3(emissive); m.full_emissive = emissive.a > 0.5f;
+        return m;
+    };
+    auto quad = [](game::LevelMesh& m, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, float tile) {
+        const glm::vec3 n = glm::normalize(glm::cross(b - a, d - a));
+        const uint32_t i0 = uint32_t(m.verts.size());
+        for (const glm::vec3& p : { a, b, c, d }) {
+            const glm::vec2 uv = std::abs(n.y) > 0.6f ? glm::vec2(p.x, p.z) : std::abs(n.x) > 0.6f ? glm::vec2(p.z, p.y) : glm::vec2(p.x, p.y);
+            m.verts.push_back({ p, n, uv.x / tile, uv.y / tile });
+        }
+        m.idx.insert(m.idx.end(), { i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3 });
+    };
+    auto box = [&](game::LevelMesh& m, glm::vec3 lo, glm::vec3 hi, float tile, bool bottom = false) {
+        quad(m, { lo.x, hi.y, lo.z }, { lo.x, hi.y, hi.z }, { hi.x, hi.y, hi.z }, { hi.x, hi.y, lo.z }, tile);
+        quad(m, { lo.x, lo.y, hi.z }, { hi.x, lo.y, hi.z }, { hi.x, hi.y, hi.z }, { lo.x, hi.y, hi.z }, tile);
+        quad(m, { hi.x, lo.y, lo.z }, { lo.x, lo.y, lo.z }, { lo.x, hi.y, lo.z }, { hi.x, hi.y, lo.z }, tile);
+        quad(m, { hi.x, lo.y, hi.z }, { hi.x, lo.y, lo.z }, { hi.x, hi.y, lo.z }, { hi.x, hi.y, hi.z }, tile);
+        quad(m, { lo.x, lo.y, lo.z }, { lo.x, lo.y, hi.z }, { lo.x, hi.y, hi.z }, { lo.x, hi.y, lo.z }, tile);
+        if (bottom) quad(m, { lo.x, lo.y, lo.z }, { hi.x, lo.y, lo.z }, { hi.x, lo.y, hi.z }, { lo.x, lo.y, hi.z }, tile);
+    };
+    auto finish = [&](game::LevelMesh& m) {
+        if (m.idx.empty()) return;
+        m.bmin = glm::vec3(1e9f); m.bmax = glm::vec3(-1e9f);
+        for (const auto& v : m.verts) { m.bmin = glm::min(m.bmin, v.p); m.bmax = glm::max(m.bmax, v.p); }
+        world_.meshes.push_back(std::move(m));
+    };
+    game::LevelMesh asphalt = start(kTexAsphalt, glm::vec3(0.92f));
+    game::LevelMesh paint = start(-1, glm::vec3(0.80f, 0.80f, 0.77f));
+    game::LevelMesh kerb = start(24, glm::vec3(1.0f));
+    game::LevelMesh steel = start(-5, glm::vec3(0.30f, 0.31f, 0.33f));
+    game::LevelMesh lamp = start(-1, glm::vec3(1.0f, 0.96f, 0.86f), glm::vec4(2.6f, 2.4f, 2.0f, 1.0f));
+    game::LevelMesh sign = start(-1, glm::vec3(0.04f, 0.16f, 0.55f));
+
+    // -- the slab, and the apron where the lane comes in through the gate (in the east side) --
+    const float gz0 = le.z - 3.4f, gz1 = le.z + 3.4f;          // the gate
+    box(asphalt, { X0, T - 3.0f, Z0 }, { X1, T, Z1 }, 3.0f);
+    box(asphalt, { X1, T - 3.0f, gz0 }, { X1 + 3.0f, T, gz1 }, 3.0f);
+    world_.aabbs.push_back({ glm::vec3(X0, T - 3.0f, Z0), glm::vec3(X1, T - 0.06f, Z1) });       // (its top under the ground's: nothing to walk into at its edge)
+    home_grass_cuts_.push_back(glm::vec4(X0 - 0.8f, Z0 - 0.8f, X1 + 3.5f, Z1 + 0.8f));
+    drive_pads_.push_back({ X0, Z0, X1, Z1, T, T });
+    drive_pads_.push_back({ X1, gz0, X1 + 3.0f, gz1, T, T });
+    // -- bays: a row along each long side (north and south), nose to the kerb; the aisle between --
+    const float bay_w = 2.7f, bay_d = 5.2f, ln = 0.12f, py = T + 0.03f;
+    {
+        const int n = int((X1 - X0 - 1.0f) / bay_w);
+        const float bx0 = 0.5f * (X0 + X1) - 0.5f * float(n) * bay_w;
+        for (int row = 0; row < 2; ++row) {
+            const float z0 = row ? Z1 - 0.5f - bay_d : Z0 + 0.5f, z1 = z0 + bay_d, head = row ? z1 : z0;
+            for (int k = 0; k <= n; ++k) box(paint, { bx0 + float(k) * bay_w - 0.5f * ln, T, z0 }, { bx0 + float(k) * bay_w + 0.5f * ln, py, z1 }, 1.0f);
+            box(paint, { bx0, T, head - 0.5f * ln }, { bx0 + float(n) * bay_w, py, head + 0.5f * ln }, 1.0f);
+        }
+    }
+    // -- the kerb: all round, open at the gate --
+    const float kw = 0.24f, kh = 0.14f;
+    auto kerb_run = [&](glm::vec3 lo, glm::vec3 hi) {
+        box(kerb, lo, hi, 4.0f);
+        world_.aabbs.push_back({ lo, hi });
+    };
+    kerb_run({ X0 - kw, T - 0.4f, Z1 }, { X1 + kw, T + kh, Z1 + kw });
+    kerb_run({ X0 - kw, T - 0.4f, Z0 - kw }, { X1 + kw, T + kh, Z0 });
+    kerb_run({ X0 - kw, T - 0.4f, Z0 }, { X0, T + kh, Z1 });
+    kerb_run({ X1, T - 0.4f, Z0 }, { X1 + kw, T + kh, gz0 });
+    kerb_run({ X1, T - 0.4f, gz1 }, { X1 + kw, T + kh, Z1 });
+    // -- two lamps on the south side, and a "P" board by the gate --
+    for (const glm::vec2& lp : { glm::vec2(X0 + 6.5f, Z1 + 0.12f), glm::vec2(X1 - 6.5f, Z1 + 0.12f) }) {
+        box(steel, { lp.x - 0.07f, T, lp.y - 0.07f }, { lp.x + 0.07f, T + 6.0f, lp.y + 0.07f }, 1.0f);
+        box(steel, { lp.x - 0.09f, T + 5.9f, lp.y - 1.3f }, { lp.x + 0.09f, T + 6.0f, lp.y + 0.07f }, 1.0f, true);
+        box(lamp, { lp.x - 0.20f, T + 5.84f, lp.y - 1.3f }, { lp.x + 0.20f, T + 5.9f, lp.y - 0.7f }, 1.0f, true);
+        lamp_lights_.push_back(glm::vec3(lp.x, T + 5.6f, lp.y - 1.0f));
+        world_.aabbs.push_back({ glm::vec3(lp.x - 0.1f, T, lp.y - 0.1f), glm::vec3(lp.x + 0.1f, T + 6.0f, lp.y + 0.1f) });
+    }
+    {   // (the board faces east, toward who comes up the lane: +z is on the reader's right)
+        const float sx = X1 + 0.5f, sz = gz1 + 1.0f;
+        box(steel, { sx - 0.04f, T, sz - 0.04f }, { sx + 0.04f, T + 2.6f, sz + 0.04f }, 1.0f);
+        box(sign, { sx + 0.04f, T + 1.9f, sz - 0.35f }, { sx + 0.06f, T + 2.6f, sz + 0.35f }, 1.0f, true);
+        box(paint, { sx + 0.06f, T + 2.0f, sz + 0.08f }, { sx + 0.075f, T + 2.5f, sz + 0.16f }, 1.0f, true);
+        box(paint, { sx + 0.06f, T + 2.42f, sz - 0.14f }, { sx + 0.075f, T + 2.5f, sz + 0.08f }, 1.0f, true);
+        box(paint, { sx + 0.06f, T + 2.22f, sz - 0.14f }, { sx + 0.075f, T + 2.30f, sz + 0.08f }, 1.0f, true);
+        box(paint, { sx + 0.06f, T + 2.22f, sz - 0.16f }, { sx + 0.075f, T + 2.5f, sz - 0.08f }, 1.0f, true);
+        world_.aabbs.push_back({ glm::vec3(sx - 0.08f, T, sz - 0.08f), glm::vec3(sx + 0.08f, T + 2.6f, sz + 0.08f) });
+    }
+    finish(asphalt); finish(paint); finish(kerb); finish(steel); finish(lamp); finish(sign);
+    log::infof("[lane] the castle car park: %.0f x %.0f m at %.2f m, its gate at z %.1f", X1 - X0, Z1 - Z0, T, le.z);
+}
+
 void VulkanEngine::place_office() {
 
     auto groups = game::load_mesh_groups("assets/office/office.mesh");
@@ -390,6 +537,43 @@ void VulkanEngine::place_office() {
     office_pos_ = base;
     log::infof("[office] the pavilion at (%.0f, %.1f, %.0f): %zu mesh parts, %zu tris, %d colliders, %d lights",
                base.x, base.y, base.z, groups.size(), tris, boxes, lights);
+}
+
+// The service station on the coast highway, 300 m north of the launch pad (the model, its
+// colliders, lights, roofs and grass-free rectangles all come from tools/gasstation/
+// make_gasstation.py; its terrace is in the landscape formula: terrain.h kStation*).
+void VulkanEngine::place_gasstation() {
+    auto groups = game::load_mesh_groups("assets/gasstation/gasstation.mesh");
+    if (groups.empty()) { log::warnf("[station] assets/gasstation/gasstation.mesh missing - no service station (blender -b --python tools/gasstation/make_gasstation.py)"); return; }
+    const glm::vec3 base(kStationX, kStationH, kStationZ);
+    size_t tris = 0;
+    for (auto& g : groups) { tris += g.mesh.idx.size() / 3; dress(g.mesh, g.name, base); world_.meshes.push_back(std::move(g.mesh)); }
+    int boxes = 0, lights = 0, roofs = 0;
+    if (FILE* fp = std::fopen("assets/gasstation/gasstation.col", "r")) {
+        char line[160];
+        while (std::fgets(line, sizeof(line), fp)) {
+            glm::vec3 a, b; float top = 0.0f;
+            if (std::sscanf(line, "box %f %f %f %f %f %f", &a.x, &a.y, &a.z, &b.x, &b.y, &b.z) == 6) {
+                world_.aabbs.push_back({ base + glm::min(a, b), base + glm::max(a, b) });
+                ++boxes;
+            } else if (std::sscanf(line, "light %f %f %f", &a.x, &a.y, &a.z) == 3) {
+                lamp_lights_.push_back(base + a);
+                if (a.y < 3.2f && a.x < -8.0f) station_lights_.push_back(base + a);       // (the rooms': also on by day)
+                ++lights;
+            } else if (std::sscanf(line, "shelter %f %f %f %f %f", &a.x, &a.z, &b.x, &b.z, &top) == 5) {
+                shelters_.push_back({ glm::vec2(base.x + a.x, base.z + a.z), glm::vec2(base.x + b.x, base.z + b.z), base.y + top });
+                ++roofs;
+            } else if (std::sscanf(line, "nograss %f %f %f %f", &a.x, &a.z, &b.x, &b.z) == 4) {
+                home_grass_cuts_.push_back(glm::vec4(base.x + a.x, base.z + a.z, base.x + b.x, base.z + b.z));
+            } else if (float h0 = 0.0f, h1 = 0.0f; std::sscanf(line, "pad %f %f %f %f %f %f", &a.x, &a.z, &b.x, &b.z, &h0, &h1) == 6) {
+                drive_pads_.push_back({ base.x + a.x, base.z + a.z, base.x + b.x, base.z + b.z, base.y + h0, base.y + h1 });       // (paved ground a car drives on)
+            }
+        }
+        std::fclose(fp);
+    }
+    station_pos_ = base;
+    log::infof("[station] the service station at (%.0f, %.1f, %.0f): %zu mesh parts, %zu tris, %d colliders, %d lights, %d roofs",
+               base.x, base.y, base.z, groups.size(), tris, boxes, lights, roofs);
 }
 
 void VulkanEngine::init_rocket_meshes() {

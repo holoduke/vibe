@@ -19,6 +19,7 @@
 #include "engine/vk_initializers.h"
 #include "engine/vk_pipelines.h"
 #include "engine/log.h"
+#include "engine/globe.h"
 
 #include <GLFW/glfw3.h>
 
@@ -187,7 +188,15 @@ struct CloudPC {
     glm::vec4 params2;  // frame, camera planet radius (km), direct-light factor, cloud size
     glm::vec4 params3;  // cloud base altitude (m), tallest cloud (m), edge softness, erosion
     glm::vec4 light_col; // direct light colour
+    glm::vec4 wx_a;     // the weather lattice at the camera: cell (xy), place in it (zw)
+    glm::vec4 wx_b;     // its second octave
+    glm::vec4 shape0;   // the shape texture's coordinate at the camera's ground point; w = shadow map extent (m)
+    glm::vec4 jmat;     // d(home) / d(engine xz) at the camera
 };
+// The cloud shadow map's reach round the camera (keep in step: scene_ubo.glsl kCloudShadowExtent).
+constexpr float kCloudShadowExtent = 16384.0f;
+// One tile of the cloud shape texture and one weather cell, in metres at cloud size 1 (clouds.comp).
+constexpr double kCloudShapePeriod = 11000.0, kCloudWeatherCell = 6500.0;
 }  // namespace
 
 // Cloud shadow map. Created by whoever needs it first (the cloud pass that
@@ -218,7 +227,7 @@ void VulkanEngine::init_cloud_shadow_map() {
         si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         si.magFilter = si.minFilter = VK_FILTER_LINEAR;
         si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;      // (the map wraps: clouds.comp shadow_map)
         si.maxLod = 0.0f;
         vk_check(vkCreateSampler(device_, &si, nullptr, &cloud_->shadow_sampler), "cloud shadow sampler");
         vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_, [&](VkCommandBuffer cb) {
@@ -430,6 +439,28 @@ void VulkanEngine::dispatch_clouds(VkCommandBuffer cmd) {
     pc.params3 = glm::vec4(glm::clamp(rt_.cloud_base_m, 400.0f, 8000.0f), glm::clamp(rt_.cloud_tower_m, 300.0f, 12000.0f),
                            glm::clamp(rt_.cloud_softness, 0.01f, 1.0f), glm::clamp(rt_.cloud_erosion, 0.0f, 1.0f));
     pc.light_col = glm::vec4(rt_.sun_color, wx_cur_.overcast);   // w: how grey the deck is (rain clouds are grey, not sky-blue)
+    {
+        // The cloud field is a function of home coordinates (m east / south of home) plus the
+        // wind's travel - the same on every chart, and the same field compose.frag paints from
+        // orbit. Worked out here in double precision for the camera's ground point and handed
+        // over in pieces that are exact in a float; the shader adds the offset from the camera.
+        const globe::Chart& ch = globe::current();
+        const double ex = double(fv.eye_pos.x), ez = double(fv.eye_pos.z);
+        const glm::dvec2 h0 = globe::home_az(globe::to_planet(ch, ex, ez));
+        const double d = 200.0;
+        const glm::dvec2 hx = (globe::home_az(globe::to_planet(ch, ex + d, ez)) - globe::home_az(globe::to_planet(ch, ex - d, ez))) / (2.0 * d);
+        const glm::dvec2 hz = (globe::home_az(globe::to_planet(ch, ex, ez + d)) - globe::home_az(globe::to_planet(ch, ex, ez - d))) / (2.0 * d);
+        const double size = double(glm::clamp(rt_.cloud_scale, 0.3f, 4.0f));
+        const glm::dvec2 hw = h0 + glm::dvec2(1.0, 0.35) * cloud_->travel;             // (carried by the wind)
+        const glm::dvec2 wa = hw / (kCloudWeatherCell * size), wb = wa * 2.17 + 13.0;
+        const glm::dvec2 ca = glm::floor(wa), cb = glm::floor(wb);
+        pc.wx_a = glm::vec4(float(ca.x), float(ca.y), float(wa.x - ca.x), float(wa.y - ca.y));
+        pc.wx_b = glm::vec4(float(cb.x), float(cb.y), float(wb.x - cb.x), float(wb.y - cb.y));
+        const double per = kCloudShapePeriod * size;
+        const glm::dvec3 sc(hw.x / per, -0.025 * cloud_->travel / per, hw.y / per);     // (the wind also carries the shapes slowly downward)
+        pc.shape0 = glm::vec4(float(sc.x - std::floor(sc.x)), float(sc.y - std::floor(sc.y)), float(sc.z - std::floor(sc.z)), kCloudShadowExtent);
+        pc.jmat = glm::vec4(float(hx.x), float(hz.x), float(hx.y), float(hz.y));
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_->pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_->pipeline_layout, 0, 1, &cloud_->set, 0, nullptr);
     auto barrier = [&]() {
@@ -539,7 +570,12 @@ void VulkanEngine::dispatch_atmosphere(VkCommandBuffer cmd) {
     AtmoPC pc{};
     // World Y is metres above sea level; planet frame == world axes.
     const float h_km = std::max(fv.eye_pos.y, 1.0f) * 0.001f;
-    pc.cam = glm::vec4(0.0f, kBottomRadiusKm + h_km, 0.0f, std::max(0.1f, rt_.aerial_scale));
+    // The haze's stretch (aerial_scale: the game's distances are short, so the air is made to
+    // act as several times as much of it) is for views along the ground. From the air the
+    // distances are real ones - a view down from 1500 m through six times the air turned the
+    // land to the sky's blue - so it eases back to 1 between 300 m and 4 km up.
+    const float aerial_k = glm::mix(std::max(0.1f, rt_.aerial_scale), 1.0f, glm::smoothstep(0.3f, 4.0f, h_km));
+    pc.cam = glm::vec4(0.0f, kBottomRadiusKm + h_km, 0.0f, std::max(0.1f, aerial_k));
     pc.eye = glm::vec4(fv.eye_pos, std::max(0.5f, rt_.aerial_max_km));
     pc.inv_vp = fv.inv_vp;
 

@@ -161,6 +161,29 @@ struct CharacterAnimationInput {
     bool      seated = false;
     glm::vec3 seat_hand_l{0.0f}, seat_hand_r{0.0f};      // model space: where the wrists go
     float     seat_legs = 0.0f;
+    // AN ACTION: something done once, from a clip played by name (IAnimationRuntime::find_clip;
+    // clips tagged kTagAction) instead of locomotion - sitting down, getting up, getting into
+    // a car. The caller owns its time (action_time, seconds into the clip) and where the model
+    // stands; the clip's own travel from its first frame is kept (the body really steps back
+    // on to the seat). The change into it, between two of them and out of it is inertialised.
+    //   Motion warping: with action_warp the hips are carried, over the clip, to
+    //   action_hips (model space) - the seat this chair really has, not the one the capture
+    //   had. action_warp_from_start: the clip BEGINS there instead (getting up).
+    //   Full-body follow-through: feet that stand on the ground stay where the clip put
+    //   them while the hips are moved (the legs are solved again).
+    ClipId    action_clip = kNoClip;
+    float     action_time = 0.0f;
+    bool      action_warp = false, action_warp_from_start = false;
+    // The clip's own travel is taken out again over its length, so that it ENDS where the
+    // model stands (getting up from a seat: the caller has the character standing at one
+    // known place afterwards, wherever the capture walked to).
+    bool      action_end_at_origin = false;
+    // LOOPS. action_in_place: the clip's travel over the ground is left out altogether - the
+    // caller moves the model (a way of walking played round and round while the character is
+    // walked along its path). action_warp_full: the hips are at action_hips for the whole
+    // clip, not carried there over it (somebody who sits, eating: every loop on the seat).
+    bool      action_in_place = false, action_warp_full = false;
+    glm::vec3 action_hips{0.0f};
     // Something worth a look (another player), model space; the head turns to it now and then
     // while the character is not aiming. `variation` makes two characters not move in step.
     bool      has_look_at = false;
@@ -198,6 +221,8 @@ public:
     WeaponDef  weapon = default_rifle();
 
     void reset();
+    // An action clip's travel from its first frame to `t` seconds (see CharacterAnimationInput::action_clip).
+    Transform action_root(ClipId clip, float t) const;
     void update(const CharacterAnimationInput& in);
 
     std::span<const glm::mat4> model() const { return model_; }       // joint matrices, model space
@@ -234,6 +259,7 @@ private:
     void feet(const CharacterAnimationInput& in, glm::vec2 v_local, float speed, float accel);
     void arms(const CharacterAnimationInput& in);
     void seated(const CharacterAnimationInput& in);
+    void action(const CharacterAnimationInput& in);
     void rotate_in_model(int joint, const glm::quat& q);              // turns a joint about model axes (local pose)
     glm::quat model_rotation(int joint) const;                        // from pose_, by walking the parents
     void fit_limb(int a, int b, int c, glm::vec3 target, const glm::vec3* pole, bool from_rest = false);
@@ -244,6 +270,10 @@ private:
     std::vector<Transform> pose_, src_, next_, scratch_, good_;
     std::vector<glm::mat4> model_, good_model_;
     Inertializer inert_;
+    int       last_mode_ = 0;                  // what made the last pose: 0 locomotion, 1 the seat, 2 an action
+    ClipId    action_clip_ = kNoClip;          // the action playing
+    float     action_last_t_ = 0.0f;           // its time last frame (a jump back = it loops: blended)
+    glm::vec3 action_ref_hips_{0.0f};          // where that clip has the hips at its end (or start), model space
     MatcherState match_;
     AirborneState air_;
     MatcherOutput cur_;                   // what the lower body is playing

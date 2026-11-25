@@ -289,6 +289,107 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 }
                 log::infof("[scatter] %d water lily rafts", lilies);
             }
+            // THE RIVER'S OWN PLANTS, all the way along it inside the home tile. (The passes
+            // above scatter within 280 m of the castle only, and find a river's narrow margin
+            // by chance: downstream the water was bare.) Every 7 m of the course the channel
+            // is crossed from bank to bank; where a bank is found: a patch of lily rafts on the
+            // shallows off it (four in ten), a bed of reeds at the waterline, and ferns and
+            // tufts of grass up the bank.
+            {
+                const glm::vec2* rp = nullptr;
+                const int rn = world_river_course(rp);
+                int r_lily = 0, r_reed = 0, r_bank = 0;
+                const float wl = params.water_level, home = 1000.0f;
+                float carry = 0.0f;
+                for (int i = 1; i < rn && r_lily + r_reed + r_bank < 60000; ++i) {
+                    const glm::vec2 a = rp[i - 1], b = rp[i];
+                    const float len = glm::distance(a, b);
+                    if (len < 1e-3f) continue;
+                    const glm::vec2 dir = (b - a) / len, nrm(-dir.y, dir.x);
+                    float st = carry;
+                    for (; st < len; st += 7.0f) {
+                        const glm::vec2 cp = a + dir * st;
+                        const glm::vec2 mid = cp - world_river_wander(cp);
+                        if (std::abs(mid.x) > home || std::abs(mid.y) > home) continue;
+                        for (float sd : { -1.0f, 1.0f }) {
+                            // out from the middle to where the bed comes up to the water
+                            float edge = -1.0f;
+                            for (float o = 2.0f; o < 45.0f; o += 0.5f) {
+                                const glm::vec2 q = mid + nrm * (sd * o);
+                                if (h_at(q.x, q.y) > wl - 0.05f) { edge = o; break; }
+                            }
+                            if (edge < 3.0f) continue;                       // (no water here: a bridge's fill, the spring)
+                            const glm::vec2 e = mid + nrm * (sd * edge);
+                            if (params.blocked(e.x, e.y)) continue;
+                            // lilies: off the bank, where there is 15 cm to a metre of water
+                            if (u01(rng) < 0.40f) {
+                                const bool pink = u01(rng) < 0.3f;
+                                const int n = 10 + int(u01(rng) * 22.0f);
+                                for (int k = 0; k < n; ++k) {
+                                    const float wx = e.x - nrm.x * sd * (0.8f + 3.2f * u01(rng)) + dir.x * (u01(rng) - 0.5f) * 6.0f;
+                                    const float wz = e.y - nrm.y * sd * (0.8f + 3.2f * u01(rng)) + dir.y * (u01(rng) - 0.5f) * 6.0f;
+                                    const float h = h_at(wx, wz);
+                                    if (h > wl - 0.12f || h < wl - 1.15f) continue;
+                                    const float sc = 0.8f + 0.7f * u01(rng);
+                                    bool afloat = true;
+                                    for (int q = 0; q < 8 && afloat; ++q) {
+                                        const float qa = float(q) * 0.7853982f;
+                                        if (h_at(wx + std::cos(qa) * 0.72f * sc, wz + std::sin(qa) * 0.72f * sc) > wl - 0.06f) afloat = false;
+                                    }
+                                    if (!afloat) continue;
+                                    ScatterInstance si{};
+                                    si.pos_scale = glm::vec4(wx, wl, wz, sc);
+                                    glm::vec3 col = pink ? glm::vec3(0.92f, 0.55f, 0.66f) : glm::vec3(0.95f, 0.94f, 0.88f);
+                                    if (u01(rng) < 0.55f) col = glm::vec3(0.02f);
+                                    si.rot_tint = glm::vec4(u01(rng) * glm::two_pi<float>(), col.x, col.y, col.z);
+                                    per[16].push_back(si);
+                                    ++r_lily;
+                                }
+                            }
+                            // reeds at the waterline, in beds (not a hedge: two stations in three)
+                            if (hash31(glm::vec3(std::floor(e.x * 0.06f), 53.0f, std::floor(e.y * 0.06f))) > 0.34f) {
+                                const int n = 5 + int(u01(rng) * 9.0f);
+                                for (int k = 0; k < n; ++k) {
+                                    const float wx = e.x + nrm.x * sd * (u01(rng) * 1.6f - 0.9f) + dir.x * (u01(rng) - 0.5f) * 7.0f;
+                                    const float wz = e.y + nrm.y * sd * (u01(rng) * 1.6f - 0.9f) + dir.y * (u01(rng) - 0.5f) * 7.0f;
+                                    const float h = h_at(wx, wz);
+                                    if (h < wl - 0.35f || h > wl + 0.30f) continue;
+                                    ScatterInstance si{};
+                                    si.pos_scale = glm::vec4(wx, h - 0.03f, wz, 0.75f + 0.55f * u01(rng));
+                                    const glm::vec3 col = glm::mix(glm::vec3(0.32f, 0.38f, 0.16f), glm::vec3(0.42f, 0.40f, 0.20f), u01(rng));
+                                    si.rot_tint = glm::vec4(u01(rng) * glm::two_pi<float>(), col.x, col.y, col.z);
+                                    per[7].push_back(si);
+                                    ++r_reed;
+                                }
+                            }
+                            // up the bank: ferns and tufts, thinning out by 6 m from the water
+                            {
+                                const int n = 5 + int(u01(rng) * 8.0f);
+                                for (int k = 0; k < n; ++k) {
+                                    const float out = 0.6f + 5.4f * u01(rng) * u01(rng);
+                                    const float wx = e.x + nrm.x * sd * out + dir.x * (u01(rng) - 0.5f) * 7.0f;
+                                    const float wz = e.y + nrm.y * sd * out + dir.y * (u01(rng) - 0.5f) * 7.0f;
+                                    if (params.blocked(wx, wz)) continue;
+                                    if (params.road && wx > params.road->bb_min.x && wx < params.road->bb_max.x && wz > params.road->bb_min.y && wz < params.road->bb_max.y &&
+                                        params.road->distance(wx, wz) < params.road->half_width + params.road->shoulder + 1.0f) continue;
+                                    const float h = h_at(wx, wz);
+                                    if (h < wl + 0.12f || h > wl + 4.0f || n_y_at(wx, wz) < 0.55f) continue;
+                                    ScatterInstance si{};
+                                    const bool fern = u01(rng) < 0.55f;
+                                    si.pos_scale = glm::vec4(wx, h - 0.02f, wz, fern ? 0.7f + 0.7f * u01(rng) : 0.9f + 0.8f * u01(rng));
+                                    const glm::vec3 col = fern ? glm::vec3(0.10f, 0.22f, 0.06f) * (0.8f + 0.4f * u01(rng))
+                                                               : glm::mix(glm::vec3(0.085f, 0.20f, 0.045f), glm::vec3(0.20f, 0.30f, 0.07f), u01(rng));
+                                    si.rot_tint = glm::vec4(u01(rng) * glm::two_pi<float>(), col.x, col.y, col.z);
+                                    per[fern ? 0 : 15].push_back(si);
+                                    ++r_bank;
+                                }
+                            }
+                        }
+                    }
+                    carry = st - len;
+                }
+                log::infof("[scatter] along the river: %d lily rafts, %d reeds, %d ferns and tufts on its banks", r_lily, r_reed, r_bank);
+            }
         }
 
         // ---- Ground cover. Ecology, the way open-world games layer it:
@@ -425,12 +526,30 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                     const float n = vnoise(wx * 0.022f, wz * 0.022f, 41.0f) * 0.65f + vnoise(wx * 0.075f, wz * 0.075f, 43.0f) * 0.35f;
                     const float open = 1.0f - glm::smoothstep(0.25f, 0.65f, cover_at(wx, wz));
                     const float dens = (0.06f + 0.94f * glm::smoothstep(0.40f, 0.60f, n)) * (0.15f + 0.85f * open);
-                    if (tu() > dens) continue;
+                    // Clumps, as Crimson Desert's placement makes them (its sceneautomaticplacement
+                    // shader: every accepted point brings up to five children on a disc of a metre
+                    // round it): a big tuft with a few smaller ones close by, and bare ground
+                    // between the clumps - instead of single tufts spread evenly. Fewer points
+                    // are accepted to make up for it.
+                    if (tu() > dens * 0.42f) continue;
                     const float size = 0.8f + 0.7f * tu();
                     // Drier, strawier clumps here and there.
                     const float dry = glm::smoothstep(0.55f, 0.8f, vnoise(wx * 0.05f, wz * 0.05f, 47.0f)) * tu() * 0.9f;
                     add_tuft(wx, wz, h, size, dry, tu(), tu(), tu());
                     ++tufts;
+                    const int kids = 1 + int(tu() * 3.999f);                 // 1 .. 4
+                    for (int k = 0; k < kids && tufts < 120000; ++k) {
+                        const float ca = tu() * glm::two_pi<float>(), cr = 0.22f + 0.78f * std::sqrt(tu());
+                        const float cx = wx + std::cos(ca) * cr, cz = wz + std::sin(ca) * cr;
+                        const float csize = size * (0.5f + 0.4f * tu());
+                        const float c0 = tu(), c1 = tu(), c2 = tu();
+                        if (params.blocked(cx, cz)) continue;
+                        if (params.road && params.road->distance(cx, cz) + road_edge_jitter(cx, cz) - params.road->half_width < 0.7f) continue;
+                        const float ch = h_at(cx, cz);
+                        if (ch < params.water_level + 0.4f || ch > params.rock_band_h || n_y_at(cx, cz) < 0.78f) continue;
+                        add_tuft(cx, cz, ch, csize, dry * (0.7f + 0.6f * c0), c0, c1, c2);
+                        ++tufts;
+                    }
                 }
                 // Painted grass: every painted cell gets its preset's density,
                 // anywhere on the map (not only near the castle).

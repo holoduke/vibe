@@ -96,9 +96,17 @@ vec3 calcNormal(vec3 pos, float t) {
         bC = terrainB_slope(pos.xz, t, tpl, eps, bR, bU);
     }
     g_nb = vec2(bC - bR, bC - bU) / eps; g_nb_h = bC; g_nb_ok = true;
-    float hC = bC + rm_ground_detail(pos.xz, t, bC) * (1.0 - tpl);
-    float hR = bR + rm_ground_detail(pos.xz + vec2(eps, 0.0), t, bR) * (1.0 - tpl);
-    float hU = bU + rm_ground_detail(pos.xz + vec2(0.0, eps), t, bU) * (1.0 - tpl);
+    if (RMDBG(524288)) g_rm_relief_lite = true;       // profiling: the normal's relief from the main rills alone
+    vec3 d3;
+    d3.x = rm_ground_detail(pos.xz, t, bC);
+    if (RMDBG(1048576)) d3.yz = d3.xx;            // profiling: one tap of the relief, not three (its slope is lost)
+    else {
+        d3.y = rm_ground_detail(pos.xz + vec2(eps, 0.0), t, bR);
+        d3.z = rm_ground_detail(pos.xz + vec2(0.0, eps), t, bU);
+    }
+    float hC = bC + d3.x * (1.0 - tpl);
+    float hR = bR + d3.y * (1.0 - tpl);
+    float hU = bU + d3.z * (1.0 - tpl);
     g_peb_mode = 0;
     g_rm_relief_lite = false;
     vec3 gN = vec3(hC - hR, eps, hC - hU) / eps;

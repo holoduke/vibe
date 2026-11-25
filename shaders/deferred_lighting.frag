@@ -221,17 +221,11 @@ bool closest_hit_m(vec3 origin, vec3 dir, float t_max, uint mask, out float out_
 //  radiance_cache.cpp). Cell size doubles every octave of camera
 //  distance from 0.5 m; 6 buckets per cell by dominant normal axis.
 // ---------------------------------------------------------------
-layout(std430, set = 0, binding = 16) buffer RcKeys { uint rc_keys[]; };
-layout(std430, set = 0, binding = 17) buffer RcAcc  { uvec4 rc_acc[]; };
-layout(std430, set = 0, binding = 18) buffer RcRes  { vec4 rc_res[]; };
-const uint kRcEntries = 1u << 20;
-const int  kRcProbe = 8;
-
-uint rc_pcg(uint v) {
-    uint s = v * 747796405u + 2891336453u;
-    uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
-    return (w >> 22u) ^ w;
-}
+#define IC_BIND_KEYS 16
+#define IC_BIND_ACC  17
+#define IC_BIND_RES  18
+#define IC_SALT 977u
+#include "irradiance_cache.glsl"      // the buffers, rc_pcg, and the irradiance entries (ic_lookup / ic_store)
 int rc_axis(vec3 n) {
     vec3 a = abs(n);
     if (a.x >= a.y && a.x >= a.z) return n.x > 0.0 ? 0 : 1;
@@ -249,7 +243,7 @@ uvec2 rc_hash(vec3 p, vec3 n) {
     ivec3 ip = ivec3(floor((p + an * 0.05) / cell));
     uint h = rc_pcg(uint(ip.x) + rc_pcg(uint(ip.y) + rc_pcg(uint(ip.z) +
              rc_pcg(uint(lvl * 8 + ax)))));
-    uint k = rc_pcg(h ^ 0x9E3779B9u) | 1u;
+    uint k = (rc_pcg(h ^ 0x9E3779B9u) & ~3u) | 1u;      // (bit 0: never 0; bit 1: 0 = radiance, 1 = irradiance - rc_resolve.comp)
     return uvec2(h, k);
 }
 void rc_store(vec3 p, vec3 n, vec3 radiance) {
@@ -259,10 +253,10 @@ void rc_store(vec3 p, vec3 n, vec3 radiance) {
         uint prev = atomicCompSwap(rc_keys[s], 0u, hk.y);
         if (prev == 0u || prev == hk.y) {
             uvec3 q = uvec3(clamp(radiance, vec3(0.0), vec3(64.0)) * 256.0 + 0.5);
-            atomicAdd(rc_acc[s].x, q.x);
-            atomicAdd(rc_acc[s].y, q.y);
-            atomicAdd(rc_acc[s].z, q.z);
-            atomicAdd(rc_acc[s].w, 1u);
+            atomicAdd(rc_acc[2u * s].x, q.x);
+            atomicAdd(rc_acc[2u * s].y, q.y);
+            atomicAdd(rc_acc[2u * s].z, q.z);
+            atomicAdd(rc_acc[2u * s].w, 1u);
             return;
         }
     }
@@ -272,7 +266,7 @@ bool rc_lookup(vec3 p, vec3 n, out vec3 radiance) {
     for (int i = 0; i < kRcProbe; ++i) {
         uint s = (hk.x + uint(i)) & (kRcEntries - 1u);
         if (rc_keys[s] == hk.y) {
-            vec4 r = rc_res[s];
+            vec4 r = rc_res[2u * s];
             // valid = resolved at least once and seen within ~4 s
             if (r.w > 0.5 && r.w < 240.0) { radiance = r.rgb; return true; }
             return false;
@@ -1003,6 +997,25 @@ void main() {
         // irradiance — a frame-stable seed would just freeze the grain.
         g_rq_leaf_solid = rq_leaf_mode() >= 1;      // bounce light: every ray of it (reset before the reflections)
         vec2 fseed = vec2(float(scene.rt_flags.w & 31)) * vec2(17.13, 9.71);
+        // Bounce light from the cache (ic_lookup above; scene.rt_flags.x bit 5). Where the cell
+        // this pixel lies in has a settled value, that value is the pixel's bounce light and no
+        // ray is traced - but for one pixel in sixteen, which traces as before and feeds the cell.
+        // A cell without a value (just come into view) has every pixel trace: as it was.
+        bool ic_on = (scene.rt_flags.x & 32) != 0 && cam_dist < 400.0;
+        bool ic_hit = false, ic_trace = true;
+        vec3 ic_irr = vec3(0.0);
+        float ic_sv = 1.0;
+        float ic_ra = hash12(gl_FragCoord.xy + fseed + vec2(311.0, 29.0));
+        if (ic_on) {
+            vec3 ic_j = vec3(hash12(gl_FragCoord.xy + fseed + vec2(57.0, 211.0)),
+                             hash12(gl_FragCoord.xy + fseed + vec2(131.0, 5.0)),
+                             hash12(gl_FragCoord.xy + fseed + vec2(7.0, 163.0)));
+            ic_hit = ic_lookup(world_pos, N, ic_j, ic_ra, ic_irr, ic_sv);
+            if (ic_hit) {
+                ic_trace = ic_feeds(uvec2(gl_FragCoord.xy), uint(scene.rt_flags.w));
+            }
+        }
+        if (ic_trace) {
         for (int i = 0; i < taken_gi; ++i) {
             float r1 = hash12(gl_FragCoord.xy + fseed + vec2(i * 13.0, 73.0));
             float r2 = hash12(gl_FragCoord.xy + fseed + vec2(i * 13.0, 47.0));
@@ -1066,11 +1079,11 @@ void main() {
                         if (lI < 1e-3) continue;
                         vec3 lto = scene.lamp_lights[li_i].xyz - hit_pos;
                         float ldist = length(lto);
-                        if (ldist >= 13.0) continue;
+                        if (ldist >= 34.0) continue;
                         vec3 ldir = lto / max(ldist, 1e-3);
                         float lndl = max(dot(hit_n, ldir), 0.0);
                         if (lndl <= 0.0) continue;
-                        float lfall = 1.0 - ldist / 13.0; lfall *= lfall;
+                        float lfall = 1.0 - ldist / 34.0; lfall = lfall * lfall * lfall * lfall * lfall;
                         if (!any_hit_m(hit_pos + hit_n * 0.02, ldir, max(ldist - 0.45, 0.05), 0x04u))
                             hit_light += vec3(1.0, 0.62, 0.28) * (lI * lndl * lfall);
                     }
@@ -1134,6 +1147,13 @@ void main() {
             }
         }
         gi_indirect /= float(taken_gi);
+        }
+        float sv_raw = float(sky_hits) / float(taken_gi);
+        if (ic_on && ic_trace) ic_store(world_pos, N, ic_ra, gi_indirect, sv_raw);
+        if (ic_hit) { gi_indirect = ic_irr; sv_raw = ic_sv; }
+        // (under Ray Reconstruction the cell's value goes out as it is - it is settled already,
+        //  and the denoiser blends the cells; without it the history below does that)
+        bool ic_direct = ic_hit && (scene.rt_flags.x & 2) != 0;
         // The u_svgf_gi screen-space override that used to replace the
         // ray-loop result for non-terrain pixels is REMOVED. That image
         // is written by cube.frag with imageStore from fragments running
@@ -1152,7 +1172,16 @@ void main() {
         // reprojection through prev_vp and per-channel disocclusion
         // rejection — the AAA pattern: denoise the SIGNAL, never the
         // composed image.
-        {
+        if (ic_direct) {
+            ivec2 pix = ivec2(gl_FragCoord.xy);
+            bool parity0 = (scene.rt_flags.w & 1) == 0;
+            sky_vis = sv_raw;
+            // (the history is kept up, for the frame this pixel has to trace again)
+            vec4 storeVal = vec4(gi_indirect, 20.0 * 32.0 + floor(sv_raw * 31.0 + 0.5));
+            float lumc = dot(gi_indirect, vec3(0.299, 0.587, 0.114));
+            if (parity0) { imageStore(u_gi_hist0, pix, storeVal); imageStore(u_gi_fast0, pix, vec4(lumc)); }
+            else         { imageStore(u_gi_hist1, pix, storeVal); imageStore(u_gi_fast1, pix, vec4(lumc)); }
+        } else {
             ivec2 pix = ivec2(gl_FragCoord.xy);
             bool parity0 = (scene.rt_flags.w & 1) == 0;
             vec3  prevRgb = gi_indirect;
@@ -1161,7 +1190,6 @@ void main() {
             // Accumulated below alongside the irradiance (packed into
             // history alpha) — consumed raw it steps the ambient term
             // up/down every frame ("broken light" flicker).
-            float sv_raw = float(sky_hits) / float(taken_gi);
             float prevSv = sv_raw;
             float fast_prev = -1.0;   // negative = no fast history
             // Motion factor: 0 = camera static (history fully trusted,
@@ -1676,12 +1704,12 @@ void main() {
             vec3 lpos = scene.lamp_lights[i].xyz;
             vec3 to = lpos - world_pos;
             float d = length(to);
-            float kLampR = candle ? 3.2 : 13.0;
+            float kLampR = candle ? 3.2 : 34.0;
             if (d >= kLampR) continue;
             vec3 ld = to / max(d, 1e-3);
             float pndl = max(dot(N, ld), 0.0);
             if (pndl <= 0.0) continue;
-            float fall = 1.0 - d / kLampR; fall *= fall;
+            float fall = 1.0 - d / kLampR; fall = candle ? fall * fall : fall * fall * fall * fall * fall;
             vec3 jit = vec3(hash12(gl_FragCoord.xy + lseed + vec2(31.0 + float(i) * 7.0, 5.0)),
                             hash12(gl_FragCoord.xy + lseed + vec2(57.0 + float(i) * 7.0, 11.0)),
                             hash12(gl_FragCoord.xy + lseed + vec2(83.0 + float(i) * 7.0, 23.0))) - 0.5;

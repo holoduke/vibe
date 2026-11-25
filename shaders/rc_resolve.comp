@@ -13,22 +13,43 @@ layout(push_constant) uniform PC { vec4 p; } pc;   // x = entries, y = EMA alpha
 void main() {
     uint i = gl_GlobalInvocationID.x;
     if (i >= uint(pc.p.x)) return;
-    if (rc_keys[i] == 0u) return;
-    uvec4 a = rc_acc[i];
-    vec4 r = rc_res[i];
-    if (a.w > 0u) {
+    uint key = rc_keys[i];
+    if (key == 0u) return;
+    // Two slots per entry. Bit 1 of the key: an irradiance entry (deferred_lighting.frag
+    // ic_store) - its second slot holds x = sky visibility, y = the samples its value rests on.
+    bool irr = (key & 2u) != 0u;
+    uvec4 a = rc_acc[2u * i];
+    vec4 r = rc_res[2u * i];
+    if (a.w > 0u && irr) {
+        float cnt = float(a.w);
+        vec3 avg = vec3(a.xyz) / (256.0 * cnt);
+        float sv = float(rc_acc[2u * i + 1u].x) / (256.0 * cnt);
+        vec4 r2 = rc_res[2u * i + 1u];
+        float conf = r.w > 0.0 ? r2.y : 0.0;
+        // A running mean while it settles, then a slow follow (a cell near the camera gets
+        // hundreds of one-ray samples a frame, a far one a few).
+        float alpha = clamp(cnt / (conf + cnt), 0.02, 1.0);
+        r.rgb = mix(r.rgb, avg, alpha);
+        r2.x = mix(r2.x, sv, alpha);
+        r2.y = min(conf + cnt, 2048.0);
+        r.w = 1.0;
+        rc_res[2u * i + 1u] = r2;
+        rc_acc[2u * i] = uvec4(0u);
+        rc_acc[2u * i + 1u] = uvec4(0u);
+    } else if (a.w > 0u) {
         vec3 avg = vec3(a.xyz) / (256.0 * float(a.w));
         // New entry snaps; existing ones blend (more samples -> faster).
         float alpha = r.w > 0.0 ? clamp(pc.p.y * (1.0 + float(a.w) * 0.05), 0.0, 0.5) : 1.0;
         r.rgb = mix(r.rgb, avg, alpha);
         r.w = 1.0;
-        rc_acc[i] = uvec4(0u);
+        rc_acc[2u * i] = uvec4(0u);
     } else {
         r.w += 1.0;
         if (r.w > 600.0) {           // unseen ~10 s: evict
             rc_keys[i] = 0u;
             r = vec4(0.0);
+            rc_res[2u * i + 1u] = vec4(0.0);
         }
     }
-    rc_res[i] = r;
+    rc_res[2u * i] = r;
 }

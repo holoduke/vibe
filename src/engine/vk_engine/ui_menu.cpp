@@ -796,6 +796,9 @@ void VulkanEngine::build_menu_ui() {
                 const char* fr_labels[] = { "Exact (slow in forests)", "Exact sun shadows nearby (default)", "Solid leaf cards for all rays (fastest)" };
                 ImGui::Combo("Foliage rays", &rt_.foliage_ray_mode, fr_labels, 3);
                 ImGui::Checkbox("Lighter bounce light on leaves", &rt_.gi_leaf_lite);
+                { bool ic = rt_.irradiance_cache != 0;
+                  if (ImGui::Checkbox("Bounce light from the cache", &ic)) rt_.irradiance_cache = ic ? 1 : 0;
+                  if (ImGui::IsItemHovered()) ImGui::SetTooltip("A pixel reads its bounce light from the world-space cache where the cache\nhas a settled value, instead of tracing its own rays every frame.\nOff: every pixel traces (as before 2026-11-24)."); }
             }
         }
         ImGui::TextDisabled("Phase 1/5 — Halton(2,3) jitter active.\n"

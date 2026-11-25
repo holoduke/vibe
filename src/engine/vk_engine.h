@@ -17,6 +17,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "engine/frustum.h"
@@ -42,6 +43,7 @@
 #include "game/player.h"
 #include "engine/net/net.h"   // LAN multiplayer session (plain data + Session)
 #include "engine/cluster_lod.h"
+#include "npc/npc.h"            // the people and cars that live their own life (src/npc)
 
 struct ImFont;      // Dear ImGui (HUD fonts)
 
@@ -679,7 +681,8 @@ private:
     static constexpr int kFileTextureCount   = 7;
     static constexpr int kTexJeep            = 34;    // the jeep's paint, 35 its seat canvas (assets/jeep/tex)
     static constexpr int kTexScreens         = 36;    // what the pavilion's displays show: 8 pictures, 4 x 2 (assets/office/tex/screens.png)
-    static constexpr int kTerrainMatCount    = 30;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
+    static constexpr int kTexStation         = 37;    // the service station's six surfaces, 37..42: brick, asphalt, checker tile, cladding, pavers, wall tile (assets/gasstation/tex)
+    static constexpr int kTerrainMatCount    = 36;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
     static constexpr int kTextureCount       = kFileTextureCount +
                                                kTerrainMatCount;   // 20
     // Albedo/normal-array indices of the baked terrain materials.
@@ -1290,6 +1293,8 @@ private:
         bool          seated = false;                  // at the wheel of a car this frame (nothing in the hands)
         int           ride = 0;                        // riding beside the driver of car (ride - 1); 0 = not
         bool          corpse = false;                  // drawn as a body on the ground: head, no weapon
+        float         npc_phase = 0.0f;                // seconds into the loop it plays (npc_world.cpp)
+        bool          unarmed = false;                 // nothing in the hands (the station's people: npc_world.cpp)
         bool          die = false;                     // killed: the body buckles where it stands, then is a ragdoll (ragdoll.cpp)
         float         dying_t = -1.0f;                 // seconds since the kill while the body still stands (-1: alive)
         net::PlayerState dying_st{};                   // where and how they were then (they themselves respawn elsewhere at once)
@@ -1785,6 +1790,7 @@ private:
     bool      site_here() const;                 // the slot's content exists where the engine is now
     void      place_house(game::Level& lv, glm::vec3 hp);    // (rocket.cpp)
     void      place_office();                    // (rocket.cpp) the pavilion by the launch pad
+    void      place_gasstation();                // (rocket.cpp) the service station on the coast highway (tools/gasstation)
     // Shelters: what has a roof - a box on the ground plan and the roof's height. Rain and snow
     // do not fall inside them (fx.cpp) and nothing in them gets wet or snowed on (the shaders:
     // scene_sheltered). shelters_: home's; site_shelters_: the loaded site's (sites.cpp).
@@ -1793,6 +1799,8 @@ private:
     void      shelters_near(glm::vec3 eye, float reach, std::vector<Shelter>& out, size_t max_n) const;
     glm::vec3 office_pos_{0.0f};
     std::vector<glm::vec3> office_lights_;       // its room lights (also in lamp_lights_): on by day too
+    glm::vec3 station_pos_{0.0f};
+    std::vector<glm::vec3> station_lights_;      // the service station's room lights: on by day too, like the pavilion's
     // Level, paved places a vehicle drives on that are not the terrain: a rectangle with its
     // height at x0 and at x1 (a ramp when they differ). The vehicle's ground is the higher of
     // the terrain and these (jeep.cpp); round each the ground comes up to it over a metre.
@@ -1801,6 +1809,8 @@ private:
     std::vector<glm::vec4> parking_bays_;        // the car park's bays: x, y, z of the middle, w = yaw
     void      place_parking();
     void      place_bridges();                   // (bridges.cpp)
+    void      place_lane_rocks();                // (bridges.cpp) armour stone under the castle lane's edge on steep banks
+    void      place_castle_parking();            // (rocket.cpp) the car park at the castle lane's end
     std::vector<glm::vec4> home_grass_cuts_;     // home's chart: where no grass may grow beyond the home tile (min x, min z, max x, max z)
     void      travel_to_site(int k);
     std::vector<int> sites_by_distance(int max_n) const;
@@ -1819,8 +1829,7 @@ private:
         bool triplanar = false, sway = false;
         float uv_scale = 1.0f;
         float relief = 1.0f;
-        float ssdm = 0.0f;            // screen-space displacement: shell thickness (m), 0 = none (ssdm.cpp)
-        Mesh  ssdm_mesh{};            // its shell mesh (normals rounded over hard edges)
+        float ssdm = 0.0f;            // screen-space displacement: how far its stones stand out (m), 0 = none (ssdm.cpp)
         glm::vec4 emissive{0.0f};     // rgb, a = 1 full-emissive
         VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
         VkBuffer blas_buf = VK_NULL_HANDLE;
@@ -1965,6 +1974,7 @@ private:
     void destroy_ssdm();
     void create_ssdm_targets();
     void destroy_ssdm_targets();
+    bool ssdm_active() const;                  // on this frame? (the parts it displaces are then drawn without parallax relief)
     bool render_ssdm(VkCommandBuffer cmd);     // mid world pass; true = the pass was interrupted (bindings are to be restored)
     glm::vec3 bridge_a_{0.0f}, bridge_b_{0.0f};   // the stone bridge over the river (world.cpp); deck ends
     bool      bridge_placed_ = false;
@@ -2003,6 +2013,7 @@ private:
     static constexpr uint32_t kWvPool = 180000;
     WvState*  wv_ = nullptr;
     uint32_t  veg_world_first_ = UINT32_MAX;
+    std::vector<collision::AABB> lane_rock_cols_; // the castle lane's armour stones (bridges.cpp place_lane_rocks)
     std::vector<collision::AABB> wv_cols_;       // trunk colliders of the cells around the player
     uint32_t  wv_quota(size_t arch) const;       // pool slots one archetype may use (its visible lists are sized for it)
     void      wv_insert_pool();                  // (after the instance list was built / rebuilt)
@@ -2029,6 +2040,7 @@ private:
     bool      body_seated_ = false;              // the player's body is in a car's seat this frame
     JeepState* jeep_ = nullptr;                  // the car that is simulated (the one last got into)
     std::vector<JeepState*> jeep_all_;           // all of them; the others stand where they were left
+    void jeep_positions(std::vector<glm::vec3>& out) const;    // where the posed cars stand (grass_trail.cpp)
     JeepState* jeep_load(const std::string& dir, const std::string& json, const glm::vec3* paint = nullptr);
     void      jeep_park(JeepState& J, glm::vec3 pos, float yaw);
     void      jeep_marks(JeepState& J, float dt);
@@ -2046,6 +2058,32 @@ private:
     bool      jeep_driving() const;
     // Riding beside the driver of a car another player drives (jeep.cpp): which car, -1 = none.
     int       jeep_ride_ = -1;
+    void      jeep_player_colliders(std::vector<collision::AABB>& out) const;   // the cars as obstacles for a player on foot (jeep.cpp)
+    // The people and cars of the NPC engine (src/npc), as shown here (npc_world.cpp; the cars: jeep.cpp).
+    std::unique_ptr<npc::World> npc_;
+    std::vector<npc::View>      npc_views_;      // this frame's
+    float                       npc_send_ = 0.0f; // seconds until the host tells the clients again
+    std::vector<MpAvatar>       npc_bodies_;     // the people near enough to be drawn
+    struct NpcCar { JeepState* car = nullptr; int agent = -1; float roll = 0.0f, pitch = 0.0f, steer = 0.0f, last_speed = 0.0f, lean = 0.0f, dip = 0.0f; glm::vec3 last{0.0f}; float last_yaw = 0.0f; };
+    std::vector<NpcCar>         npc_cars_;       // cars without physics, lent to the NPC cars nearest the eye
+    void      npc_tick(float dt);
+    void      npc_pose(float dt);
+    void      draw_npc_bodies(VkCommandBuffer cmd, const glm::mat4& vp);
+    // Shooting the station's people (npc_world.cpp) and what it leaves (blood: fx.cpp draws it).
+    bool      npc_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit);
+    struct Blood { glm::vec3 pos{0.0f}, vel{0.0f}; float t = 0.0f, life = 1.0f, size = 0.05f; bool stain = false; float seed = 0.0f; };
+    std::vector<Blood> blood_;
+    void      spawn_blood(glm::vec3 pos, glm::vec3 dir);
+    void      blood_update(float dt);
+    bool      npc_take_car(float reach);          // (jeep.cpp) the standing NPC car within reach becomes one of the player's
+    void      car_audio_tick(float dt);          // (jeep.cpp) the engines' sound: the player's car and the nearest others
+    std::unordered_map<JeepState*, uint32_t> car_voices_;
+    glm::vec3 car_ear_last_{0.0f}, car_ear_vel_{0.0f};
+    bool      car_ear_has_ = false;
+    bool      cars_need_lights() const;          // (jeep.cpp) evening or night: a car that drives has its lights on
+    void      npc_cars_init();
+    void      npc_cars_place(const std::vector<npc::View>& views, float dt);
+    bool      npc_car_seat(int agent, int seat, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;
     void      jeep_ride_place();
     bool      jeep_passenger_seat(int car, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;
     void      hw_lamps_near(glm::vec3 eye, float reach, std::vector<glm::vec3>& out) const;      // the road's street lamps (highway_furniture.cpp)
@@ -2240,6 +2278,20 @@ private:
     void destroy_wm_cache();
     void wm_cache_plan(struct SceneUBO& data);
     void wm_cache_bake(VkCommandBuffer cmd);
+    // The trail round the player: where people and cars have just been, for plants to lean
+    // away from (vk_engine/grass_trail.cpp).
+    VkImage          grass_trail_image_[2] = {};    // [0] this frame's (scene binding 41), [1] last frame's (42)
+    VmaAllocation    grass_trail_alloc_[2] = {};
+    VkImageView      grass_trail_view_[2]  = {};
+    VkSampler        grass_trail_sampler_  = VK_NULL_HANDLE;
+    VkPipeline       grass_trail_pipeline_ = VK_NULL_HANDLE;
+    VkShaderModule   grass_trail_frag_     = VK_NULL_HANDLE;
+    glm::vec2        grass_trail_org_ = glm::vec2(0.0f);    // world x, z of the window's corner
+    float            grass_trail_time_ = 0.0f;
+    void init_grass_trail();
+    void destroy_grass_trail();
+    void grass_trail_update(VkCommandBuffer cmd);
+    glm::vec4 grass_trail_window() const;
 
     // Heightmap raw heights as an R32_SFLOAT texture. Used by the
     // procedural raymarched terrain shader (binding 8) so the

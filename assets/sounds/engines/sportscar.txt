@@ -1,0 +1,9 @@
+1000 sportscar_01000_on.wav sportscar_01000_off.wav
+1950 sportscar_01950_on.wav sportscar_01950_off.wav
+2900 sportscar_02900_on.wav sportscar_02900_off.wav
+3850 sportscar_03850_on.wav sportscar_03850_off.wav
+4800 sportscar_04800_on.wav sportscar_04800_off.wav
+5750 sportscar_05750_on.wav sportscar_05750_off.wav
+6700 sportscar_06700_on.wav sportscar_06700_off.wav
+7650 sportscar_07650_on.wav sportscar_07650_off.wav
+8600 sportscar_08600_on.wav sportscar_08600_off.wav

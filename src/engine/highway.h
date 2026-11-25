@@ -59,11 +59,21 @@ bool ready();
 
 // A line from data: points on the ground plan with the surface height (y). Thread-safe only
 // before the first query.
-void add_line(const std::vector<glm::vec3>& pts, float s0 = 0.0f);
+// `width`: the road's size against a highway's (1 = the cross-section above). A road of width
+// w is the same road w times as large across: asphalt to 5.5 w, verge to 8 w, the cut and
+// fill met by 30 w. The castle lane (one lane, 4 m of asphalt) is 0.364.
+void add_line(const std::vector<glm::vec3>& pts, float s0 = 0.0f, float width = 1.0f);
 
 // The nearest centre line within `reach` of (x, z): false when there is none. d: signed
 // distance (left of the line's direction is negative), h: surface height, s: metres along.
+// DISTANCES ARE IN THE ROAD'S OWN MEASURE: metres divided by its width (above). For a highway
+// that is metres; 5.5 is the asphalt's edge on any road, 8 its verge's. So whoever asks "is
+// this on the asphalt" needs to know nothing of how wide the road is. `reach` likewise.
+// "Nearest" is by that measure too (beside a junction a point belongs to the road whose
+// cross-section it lies further inside).
 bool nearest(float x, float z, float reach, float& d, float& h, float& s);
+bool nearest(float x, float z, float reach, float& d, float& h, float& s, int& line);
+float line_width(int line);
 // Distance to the nearest centre line (1e9 beyond 64 m).
 float distance(float x, float z);
 // The ground with the shelf: `h` is the natural height at (x, z).
@@ -77,12 +87,18 @@ float course_length();
 // carries the road (vk_engine/bridges.cpp). `bridge`: its ends, in point_along's metres.
 int   bridge_count();
 void  bridge(int i, float& s0, float& s1);
+// Every road's bridges (the two above are the course's only): which line, and from where to
+// where in that line's own metres (point_on).
+int   span_count();
+void  span(int i, int& line, float& s0, float& s1);
+bool  point_on(int line, float s, glm::vec3& pos, glm::vec2& dir);
 // On a bridge's deck: its surface height at (x, z).
 bool  deck(float x, float z, float& h);
 
 // The field around `center` (rounded by the caller): two RGBA8 images, kFieldN a side.
 //   a: R,G = signed distance (16 bit over +-64 m), B,A = surface height (16 bit over 512 m)
-//   b: R,G,B = metres along the road less s_ref, in millimetres + 2^23; A = 255
+//   b: R,G,B = metres along the road less s_ref, in millimetres + 2^23; A = the road's width x 255
+//   (the distance is in the road's own measure - see nearest())
 // bbox: min x, min z, max x, max z of where the shelf is, inside the window (the shader reads
 // the field only there). Returns false when no road is in the window.
 // `ring`: when the engine is in a chart that is not home's (engine/globe.h Ring, `on`), the
@@ -92,6 +108,9 @@ bool bake(glm::vec2 center, std::vector<uint8_t>& a, std::vector<uint8_t>& b, gl
 // The lines themselves (for what is built along them: vk_engine/highway_furniture.cpp).
 int line_count();
 const std::vector<glm::vec3>& line_points(int line);
+
+// The castle lane's end (where its car park begins) and the way the road arrives there.
+bool lane_end(glm::vec3& pos, glm::vec3& dir);
 
 // The coast road's tightest bend: where (xyz) and its radius in metres (w).
 glm::vec4 tightest_bend();

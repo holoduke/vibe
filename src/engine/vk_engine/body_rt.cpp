@@ -214,7 +214,7 @@ void VulkanEngine::record_body_rt(VkCommandBuffer cmd) {
     body_rt_list_.clear();
     if (!body_rt_pipeline_ || !game_.player_body) return;
     struct Cand { float d2; glm::mat4 model, prev; int palette; };
-    Cand cand[1 + net::kMaxPlayers + 8];
+    Cand cand[1 + net::kMaxPlayers + 8 + 32];
     int nc = 0;
     const glm::vec3 eye = current_frame_view_.eye_pos;
     auto add = [&](const glm::mat4& model, const glm::mat4& prev, int palette) {
@@ -230,6 +230,11 @@ void VulkanEngine::record_body_rt(VkCommandBuffer cmd) {
             if (a.id && a.drawn) add(a.model, a.prev_model, a.palette);
     for (const Corpse& c : corpses_)
         if (c.rag && c.av.drawn) add(c.av.model, c.av.model, c.av.palette);
+    // The people of the NPC engine (npc_world.cpp): the same rule - within kRange, the nearest
+    // kRtBodies of everybody are in the ray-traced scene (they cast the sun's sharp shadow and
+    // show in reflections); further off, the small-object shadow map has them (clutter_shadow.cpp).
+    for (const MpAvatar& a : npc_bodies_)
+        if (a.id && a.drawn) add(a.model, a.prev_model, a.palette);
     // Test hook: VIBE_BODY_RT_TEST=<n> adds n copies of the nearest soldier, a metre apart (the cost of n more).
     static const int kTest = std::getenv("VIBE_BODY_RT_TEST") ? std::atoi(std::getenv("VIBE_BODY_RT_TEST")) : 0;
     for (int i = 0; i < kTest && nc > 0 && nc < int(std::size(cand)); ++i) {

@@ -52,6 +52,15 @@ layout(push_constant) uniform PC {
     vec4 params2;   // x frame index, y camera planet radius (km), z direct-light factor, w cloud size (1 = default)
     vec4 params3;   // x cloud base altitude (m), y tallest cloud (m), z edge softness, w erosion strength
     vec4 light_col; // rgb colour of the direct light (white sun, bluish moon)
+    // The cloud field is a function of the place on the planet (home coordinates: metres east
+    // and south of home, plus the wind's travel), not of the engine's coordinates - those are
+    // re-centred as the player travels (engine/globe.h). The CPU works the camera's place out in
+    // double precision and hands it over in pieces that stay exact in a float; the shader adds
+    // the small offset from the camera (atmosphere.cpp cloud_field).
+    vec4 wx_a;      // the weather lattice at the camera: xy = cell, zw = place in the cell
+    vec4 wx_b;      // the same for the second octave (x 2.17 + 13)
+    vec4 shape0;    // xyz = the shape texture's coordinate at the camera's ground point (0..1), w = shadow map extent (m)
+    vec4 jmat;      // d(home) / d(engine xz) at the camera: rows (xy), (zw)
 } pc;
 
 // ---------------- tileable noise (generation) ----------------
@@ -123,16 +132,32 @@ const float kDetailScale = 10.0;       // detail tiles per shape tile
 const float kWeatherCell = 6500.0;     // m: size of a weather blob (x cloud size)
 const float kSigma = 0.008;            // extinction per metre at density 1 (x density)
 
-float hvalue(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
+// The weather's value noise on a lattice of whole cells: `cell0` + `p` (p: the camera's place
+// in its cell plus the offset from the camera, in cells - small numbers, whatever the cell's
+// number is). The same hash as compose.frag wm_hash: the painted weather is this field.
+float wx_hash(ivec2 c) {
+    uvec3 q = uvec3(ivec3(c, 7)) * uvec3(1597334673u, 3812015801u, 2798796415u);
+    q = (q.x ^ q.y ^ q.z) * uvec3(1597334673u, 3812015801u, 2798796415u);
+    return float(q.x) * (1.0 / 4294967295.0);
+}
+float hvalue(ivec2 cell0, vec2 p) {
+    vec2 fl = floor(p), f = p - fl;
+    ivec2 i = cell0 + ivec2(fl);
     f = f * f * (3.0 - 2.0 * f);
-    float a = hash33(vec3(i, 7.0)).x, b = hash33(vec3(i + vec2(1, 0), 7.0)).x;
-    float c = hash33(vec3(i + vec2(0, 1), 7.0)).x, d = hash33(vec3(i + vec2(1, 1), 7.0)).x;
+    float a = wx_hash(i), b = wx_hash(i + ivec2(1, 0));
+    float c = wx_hash(i + ivec2(0, 1)), d = wx_hash(i + ivec2(1, 1));
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
-// Altitude above the ground sphere (the world's y = 0 plane touches it
-// under the origin): y plus the planet's drop-off with distance.
-float altitude(vec3 p) { return p.y + dot(p.xz, p.xz) / (2.0 * kPlanetR); }
+// Home metres from the camera's ground point to p's (the engine's axes turned into home's).
+vec2 home_off(vec3 p) {
+    vec2 l = p.xz - pc.eye.xz;
+    return vec2(dot(pc.jmat.xy, l), dot(pc.jmat.zw, l));
+}
+// Altitude above the ground sphere: y plus the planet's drop-off with distance FROM THE CAMERA
+// (the engine's ground is the planet unrolled - y is the height over the sea everywhere - and a
+// straight line of sight leaves it by d^2 / 2R). It used to be taken from the engine's origin,
+// which is kilometres from the player in every chart but home's.
+float altitude(vec3 p) { vec2 l = p.xz - pc.eye.xz; return p.y + dot(l, l) / (2.0 * kPlanetR); }
 
 // Density 0..1 at world point p (sampleCloud). `detail`: erode the edges.
 float sample_cloud(vec3 p, bool detail) {
@@ -140,7 +165,7 @@ float sample_cloud(vec3 p, bool detail) {
     float alt = altitude(p);
     if (alt < base_alt || alt > base_alt + tallest) return 0.0;
     float size = max(pc.params2.w, 0.2);
-    vec3 wind = vec3(1.0, 0.0, 0.35) * pc.params.z * pc.eye.w;
+    vec2 ho = home_off(p);
 
     // 1. Weather: coverage. The coverage setting (and the weather system
     // behind it) slides the whole field from clear to overcast.
@@ -149,11 +174,11 @@ float sample_cloud(vec3 p, bool detail) {
     // kept re-forming at the same rate whatever its distance - far clouds
     // seemed to move as fast as near ones. Now distance alone sets how fast
     // a cloud crosses the sky.)
-    vec2 wp = (p.xz + wind.xz) / (kWeatherCell * size);
-    float wn = hvalue(wp) * 0.7 + hvalue(wp * 2.17 + 13.0) * 0.3;
+    vec2 wl = ho / (kWeatherCell * size);
+    float wn = hvalue(ivec2(pc.wx_a.xy), pc.wx_a.zw + wl) * 0.7 + hvalue(ivec2(pc.wx_b.xy), pc.wx_b.zw + wl * 2.17) * 0.3;
     float cov = clamp(pc.params.x, 0.0, 1.0);
     float map_cov = smoothstep(0.2, 0.8, clamp(smoothstep(0.2, 0.8, wn) + (cov - 0.5) * 1.5, 0.0, 1.0));
-    if (map_cov <= 0.01) return 0.0;
+    if (map_cov <= 0.01) return -1.0;        // (no weather here at any height: the march strides on)
 
     // Coverage sets the height the clouds reach there: towers where the
     // weather is thick, low puffs at its edges.
@@ -162,7 +187,7 @@ float sample_cloud(vec3 p, bool detail) {
     if (hp > 1.0) return 0.0;
 
     // 2. Base shape (wind also carries it slowly downward: the layer boils).
-    vec3 nc = (p + wind + vec3(0.0, -0.025 * pc.params.z * pc.eye.w, 0.0)) / (kShapePeriod * size);
+    vec3 nc = pc.shape0.xyz + vec3(ho.x, p.y, ho.y) / (kShapePeriod * size);
     float base = textureLod(u_shape, nc, 0.0).r;
 
     // 3. Vertical shaping and coverage (original defaults: shapeBase 0.2,
@@ -196,7 +221,7 @@ float hg(float c, float g) { float g2 = g * g; return (1.0 - g2) / (4.0 * kAtmoP
 
 // Distance along the ray to the shell at altitude `a` (far side), < 0 = none.
 vec2 hit_shell(vec3 ro, vec3 rd, float a) {
-    vec3 oc = ro + vec3(0.0, kPlanetR, 0.0);
+    vec3 oc = vec3(0.0, ro.y + kPlanetR, 0.0);          // (the sphere's centre is under the camera - see altitude())
     float r = kPlanetR + a;
     float b = dot(oc, rd);
     float c = dot(oc, oc) - r * r;
@@ -218,9 +243,21 @@ void render(ivec2 px) {
     // that base is always in front of it)
     bool from_above = altitude(ro) > pc.params3.x;
     vec4 dg = textureGather(u_depth, uv, 0);
-    if (max(max(dg.x, dg.y), max(dg.z, dg.w)) < (from_above ? 0.9995 : 0.99999)) { imageStore(o_clouds, px, vec4(0.0)); return; }
+    float dmax = max(max(dg.x, dg.y), max(dg.z, dg.w));
+    if (dmax < 0.9995) { imageStore(o_clouds, px, vec4(0.0)); return; }
     vec4 wf = pc.inv_vp * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
     vec3 rd = normalize(wf.xyz / wf.w - ro);
+    // From below the layer, land is in front of the clouds - unless it stands up into them: a
+    // mountain whose flank is above the cloud base has cloud between the eye and itself. The
+    // march then ends at the land (t_land). It used to be "sky pixels only": a cloud drifting
+    // in front of a far peak was cut out along the peak's outline.
+    float t_land = 1e9;
+    if (!from_above && dmax < 0.99999) {
+        vec4 wl4 = pc.inv_vp * vec4(uv * 2.0 - 1.0, dmax, 1.0);
+        vec3 wl = wl4.xyz / wl4.w;
+        if (altitude(wl) < pc.params3.x + 20.0) { imageStore(o_clouds, px, vec4(0.0)); return; }
+        t_land = distance(wl, ro);
+    }
 
     // The layer between two spherical shells: it curves down to the horizon.
     float base_alt = pc.params3.x, top_alt = pc.params3.x + pc.params3.y;
@@ -238,7 +275,8 @@ void render(ivec2 px) {
         t_near = h_top.x; t_far = (h_base.x > 0.0) ? h_base.x : h_top.y;
     }
     const float kMaxDistance = 90000.0;
-    t_far = min(t_far, t_near + kMaxDistance);
+    t_far = min(min(t_far, t_near + kMaxDistance), t_land);
+    if (t_far <= t_near) { imageStore(o_clouds, px, vec4(0.0)); return; }
 
     // Per-pixel jitter (interleaved gradient noise, frame-varying).
     float jit = fract(52.9829189 * fract(dot(vec2(px) + pc.params2.x * 5.588, vec2(0.06711056, 0.00583715))));
@@ -266,12 +304,30 @@ void render(ivec2 px) {
     float step_len = 70.0;             // first step (m); grows with distance
     int hits = 0;
     float first_hit = -1.0;
+    // Where the weather map has no cloud at any height (sample_cloud < 0) the march strides
+    // on by half a kilometre and more; the step after such a stride that finds weather goes
+    // back to where the stride began and walks it at the normal step, so a cloud's near edge
+    // is not jumped over. A clear sky is then a few dozen samples a pixel, not 176.
+    float stride_back = 0.0, walk_until = -1.0;
     for (int i = 0; i < 176; ++i) {
         if (t >= t_far || T < 0.01) break;
         float ts = t + step_len * jit;
         if (ts >= t_far) break;
         vec3 p = ro + rd * ts;
         float raw = sample_cloud(p, true);
+        if (raw >= 0.0 && stride_back > 0.0) { walk_until = t; t -= stride_back; stride_back = 0.0; continue; }
+        if (raw < 0.0) {
+            if (t < walk_until) {                     // (walking a stride again: normal steps up to where the weather was found)
+                t += step_len * 1.9;
+            } else {
+                float big = max(step_len * 1.9, 500.0 + 0.02 * (t - t_near));
+                stride_back = big - step_len;
+                t += big;
+            }
+            step_len = min(step_len * 1.012, 900.0);
+            continue;
+        }
+        stride_back = 0.0;
         float dens = soft_edge(raw);
         if (dens > 0.001) {
             if (first_hit < 0.0) first_hit = ts;
@@ -279,9 +335,12 @@ void render(ivec2 px) {
             // steps; the last two skip the detail texture).
             float sd = 0.0, ls = max(step_len, 80.0);
             vec3 lp = p;
+// (each tap at its own place within its stretch, another every pixel and frame: at
+            //  fixed distances the shadow inside a cloud came out in contour bands)
             for (int k = 0; k < 4; ++k) {
+                float jl = fract(jit + 0.618034 * float(k + 1));
+                sd += max(sample_cloud(lp + sun * (ls * jl), k < 2), 0.0) * (ls / 110.0);
                 lp += sun * ls;
-                sd += sample_cloud(lp, k < 2) * (ls / 110.0);
                 ls *= 1.7;
             }
             // Beer's law and the powder term (dark edges facing the sun).
@@ -319,19 +378,26 @@ void render(ivec2 px) {
 // Texel -> the point on the y = 0 plane it stands for; marched from there
 // toward the sun through the whole layer with the same density function
 // the sky is rendered with, so every shadow lies under its own cloud.
-const float kShadowExtent = 6144.0;    // m, centred on the world origin (keep in sync: scene_ubo.glsl)
+// The map WRAPS: texel (i, j) holds the point congruent to it (modulo the extent, pc.shape0.w)
+// that is nearest the camera - so it covers the extent round the camera wherever the camera
+// is, and a point keeps its texel while the camera moves (scene_ubo.glsl cloud_shadow reads it
+// with a repeating sampler and the same extent - kCloudShadowExtent there).
 void shadow_map(ivec2 px) {
-    vec2 xz = ((vec2(px) + 0.5) / vec2(imageSize(o_shadow)) - 0.5) * kShadowExtent;
+    float ext = pc.shape0.w;
+    vec2 xz = (vec2(px) + 0.5) / vec2(imageSize(o_shadow)) * ext;
+    xz += ext * round((pc.eye.xz - xz) / ext);
     vec3 L = normalize(pc.sun.xyz);
     float ly = max(L.y, 0.10);
     float base_alt = pc.params3.x, tallest = pc.params3.y;
-    const int N = 12;
+    const int N = 32;
     float od = 0.0;
     for (int i = 0; i < N; ++i) {
         float h = base_alt + tallest * (float(i) + 0.5) / float(N);
         vec3 p = vec3(xz.x + L.x / ly * h, h, xz.y + L.z / ly * h);
-        p.y -= dot(p.xz, p.xz) / (2.0 * kPlanetR);          // sample_cloud works in altitude
-        od += soft_edge(sample_cloud(p, false));
+        { vec2 pl = p.xz - pc.eye.xz; p.y -= dot(pl, pl) / (2.0 * kPlanetR); }          // sample_cloud works in altitude
+        // (with the detail, as the sky is drawn: without the erosion of the edges every wisp of the
+        //  base shape counted as cloud, and a shadow was the size of its whole weather cell)
+        od += soft_edge(sample_cloud(p, true));
     }
     od *= max(pc.params.y, 0.0) * kSigma * (tallest / float(N)) / ly;
     imageStore(o_shadow, px, vec4(exp(-od)));

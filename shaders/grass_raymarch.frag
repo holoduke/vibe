@@ -1043,9 +1043,9 @@ void main() {
         if (lI < 1e-3) continue;
         vec3 lto = scene.lamp_lights[li].xyz - p;
         float ld_len = length(lto);
-        if (ld_len >= 13.0) continue;
+        if (ld_len >= 34.0) continue;
         vec3 ldir = lto / max(ld_len, 1e-3);
-        float lfall = 1.0 - ld_len / 13.0; lfall *= lfall;
+        float lfall = 1.0 - ld_len / 34.0; lfall = lfall * lfall * lfall * lfall * lfall;
         rayQueryEXT lrq;
         rayQueryInitializeEXT(lrq, topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT,
                               0x01u, p + vec3(0.0, 0.04, 0.0), 0.3, ldir, max(ld_len - 0.45, 0.31));

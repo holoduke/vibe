@@ -32,7 +32,7 @@ struct MsgWorld   { uint8_t type; WorldState w; };
 struct MsgCar     { uint8_t type; uint32_t id; uint32_t t; uint8_t t_frac; PackedCar c; };      // (t_frac: 1/256 ms)
 #pragma pack(pop)
 
-enum : uint8_t { kMsgState = 1, kMsgSnap = 2, kMsgEvent = 3, kMsgHello = 4, kMsgWorld = 5, kMsgCar = 6 };
+enum : uint8_t { kMsgState = 1, kMsgSnap = 2, kMsgEvent = 3, kMsgHello = 4, kMsgWorld = 5, kMsgCar = 6, kMsgNpc = 7 };
 constexpr uint8_t kVersion = kProtocolVersion;
 
 // VIBE_NET_PORT=<n>: another discovery port (game ports follow it), so test instances on a
@@ -275,6 +275,21 @@ void Session::send_world(const WorldState& w) {
     else if (role_ == Role::Client) { m.w.request = 1; d_->send(d_->server, &m, sizeof(m), true); }
 }
 
+void Session::send_npc(const uint8_t* data, size_t size) {
+    if (!d_->host || role_ != Role::Host || !data || size == 0 || size > kMaxNpcBytes) return;
+    uint8_t buf[1 + kMaxNpcBytes];
+    buf[0] = kMsgNpc;
+    std::memcpy(buf + 1, data, size);
+    d_->send_all(buf, 1 + size, false);
+}
+
+bool Session::take_npc(std::vector<uint8_t>& out) {
+    if (!npc_new_) return false;
+    npc_new_ = false;
+    out = npc_;
+    return true;
+}
+
 bool Session::take_world(WorldState& out) {
     if (!world_new_) return false;
     world_new_ = false;
@@ -369,6 +384,9 @@ void Session::update(double now, const PlayerState& local) {
                 // (a duplicate or a stale repeat is neither played nor passed on)
                 if (gate_.push(m.e)) { if (role_ == Role::Host) d_->send_all(&m, sizeof(m), true, ev.peer); }
                 else ++stats_.duplicate_events;
+            } else if (type == kMsgNpc && len > 1 && len <= 1 + kMaxNpcBytes) {
+                // (only the host's word counts; what is in it is npc::World::apply's to check)
+                if (ev.peer == d_->server) { npc_.assign(data + 1, data + len); npc_new_ = true; }
             } else if (type == kMsgWorld && len == sizeof(MsgWorld)) {
                 MsgWorld m; std::memcpy(&m, data, sizeof(m));
                 // host: only requests from clients; client: only from the host

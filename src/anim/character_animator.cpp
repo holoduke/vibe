@@ -285,6 +285,7 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
     }
 
     if (in.seated) seated(in);
+    else if (in.action_clip >= 0 && in.action_clip < rt.num_clips()) action(in);
     else {
     float ground_dist = 1e9f;
     if (!in.grounded && in.ground_height) ground_dist = std::max(0.0f, -ground_at(in, glm::vec3(0.0f)));
@@ -363,10 +364,100 @@ void CharacterAnimator::seated(const CharacterAnimationInput& in) {
         if (sl > 1e-5f) rotate_in_model(c, glm::angleAxis(std::atan2(sl, cl), ax / sl));
         rt.local_to_model(*ctx_, pose_, model_);
     }
+    // (through the inertialiser: no pop from the end of "sitting down" into this, or out of it)
+    src_ = pose_;
+    if (last_mode_ != 1 && started_ && !in.teleported) inert_.transition(src_, src_, 0.0f);
+    last_mode_ = 1;
+    inert_.apply(src_, std::clamp(in.dt, 0.0f, 0.1f), tuning.inertial_halflife, pose_);
+    started_ = true;
+    rt.local_to_model(*ctx_, pose_, model_);
     dbg_.mode = "seated";
 }
 
-void CharacterAnimator::lower_body(const CharacterAnimationInput& in, glm::vec2 v_local, float speed, float yaw_rate, float ground_dist) {
+// An action clip (CharacterAnimationInput::action_clip): sampled at the caller's time, with its
+// own travel from its first frame; inertialised in; the hips warped to where they must end.
+void CharacterAnimator::action(const CharacterAnimationInput& in) {
+    const IAnimationRuntime& rt = *set_.runtime;
+    const Rig& rig = rt.rig();
+    const SkeletonDef& sk = rt.skeleton();
+    const ClipInfo& ci = rt.clip(in.action_clip);
+    const float dt = std::clamp(in.dt, 0.0f, 0.1f);
+    const float last = std::max(ci.duration - 1e-3f, 0.0f);
+    const float t = std::clamp(in.action_time, 0.0f, last);
+    const int hips = rig[Role::Hips];
+    auto sample_at = [&](int slot, float tt, std::vector<Transform>& p) {
+        rt.sample(*ctx_, slot, in.action_clip, tt, p);
+        p[0] = rt.root_motion(*ctx_, in.action_clip, 0.0f, tt);          // (the clip's travel since its first frame)
+        if (in.action_in_place) p[0] = Transform{};
+    };
+    sample_at(0, t, src_);
+    const float u = ci.duration > 0.05f ? t / ci.duration : 1.0f;
+    if (in.action_end_at_origin) {
+        const Transform all = rt.root_motion(*ctx_, in.action_clip, 0.0f, last);
+        const float k = smooth01(u);
+        src_[0].t.x -= all.t.x * k; src_[0].t.z -= all.t.z * k;
+    }
+    const bool looped = last_mode_ == 2 && action_clip_ == in.action_clip && t < action_last_t_ - 0.25f;
+    action_last_t_ = t;
+    if (looped && started_) inert_.transition(src_, src_, 0.0f);
+    if (last_mode_ != 2 || action_clip_ != in.action_clip) {
+        const float h = 1.0f / 30.0f;
+        sample_at(1, std::min(t + h, last), next_);
+        if (started_ && !in.teleported) inert_.transition(src_, next_, h);
+        action_clip_ = in.action_clip;
+        last_mode_ = 2;
+        if (hips >= 0) {
+            sample_at(1, in.action_warp_from_start ? 0.0f : last, next_);
+            rt.local_to_model(*ctx_, next_, model_);
+            action_ref_hips_ = glm::vec3(model_[size_t(hips)][3]);
+        }
+    }
+    inert_.apply(src_, dt, tuning.inertial_halflife, pose_);
+    started_ = true;
+    rt.local_to_model(*ctx_, pose_, model_);
+    if (in.action_warp && hips >= 0) {
+        float w = smooth01(u);
+        if (in.action_warp_from_start) w = 1.0f - w;
+        if (in.action_warp_full) w = 1.0f;
+        const glm::vec3 delta = (in.action_hips - action_ref_hips_) * w;
+        const Role leg[2][3] = { { Role::LeftUpLeg, Role::LeftLeg, Role::LeftFoot }, { Role::RightUpLeg, Role::RightLeg, Role::RightFoot } };
+        glm::vec3 foot[2]{};
+        bool stands[2] = { false, false };
+        for (int s = 0; s < 2; ++s) {
+            const int f = rig[leg[s][2]];
+            if (f < 0) continue;
+            foot[s] = glm::vec3(model_[size_t(f)][3]);
+            stands[s] = foot[s].y < 0.24f;                             // (an ankle near the ground: that foot stands)
+        }
+        const int par = sk.parents[size_t(hips)];
+        const glm::mat3 P = par >= 0 ? glm::mat3(model_[size_t(par)]) : glm::mat3(1.0f);
+        pose_[size_t(hips)].t += glm::transpose(P) * delta;
+        rt.local_to_model(*ctx_, pose_, model_);
+        for (int s = 0; s < 2; ++s) {
+            const int a = rig[leg[s][0]], b = rig[leg[s][1]], c = rig[leg[s][2]];
+            if (!stands[s] || a < 0 || b < 0 || c < 0) continue;
+            // (A foot stays where the clip put it while the hips are moved a little - sitting
+            //  down on a chair a hand further back. Moved far - into a car's seat a metre to
+            //  the side - the feet go with the body: pinned, a leg stayed outside the car,
+            //  through the door.)
+            const float go = glm::smoothstep(0.18f, 0.55f, glm::length(glm::vec2(delta.x, delta.z)));
+            fit_limb(a, b, c, foot[s] + delta * go, nullptr);
+            rt.local_to_model(*ctx_, pose_, model_);
+        }
+    }
+    dbg_.mode = "action";
+    dbg_.clip = in.action_clip;
+    dbg_.clip_time = t;
+}
+
+// An action clip's travel from its first frame to `t` (for whoever places the model: how far
+// it goes, and how far it turns).
+Transform CharacterAnimator::action_root(ClipId clip, float t) const {
+    return set_.runtime->root_motion(*ctx_, clip, 0.0f, t);
+}
+
+void CharacterAnimator::lower_body(
+const CharacterAnimationInput& in, glm::vec2 v_local, float speed, float yaw_rate, float ground_dist) {
 
     const IAnimationRuntime& rt = *set_.runtime;
     const MotionDatabase& db = set_.db;
@@ -493,6 +584,7 @@ void CharacterAnimator::lower_body(const CharacterAnimationInput& in, glm::vec2 
     };
     rt.sample(*ctx_, 0, cur_.clip, cur_.time, src_);
     prepare(src_);
+    if (last_mode_ != 0) { switched = true; last_mode_ = 0; action_clip_ = kNoClip; }      // (back from a seat or an action)
     if (switched && started_) {
         const float h = 1.0f / db.sample_rate();
         if (ao.active) inert_.transition(src_, src_, 0.0f);     // (a scrubbed flight has no pace of its own)

@@ -35,6 +35,8 @@ enum ClipTag : uint32_t {
     kTagIdle       = 1u << 3,   // standing still
     kTagShortTake  = 1u << 4,   // a take of a second or two (a run cut after a few strides): for the search its end
                                 // is continued at its last pace, and all but its last frames can be jumped to
+    kTagAction     = 1u << 5,   // something done once, played by name (sitting down, getting into a car): never
+                                // found by the locomotion search (CharacterAnimationInput::action_clip)
 };
 
 struct ClipInfo {

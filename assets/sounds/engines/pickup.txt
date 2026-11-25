@@ -1,0 +1,8 @@
+700 pickup_00700_on.wav pickup_00700_off.wav
+1514 pickup_01514_on.wav pickup_01514_off.wav
+2329 pickup_02329_on.wav pickup_02329_off.wav
+3143 pickup_03143_on.wav pickup_03143_off.wav
+3957 pickup_03957_on.wav pickup_03957_off.wav
+4771 pickup_04771_on.wav pickup_04771_off.wav
+5586 pickup_05586_on.wav pickup_05586_off.wav
+6400 pickup_06400_on.wav pickup_06400_off.wav

@@ -90,6 +90,7 @@ struct RtSettings {
         // offers A2B10G10R10 + HDR10_ST2084; falls back to SDR otherwise.
         int   hdr_output = 1;
         int   radiance_cache = 1;   // world-space GI radiance cache (SHaRC-style)
+        int   irradiance_cache = 1; // a pixel's bounce light read from that cache instead of traced (needs radiance_cache)
         float hdr_paper_nits = 200.0f;   // SDR-white / UI brightness
         float hdr_peak_nits  = 1000.0f;  // display peak (tonemap shoulder)
         float aerial_scale = 6.0f;

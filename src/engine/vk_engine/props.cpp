@@ -1121,7 +1121,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
                               glm::scale(glm::mat4(1.0f), glm::vec3(0.22f, 0.13f, 0.25f)),
                   glm::vec4(0.16f, 0.20f, 0.12f, 1.0f), glm::vec3(0.0f), false);
         }
-        if (mp_->draw->corpse) return;          // a body on the ground: no weapon in its hands
+        if (mp_->draw->corpse || mp_->draw->unarmed) return;          // a body on the ground: no weapon in its hands
     }
 
     if (flashlight_on_) {              // the flashlight replaces the weapon in the hand
@@ -1347,6 +1347,10 @@ void VulkanEngine::rebuild_tick_aabbs() {
         slot.body_id = dp.body_id;
         tick_aabbs_.push_back(slot.aabb);
     }
+    jeep_player_colliders(tick_aabbs_);          // the cars (not the one the player sits in)
+    if (globe::current().home)                   // the castle lane's stones near the player
+        for (const collision::AABB& a : lane_rock_cols_)
+            if (std::abs(0.5f * (a.min.x + a.max.x) - player_.position.x) < 12.0f && std::abs(0.5f * (a.min.z + a.max.z) - player_.position.z) < 12.0f) tick_aabbs_.push_back(a);
 }
 
 void VulkanEngine::init_doors() {

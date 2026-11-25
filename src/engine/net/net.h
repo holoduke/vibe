@@ -113,6 +113,12 @@ public:
     const std::vector<RemoteCar>& cars() const { return cars_; }
     void send_world(const WorldState& w);     // host: to all clients; client: request to the host
     bool take_world(WorldState& out);         // the newest world state received since the last call
+    // The people and cars that live their own life (src/npc): the host's world, as its own
+    // bytes (npc::World::serialize) - the session only carries them. Host: to all clients, a few
+    // times a second, unreliable (the next one replaces a lost one). Client: the newest received.
+    static constexpr size_t kMaxNpcBytes = 4 + 100 * 27;
+    void send_npc(const uint8_t* data, size_t size);
+    bool take_npc(std::vector<uint8_t>& out);
 
     const std::vector<RemotePlayer>& players() const { return players_; }
     Role        role() const { return role_; }
@@ -138,6 +144,8 @@ private:
     uint16_t event_seq_ = 0;
     WorldState world_{};
     bool world_new_ = false;
+    std::vector<uint8_t> npc_;
+    bool npc_new_ = false;
 
     RemotePlayer& player(uint32_t id);
     void remove_player(uint32_t id);

@@ -128,6 +128,8 @@ void make_stations(glm::vec3 base) {
         for (size_t i = 5; i < n; i += 10) {
             const size_t d = i > k0 ? i - k0 : k0 - i;
             if (std::min(d, n - d) > 500) continue;
+            // (not in the mouth of the service station's way in: terrain.h kStation*)
+            if (std::abs(g_st[i].p.z - kStationZ) < 19.0f && std::abs(g_st[i].p.x - (kStationX + 42.7f)) < 14.0f) continue;
             g_lamp[i] = 1;
             g_lamp_light.push_back(g_st[i].p - g_st[i].sea * (kLampSide - kLampArm) + glm::vec3(0.0f, kLampHigh - 0.25f, 0.0f));
         }

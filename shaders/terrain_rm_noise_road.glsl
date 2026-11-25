@@ -114,8 +114,11 @@ bool rm_flat_on() { return !rm_far_chart() || rm_ring(); }
 //   1 close-up ground textures   2 stones in the normal      4 the ground's own sun shadow
 //   8 grass blade shadows       16 small plants' shadow map  32 ray-traced object shadows
 // 512 screen-space normal      1024 close-range ground relief   32768 stones in the march
+// 128 the relief left out of the march (before any of its work)
 // 65536 object shadows only where the ground faces the sun (as before 2026-11-24)
 // 131072 water flat (the shading test)
+// 524288 the normal's relief from the main rills alone   1048576 one tap of the relief in the normal, not three
+// 2097152 view: the cloud shadow map on the ground (white = open sky)
 #ifdef VIBE_LITE
 // The "first start" build of this shader (see VIBE_LITE in terrain_raymarch.frag): the sections
 // in VIBE_LITE_MASK are compiled out for good.
@@ -162,7 +165,14 @@ float rm_site_ground(float h, vec2 wp) {
 bool rm_hw_in(vec2 wp) {
     return scene.hw_info.z > 0.5 && all(greaterThan(wp, scene.hw_bbox.xy)) && all(lessThan(wp, scene.hw_bbox.zw));
 }
-vec2 rm_hw_dh(vec2 wp) {             // x: signed distance to the centre line (m), y: the road's height
+// The distance is in the ROAD'S OWN MEASURE: metres divided by the road's width against a
+// highway's (highway.h nearest). 5.5 is the asphalt's edge and 8 the verge's on any road, so
+// the shelf, the relief's cut-out and the surface's layout need not know how wide a road is;
+// what is laid out in real metres (wheel tracks, paint, cracks) asks rm_hw_width.
+float rm_hw_width(vec2 wp) {         // 1 a highway; 0.364 the castle lane
+    return max(textureLod(u_normal[31], (wp - scene.hw_info.xy) / scene.hw_info.w + 0.5, 0.0).a, 0.2);
+}
+vec2 rm_hw_dh(vec2 wp) {             // x: signed distance to the centre line (the road's measure), y: the road's height
     vec4 f = textureLod(u_normal[30], (wp - scene.hw_info.xy) / scene.hw_info.w + 0.5, 0.0);
     return vec2((f.r * 65280.0 + f.g * 255.0) * (128.0 / 65535.0) - 64.0, (f.b * 65280.0 + f.a * 255.0) * (512.0 / 65535.0) - 64.0);
 }
@@ -179,7 +189,21 @@ float rm_highway(float h, vec2 wp) {
     // (the crown: 2 % from the centre line to the asphalt's edge, 5 % over the verge - highway.cpp cross_fall)
     float ad = abs(dh.x);
     float fall = 0.02 * min(ad, 5.5) + 0.05 * clamp(ad - 5.5, 0.0, 2.5);
-    return w <= 0.0 ? h : mix(h, dh.y - fall, w);
+    float hr = w <= 0.0 ? h : mix(h, dh.y - fall, w);
+    // Beside the service station (terrain.h kStationEdge; highway.cpp ground() - keep in step) the
+    // shelf's 22 m of cut and fill would run through the forecourt. There the ground is the
+    // terrace up to the plot's edge, and from that edge a straight ramp to the road's verge.
+    // (Not where there is no road in the ground - under the bridge south of the station the
+    //  distance reads "far": the ramp was then drawn toward a road 64 m off, a sunken flat
+    //  with walls, while the CPU's ground had none: grass and stones hung over the hole. And
+    //  the rule ends before the bridge begins (z 565..573; the span starts at 577).)
+    if (wp.y > 503.0 && wp.y < 573.0 && wp.x < 1654.0 && ad > 8.0 && ad < 60.0) {
+        float a = wp.x - 1642.6, b = ad - 8.0;
+        float k = a <= 0.0 ? 0.0 : smoothstep(0.0, 1.0, a / (a + b));
+        float hz = a <= 0.0 ? h : mix(41.825, dh.y - fall, k);
+        hr = mix(hr, hz, smoothstep(503.0, 509.0, wp.y) * (1.0 - smoothstep(565.0, 573.0, wp.y)));
+    }
+    return hr;
 }
 // Land or sea (.x, wm_continent's value) and the ranges (.y) at a chart position, as the
 // height formula reads them - from the formula itself.
@@ -404,16 +428,21 @@ float snow_road_patch(vec2 wp) {
 //   tex: the scan's colour here, hgt: its height (0 pores .. 1 stone tops).
 // Returns the colour; gloss: 0 matt .. 1 like tar.
 float rm_hw_hash(float x) { return fract(sin(x * 12.9898) * 43758.5453); }
-vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, out float gloss) {
+// `wk`: the road's width (rm_hw_width). A road of one lane (wk < 0.75) has one pair of wheel
+// tracks about its middle, an edge line a hand inside each edge, and no line down the middle.
+vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, float wk, out float gloss) {
     float ad = abs(d), lane = d < 0.0 ? -1.0 : 1.0;
+    bool  one = wk < 0.75;
+    float ar = ad * wk;                                   // metres from the centre line
+    if (one) lane = 1.0;
     float near = 1.0 - smoothstep(4.0, 30.0, t), mid = 1.0 - smoothstep(60.0, 220.0, t);
     float fw = max(t * 0.0022, 0.004);                    // what a pixel covers, about
     vec3 a = tex * 0.60;
     a *= mix(0.84, 1.14, noise2(vec2(s * 0.011, d * 0.06 + lane * 3.0) + 3.0));
     a *= mix(0.93, 1.06, tile_noise2(wp, 0.9, vec2(0.0)));
     gloss = 0.22;
-    float track = 1.0 - smoothstep(0.20, 0.62, abs(abs(ad - 1.95) - 0.85));
-    float oil = (1.0 - smoothstep(0.10, 0.50, abs(ad - 1.95))) * smoothstep(0.25, 0.7, noise2(vec2(s * 0.05, lane * 5.0)));
+    float track = 1.0 - smoothstep(0.20, 0.62, one ? abs(ar - 0.80) : abs(abs(ad - 1.95) - 0.85));
+    float oil = (1.0 - smoothstep(0.10, 0.50, one ? ar : abs(ad - 1.95))) * smoothstep(0.25, 0.7, noise2(vec2(s * 0.05, lane * 5.0)));
     a *= 1.0 + 0.11 * track - 0.20 * oil * mid;
     gloss += 0.16 * track + 0.10 * oil;
     {   // a patch: a rectangle of newer asphalt, in some 37 m stretches of a lane
@@ -421,7 +450,7 @@ vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, out 
         if (r > 0.70) {
             float r2 = rm_hw_hash(cell * 3.1 + 7.0), r3 = rm_hw_hash(cell * 5.3 + 2.0), r4 = rm_hw_hash(cell * 7.9 + 4.0);
             vec2 c = vec2((cell + 0.3 + 0.4 * r2) * 37.0, 0.9 + 2.2 * r3), hs = vec2(1.5 + 5.0 * r4, 0.7 + 0.9 * r2);
-            vec2 q = abs(vec2(s, ad) - c) - hs;
+            vec2 q = abs(vec2(s, one ? ar + 0.9 : ad) - c) - hs;
             float sd = max(q.x, q.y);
             float in_p = 1.0 - smoothstep(-fw, fw, sd);
             a = mix(a, tex * 0.36 * vec3(0.96, 0.98, 1.04), in_p);
@@ -434,7 +463,7 @@ vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, out 
     {   // cracks across the lane, sealed with tar
         float per = 19.0, cell = floor(s / per + 0.5), r = rm_hw_hash(cell * 2.3 + lane * 11.0);
         if (r > 0.45) {
-            float x = s - cell * per + (noise2(vec2(ad * 0.9, cell)) - 0.5) * 1.1 + (r - 0.7) * 6.0;
+            float x = s - cell * per + (noise2(vec2(ar * 0.9, cell)) - 0.5) * 1.1 + (r - 0.7) * 6.0;
             float ext = 1.0 - smoothstep(3.2 + 2.0 * r, 3.6 + 2.0 * r, ad);
             float cr = (1.0 - smoothstep(0.016, 0.016 + fw, abs(x))) * min(1.0, 0.04 / fw) * ext;
             a = mix(a, vec3(0.013), cr * 0.9);
@@ -456,10 +485,11 @@ vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, out 
         // worn where the wheels cross.
         float pw = max(fw, 0.01);
         float jit = (tile_noise2(wp, 11.0, vec2(0.0)) - 0.5) * 0.014 * near;
-        float e = clamp((0.075 + jit - abs(ad - 3.75)) / pw + 0.5, 0.0, 1.0) * min(1.0, 0.15 / pw);
+        float e = one ? clamp((0.05 + jit - abs(ar - 1.74)) / pw + 0.5, 0.0, 1.0) * min(1.0, 0.10 / pw)
+                      : clamp((0.075 + jit - abs(ad - 3.75)) / pw + 0.5, 0.0, 1.0) * min(1.0, 0.15 / pw);
         float dx = abs(fract(s / 12.0) * 12.0 - 1.5);
         float c = clamp((0.075 + jit - ad) / pw + 0.5, 0.0, 1.0) * min(1.0, 0.15 / pw) * clamp((1.5 - dx) / (pw * 3.0) + 0.5, 0.0, 1.0);
-        float paint = max(e, c);
+        float paint = one ? e : max(e, c);
         float wear = smoothstep(0.42, 0.82, tile_noise2(wp, 1.7, vec2(7.0)) * 0.55 + tile_noise2(wp, 23.0, vec2(0.0)) * 0.25 * near + hgt * 0.35 * near + 0.10);
         paint *= 1.0 - mix(0.22, 0.80 * wear, near);
         a = mix(a, vec3(0.50, 0.50, 0.47) * mix(0.85, 1.0, tile_noise2(wp, 0.8, vec2(0.0))), paint);

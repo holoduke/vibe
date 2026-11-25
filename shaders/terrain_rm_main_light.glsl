@@ -224,6 +224,9 @@
     }
 
     vec3 mate = getMaterial(pos, nor) * rm_det_tint;
+    // (a steep face: the rock itself - terrain_rm_main_ground.glsl rm_cliff. A little of what
+    //  grows there is left: moss in streaks, not a lawn.)
+    if (rm_cliff > 0.001) mate = mix(mate, rm_cliff_alb * mix(vec3(1.0), vec3(0.80, 0.95, 0.70), 0.35 * smoothstep(0.55, 0.8, tile_noise2(pos.xz, 0.09, vec2(4.0)))), rm_cliff * 0.92);
 #if !defined(VIBE_LITE) && !defined(VIBE_WATER)
     if (RMDBG(256)) mate = lo_ok ? vec3(0.1, 0.8, 0.1) : vec3(0.9, 0.1, 0.1);    // profiling: green = sun shadows taken from the low-resolution pass
 #endif
@@ -418,7 +421,7 @@
         if (hw_pave > 0.001) {
             vec3 tex = textureLod(u_albedo[kRmMatAsphalt], hw_uv, hw_lod).rgb * 0.50;
             float gl = 0.0;
-            vec3 asph = rm_hw_asphalt(pos.xz, hw_d, hw_s, t, tex, hw_hgt, gl);
+            vec3 asph = rm_hw_asphalt(pos.xz, hw_d, hw_s, t, tex, hw_hgt, hw_wk, gl);
             mate = mix(mate, asph, hw_pave);
             hw_gloss = gl * hw_pave;
         }

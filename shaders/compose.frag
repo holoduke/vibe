@@ -1119,7 +1119,8 @@ void main() {
 void main() {
     float alt_m = (pc.atmo.z - 6360.0) * 1000.0;
     float depth = texelFetch(history_depth, ivec2(gl_FragCoord.xy), 0).r;
-    if (alt_m <= u_exposure.misc2.x || depth <= 0.9995 || depth >= 0.99999) discard;
+    // (from below the layer too: clouds.comp marches them in front of land that stands above the cloud base)
+    if (depth <= 0.9995 || depth >= 0.99999) discard;
     vec2 cuv = gl_FragCoord.xy * pc.viewport.zw;
     vec4 cl = textureLod(u_clouds, cuv, 0.0);
     if (alt_m > u_exposure.misc.x) {

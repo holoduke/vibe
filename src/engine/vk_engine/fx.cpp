@@ -986,6 +986,22 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // Tyre marks and tyre smoke (jeep.cpp).
     static RibbonBuilder marks; marks.v.clear();
     jeep_fx(marks.v, mist.v, flash.v, eye, cam_right, cam_up);
+    // Blood (npc_world.cpp): mist and drops face the eye, stains lie on what they landed on.
+    static RibbonBuilder blood; blood.v.clear();
+    for (const Blood& d : blood_) {
+        if (glm::distance(d.pos, eye) > 120.0f) continue;
+        if (d.stain) {
+            const glm::vec3 nrm = glm::normalize(d.vel + glm::vec3(0.0f, 1e-4f, 0.0f));
+            const glm::vec3 t1 = glm::normalize(glm::cross(nrm, std::abs(nrm.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f)));
+            const float fade = glm::clamp((d.life - d.t) / 20.0f, 0.0f, 1.0f);
+            blood.billboard(d.pos, d.size, t1, glm::cross(nrm, t1), glm::vec3(0.95f * fade, 0.55f, d.seed));
+        } else {
+            const bool is_mist = d.size > 0.09f;
+            const float k = d.t / d.life;
+            blood.billboard(d.pos, is_mist ? d.size * (1.0f + 2.2f * k) : min_w(d.pos, d.size, 0.9f), cam_right, cam_up,
+                            glm::vec3(is_mist ? 0.55f * (1.0f - k) : 0.95f * glm::clamp((d.life - d.t) * 3.0f, 0.0f, 1.0f), 1.0f, d.seed));
+        }
+    }
     for (const auto& d : water_drops_) {
         if (d.t < 0.0f) continue;
         const float sp = glm::length(d.vel);
@@ -1199,7 +1215,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
 
     const size_t n_smoke = smoke.v.size(), n_glow = glow.v.size(), n_flash = flash.v.size();
     if (vols.empty() && decals_.empty() &&
-        n_smoke + n_glow + n_flash + cloth.v.size() + spray.v.size() + mist.v.size() == 0) return;
+        n_smoke + n_glow + n_flash + cloth.v.size() + spray.v.size() + mist.v.size() + blood.v.size() == 0) return;
 
     // Upload ribbon vertices.
     const uint32_t slot = static_cast<uint32_t>(frame_number_ & 1);
@@ -1219,6 +1235,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     auto r_mist  = put(mist.v);
     auto r_spray = put(spray.v);
     auto r_marks = put(marks.v);
+    auto r_blood = put(blood.v);
     vmaFlushAllocation(allocator_, fx_->valloc[slot], 0, total * sizeof(Vertex));
 
     // ---- Pass ----
@@ -1381,6 +1398,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         draw(r_marks, 6.0f, 1.0f);
         draw(r_smoke, 0.0f, 1.0f);
         draw(r_mist,  5.0f, 1.0f);
+        draw(r_blood, 7.0f, 1.0f);
         draw(r_spray, 4.0f, 1.0f);
         draw(r_glow,  1.0f, 1.0f);
         draw(r_flash, 2.0f, 1.0f);

@@ -1,6 +1,7 @@
 #include "engine/road.h"
 
 #include "engine/terrain.h"
+#include "engine/highway.h"
 
 #include <glm/geometric.hpp>
 
@@ -31,7 +32,9 @@ float Road::distance(float x, float z, float* out_h) const {
     float best = (std::numeric_limits<float>::max)();
     float best_h = 0.0f;
     const glm::vec2 p(x, z);
-    for (size_t i = 0; i + 1 < pts.size(); ++i) {
+    // (far from this road's own line: only the highways are asked - no walk along its points)
+    const bool own = !with_highways || (x > paved_bb_min.x - 20.0f && x < paved_bb_max.x + 20.0f && z > paved_bb_min.y - 20.0f && z < paved_bb_max.y + 20.0f);
+    for (size_t i = 0; own && i + 1 < pts.size(); ++i) {
         glm::vec2 a(pts[i].x, pts[i].z), b(pts[i + 1].x, pts[i + 1].z);
         glm::vec2 ab = b - a;
         float l2 = glm::dot(ab, ab);
@@ -44,8 +47,19 @@ float Road::distance(float x, float z, float* out_h) const {
             best_h = pts[i].y + (pts[i + 1].y - pts[i].y) * t;
         }
     }
+    best = std::sqrt(best);
+    if (with_highways && highway::ready()) {
+        float d, h, s; int li = 0;
+        // (reach: in the road's own measure - 60 is 22 m of a lane. It was 12, 4.4 m: beyond
+        //  that this answered "far from any road" and trees were set 5 m from the lane's middle.)
+        if (highway::nearest(x, z, 60.0f, d, h, s, li)) {
+            // (in this road's measure: its paving ends at half_width, the other's at 5.5 of its own)
+            const float mine = half_width + (std::abs(d) - highway::kPaved) * highway::line_width(li) - 1.5f;       // (1.5 m more room than the old road asks: branches)
+            if (mine < best) { best = std::max(mine, 0.0f); best_h = h; }
+        }
+    }
     if (out_h) *out_h = best_h;
-    return std::sqrt(best);
+    return best;
 }
 
 Road make_castle_road(const Heightmap& hm, float water_level, float gate_h, const glm::vec2* spur_to) {

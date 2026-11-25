@@ -6,6 +6,7 @@
 // + fog-wisp procedural textures. Split out of world.cpp (maintainability).
 
 #include "engine/vk_engine/internal.h"
+#include "engine/highway.h"
 #include "engine/vk_engine/state/fog.h"
 #include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/gltf_loader.h"
@@ -150,6 +151,21 @@ void VulkanEngine::upload_terrain_height_payload(VkImageLayout src_layout) {
         std::vector<float> delta(n);
         for (size_t i = 0; i < n; ++i) {
             delta[i] = terrain_data_.heights[i] - terrain_baseline_heights_[i];
+        }
+        // VIBE_DUMP_DELTA=<x>,<z>: the land's height above its baseline round that place, 3 m apart (cm), to the log.
+        if (const char* dd = std::getenv("VIBE_DUMP_DELTA")) {
+            float gx = 0.0f, gz = 0.0f;
+            std::sscanf(dd, "%f,%f", &gx, &gz);
+            const float cell = 2048.0f / float(W - 1);
+            for (int j = -6; j <= 6; ++j) {
+                std::string row;
+                for (int i = -6; i <= 6; ++i) {
+                    const int mx = std::clamp(int(std::lround((gx + float(i) * 1.0f + 0.5f * 2048.0f) / cell)), 0, int(W) - 1), mz = std::clamp(int(std::lround((gz + float(j) * 1.0f + 0.5f * 2048.0f) / cell)), 0, int(H) - 1);
+                    char b[16]; std::snprintf(b, sizeof(b), "%6.0f", double(terrain_data_.heights[size_t(mz) * W + mx]) * 10.0);
+                    row += b;
+                }
+                log::infof("[delta] z %+3d m:%s", j * 3, row.c_str());
+            }
         }
         std::memcpy(ai.pMappedData, delta.data(), static_cast<size_t>(bytes));
     } else {
@@ -658,9 +674,60 @@ void VulkanEngine::init_grass_mask_texture() {
     // presence/slope field. Mirrors the height-load path: bake the
     // procedural baseline first so a missing save file is a no-op,
     // then replace bytes if the file is present.
-    load_grass_mask();
+    // ONLY the presence is the user's (R). The slope (G) is the land's as it is NOW: the saved
+    // file carries the slope of the day it was painted, and where the land has changed since
+    // (the river's valley, a road's shelf) that left round bare patches in a meadow and grass
+    // on faces too steep for it.
+    {
+        std::vector<uint8_t> slope_now(static_cast<size_t>(dim) * dim);
+        for (size_t i = 0; i < slope_now.size(); ++i) slope_now[i] = data[i * 2 + 1];
+        load_grass_mask();
+        if (grass_mask_data_.size() == slope_now.size() * 2)
+            for (size_t i = 0; i < slope_now.size(); ++i) grass_mask_data_[i * 2 + 1] = slope_now[i];
+    }
     // Keep the road paving + verge clear of blades.
     clear_grass_mask(castle_road_, grass_mask_data_, dim, kWorldSide);
+    // ... and of a highway's line that runs through the home tile (the castle lane).
+    if (highway::ready() && !grass_mask_data_.empty()) {
+        const float cell = kWorldSide / float(dim);
+        for (int li = 0; li < highway::line_count(); ++li) {
+            const std::vector<glm::vec3>& P = highway::line_points(li);
+            glm::vec2 lo(1e9f), hi(-1e9f);
+            for (const glm::vec3& p : P) if (std::abs(p.x) < 0.5f * kWorldSide + 10.0f && std::abs(p.z) < 0.5f * kWorldSide + 10.0f) { lo = glm::min(lo, glm::vec2(p.x, p.z)); hi = glm::max(hi, glm::vec2(p.x, p.z)); }
+            if (hi.x < lo.x) continue;
+            const int x0 = std::clamp(int((lo.x - 6.0f + 0.5f * kWorldSide) / cell), 0, dim - 1), x1 = std::clamp(int((hi.x + 6.0f + 0.5f * kWorldSide) / cell), 0, dim - 1);
+            const int z0 = std::clamp(int((lo.y - 6.0f + 0.5f * kWorldSide) / cell), 0, dim - 1), z1 = std::clamp(int((hi.y + 6.0f + 0.5f * kWorldSide) / cell), 0, dim - 1);
+            for (int mz = z0; mz <= z1; ++mz)
+                for (int mx = x0; mx <= x1; ++mx) {
+                    const float d = highway::distance((float(mx) + 0.5f) * cell - 0.5f * kWorldSide, (float(mz) + 0.5f) * cell - 0.5f * kWorldSide);
+                    if (d > highway::kVerge + 1.0f) continue;
+                    uint8_t& r = grass_mask_data_[(size_t(mz) * dim + mx) * 2];
+                    r = uint8_t(float(r) * glm::smoothstep(highway::kVerge - 1.2f, highway::kVerge + 0.6f, d));
+                }
+        }
+    }
+    // ... nor on the castle lane's car park (terrain.h kCastlePark).
+    if (!grass_mask_data_.empty()) {
+        const float cell = kWorldSide / float(dim);
+        for (int mz = std::max(0, int((kCastlePark[1] - 2.0f + 0.5f * kWorldSide) / cell)); mz <= std::min(dim - 1, int((kCastlePark[3] + 2.0f + 0.5f * kWorldSide) / cell)); ++mz)
+            for (int mx = std::max(0, int((kCastlePark[0] - 2.0f + 0.5f * kWorldSide) / cell)); mx <= std::min(dim - 1, int((kCastlePark[2] + 4.5f + 0.5f * kWorldSide) / cell)); ++mx)
+                grass_mask_data_[(size_t(mz) * dim + mx) * 2] = 0;
+    }
+    // VIBE_DUMP_GRASS=<x>,<z>: the grass mask's presence round that place, 3 m apart (0..255), to the log.
+    if (const char* dg = std::getenv("VIBE_DUMP_GRASS"); dg && !grass_mask_data_.empty()) {
+        float gx = 0.0f, gz = 0.0f;
+        std::sscanf(dg, "%f,%f", &gx, &gz);
+        const float cell = kWorldSide / float(dim);
+        for (int j = -5; j <= 5; ++j) {
+            std::string row;
+            for (int i = -5; i <= 5; ++i) {
+                const int mx = std::clamp(int((gx + float(i) * 3.0f + 0.5f * kWorldSide) / cell), 0, dim - 1), mz = std::clamp(int((gz + float(j) * 3.0f + 0.5f * kWorldSide) / cell), 0, dim - 1);
+                char b[16]; std::snprintf(b, sizeof(b), "%4d", int(grass_mask_data_[(size_t(mz) * dim + mx) * 2 + 1]));
+                row += b;
+            }
+            log::infof("[grass] z %+3d m:%s", j * 3, row.c_str());
+        }
+    }
     // No lawn under the chapel (the blades would stand up through its floor).
     if (church_placed_) {
         const float cell = kWorldSide / float(dim);

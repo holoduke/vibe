@@ -1,0 +1,8 @@
+800 saloon_00800_on.wav saloon_00800_off.wav
+1629 saloon_01629_on.wav saloon_01629_off.wav
+2457 saloon_02457_on.wav saloon_02457_off.wav
+3286 saloon_03286_on.wav saloon_03286_off.wav
+4114 saloon_04114_on.wav saloon_04114_off.wav
+4943 saloon_04943_on.wav saloon_04943_off.wav
+5771 saloon_05771_on.wav saloon_05771_off.wav
+6600 saloon_06600_on.wav saloon_06600_off.wav

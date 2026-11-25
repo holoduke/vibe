@@ -35,6 +35,16 @@ struct Road {
     // the same points to pts[spur_b] (= the junction again). -1 = none.
     int spur_a = -1, spur_tip = -1, spur_b = -1;
 
+    // Also keep off the highways' lines (engine/highway.h) - the castle lane runs through the
+    // home tile: distance() then answers for whichever road is nearer, a lane's asphalt edge
+    // counted as this road's. Set once the road has been carved (carving asks for this road only).
+    bool with_highways = false;
+    // With that set, bb_min / bb_max reach round the highways' lines in the home tile too
+    // (everything that scatters asks "inside the road's bounds?" before it asks how far the
+    // road is - with the old road's bounds alone the lane was never asked about). The old
+    // road's own bounds - what the shader draws its paving in - are kept here.
+    glm::vec2 paved_bb_min{0.0f}, paved_bb_max{0.0f};
+
     bool empty() const { return pts.size() < 2; }
     // XZ distance to the centreline. Also returns the road height at the
     // closest point.

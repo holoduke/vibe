@@ -273,11 +273,11 @@
             vec3 lpos = scene.lamp_lights[li].xyz;
             vec3 to = lpos - pos;
             float d = length(to);
-            if (d >= 13.0) continue;
+            if (d >= 34.0) continue;
             vec3 ld = to / max(d, 1e-3);
             float ndl = max(dot(nor, ld), 0.0);
             if (ndl <= 0.0) continue;
-            float fall = 1.0 - d / 13.0; fall *= fall;
+            float fall = 1.0 - d / 34.0; fall = fall * fall * fall * fall * fall;      // (as bright near the lamp as when it reached 13 m, and a long thin tail)
             vec3 jit = fract(sin(vec3(dot(lseed, vec2(12.9898, 78.233)) + float(li) * 3.1,
                                       dot(lseed, vec2(39.3468, 11.135)) + float(li) * 5.7,
                                       dot(lseed, vec2(73.1560, 52.235)) + float(li) * 9.3)) * 43758.5453) - 0.5;
@@ -308,6 +308,7 @@
         }
     }
     vec3 col = mate * lin + gi_indirect;
+    if (RMDBG(2097152)) col = vec3(0.9 * cl_sh * cl_sh);      // view: the cloud shadow map on the ground (white = open sky)
     // A highway's sheen: asphalt is matt seen from above and glares toward a low sun; the
     // polished wheel tracks and the tar more so.
     if (hw_pave > 0.001) {

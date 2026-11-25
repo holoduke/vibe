@@ -744,10 +744,13 @@ void VulkanEngine::load_foliage_textures() {
     {
         struct OT { const char* file; float strength; };
         // (and the jeep's: its paint and its seat canvas - assets/jeep/tex/)
-        const OT ot[8] = { { "corten", 2.6f }, { "oak", 1.6f }, { "floor", 0.7f }, { "board", 3.2f }, { "fabric", 3.0f },
-                           { "../../jeep/tex/paint", 1.1f }, { "../../jeep/tex/canvas", 2.6f }, { "screens", 0.0f } };
-        for (int k = 0; k < 8; ++k) {
-            const int slot = k < 5 ? kTexOffice + k : k < 7 ? kTexJeep + (k - 5) : kTexScreens;
+        // (and the service station's six: assets/gasstation/tex/)
+        const OT ot[14] = { { "corten", 2.6f }, { "oak", 1.6f }, { "floor", 0.7f }, { "board", 3.2f }, { "fabric", 3.0f },
+                           { "../../jeep/tex/paint", 1.1f }, { "../../jeep/tex/canvas", 2.6f }, { "screens", 0.0f },
+                            { "../../gasstation/tex/brick", 3.0f }, { "../../gasstation/tex/asphalt", 2.2f }, { "../../gasstation/tex/checker", 0.5f },
+                            { "../../gasstation/tex/cladding", 2.4f }, { "../../gasstation/tex/pavers", 2.6f }, { "../../gasstation/tex/subway", 1.4f } };
+        for (int k = 0; k < 14; ++k) {
+            const int slot = k < 5 ? kTexOffice + k : k < 7 ? kTexJeep + (k - 5) : k == 7 ? kTexScreens : kTexStation + (k - 8);
             const std::string p = resolve(std::string("../office/tex/") + ot[k].file + ".png");
             if (p.empty()) continue;
             int w = 0, h = 0, c = 0;
@@ -757,6 +760,17 @@ void VulkanEngine::load_foliage_textures() {
             std::vector<float> lum(size_t(w) * size_t(h));
             for (size_t i = 0; i < lum.size(); ++i)
                 lum[i] = (0.30f * float(px[i * 4]) + 0.59f * float(px[i * 4 + 1]) + 0.11f * float(px[i * 4 + 2])) / 255.0f;
+            // A height map of its own beside the picture ("<name>_h.png", same size): the relief
+            // is read from it. Where the picture's light and dark is not its relief - light
+            // mortar between dark bricks, black and white tiles - the derived one is wrong
+            // (tools/gasstation/make_maps.py writes these).
+            if (const std::string ph = resolve(std::string("../office/tex/") + ot[k].file + "_h.png"); !ph.empty()) {
+                int hw = 0, hh = 0, hc = 0;
+                if (unsigned char* hx = ::stbi_load(ph.c_str(), &hw, &hh, &hc, 1)) {
+                    if (hw == w && hh == h) for (size_t i = 0; i < lum.size(); ++i) lum[i] = float(hx[i]) / 255.0f;
+                    ::stbi_image_free(hx);
+                }
+            }
             std::vector<unsigned char> nrm(lum.size() * 4);
             auto Hh = [&](int x, int y) { return lum[size_t((y + h) % h) * size_t(w) + size_t((x + w) % w)]; };
             const float st = ot[k].strength;
@@ -1381,6 +1395,12 @@ void VulkanEngine::bake_terrain_materials() {
         { TM_ROCK,  kTexOffice + 2, "office/placeholder" },
         { TM_ROCK,  kTexOffice + 3, "office/placeholder" },
         { TM_ROCK,  kTexOffice + 4, "office/placeholder" },
+        { TM_ROCK,  kTexStation + 0, "station/placeholder" },
+        { TM_ROCK,  kTexStation + 1, "station/placeholder" },
+        { TM_ROCK,  kTexStation + 2, "station/placeholder" },
+        { TM_ROCK,  kTexStation + 3, "station/placeholder" },
+        { TM_ROCK,  kTexStation + 4, "station/placeholder" },
+        { TM_ROCK,  kTexStation + 5, "station/placeholder" },
     };
     // CPU generation of all materials in parallel (pure functions of
     // kind + size); uploads stay on this thread (queue owner).
