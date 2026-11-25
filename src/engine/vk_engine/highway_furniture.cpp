@@ -13,6 +13,7 @@
 // To add another kind of roadside object: make it in build_stretch(). No colliders yet.
 #include "engine/vk_engine/internal.h"
 #include "engine/highway.h"
+#include "engine/vk_engine/lane_edge.h"
 #include "engine/terrain.h"
 #include "engine/globe.h"
 
@@ -29,6 +30,10 @@ namespace {
 
 constexpr float  kLoad = 1500.0f, kFree = 1900.0f;      // from the camera to a stretch's middle (m)
 constexpr size_t kStretch = 75;                          // stations a stretch (300 m)
+// A narrow road's dry-stone wall (lane_edge.h) is streamed with the rest: its stretches have the
+// numbers kLaneId + c, and come and go nearer by (stones are small).
+constexpr int    kLaneId = 1 << 20;
+constexpr float  kLaneLoad = 520.0f, kLaneFree = 700.0f;
 
 void push(game::LevelMesh& m, glm::vec3 p, glm::vec3 n, float u, float v) {
     m.verts.push_back({ p, n, u, v });
@@ -132,6 +137,10 @@ void make_stations(glm::vec3 base) {
             if (std::abs(g_st[i].p.z - kStationZ) < 19.0f && std::abs(g_st[i].p.x - (kStationX + 42.7f)) < 14.0f) continue;
             g_lamp[i] = 1;
             g_lamp_light.push_back(g_st[i].p - g_st[i].sea * (kLampSide - kLampArm) + glm::vec3(0.0f, kLampHigh - 0.25f, 0.0f));
+            // (VIBE_LOG_LAMPS=1: where they stand and which way the road runs there - for test views)
+            if (static const bool lg = std::getenv("VIBE_LOG_LAMPS") != nullptr; lg && g_lamp_light.size() % 10 == 1)
+                log::infof("[lamps] street lamp %zu: road at (%.1f, %.1f, %.1f), running (%.2f, %.2f)", g_lamp_light.size() - 1,
+                           double(g_st[i].p.x), double(g_st[i].p.y), double(g_st[i].p.z), double(g_st[i].dir.x), double(g_st[i].dir.z));
         }
     }
 }
@@ -255,6 +264,15 @@ void VulkanEngine::hw_objects_poll() {
         if (!launch_site_placed_) return;            // (the lamps stand by the launch site: it has to be there)
         make_stations(launch_pad_);
     }
+    // The ground as it is drawn: the home tile's own heights, the formula with the road's shelf beyond it.
+    const lane_edge::Ground lane_ground = [this](float x, float z) {
+        return (!terrain_data_.heights.empty() && std::abs(x) < 1020.0f && std::abs(z) < 1020.0f) ? sample_terrain_height(x, z) : world_ground_height(x, z, rt_.water_level, 9);
+    };
+    if (!lane_edge::made()) {
+        // (no wall across the castle car park's entrance: terrain.h kCastlePark)
+        lane_edge::make(lane_ground, [](float x, float z) { return x > kCastlePark[0] - 4.0f && x < kCastlePark[2] + 4.0f && z > kCastlePark[1] - 4.0f && z < kCastlePark[3] + 4.0f; });
+        lane_rock_cols_ = lane_edge::walker_boxes();          // (solid for a walker: props.cpp)
+    }
     // VIBE_TEST_HIGHWAY_RIDE=<m/s>: carries the player along the coast road (tests the streaming).
     {
         static const char* ride = std::getenv("VIBE_TEST_HIGHWAY_RIDE");
@@ -274,6 +292,7 @@ void VulkanEngine::hw_objects_poll() {
     }
     const globe::Ring rg = globe::ring_now();
     const bool here = (globe::current().home || rg.on) && !g_st.empty();
+    const bool lane_here = globe::current().home && lane_edge::stretch_count() > 0;      // (the walls: home's chart only)
     glm::vec3 eye = player_.eye_position();
     if (rg.on) { const glm::dvec2 h = rg.to_home(glm::dvec2(eye.x, eye.z)); eye.x = float(h.x); eye.z = float(h.y); }      // (the stations are in home coordinates)
     // Another chart: other coordinates. A shift by whole tiles has been dealt with already, in
@@ -283,17 +302,29 @@ void VulkanEngine::hw_objects_poll() {
     g_serial = globe::chart_serial();
     // Free: everything when home is left, otherwise what is beyond kFree.
     for (size_t k = 0; k < hw_chunks_.size();) {
-        const glm::vec3 m = stretch_middle(size_t(hw_chunks_[k].first));
-        if (here && !rechart && glm::distance(glm::vec2(m.x, m.z), glm::vec2(eye.x, eye.z)) < kFree && eye.y - m.y < 2500.0f) { ++k; continue; }
+        const int id = hw_chunks_[k].first;
+        const bool lane = id >= kLaneId;
+        const glm::vec3 m = lane ? lane_edge::stretch_middle(size_t(id - kLaneId)) : stretch_middle(size_t(id));
+        if ((lane ? lane_here : here) && !rechart && glm::distance(glm::vec2(m.x, m.z), glm::vec2(eye.x, eye.z)) < (lane ? kLaneFree : kFree) && eye.y - m.y < 2500.0f) { ++k; continue; }
         hw_retired_.emplace_back(12, std::move(hw_chunks_[k].second));
         hw_chunks_.erase(hw_chunks_.begin() + ptrdiff_t(k));
         ++hw_gen_;
     }
-    if (!here || !hw_retired_.empty()) return;
+    if ((!here && !lane_here) || !hw_retired_.empty()) return;
     // Make: the nearest missing stretch within kLoad, one a frame.
     int want = -1; float best = kLoad;
-    const size_t n = stretch_count();
-    for (size_t c = 0; c < n; ++c) {
+    const size_t n = here ? stretch_count() : 0;
+    // (a wall's stretch first: it is only wanted when the player is near it)
+    for (size_t c = 0; lane_here && c < lane_edge::stretch_count(); ++c) {
+        if (!lane_edge::stretch_has_wall(c)) continue;
+        const glm::vec3 m = lane_edge::stretch_middle(c);
+        const float d = glm::distance(glm::vec2(m.x, m.z), glm::vec2(eye.x, eye.z));
+        if (d >= std::min(best, kLaneLoad) || eye.y - m.y > 600.0f) continue;
+        bool have = false;
+        for (const auto& ch : hw_chunks_) if (ch.first == kLaneId + int(c)) { have = true; break; }
+        if (!have) { want = kLaneId + int(c); best = d; }
+    }
+    for (size_t c = 0; want < 0 && c < n; ++c) {
         const glm::vec3 m = stretch_middle(c);
         if (eye.y - m.y > 2000.0f) break;
         const float d = glm::distance(glm::vec2(m.x, m.z), glm::vec2(eye.x, eye.z));
@@ -304,7 +335,8 @@ void VulkanEngine::hw_objects_poll() {
     }
     if (want < 0) return;
     std::vector<game::LevelMesh> lms;
-    build_stretch(size_t(want), lms, rg);
+    if (want >= kLaneId) lane_edge::build_stretch(size_t(want - kLaneId), lane_ground, lms);
+    else build_stretch(size_t(want), lms, rg);
     // A stretch's vertices are kept relative to a point of its own (small numbers: exact to a
     // hundredth of a millimetre) and placed by the part's transform - always, so that a part
     // is drawn and traced the same way whether or not the engine has re-centred since.
@@ -330,7 +362,9 @@ void VulkanEngine::hw_objects_poll() {
 // The guard rail within `reach` of a place, as boxes for the physics (home's chart): one per
 // 4 m of rail, turned along the road.
 void VulkanEngine::hw_rail_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const {
-    if (!g_st_made || g_st.size() < 2 || !globe::current().home) return;
+    if (!globe::current().home) return;
+    lane_edge::car_boxes(at, reach, out);          // (a narrow road's dry-stone wall: lane_edge.cpp)
+    if (!g_st_made || g_st.size() < 2) return;
     for (size_t i = 0; i + 1 < g_st.size(); ++i) {
         const St& s = g_st[i];
         if (std::abs(s.p.x - at.x) > reach || std::abs(s.p.z - at.z) > reach) continue;

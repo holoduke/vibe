@@ -1007,6 +1007,9 @@ private:
     std::vector<ViewmodelMesh> rifle_gltf_;
     glm::mat4 rifle_root_offset_{ 1.0f };
     glm::vec3 rifle_muzzle_{ 0.18f, -0.18f, -0.72f };
+    // Where each gun's fore-end is, measured from its model (props.cpp load_gun): the middle of its
+    // underside where the support hand holds it, weapon frame. [0] the laser, [1] the rifle; w = 1 when measured.
+    glm::vec4 gun_fore_[2]{};
     const glm::vec3& held_muzzle(bool rifle) const { return rifle && !rifle_gltf_.empty() ? rifle_muzzle_ : viewmodel_muzzle_; }
 
     // Spacejet flyover system — glTF asset loaded once, rendered as
@@ -1842,9 +1845,11 @@ private:
     std::vector<glm::vec4> parking_bays_;        // the car park's bays: x, y, z of the middle, w = yaw
     void      place_parking();
     void      place_bridges();                   // (bridges.cpp)
-    void      place_lane_rocks();                // (bridges.cpp) armour stone under the castle lane's edge on steep banks
     void      place_castle_parking();            // (rocket.cpp) the car park at the castle lane's end
     std::vector<glm::vec4> home_grass_cuts_;     // home's chart: where no grass may grow beyond the home tile (min x, min z, max x, max z)
+    // Fields of the flowering meadow (plant_gpu.cpp, tuft_place.comp; at most four): x, z of the
+    // middle, radius, how frayed the edge is (m). It grows there wherever the short grass does.
+    std::vector<glm::vec4> flower_fields_;
     void      travel_to_site(int k);
     std::vector<int> sites_by_distance(int max_n) const;
     glm::vec4 site_uniform(glm::vec4* shape = nullptr) const;
@@ -2046,7 +2051,7 @@ private:
     static constexpr uint32_t kWvPool = 180000;
     WvState*  wv_ = nullptr;
     uint32_t  veg_world_first_ = UINT32_MAX;
-    std::vector<collision::AABB> lane_rock_cols_; // the castle lane's armour stones (bridges.cpp place_lane_rocks)
+    std::vector<collision::AABB> lane_rock_cols_; // the castle lane's dry-stone wall, for a walker (lane_edge.cpp; set in highway_furniture.cpp)
     std::vector<collision::AABB> wv_cols_;       // trunk colliders of the cells around the player
     uint32_t  wv_quota(size_t arch) const;       // pool slots one archetype may use (its visible lists are sized for it)
     void      wv_insert_pool();                  // (after the instance list was built / rebuilt)
@@ -2077,7 +2082,7 @@ private:
     JeepState* jeep_load(const std::string& dir, const std::string& json, const glm::vec3* paint = nullptr);
     void      jeep_park(JeepState& J, glm::vec3 pos, float yaw);
     void      jeep_marks(JeepState& J, float dt);
-    bool      jeep_driver(glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;     // the driver's seat and the wheel's rim, world (player_body.cpp)
+    bool      jeep_driver(glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs, anim::CharacterAnimationInput::SeatExtras* more = nullptr) const;     // the driver's seat and the wheel's rim, world (player_body.cpp)
     void      jeep_place(JeepState& J, const PhysicsWorld::VehicleState& prev, float dt);
     void      jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puffs, std::vector<Vertex>& glow, glm::vec3 eye, glm::vec3 cam_right, glm::vec3 cam_up);
     bool      jeep_headlights(glm::vec4& pos, glm::vec4& dir, glm::vec4& col) const;     // a car's beam, as the torch's uniforms (descriptors.cpp)   // tyre marks and smoke (fx.cpp)
@@ -2117,6 +2122,10 @@ private:
     float     npc_taken_resend_ = -1.0f;          // seconds until this machine tells a player who joined of them
     size_t    npc_players_seen_ = 0;
     float     npc_take_asked_ = 0.0f;             // (a client asked the host for a car: not again for a moment)
+    float     npc_nodriver_[100] = {};            // seconds a car is shown without the driver nobody of the NPC world sits for (he was shot, and a copy of the host's world has not heard yet)
+    void      npc_test_input(InputFrame& in);     // (npc_world.cpp) VIBE_TEST_NPC_SHOOT: aims at somebody and pulls the trigger
+    void      npc_car_test(InputFrame& in);       // (jeep.cpp) VIBE_TEST_NPC_CAR: into an NPC car, and away
+    void      npc_car_add(const JeepState& kind); // (jeep.cpp) one more car without physics of that kind in the pool lent to the NPC cars
     void      npc_hit(int agent, glm::vec3 hit, glm::vec3 dir);      // (npc_world.cpp) somebody was shot, by whoever
     void      npc_event(const net::Event& e);     // (npc_world.cpp) from the network
     bool      npc_host_take(int agent, uint32_t taker);              // (jeep.cpp) the authority lets the car go and tells everybody
@@ -2129,17 +2138,18 @@ private:
     bool      cars_need_lights() const;          // (jeep.cpp) evening or night: a car that drives has its lights on
     void      npc_cars_init();
     void      npc_cars_place(const std::vector<npc::View>& views, float dt);
-    bool      npc_car_seat(int agent, int seat, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;
+    bool      npc_car_seat(int agent, int seat, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs, anim::CharacterAnimationInput::SeatExtras* more = nullptr) const;
     void      jeep_ride_place();
-    bool      jeep_passenger_seat(int car, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;
+    bool      jeep_passenger_seat(int car, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs, anim::CharacterAnimationInput::SeatExtras* more = nullptr) const;
     void      hw_lamps_near(glm::vec3 eye, float reach, std::vector<glm::vec3>& out) const;      // the road's street lamps (highway_furniture.cpp)
     void      hw_pole_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const;
     void      jeep_grass_press(glm::vec4 out[4]) const;     // the cars the grass lies down under (scene UBO car_press)
     // Multiplayer: the cars this machine simulates are told to the others; theirs are drawn from what they tell (jeep.cpp).
     void      jeep_net_send(float dt);
     void      jeep_net_receive(float dt);
-    bool      jeep_seat_of(uint32_t player, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs) const;     // the seat of the car that player drives
-    static void      jeep_seat(const JeepState& J, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs);
+    bool      jeep_seat_of(uint32_t player, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs, anim::CharacterAnimationInput::SeatExtras* more = nullptr) const;     // the seat of the car that player drives
+    static void      jeep_seat(const JeepState& J, glm::mat4& hip, glm::vec3& hand_l, glm::vec3& hand_r, float& legs, anim::CharacterAnimationInput::SeatExtras* more = nullptr);
+    static void      jeep_seat_feet(const JeepState& J, bool passenger, anim::CharacterAnimationInput::SeatExtras& e);       // where that car has its occupant's feet and back
     static glm::mat4 jeep_wheel_from(const JeepState& J, const glm::mat4& body, int w, float steer, float susp, float roll);
     void      jeep_tick(InputFrame& in, float dt);
     void      jeep_after_sim(float dt);
@@ -2173,6 +2183,9 @@ private:
     void destroy_plant_gpu();
     void write_plant_hiz_binding();
     void cull_plants(VkCommandBuffer cmd);
+    void upload_tuft_ground(bool first);            // (plant_gpu.cpp) the rules picture tuft_place.comp reads
+    void write_tuft_ground_bindings();              // ... and the height map and lawn mask it reads
+    bool turf_on() const;                           // the short grass is drawn as turf clumps (not the raymarched lawn)
     bool draw_plants_gpu(VkCommandBuffer cmd, int species);
     // Cluster LOD of the static world meshes (castle, chapel, gravestones).
     // (the state of this is private to its own files: vk_engine/state/static_clusters.h)
@@ -2211,7 +2224,7 @@ private:
     VkDescriptorSet       veg_set_ = VK_NULL_HANDLE;
     VkPipelineLayout veg_layout_ = VK_NULL_HANDLE, veg_cull_layout_ = VK_NULL_HANDLE;
     VkPipeline veg_cull_pipeline_ = VK_NULL_HANDLE, veg_color_pipeline_ = VK_NULL_HANDLE,
-               veg_gbuf_pipeline_ = VK_NULL_HANDLE, veg_depth_pipeline_ = VK_NULL_HANDLE;
+               veg_gbuf_pipeline_ = VK_NULL_HANDLE, veg_depth_pipeline_ = VK_NULL_HANDLE, veg_imp_depth_pipeline_ = VK_NULL_HANDLE;
     VkShaderModule veg_vert_module_ = VK_NULL_HANDLE, veg_cull_module_ = VK_NULL_HANDLE;
     struct VegBlas { VkAccelerationStructureKHR as = VK_NULL_HANDLE; VkBuffer buf = VK_NULL_HANDLE;
                      VmaAllocation alloc = nullptr; VkDeviceAddress addr = 0; };
@@ -2232,7 +2245,7 @@ private:
     std::vector<uint8_t> veg_has_imp_;
     VkBuffer      veg_fade_buf_ = VK_NULL_HANDLE;
     VmaAllocation veg_fade_alloc_ = nullptr;
-    VkShaderModule veg_depth_frag_module_ = VK_NULL_HANDLE, veg_hiz_module_ = VK_NULL_HANDLE;
+    VkShaderModule veg_depth_frag_module_ = VK_NULL_HANDLE, veg_hiz_module_ = VK_NULL_HANDLE, veg_imp_depth_frag_module_ = VK_NULL_HANDLE;
     glm::mat4     veg_prev_vp_{1.0f};
     glm::vec3     veg_prev_eye_{0.0f};
     glm::vec3     veg_prev_fwd_{0.0f, 0.0f, -1.0f};
@@ -2279,6 +2292,8 @@ private:
         const float d = species == 16 ? 70.0f                                        // water lilies (a heavy mesh: 9000 rafts at 120 m cost 3 ms)
                       : species == 7 ? rt_.reed_draw_distance
                       : species == 15 ? std::max(rt_.ground_draw_distance, rt_.flower_draw_distance)   // grass tufts
+                      : species == 17 ? std::clamp(rt_.grass_raymarch_distance, 24.0f, 75.0f) * 0.85f                // turf (plant_gpu.cpp places it to that range)
+                      : species == 18 ? 230.0f * 0.85f                                                               // flowering meadow (plant_gpu.cpp places it to that range)
                       : species >= 8 ? rt_.ground_draw_distance : rt_.flower_draw_distance;
         return std::max(10.0f, d) / 0.85f;
     }
@@ -2337,6 +2352,10 @@ private:
     void init_grass_trail();
     void destroy_grass_trail();
     void grass_trail_update(VkCommandBuffer cmd);
+    // The wind field round the camera (vk_engine/wind_fluid.cpp): scene binding 45.
+    void init_wind_fluid();
+    void destroy_wind_fluid();
+    void wind_fluid_update(VkCommandBuffer cmd);
     glm::vec4 grass_trail_window() const;
 
     // Heightmap raw heights as an R32_SFLOAT texture. Used by the

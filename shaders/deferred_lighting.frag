@@ -1074,7 +1074,7 @@ void main() {
                     // Lantern light arriving at the bounce point (with its own
                     // shadow ray): the lit road and walls under a lantern throw
                     // warm light back onto what surrounds them.
-                    for (int li_i = 0; li_i < 8; ++li_i) {
+                    for (int li_i = 0, li_n = int(scene.lamp_info.y + 0.5); li_i < li_n; ++li_i) {
                         float lI = scene.lamp_lights[li_i].w;
                         if (lI < 1e-3) continue;
                         vec3 lto = scene.lamp_lights[li_i].xyz - hit_pos;
@@ -1507,6 +1507,9 @@ void main() {
     // but occluded corners get pushed much darker before the floor —
     // the "dark where it should be dark" contact look. Floor lowered
     // 0.08 -> 0.05 (still above the scattered-black-pixel regime).
+    // (the game's rule for its foliage: occlusion only comes in with distance - close by a
+    // crown's leaves would speckle each other)
+    if (material_id == 2) ao = mix(1.0, ao, clamp(cam_dist * 0.005, 0.0, 1.0));
     float ao_floored = mix(0.05, 1.0, ao * ao);
     // Diffuse ambient keeps the energy the specular lobe did not take.
     vec3 ambient_term = diff_albedo * (1.0 - F_env) * ambient_combined * ao_floored;
@@ -1640,6 +1643,17 @@ void main() {
         sun_term = max(spec_keep, vec3(0.0)) * 0.15 +
                    sunE * lit * (diff_albedo * nw * 0.9 + tcol * band * 0.30) +
                    sunE * tcol * (back * 0.40 + fwd * 0.85) * thin;
+        if (material_id == 2) {
+            // Grass (scatter.frag) and the leaves of trees and bushes (cube.frag): the light through
+            // the leaf as the reference game adds it for its
+            // foliage shading ids (diffuse lighting shader lighting pass, read
+            // from the compiled shader) instead of the lobes above: on the faces turned from the
+            // sun, diffuse += max(0, 0.3 - N.L) * 0.2319069 * the (coloured) shadow term - no
+            // phase, no thickness. (0.2319069 is against a Lambert term with its 1/pi: x pi here.
+            // That it is multiplied by the albedo like the rest of the diffuse is assumed.)
+            float trans = max(0.0, 0.3 - ndl_raw) * 0.2319069 * 3.14159265;
+            sun_term = max(spec_keep, vec3(0.0)) * 0.15 + sunE * lit * diff_albedo * (nw * 0.9 + trans);
+        }
     }
 
     // ---------------------------------------------------------------
@@ -1695,7 +1709,7 @@ void main() {
     // toward the object casting it.
     {
         vec2 lseed = vec2(float(scene.rt_flags.w & 31)) * vec2(17.13, 9.71);
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0, lamp_n = int(scene.lamp_info.y + 0.5); i < lamp_n; ++i) {
             float li = scene.lamp_lights[i].w;
             // w < 0: a candle - a small flame, short reach (3.2 m).
             bool candle = li < 0.0;

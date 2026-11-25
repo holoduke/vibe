@@ -21,6 +21,8 @@
 #include "extras/stb_vorbis.c"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <list>
 #include <cmath>
 #include <fstream>
@@ -38,6 +40,19 @@ float frand_pm(std::default_random_engine& rng, float amt) {
     if (amt <= 0.0f) return 0.0f;
     std::uniform_real_distribution<float> d(-amt, amt);
     return d(rng);
+}
+
+// The device's callback: miniaudio's own (mix the engine's graph into the buffer), timed -
+// AudioEngine::mixer_cost_take. Runs on the audio thread: two clock reads and three atomic adds
+// a block, nothing else.
+std::atomic<uint64_t> g_mix_ns{ 0 }, g_mix_frames{ 0 }, g_mix_blocks{ 0 };
+void timed_data_callback(ma_device* dev, void* out, const void*, ma_uint32 frames) {
+    const auto t0 = std::chrono::steady_clock::now();
+    ma_engine_read_pcm_frames(static_cast<ma_engine*>(dev->pUserData), out, frames, nullptr);
+    const auto t1 = std::chrono::steady_clock::now();
+    g_mix_ns.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()), std::memory_order_relaxed);
+    g_mix_frames.fetch_add(frames, std::memory_order_relaxed);
+    g_mix_blocks.fetch_add(1, std::memory_order_relaxed);
 }
 
 } // namespace
@@ -95,7 +110,9 @@ struct AudioEngine::Impl {
 };
 
 AudioEngine::AudioEngine() : impl_(std::make_unique<Impl>()) {
-    ma_result r = ma_engine_init(nullptr, &impl_->engine);
+    ma_engine_config ecfg = ma_engine_config_init();
+    ecfg.dataCallback = timed_data_callback;       // (what miniaudio's own does, with a clock round it)
+    ma_result r = ma_engine_init(&ecfg, &impl_->engine);
     if (r != MA_SUCCESS) {
         log::warnf("[audio] ma_engine_init failed (%d) — sound disabled", r);
         impl_->ok = false;
@@ -217,6 +234,24 @@ void AudioEngine::engine_stop(uint32_t h) {
 
 void AudioEngine::set_listener_velocity(glm::vec3 v) {
     if (impl_->ok) ma_engine_listener_set_velocity(&impl_->engine, 0, v.x, v.y, v.z);
+}
+
+void AudioEngine::engine_counts(int& voices, int& loops_playing) const {
+    voices = 0; loops_playing = 0;
+    if (!impl_ || !impl_->ok) return;
+    for (const auto& kv : impl_->engines) {
+        ++voices;
+        for (uint8_t p : kv.second->playing) loops_playing += p ? 1 : 0;
+    }
+}
+
+AudioEngine::MixerCost AudioEngine::mixer_cost_take() {
+    MixerCost c;
+    if (!impl_ || !impl_->ok) return c;
+    c.mix_ms = double(g_mix_ns.exchange(0, std::memory_order_relaxed)) * 1e-6;
+    c.audio_ms = double(g_mix_frames.exchange(0, std::memory_order_relaxed)) * 1000.0 / double((std::max)(ma_engine_get_sample_rate(&impl_->engine), ma_uint32(1)));
+    c.blocks = g_mix_blocks.exchange(0, std::memory_order_relaxed);
+    return c;
 }
 
 bool AudioEngine::ok() const { return impl_ && impl_->ok; }

@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <VkBootstrap.h>
 #include "engine/highway.h"
+#include "engine/vk_engine/river_stream.h"
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -128,6 +129,7 @@ void VulkanEngine::loop_test_input(InputFrame& in, float frame_dt, bool autodemo
             in.fire = true;
             in.fire_held = true;
         }
+        npc_test_input(in);                // (npc_world.cpp: VIBE_TEST_NPC_SHOOT aims at somebody of the NPC world and fires)
         // VIBE_TEST_MOVE=1: real movement keys on a 9 s loop (forward with a jump, sprint,
         // strafe, back, a turning arc) - an unattended player for watching animation and
         // netcode from a second instance.
@@ -303,6 +305,7 @@ void VulkanEngine::loop_handle_keys(InputFrame& in, float frame_dt) {
         if (in.weapon2 && !prev_weapon_key_[1]) { weapon_ = 1; flashlight_on_ = false; }
         if (in.weapon3 && !prev_weapon_key_[2]) { weapon_ = 2; flashlight_on_ = false; }
     }
+    if (static const char* tw = std::getenv("VIBE_TEST_WEAPON")) weapon_ = std::clamp(std::atoi(tw), 0, 2);   // (tests: which weapon is in the hand)
     prev_weapon_key_[0] = in.weapon1; prev_weapon_key_[1] = in.weapon2; prev_weapon_key_[2] = in.weapon3;
     // R: reload. Cosmetic (no ammunition is counted): it is shown and replicated, and firing ends it.
     if (state_ == State::Playing && !terrain_edit_mode_ && in.brush_mode_next && !prev_reload_key_ && gun_in_hand() &&
@@ -432,7 +435,7 @@ void VulkanEngine::loop_weapons_and_edit(InputFrame& in, float frame_dt) {
     if (recoil_timer_       > 0.0f) recoil_timer_       -= frame_dt;
     mp_update(frame_dt);               // LAN multiplayer: network, other players' shots, hits
     if (state_ == State::Playing && (window_->cursor_captured() ||
-                                       std::getenv("VIBE_TEST_FIRE"))) {
+                                       std::getenv("VIBE_TEST_FIRE") || std::getenv("VIBE_TEST_NPC_SHOOT"))) {
         // Raymarch terrain reads FBM directly in the shader — sculpting
         // the heightmap has no visual effect and only triggers wasted
         // chunk rebuilds / BLAS rebuilds / texture uploads.
@@ -865,6 +868,7 @@ void VulkanEngine::loop_upkeep(InputFrame& in, float frame_dt) {
     wv_nf_poll();
     hw_poll();
     hw_objects_poll();
+    river_stream::poll(allocator_, player_.eye_position(), globe::current().home, rt_.water_level, std::clamp(rt_.terrain_raymarch_octaves, 4, 24));   // (the river's plants beyond the home tile)
     if (veg_job_active_ && veg_job_.valid() &&
         veg_job_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         VegJobResult r = veg_job_.get();

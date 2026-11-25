@@ -88,3 +88,16 @@ Hooks: `VIBE_NPC_ACT=<clip>` (everybody who stands plays it), `VIBE_NPC_WARM=<s>
   Getting up from a chair and the till / fuel loops play, but were not judged by eye.
 - The right-hand passenger uses the same car clips as the driver (not mirrored).
 - No hands on the door or the wheel during the car acts; no door moves.
+
+## At the wheel (2026-11-25): the body is fitted to the car, not played from a clip
+
+- The pose is made by rule (`CharacterAnimator::seated`), not from the `drive` clip (still unused): a clip's seat, wheel and pedals are never this car's.
+- Each car's file (`assets/<car>/car.json`, `assets/jeep/jeep.json`) says where things are, measured from its model: `hip_driver` (the hip joint: the cushion's top + 10 cm, 13 - 17 cm in front of the backrest), `pedal_gas` (the middle of the accelerator's pad), `floor_y` (the footwell), `foot_rest` (x, z of the left heel), `seat_back_deg`. jeep.cpp `jeep_seat` / `jeep_seat_feet` hand them over as `CharacterAnimationInput::SeatExtras` (`take_seat`), for the player, other players and NPC drivers and passengers alike.
+- The rule: the back against the backrest, unless the arms then do not reach the wheel with the elbows bent - then the trunk comes forward as far as it takes; the palms on the outside of the rim at a quarter to three, knuckles along it, fingers closed round it; the right heel on the floor behind the accelerator with the ball of the foot on its pad, the left foot on the floor beside the pedals; a leg too short for its pedal stops short of it with the knee bent (the sports car). The head turns a little with the wheel and is never quite still.
+- Measured with scratch perl scripts over the `.mesh` text (cushion tops: jeep 0.63, pickup 0.78, saloon 0.38, sports car 0.30 m; pedals and floors likewise). A new car needs the same five entries, or it gets the old general pose.
+
+## Round three (2026-11-25) - stopped before it was finished
+
+- Made with HY-Motion (`vibe_prompts/life2.txt`, takes in `C:\Users\gillis\dev\hy-motion\vibe_out2`): `bar_idle`, `table_drink`, `table_idle` (two seeds each). NOT yet chosen, copied to `hy_actions` or cooked. Not made: `walk_relaxed`, `walk_swagger`, `look_watch`, `look_around`, `cashier_idle` (the run died when a game started beside it, with 13.2 GB peak; the second run was stopped).
+- `npc_world.cpp` already names all eight: whoever stays takes turns (bar: `bar_sit` / `bar_talk` / `bar_idle`; eating: `table_eat` / `table_drink`; talking: `table_talk` / `table_idle` / `table_drink`; cashier: `cashier` / `cashier_take` / `cashier_idle`; standing: `look_around`, `look_watch` beside the four there were; walking: `look % 8` 5 `walk_relaxed`, 6 `walk_swagger`). A name the cooked set does not have falls back to the clip used before, so nothing breaks until they are cooked. When the two walks are cooked, set their paces in `npc::kPace[5]`, `[6]`.
+- The soldiers' run is still the motion-matched run (real capture, rifle in the hands); no clip was made for it.

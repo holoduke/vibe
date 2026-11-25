@@ -119,30 +119,108 @@ vec2 veg_card_uv(vec2 uv, float kind, float m) {
 vec2 veg_card_uv(vec2 uv, float kind) { return veg_card_uv(uv, kind, 0.006); }
 
 // ---- Baked tree impostors (src/engine/vk_engine/veg_impostor.cpp) ----
-// The atlas: 8 views across (one 128 px tile each), one row per tree archetype. `info` from
-// veg.vert: x = row, y = the view (0..8, fractional: between two of them), z = the tree's
-// rotation. `card_uv`: u -1..1 across the card, v 0..1 up. `noise` (0..1, per pixel) picks
-// one of the two nearest views, so turning round a tree blends them instead of jumping.
-const float kImpViews = 8.0;
-const float kImpTile = 128.0;
-const float kImpMargin = 3.0 / 128.0;
-float veg_imp_noise(vec2 fc, uint frame) {
-    return fract(52.9829189 * fract(dot(fc + 9.31 * float(frame & 7u), vec2(0.06711056, 0.00583715)) + 0.37));
+// the reference game's impostors (its impostor shader, read from the compiled shaders; our code):
+// every tree archetype is baked from kImpN x kImpN directions laid out on a hemi-octahedron,
+// one kImpTile px tile each, orthographic, framed on the sphere round the tree's middle -
+//   colour atlas : rgb colour, a coverage
+//   second atlas : rg the surface normal in the tree's own space (octahedral), b depth along
+//                  the view (0.5 = the plane through the middle, 1 = a radius nearer),
+//                  a 1 for leaves, 0 for wood
+// The atlas holds one block of kImpN x kImpN tiles per archetype, the blocks in rows of
+// kImpCols. Looking up a pixel: the view ray is cut with the plane through the tree's middle
+// that faces the camera; that point is projected into the three baked views round the
+// direction to the camera, and they are blended - only in the middle fifth between two views,
+// so most of the time one view is shown sharp. Their depths move the point off the plane: the
+// card gets a real depth (it cuts into the ground and other trees as the tree would).
+const float kImpN = 8.0;
+const float kImpTile = 96.0;
+const float kImpCols = 6.0;
+
+vec2 veg_imp_enc(vec3 n) {                    // direction (y up, y >= 0) -> -1..1 square
+    n.y = max(n.y, 0.0);
+    n /= abs(n.x) + abs(n.y) + abs(n.z);
+    return vec2(n.x + n.z, n.x - n.z);
 }
-vec2 veg_imp_uv(vec2 card_uv, vec3 info, float noise, float rows) {
-    float view = mod(floor(info.y + noise), kImpViews);
-    vec2 t = vec2(kImpMargin + (clamp(card_uv.x, -1.0, 1.0) * 0.5 + 0.5) * (1.0 - 2.0 * kImpMargin),
-                  kImpMargin + (1.0 - clamp(card_uv.y, 0.0, 1.0)) * (1.0 - 2.0 * kImpMargin));
-    return vec2((view + t.x) / kImpViews, (floor(info.x + 0.5) + t.y) / rows);
+vec3 veg_imp_dir(vec2 e) {
+    vec2 t = vec2(e.x + e.y, e.x - e.y) * 0.5;
+    return normalize(vec3(t.x, 1.0 - abs(t.x) - abs(t.y), t.y));
 }
-// (the mip by hand: the uv jumps between views, which would fool the automatic one. Never
-// past 2: beyond that neighbouring tiles would bleed into each other.)
-float veg_imp_lod(vec2 card_uv) {
-    return clamp(log2(max(fwidth(card_uv.x) * 0.5, fwidth(card_uv.y)) * kImpTile + 1e-6), 0.0, 2.0);
+vec3 veg_oct_dec(vec2 e) {                    // full octahedral (the baked normal)
+    e = e * 2.0 - 1.0;
+    vec3 n = vec3(e.x, 1.0 - abs(e.x) - abs(e.y), e.y);
+    float t = max(-n.y, 0.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.z += n.z >= 0.0 ? -t : t;
+    return normalize(n);
+}
+// (a baked view's right and up: veg_impostor.cpp imp_axes - keep in step)
+void veg_imp_axes(vec3 f, out vec3 rt, out vec3 up) {
+    rt = normalize(cross(vec3(0.0, 1.0, 0.0), f) + vec3(1e-6, 0.0, 0.0));
+    up = cross(f, rt);
+}
+// wpos: the pixel on the card. base / ssy (size, y squash, turn) / info (block, the baked
+// sphere's radius, its middle's height): the tree. px: the pixel's footprint on the card (m).
+// False: nothing of the tree here. col: its colour; nrm: the baked normal, world space; leaf:
+// 1 on leaves; surf: the surface point in the world (for the depth).
+bool veg_imp_sample(sampler2D colT, sampler2D auxT, vec3 wpos, vec3 cam, vec3 base, vec3 ssy, vec3 info, float px,
+                    out vec3 col, out vec3 nrm, out float leaf, out vec3 surf) {
+    col = vec3(0.0); nrm = vec3(0.0, 1.0, 0.0); leaf = 0.0; surf = wpos;
+    float c = cos(ssy.z), sn = sin(ssy.z);
+    vec3  sc = vec3(ssy.x, ssy.x * ssy.y, ssy.x);
+    vec3  a = cam - base, b = wpos - base;
+    vec3  camL = vec3(c * a.x + sn * a.z, a.y, -sn * a.x + c * a.z) / sc;
+    vec3  posL = vec3(c * b.x + sn * b.z, b.y, -sn * b.x + c * b.z) / sc;
+    vec3  c0 = vec3(0.0, info.z, 0.0);
+    float R  = max(info.y, 1e-3);
+    vec3  vd = normalize(camL - c0);
+    vec3  d  = posL - camL;
+    float t  = dot(c0 - camL, vd) / min(dot(d, vd), -1e-6);
+    vec3  p  = camL + d * t - c0;                                  // on the plane through the middle
+    if (dot(p, p) > R * R) return false;
+
+    vec2  g  = (veg_imp_enc(vd) * 0.5 + 0.5) * (kImpN - 1.0);
+    vec2  ij = min(floor(g), vec2(kImpN - 2.0));
+    vec2  fr = clamp((g - ij - 0.4) * 5.0, 0.0, 1.0);
+    vec2  fs = fr * fr * (3.0 - 2.0 * fr);
+    vec3  w  = vec3(min(1.0 - fs.x, 1.0 - fs.y), abs(fs.x - fs.y), min(fs.x, fs.y));
+    vec2  fc[3] = vec2[3](ij, ij + (fs.x > fs.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0)), ij + 1.0);
+
+    vec2  asz = vec2(textureSize(colT, 0));
+    float blk = floor(info.x + 0.5);
+    vec2  org = vec2(mod(blk, kImpCols), floor(blk / kImpCols)) * kImpN;       // the block's first tile
+    // (the mip by hand: the uv jumps between views. Never past 2: tiles would bleed.)
+    float lod = clamp(log2(px / (2.0 * R * ssy.x) * kImpTile + 1e-6), 0.0, 2.0);
+    float m   = (0.5 + exp2(lod)) / kImpTile;                                 // keeps the taps inside the tile
+    float al = 0.0, lf = 0.0;
+    vec3  off = vec3(0.0), nn = vec3(0.0);
+    for (int k = 0; k < 3; ++k) {
+        if (w[k] <= 0.001) continue;
+        vec3 f = veg_imp_dir(fc[k] / (kImpN - 1.0) * 2.0 - 1.0), rt, up;
+        veg_imp_axes(f, rt, up);
+        vec2 uv = vec2(dot(rt, p), -dot(up, p)) / (2.0 * R) + 0.5;
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) continue;
+        vec2 auv = (org + fc[k] + clamp(uv, m, 1.0 - m)) * kImpTile / asz;
+        vec4 tc = textureLod(colT, auv, lod);
+        vec4 ta = textureLod(auxT, auv, lod);
+        float wa = w[k] * tc.a;
+        al  += wa;
+        col += wa * tc.rgb;
+        off += wa * (ta.b - 0.5) * 2.0 * R * f;
+        nn  += wa * veg_oct_dec(ta.rg);
+        lf  += wa * ta.a;
+    }
+    if (al < 0.5) return false;                                     // (the game's cut)
+    col /= al; off /= al; lf /= al;
+    leaf = lf;
+    vec3 sl = (p + c0 + off) * sc;
+    surf = base + vec3(c * sl.x - sn * sl.z, sl.y, sn * sl.x + c * sl.z);
+    vec3 nl = normalize(nn / vec3(1.0, ssy.y, 1.0) + vec3(0.0, 1e-5, 0.0));
+    nrm = vec3(c * nl.x - sn * nl.z, nl.y, sn * nl.x + c * nl.z);
+    return true;
 }
 // Winter: the leaf trees' cards lose their leaf texels as the mesh loses its leaves.
-bool veg_imp_bare(vec2 atlas_uv, float leafy, float kind, float winter) {
+bool veg_imp_bare(vec3 surf, float leafy, float kind, float winter) {
     if (leafy < 0.5 || kind < 1.5 || winter <= 0.0) return false;
-    float tone = fract(sin(dot(floor(atlas_uv * vec2(kImpViews * kImpTile, kImpTile) * 0.5), vec2(12.9898, 78.233))) * 43758.5453);
+    float tone = fract(sin(dot(floor(surf * 4.0), vec3(12.9898, 78.233, 37.719))) * 43758.5453);
     return smoothstep(tone * 0.6, tone * 0.6 + 0.4, winter) > 0.5;      // (veg.vert: when this leaf has let go)
 }

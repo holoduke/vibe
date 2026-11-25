@@ -1,0 +1,319 @@
+#version 460
+// Grass, placed on the GPU every frame - the reference game's automatic placement (its
+// placement shader placement pass, read from the compiled shader; this is
+// our own code for it). vk_engine/plant_gpu.cpp runs it right after plant_cull.comp, once for
+// every kind of grass (the game's "objects" of a placement group): the long tufts (species 15)
+// and the turf that covers the ground (species 17).
+//
+// THE METHOD. No list of this grass exists anywhere. Every frame, for the 4 x 4 block of
+// square cells round the camera:
+//   1. candidates   every cell holds the same N points of the R2 low-discrepancy sequence;
+//                   each point brings 5 candidates, pushed out from it on a disc of a metre
+//                   (the clumps). The cells are fixed in the world, so a candidate is the same
+//                   one every frame, wherever the camera stands.
+//   2. range        nothing beyond min(range, 3 cells); a share of the candidates (chosen by a
+//                   hash of their position) shrinks away between `fade.x` and `fade.y`.
+//   3. the ground   its height and slope from the terrain's height map; what may grow there
+//                   from a top-down picture (the game renders one with a placement group per
+//                   texel; ours: the lawn's grass mask for the turf, ScatterSet::tuft_rules
+//                   for the long tufts).
+//   4. rejections   nothing may grow / too steep / density (keep 1 - 1/(10 d + 1)) / the
+//                   clustering noise (six octaves of a rotated sine product: patches of grass
+//                   with bare ground between).
+//   5. transform    a turn about the vertical and a size from hashes of the candidate's number,
+//                   the size times the fade and growing a little with distance.
+//   6. culling      bounding sphere against the six planes of the view, then against last
+//                   frame's depth pyramid (five taps at the level the sphere covers).
+//   7. the record   appended to that species' (level of detail) list - the lists
+//                   plant_cull.comp fills with the hand-placed plants - and drawn as they are
+//                   by scatter.vert.
+//
+// The record is this engine's 32-byte plant instance, not the game's four rows: the ground's
+// normal is looked up again by scatter.vert (the height map), the seed is a hash of the place.
+//   pos_scale  xyz = root, w = MINUS the size (the sign says: already faded, do not fade again)
+//   rot_tint   x = turn (+ whole turns = the lift onto the raymarched ground's relief),
+//              y = red + 255 - fade byte (the dissolve at the end of the range), zw = green, blue
+layout(local_size_x = 128) in;
+
+struct Inst { vec4 pos_scale; vec4 rot_tint; };
+layout(std430, set = 0, binding = 1) writeonly buffer Packed { Inst packed[]; };
+layout(std430, set = 0, binding = 2) buffer Commands        { uint cmd[]; };       // 5 uints per (species, level)
+layout(std430, set = 0, binding = 3) readonly buffer Params { vec4 par[]; };       // (after the species table: this pass's numbers)
+layout(set = 0, binding = 4) uniform sampler2D u_hiz;                              // max-depth pyramid of the previous frame
+layout(set = 0, binding = 5) uniform sampler2D u_rules;                            // long grass: density (0 = none), dryness, -, -
+layout(set = 0, binding = 6) uniform sampler2D u_height;                           // the home tile's heights (m), 2048 m square
+layout(set = 0, binding = 7) uniform sampler2D u_lawn;                             // the lawn's mask: r = grass, g = slope
+layout(set = 0, binding = 8) uniform sampler2D u_near;                             // beyond the home tile: the ground round the camera (veg_stream.cpp wv_nf_poll)
+
+layout(push_constant) uniform PC {
+    vec4  planes[6];
+    vec4  cam;        // .xyz eye, .w 1 = use the depth pyramid
+    mat4  prev_vp;
+    vec4  misc;       // .x where this kind's numbers start in `par`, .y 1 = the ground has its close relief (raymarched terrain), .z water level, .w 1 = the ground beyond the home tile may be read (u_near)
+} pc;
+
+// This kind of grass (plant_gpu.cpp fills these in).
+#define P_CELL  par[PB + 0]   // .x a cell's half side (m), .yz the camera's cell (whole numbers), .w points a cell
+#define P_FADE  par[PB + 1]   // .x where the shrinking starts, .y where it ends, .z share that keeps its size, .w seed
+#define P_OBJ   par[PB + 2]   // .x density, .y clustering noise size (1/m), .z cluster size, .w steepest slope (degrees)
+#define P_OBJ2  par[PB + 3]   // .x smallest size, .y largest, .z growth with distance, .w turn variability 0..1
+#define P_CAP   par[PB + 4]   // .x the rules picture's half side (m), .y species, .z room in a list, .w 1 = grows where the lawn does, 2 = ... and only in a field
+#define P_SHAPE par[PB + 5]   // .x the mesh's height at size 1 (m), .y its width, .z range (m), .w dissolve band (share of the range)
+#define P_COL0  par[PB + 6]   // fresh green, one end ...
+#define P_COL1  par[PB + 7]   // ... and the other
+#define P_COL2  par[PB + 8]   // dry
+#define P_FIELD(i) par[PB + 9u + uint(i)]   // a field of this kind: .xy its middle (world x, z), .z radius (0 = none), .w how frayed its edge is (m)
+#define P_FADE2 par[PB + 13]  // .x where the shrinking starts (share of the range), .y where it ends
+
+const float kLod1 = 22.0, kLod2 = 48.0;       // = ScatterSet::kPlantFarLod / kPlantFarLod2
+const float kSide = 2048.0;                   // the home tile
+
+float h_sin(float f)  { return fract(sin(f + 0.546) * 143758.5); }
+float h_sqrt(float f) { return fract(sqrt(abs(f)) * 3734.422); }
+
+// Beyond the home tile: the ground round the camera, baked by the engine as it moves (512 x 512 m
+// at 1 m; grass_raymarch.frag nf_*: keep in step). Heights in RGB (24-bit fixed point), where
+// grass may grow in A; row 0 holds the window's origin and a mark that the bake is there.
+vec2 g_nf_org = vec2(0.0);
+bool g_nf_ok  = false;
+void nf_setup() {
+    vec3 m = texelFetch(u_near, ivec2(2, 0), 0).rgb * 255.0;
+    g_nf_ok = pc.misc.w > 0.5 && abs(m.r - 77.0) < 0.5 && abs(m.g - 123.0) < 0.5 && abs(m.b - 201.0) < 0.5;
+    if (!g_nf_ok) return;
+    vec3 a = texelFetch(u_near, ivec2(0, 0), 0).rgb * 255.0;
+    vec3 b = texelFetch(u_near, ivec2(1, 0), 0).rgb * 255.0;
+    g_nf_org = (vec2(a.r * 65536.0 + a.g * 256.0 + a.b, b.r * 65536.0 + b.g * 256.0 + b.b) - 8388608.0) * 64.0;
+}
+bool nf_inside(vec2 wp) {
+    vec2 l = wp - g_nf_org;
+    return g_nf_ok && all(greaterThan(l, vec2(3.0))) && all(lessThan(l, vec2(508.0)));
+}
+float nf_height(vec2 wp) {
+    vec3 c = textureLod(u_near, (wp - g_nf_org + 0.5) / 512.0, 0.0).rgb;
+    return c.r * 255.0 + c.g * (255.0 / 256.0) + c.b * (255.0 / 65536.0) - 64.0;
+}
+bool on_tile(vec2 xz) { return max(abs(xz.x), abs(xz.y)) < kSide * 0.5 - 2.0; }
+
+float ground_h(vec2 xz) {
+    if (max(abs(xz.x), abs(xz.y)) > kSide * 0.5 && g_nf_ok) return nf_height(xz);
+    float W = float(textureSize(u_height, 0).x);
+    return textureLod(u_height, ((xz / kSide + 0.5) * (W - 1.0) + 0.5) / W, 0.0).r;
+}
+
+// The close relief of the raymarched ground (terrain_rm_heightfield.glsl rm_ground_detail,
+// grass_raymarch.frag grass_ground_relief, CPU raymarch_ground_relief: keep in step), at its
+// full height - scatter.vert fades it with distance.
+const float kTile = 6400.0;
+vec2  tile_wrap(vec2 id, float n) { return id - n * floor(id / n + 0.5); }
+float tile_h21(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract((p3.x + p3.y) * p3.z);
+}
+float tile_noise2(vec2 wp, float k, vec2 off) {
+    float n = max(round(kTile * k), 1.0);
+    vec2 p = wp * (n / kTile) + off;
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    vec2 i0 = tile_wrap(i, n), i1 = tile_wrap(i + 1.0, n);
+    float a = tile_h21(i0), b = tile_h21(vec2(i1.x, i0.y)), c = tile_h21(vec2(i0.x, i1.y)), d = tile_h21(i1);
+    return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
+}
+float tile_w(float w) { return max(round(kTile * w / 6.28318530718), 1.0) * 6.28318530718 / kTile; }
+float ground_relief(vec2 wp, float h) {
+    float wn = tile_noise2(wp, 0.21, vec2(0.0));
+    vec2  qo = vec2(wn, 1.0 - wn) * 1.7;
+    float g1 = 1.0 - smoothstep(0.0, 0.22, abs(tile_noise2(wp, 0.55, qo) * 2.0 - 1.0));
+    float g2 = 1.0 - smoothstep(0.0, 0.25, abs(tile_noise2(wp, 1.485, qo * 2.7 + 3.1) * 2.0 - 1.0));
+    float d = 0.11 * (1.0 - g1) + 0.045 * (1.0 - g2) + 0.045;
+    float sand = 1.0 - smoothstep(pc.misc.z + 0.4, pc.misc.z + 2.5, h);
+    d += sand * 0.03 * (0.5 + 0.5 * sin(wp.x * tile_w(9.0) + wp.y * tile_w(3.5) + 6.0 * wn));
+    return d;
+}
+
+// The game's clustering noise: -1 .. 1, patches a few noise-sizes across.
+float crowd_noise(vec2 p) {
+    float n = 0.5 * sin(p.x * 1.5) * sin(p.y * 1.5);
+    vec2  q = vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y);
+    n += 0.25 * sin(q.x * 3.03) * sin(q.y * 3.03);
+    q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.02;
+    n += 0.125 * sin(q.x * 3.045) * sin(q.y * 3.045);
+    q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.03;
+    n += 0.0625 * sin(q.x * 3.015) * sin(q.y * 3.015);
+    q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.01;
+    n += 0.03125 * sin(q.x * 3.06) * sin(q.y * 3.06);
+    q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.04;
+    n += 0.015625 * sin(q.x * 3.015) * sin(q.y * 3.015);
+    return n;
+}
+
+// How much of a field this place is in (kinds that grow in fields only): 1 inside, 0 outside,
+// the edge frayed by the clustering noise.
+float field_w(uint PB, vec2 xz) {
+    float w = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        vec4 F = P_FIELD(i);
+        if (F.z <= 0.0) continue;
+        float d = distance(xz, F.xy);
+        if (d > F.z + F.w) continue;
+        w = max(w, 1.0 - smoothstep(F.z - F.w, F.z, d + crowd_noise(xz * 0.07) * F.w));
+    }
+    return w;
+}
+
+// Hidden behind last frame's depth? (the game's test: the sphere's four corners as the old
+// camera saw them, five taps at the pyramid level they span, the sphere's nearest point)
+bool occluded(vec3 c, float r) {
+    vec3 right = normalize(vec3(pc.prev_vp[0][0], pc.prev_vp[1][0], pc.prev_vp[2][0])) * r;
+    vec3 up    = normalize(vec3(pc.prev_vp[0][1], pc.prev_vp[1][1], pc.prev_vp[2][1])) * r;
+    vec2 lo = vec2(1e9), hi = vec2(-1e9);
+    for (int k = 0; k < 4; ++k) {
+        vec4 cc = pc.prev_vp * vec4(c + ((k & 1) == 0 ? -right : right) + ((k & 2) == 0 ? -up : up), 1.0);
+        if (cc.w <= 1e-4) return false;
+        vec2 uv = cc.xy / cc.w * 0.5 + 0.5;
+        lo = min(lo, uv); hi = max(hi, uv);
+    }
+    vec2 ext = hi - lo;
+    if (ext.x > 1.0 || ext.y > 1.0) return false;
+    if (lo.x < 0.0 || lo.y < 0.0 || hi.x > 1.0 || hi.y > 1.0) return false;       // (partly off last frame's picture)
+    vec4 nc = pc.prev_vp * vec4(c + normalize(pc.cam.xyz - c) * r, 1.0);
+    if (nc.w <= 1e-4) return false;
+    float znear = nc.z / nc.w;
+    vec2  sz  = vec2(textureSize(u_hiz, 0));
+    float mip = clamp(ceil(log2(max(max(ext.x * sz.x, ext.y * sz.y), 1.0))), 0.0, float(textureQueryLevels(u_hiz) - 1));
+    float z = textureLod(u_hiz, lo, mip).r;
+    z = max(z, textureLod(u_hiz, vec2(hi.x, lo.y), mip).r);
+    z = max(z, textureLod(u_hiz, vec2(lo.x, hi.y), mip).r);
+    z = max(z, textureLod(u_hiz, hi, mip).r);
+    z = max(z, textureLod(u_hiz, (lo + hi) * 0.5, mip).r);
+    return znear > z + 1e-5;
+}
+
+void main() {
+    const uint PB = uint(pc.misc.x);
+    // ---- 1. Which candidate: cell (0..15), point of the cell, child (0..4) ----
+    const uint N   = uint(P_CELL.w);
+    const uint idx = gl_GlobalInvocationID.x;
+    if (idx >= N * 80u) return;
+    const uint  c16    = idx / (N * 5u);
+    const uint  parent = (idx / 5u) % N;
+    const float f      = float(idx % 5u + parent * 5u);                     // the candidate's number within its cell
+    const float cs     = P_CELL.x;
+    const float seed   = P_FADE.w;
+    // (the cells' middles: +-1, +-3 half sides from the block's middle)
+    vec2 cell_mid = (2.0 * P_CELL.yz + vec2(float(c16 & 3u), float(c16 >> 2)) * 2.0 - 3.0) * cs;
+    // The cell's point: R2, plus half a metre of its own.
+    float fp = float(parent);
+    vec2 pt = (vec2(fract(fp * 0.7548776 + 0.5), fract(fp * 0.5698403 + 0.5)) * 2.0 - 1.0) * cs
+            + vec2(h_sqrt(seed + fp + 11.0), h_sqrt(seed + fp + 12.0)) - 0.5;
+    // Its child: pushed out on a disc of up to a metre.
+    vec2 r2 = vec2(fract(f * 0.7548776 + 0.5), fract(f * 0.5698403 + 0.5)) * 2.0 - 1.0;
+    vec2 q  = (abs(r2) + 2.0) * r2;
+    vec2 xz = cell_mid + pt + q * (max(abs(r2.x), abs(r2.y)) * inversesqrt(max(dot(q, q), 1e-8)));
+
+    // ---- 2. Range, and the shrinking of a share of them toward its end ----
+    const float range = min(P_SHAPE.z, 3.0 * cs);
+    float d2  = distance(xz, pc.cam.xz);
+    float hsh = fract(abs(xz.y) * 0.5698403 + abs(xz.x) * 0.7548776);
+    float tri = hsh < 0.5 ? hsh * 2.0 : 2.0 - hsh * 2.0;
+    float fade = tri < P_FADE.z ? 1.0
+               : 1.0 - clamp(max(d2 - P_FADE2.x * range, 0.0) / max((P_FADE2.y - P_FADE2.x) * range, 0.01), 0.0, 1.0);
+    if (d2 >= 300.0 || d2 >= range || fade <= 0.2) return;
+    // (the game drops what lies outside the view's footprint on the ground here, before it
+    // looks at the ground at all: most candidates end at this line)
+    {
+        float rr = 2.5 * max(P_OBJ2.y, 1.0);
+        for (int p = 0; p < 6; ++p) {
+            vec4 pl = pc.planes[p];
+            // (a column over the point, as tall as the ground can be from the eye: only the
+            // planes that are nearly upright can reject it)
+            if (abs(pl.y) < 0.2 && dot(pl.xz, xz) + pl.y * pc.cam.y + pl.w < -rr - abs(pl.y) * 60.0) return;
+        }
+    }
+
+    // ---- 3. The ground ----
+    float fieldw = 1.0;
+    if (P_CAP.w > 1.5) { fieldw = field_w(PB, xz); if (fieldw <= 0.02) return; }
+    const bool home = on_tile(xz);
+    nf_setup();
+    if (!home && !nf_inside(xz)) return;                                           // no ground known there
+    float grows = 0.0, dryness = 0.0;
+    if (P_CAP.w > 0.5 && home) {
+        vec2 mg = textureLod(u_lawn, xz / kSide + 0.5, 0.0).rg;                // (as grass_raymarch.frag reads it)
+        grows = mg.r * fieldw;
+    } else if (P_CAP.w > 0.5) {
+        // The wider world: grass by rule (grass_raymarch.frag: keep in step) - from just above
+        // the shore up to where the turf ends, thinning out toward the edge of the baked
+        // window, not on the launch site's apron, nor where the bake's alpha cuts it out.
+        float h0 = nf_height(xz);
+        vec2  lc = abs(xz - g_nf_org - 256.0);
+        grows = smoothstep(pc.misc.z + 1.2, pc.misc.z + 2.6, h0) * (1.0 - smoothstep(52.0, 70.0, h0)) *
+                (1.0 - smoothstep(200.0, 245.0, max(lc.x, lc.y))) *
+                smoothstep(84.0, 92.0, distance(xz, vec2(1600.0, 830.0))) *
+                smoothstep(0.25, 0.75, textureLod(u_near, (xz - g_nf_org + 0.5) / 512.0, 0.0).a) * fieldw;
+    } else {
+        if (!home) return;
+        if (abs(xz.x) >= P_CAP.x || abs(xz.y) >= P_CAP.x) return;              // outside the picture
+        ivec2 rn = textureSize(u_rules, 0);
+        vec4  rules = texelFetch(u_rules, clamp(ivec2((xz / P_CAP.x * 0.5 + 0.5) * vec2(rn)), ivec2(0), rn - 1), 0);
+        grows = rules.r; dryness = rules.g;
+    }
+    if (grows <= 0.02) return;                                                 // nothing grows here
+    float h  = ground_h(xz);
+    const float e = 1.0;
+    vec3  Nn = normalize(vec3(ground_h(xz - vec2(e, 0.0)) - ground_h(xz + vec2(e, 0.0)), 2.0 * e,
+                              ground_h(xz - vec2(0.0, e)) - ground_h(xz + vec2(0.0, e))));
+    vec3  pos = vec3(xz.x, h - 0.02, xz.y);
+    float d3 = distance(pos, pc.cam.xyz);
+    if (d3 >= range || d3 >= 300.0) return;
+
+    // ---- 4. Rejections ----
+    if (90.0 - Nn.y * 90.0 > P_OBJ.w) return;                                  // too steep
+    if (h < pc.misc.z + 0.15) return;                                          // under water
+    float dens = P_OBJ.x * grows;
+    if (dens < 10.0 && !(h_sqrt(seed + f + 3.0) > 1.0 / (dens * 10.0 + 1.0))) return;
+    if (P_OBJ.y != 0.0) {
+        float n = crowd_noise(xz * P_OBJ.y);
+        if (floor((n * 1.032258 + P_OBJ.z) * h_sqrt(f + 1.0)) != 0.0) return;
+    }
+
+    // ---- 5. Transform ----
+    float size = mix(P_OBJ2.x, P_OBJ2.y, h_sqrt(f)) * fade;
+    if (P_FADE.z > 0.0) {
+        // A kind that thins out with distance (a share keeps its size, the rest shrinks away):
+        // what stands is grown so that the ground it covers stays the same - no ring round the
+        // camera where the field thins. (Ours; the game's rule is the line below.)
+        float f = 1.0 - clamp(max(d2 - P_FADE2.x * range, 0.0) / max((P_FADE2.y - P_FADE2.x) * range, 0.01), 0.0, 1.0);
+        size *= inversesqrt(max(P_FADE.z + (1.0 - P_FADE.z) * f * f, 0.05));
+    } else
+        size *= 1.0 + max(range / cs, 1.0) * P_OBJ2.z * (d3 / range);
+    float yaw = clamp(P_OBJ2.w, 0.0, 1.0) * 6.283185 * h_sin(f + 1.0);
+
+    // ---- 6. Culling ----
+    vec3  c = pos + Nn * (0.5 * P_SHAPE.x * size);
+    float r = 0.5 * length(vec3(P_SHAPE.y, P_SHAPE.x, P_SHAPE.y)) * size;      // (the game: a quarter of the box's diagonal; ours sways further)
+    if (distance(c, pc.cam.xyz) >= r) {
+        for (int p = 0; p < 6; ++p)
+            if (dot(pc.planes[p].xyz, c) + pc.planes[p].w < -r) return;
+        if (pc.cam.w > 0.5 && occluded(c, r)) return;
+    }
+
+    // ---- 7. The record ----
+    uint lod = d3 < kLod1 ? 0u : (d3 < kLod2 ? 1u : 2u);
+    uint b = (uint(P_CAP.y) * 3u + lod) * 5u;
+    uint slot = atomicAdd(cmd[b + 1u], 1u);
+    if (slot >= uint(P_CAP.z)) { atomicAdd(cmd[b + 1u], 0xFFFFFFFFu); return; }        // the list is full
+    float c0 = h_sin(f + 5.0), c1 = h_sin(f + 6.0);
+    float dry = dryness * h_sin(f + 7.0) * 0.9;
+    vec3 col = mix(P_COL0.rgb, P_COL1.rgb, c0);
+    col = mix(col, P_COL2.rgb, clamp(dry, 0.0, 1.0) * 0.8) * (0.85 + 0.3 * c1);
+    // The dissolve over the last stretch of the range (those that kept their size to the end).
+    // (the game's placed grass has none: its fade byte is always 255, it shrinks away - step 2)
+    float band  = P_SHAPE.w * range;
+    float fbyte = band > 0.0 ? floor(255.0 * (1.0 - clamp((d3 - (range - band)) / band, 0.0, 1.0)) + 0.5) : 255.0;
+    float lift  = pc.misc.y > 0.5 ? clamp(floor(ground_relief(xz, h) / 0.004 + 0.5), 0.0, 120.0) : 0.0;
+    Inst I;
+    I.pos_scale = vec4(pos, -size);
+    I.rot_tint  = vec4(yaw + 6.2831853 * lift, min(col.r, 0.98) * 0.99 + (255.0 - fbyte), col.g, col.b);
+    packed[cmd[b + 4u] + slot] = I;
+}

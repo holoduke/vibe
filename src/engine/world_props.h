@@ -58,6 +58,7 @@ struct VegImpostorAtlas {
     std::vector<unsigned char> color, normal;
     std::vector<int> row;
 };
+void veg_impostor_frame(const game::LevelMesh& m, float& cy, float& radius);     // the sphere a tree is baked in
 VegImpostorAtlas bake_veg_impostors(const std::vector<VegArchetype>& archs,
                                     const unsigned char* leaf_px, int leaf_w, int leaf_h);
 

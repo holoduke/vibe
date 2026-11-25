@@ -415,16 +415,20 @@ void main() {
     }
     bool veg_imp = vVegInfo.z > 0.5;
     vec4 imp_col = vec4(0.0), imp_nrm = vec4(0.0);
+    vec3 imp_surf = vWorldPos;
+    float imp_px = max(length(dFdx(vWorldPos)), length(dFdy(vWorldPos)));
     if (veg_imp) {
-        // The baked card of this tree (veg_impostor.cpp): its silhouette, colour and normal
-        // from the nearest baked view. (The same cut as the depth pre-pass, veg_depth.frag.)
-        float rows = float(textureSize(u_normal[15], 0).y) / kImpTile;
-        vec2 iuv = veg_imp_uv(vUv, vObjectNormal, veg_imp_noise(gl_FragCoord.xy, uint(scene.rt_flags.w)), rows);
-        float ilod = veg_imp_lod(vUv);
-        imp_col = textureLod(u_normal[15], iuv, ilod);
-        if (imp_col.a < 0.26) discard;
-        imp_nrm = textureLod(u_normal[18], iuv, ilod);
-        if (veg_imp_bare(iuv, imp_nrm.a, vVegInfo.z, scene.season.w)) discard;
+        // The baked card of this tree (veg_impostor.cpp; veg_leaf.glsl veg_imp_sample): its
+        // silhouette, colour, normal and depth from the baked views round the direction to
+        // the camera. (The same cut and the same depth as the pre-pass, veg_imp_depth.frag.)
+        vec3 ic, inr; float ilf;
+        if (!veg_imp_sample(u_normal[15], u_normal[18], vWorldPos, scene.camera_pos.xyz, vObjectPos, vShellBase, vObjectNormal, imp_px,
+                            ic, inr, ilf, imp_surf)) discard;
+        if (veg_imp_bare(imp_surf, ilf, vVegInfo.z, scene.season.w)) discard;
+        imp_col = vec4(ic, 1.0); imp_nrm = vec4(inr, ilf);
+        precise vec4 isc = pc.mvp * vec4(imp_surf, 1.0);
+        precise float iz = isc.z / isc.w;
+        gl_FragDepth = max(gl_FragCoord.z, iz);
     } else if (pc.grass_params.w < -0.5 && pc.grass_params.x > 0.5) {
         // GPU vegetation canopy / bush: leafy cut-out silhouette (veg_leaf.glsl).
         int vm = int(vUv.y + 0.5);
@@ -436,17 +440,19 @@ void main() {
     }
     vec3 N = normalize(vNormal);
     if (veg_imp) {
-        // Fake a rounded canopy: bend the camera-facing normal outward by
-        // the billboard uv so impostors shade like the 3D crowns.
-        vec3 Vc = normalize(scene.camera_pos.xyz - vWorldPos);
-        vec3 Rc = cross(vec3(0.0, 1.0, 0.0), Vc);   // zero when viewed from straight above
-        vec3 Rt = dot(Rc, Rc) > 1e-8 ? normalize(Rc) : vec3(1.0, 0.0, 0.0);
-        vec3 Nf = normalize(Vc * 0.6 + Rt * vUv.x * 0.7 + vec3(0.0, 1.0, 0.0) * (vUv.y - 0.35) * 0.9);
-        // The baked normal, from the tree's space into the world's (its rotation: .z), eased
-        // a little toward the rounded card so the two baked views either side agree.
-        vec3  nb = imp_nrm.xyz * 2.0 - 1.0;
-        float irc = cos(vObjectNormal.z), irs = sin(vObjectNormal.z);
-        N = normalize(mix(Nf, vec3(irc * nb.x - irs * nb.z, nb.y, irs * nb.x + irc * nb.z), 0.75));
+        // The card's normal. The game has no baked normal: it takes the slope of the baked
+        // depth, turns it toward the eye where it is seen edge-on (k = (N.-V)^(1/8),
+        // N1 = k (V + N) - V) and leans it 10 - 20 % up. Ours: the same, then half way to the
+        // baked normal - the crown's smooth normal the mesh is lit with, so the card and the
+        // mesh it takes over from are shaded alike.
+        vec3 Vd = normalize(vWorldPos - scene.camera_pos.xyz);            // from the eye
+        vec3 Ng = cross(dFdy(imp_surf), dFdx(imp_surf));
+        Ng = dot(Ng, Ng) > 1e-12 ? normalize(Ng) : -Vd;
+        if (dot(Ng, Vd) > 0.0) Ng = -Ng;
+        float kk = pow(clamp(dot(Ng, -Vd), 0.0, 1.0), 0.125);
+        vec3 N1 = kk * (Vd + Ng) - Vd;
+        N1 = normalize(mix(normalize(N1), imp_nrm.xyz, 0.5));
+        N = normalize(mix(N1, vec3(0.0, 1.0, 0.0), max(0.0, -Vd.y) * 0.1 + 0.1));
     }
 
     if (vEmissive.a > 0.5) {
@@ -454,16 +460,20 @@ void main() {
         // Self-lit textured mesh (stained glass): the texture is the light.
         if (pc.grass_params.w < -0.5 && vTexParams.x > -0.5 && vTexParams.x < float(kTextureCount) - 0.5)
             e = texture(u_albedo[int(vTexParams.x + 0.5)], vUv * vTexParams.z).rgb * vColor + vEmissive.rgb;
+        // (The atlas is 4096 x 4096: the displays' pictures are its top 1152 rows; under them the
+        //  service station's posters, which are sampled as they are by the line above - their
+        //  uv is the cell itself with v + 2 to tell them from a display. tools/gasstation/make_poster_atlas.ps1.)
         // A display (slot 36: 8 pictures in a 4 x 2 atlas; uv = its number + 0..1 across, 0..1
         // down): each shows one of them and changes to another every quarter of a minute -
         // not all at the same moment.
-        if (pc.grass_params.w < -0.5 && int(vTexParams.x + 0.5) == 36) {
+        if (pc.grass_params.w < -0.5 && int(vTexParams.x + 0.5) == 36 && vUv.y < 1.5) {
             float id = floor(vUv.x - 1e-4);
             vec2  f  = clamp(vec2(vUv.x - id, vUv.y), 0.004, 0.996);
             float turn = floor((scene.water_params.w + id * 3.7) / 16.0);
             float cell = mod(id * 3.0 + floor(cs_hash(vec2(id, turn)) * 8.0), 8.0);
-            vec2  cuv = (vec2(mod(cell, 4.0), floor(cell / 4.0)) + f) / vec2(4.0, 2.0);
-            e = textureGrad(u_albedo[36], cuv, dFdx(vUv) / vec2(4.0, 2.0), dFdy(vUv) / vec2(4.0, 2.0)).rgb * vColor;
+            const vec2 kCells = vec2(4.0, 2.0 * 4096.0 / 1152.0);       // (two rows in the top 1152 of 4096)
+            vec2  cuv = (vec2(mod(cell, 4.0), floor(cell / 4.0)) + f) / kCells;
+            e = textureGrad(u_albedo[36], cuv, dFdx(vUv) / kCells, dFdy(vUv) / kCells).rgb * vColor;
         }
         outColor = vec4(e, 1.0);
         // Also fill gbuffer with the lit emissive value tagged mat 5 so the
@@ -1030,22 +1040,29 @@ void main() {
             albedo *= mix(1.0, 0.72, rain_wet) * mix(1.0, 0.50, rain_pool);
             N = normalize(mix(N, vec3(0.0, 1.0, 0.0), rain_pool));
         }
-        int fast_mat = is_terrain_pre ? 3 : 1;
+        // (material 2 = leaves of trees and bushes: lit as the reference game lights its foliage -
+        // deferred_lighting.frag; their roughness the game's too: glossier close by, matt with
+        // distance; a far card 0.9)
+        bool cd_leaf = is_foliage_px && !g_veg_solid;
+        int fast_mat = is_terrain_pre ? 3 : (cd_leaf ? 2 : 1);
         outColor    = vec4(albedo, 1.0);
         outGBuffer0 = vec4(clamp(albedo * terrain_grass_occ, vec3(0.0), vec3(1.0)),
                            float(fast_mat) / 255.0);
         vec2 rmf = surface_rough_metal(albedo_idx_raw, is_foliage_px, is_mesh_draw);
         rmf.x = mix(mix(rmf.x, rmf.x * 0.55, rain_wet), 0.04, rain_pool);
+        if (cd_leaf) rmf.x = veg_imp ? 0.902 : min(length(vWorldPos - scene.camera_pos.xyz) * 0.005 + 0.45, 0.99);
         outGBuffer1 = vec4(octa_encode(N), is_terrain_pre ? terrain_pom_vis : rmf.x, gbuf_flags(is_foliage_px, rmf.y));
         return;
     }
 
 #include "cube_main_forward_lighting.glsl"   // main(): forward lighting path (RT sun shadow, AO, GI, final colour) - skipped when deferred lighting owns the frame
-    int mat_id = is_terrain_pre ? 3 : 1;
+    bool cd_leaf2 = is_foliage_px && !g_veg_solid;
+    int mat_id = is_terrain_pre ? 3 : (cd_leaf2 ? 2 : 1);
     if (vEmissive.a > 0.5) mat_id = 5;     // emissive — handled above too
     outGBuffer0 = vec4(clamp(albedo * terrain_grass_occ, vec3(0.0), vec3(1.0)),
                        float(mat_id) / 255.0);
     vec2 rmf = surface_rough_metal(albedo_idx_raw, is_foliage_px, is_mesh_draw);
+    if (cd_leaf2) rmf.x = veg_imp ? 0.902 : min(length(vWorldPos - scene.camera_pos.xyz) * 0.005 + 0.45, 0.99);
     outGBuffer1 = vec4(octa_encode(N), is_terrain_pre ? terrain_pom_vis : rmf.x, gbuf_flags(is_foliage_px, rmf.y));
 }
 

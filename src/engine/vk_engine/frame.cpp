@@ -582,6 +582,8 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     clear_depth.depthStencil.depth = 1.0f;
     wm_cache_bake(frame.command_buffer);        // the world's slow fields, when the camera has moved on (wm_cache.cpp)
     grass_trail_update(frame.command_buffer);   // where people and cars have just been, for the plants (grass_trail.cpp)
+    wind_fluid_update(frame.command_buffer);    // the air people and cars stir up, for the plants (wind_fluid.cpp)
+    prof_mark(frame.command_buffer, "trail_wind");
     // ---------- Pass 0.45: the terrain's low-resolution march ("march pre-pass") ----------
     // One ray per block of pixels finds how far it can go before the ground comes near;
     // the terrain pass - the full-resolution one in the world pass, or the low-resolution

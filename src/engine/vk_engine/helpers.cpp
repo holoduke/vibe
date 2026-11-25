@@ -49,7 +49,8 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 7984 (season weights).
 //     → 8448 (the globe: chart frame + FBM lattice).
 //     → 9376 (wm_cache, wm_cache1: the world's slow fields as textures).
-static_assert(sizeof(SceneUBO) == 9440, "scene ubo layout");
+//     → 9696 (lamp_lights[8] -> [24]: a row of street lamps lights the road far ahead).
+static_assert(sizeof(SceneUBO) == 9696, "scene ubo layout");
 
 RtFuncs g_rt;
 

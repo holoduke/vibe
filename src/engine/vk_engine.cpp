@@ -306,6 +306,7 @@ void VulkanEngine::init() {
     init_grass_raymarch_pipeline();
     init_wm_cache();              // (after init_taa: the same full-screen triangle)
     init_grass_trail();           // (the same triangle; scene bindings 41, 42)
+    init_wind_fluid();            // (scene binding 45)
     init_viewmodel();
     init_spacejet();
     init_fx();
@@ -920,6 +921,7 @@ void VulkanEngine::shutdown() {
     guarded("destroy_grass_raymarch_pipeline", [&]{ destroy_grass_raymarch_pipeline(); });
     guarded("destroy_wm_cache", [&]{ destroy_wm_cache(); });
     guarded("destroy_grass_trail", [&]{ destroy_grass_trail(); });
+    guarded("destroy_wind_fluid", [&]{ destroy_wind_fluid(); });
     guarded("destroy_grass_pipeline", [&]{ destroy_grass_pipeline(); });
     guarded("destroy_scatter_pipeline", [&]{ destroy_scatter_pipeline(); });
     guarded("destroy_terrain_height_texture", [&]{ destroy_terrain_height_texture(); });

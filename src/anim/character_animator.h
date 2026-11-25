@@ -34,6 +34,7 @@ struct AnimationSet {
         int       finger[4][3], thumb[3];     // index, middle, ring, pinky; -1 if absent
         glm::vec3 a0{0.0f}, n0{0.0f}, b0{0.0f};  // at rest: wrist -> knuckles, out of the palm, a0 x n0
         float     palm = 0.08f;               // wrist to knuckles, metres
+        float     index_side = 1.0f;          // +1 / -1: the turn about n0 that takes a finger towards the index finger's side
         bool      ok = false;
     };
     Hand   hand[2]{};                    // left, right
@@ -54,12 +55,34 @@ struct AnimationSet {
 
 enum class HeldItem : uint8_t { None, Rifle, Tablet, Torch };
 
+// ONE HAND'S FINGERS ON WHAT IT HOLDS (docs/animation/hands.md). Every finger has its own bend:
+// a hand whose four fingers all bend alike is a mitten.
+//   curl[finger][joint]: radians each joint is bent towards the palm - index, middle, ring,
+//                        pinky; knuckle, middle joint, tip
+//   spread[finger]:      radians the finger is fanned away from the middle finger's line
+//                        (the middle finger's own: towards the index)
+//   thumb:               [0] swung across the palm, [1] bent at its base, [2] at its outer joints
+struct HandPose {
+    float curl[4][3];
+    float spread[4];
+    float thumb[3];
+};
+
 // Where the hands go on what is carried, in view space (x right, y up, z toward the viewer),
 // and how it kicks and reloads. Gameplay aim places the view frame; the hands follow it.
 struct WeaponDef {
     glm::vec3 grip_r{0.165f, -0.300f, -0.120f}, grip_l{0.178f, -0.243f, -0.430f};   // palm centres
     glm::vec3 r_fingers{-0.10f, 0.25f, -1.0f}, r_palm{-1.0f, 0.0f, 0.10f};          // direction of the fingers, palm normal
     glm::vec3 l_fingers{0.95f, 0.20f, -0.35f}, l_palm{0.05f, 1.0f, 0.15f};
+    // The right hand on a pistol grip: three fingers wrapped, tighter towards the little finger
+    // (it has the least to go round); the index finger laid on the trigger, hardly bent; the
+    // thumb round the other side, pointing forward.
+    HandPose  pose_r{ { { 0.30f, 0.62f, 0.30f }, { 1.02f, 1.32f, 0.80f }, { 1.10f, 1.38f, 0.85f }, { 1.18f, 1.42f, 0.88f } },
+                      { 0.10f, 0.0f, 0.03f, 0.07f }, { 0.85f, 0.30f, 0.45f } };
+    // The left hand under the fore-end: the palm carries it, the fingers come up round its far
+    // side, a little fanned along it; the thumb lies along the near side.
+    HandPose  pose_l{ { { 0.50f, 1.20f, 0.70f }, { 0.58f, 1.28f, 0.78f }, { 0.64f, 1.30f, 0.80f }, { 0.72f, 1.34f, 0.84f } },
+                      { 0.13f, 0.02f, 0.07f, 0.16f }, { 0.22f, 0.10f, 0.22f } };
     glm::vec3 muzzle{0.18f, -0.18f, -0.72f};
     glm::vec3 butt{0.172f, -0.175f, 0.03f};                // the end of the stock (weapon frame)
     glm::vec3 shoulder_offset{-0.035f, 0.020f, -0.07f};    // where the butt sits from the right shoulder joint (aim frame: +x right, -z forward)
@@ -74,7 +97,7 @@ struct WeaponDef {
     // while nothing is fired; 0 = it never does. It read as a weapon pointing the wrong way.)
     glm::vec3 ready_shift{0.015f, -0.135f, 0.015f};     // aim frame, added to shoulder_offset
     float     ready_pitch = 0.0f, ready_yaw = 0.0f;     // radians: muzzle down, and to the left
-    glm::vec3 ready_shift_fp{0.020f, -0.045f, 0.030f};
+    glm::vec3 ready_shift_fp{-0.045f, 0.050f, 0.020f};      // (was 0.020, -0.045, 0.030: only the barrel's end showed in the corner)
     float     ready_pitch_fp = 0.0f, ready_yaw_fp = 0.0f, ready_roll_fp = -0.07f;
     // Aiming, in the player's own view only: the weapon comes to the middle of the screen, its
     // sights under the crosshair. Nobody else sees this: for them it is in the shoulder.
@@ -162,6 +185,32 @@ struct CharacterAnimationInput {
     bool      seated = false;
     glm::vec3 seat_hand_l{0.0f}, seat_hand_r{0.0f};      // model space: where the wrists go
     float     seat_legs = 0.0f;
+    // What the car itself knows of its seat (SeatExtras, below; take_seat() fills these). Model space.
+    //   seat_wheel: the hands HOLD a wheel. seat_hand_* are then points on its rim (not
+    //     wrists), seat_hub is its middle and seat_axis the column, pointing at the driver: the
+    //     palm lies on the outside of the rim, the knuckles along it, the fingers round it.
+    //   seat_feet: the feet have places. seat_heel_* on the floor, seat_ball_* where the ball
+    //     of the foot presses (the accelerator's pad; the floor or the foot rest).
+    //   seat_back: degrees the backrest leans back (negative: as seat_legs says, as before).
+    //   seat_steer: -1 .. 1, how far the wheel is turned to the right (the head goes into the bend).
+    bool      seat_wheel = false, seat_feet = false;
+    glm::vec3 seat_hub{0.0f}, seat_axis{0.0f, 0.0f, 1.0f};
+    glm::vec3 seat_heel_l{0.0f}, seat_ball_l{0.0f}, seat_heel_r{0.0f}, seat_ball_r{0.0f};
+    float     seat_back = -1.0f, seat_steer = 0.0f;
+    // (the same in the caller's space - the world - brought into the model's)
+    struct SeatExtras {
+        bool      wheel = false, feet = false;
+        glm::vec3 hub{0.0f}, axis{0.0f, 0.0f, 1.0f};
+        glm::vec3 heel_l{0.0f}, ball_l{0.0f}, heel_r{0.0f}, ball_r{0.0f};
+        float     back = -1.0f, steer = 0.0f;
+    };
+    void take_seat(const SeatExtras& e, const glm::mat4& to_model) {
+        auto pt = [&](glm::vec3 p) { return glm::vec3(to_model * glm::vec4(p, 1.0f)); };
+        seat_wheel = e.wheel; seat_feet = e.feet;
+        seat_hub = pt(e.hub); seat_axis = glm::vec3(to_model * glm::vec4(e.axis, 0.0f));
+        seat_heel_l = pt(e.heel_l); seat_ball_l = pt(e.ball_l); seat_heel_r = pt(e.heel_r); seat_ball_r = pt(e.ball_r);
+        seat_back = e.back; seat_steer = e.steer;
+    }
     // AN ACTION: something done once, from a clip played by name (IAnimationRuntime::find_clip;
     // clips tagged kTagAction) instead of locomotion - sitting down, getting up, getting into
     // a car. The caller owns its time (action_time, seconds into the clip) and where the model

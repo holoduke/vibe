@@ -614,6 +614,29 @@ def shell():
 
 
 # ------------------------------------------------------------------ the diner
+def poster(i, x, y, z0, face, w=0.72):
+    """Poster number i (0..17) of the atlas on a wall: (x, y) the middle of its foot on the wall's
+    surface, z0 its lower edge, `face` the way it looks ('N' or 'E'). 2:3, in a thin black frame.
+    The pictures: tools/gasstation/posters/p00..p17.png, packed by make_poster_atlas.ps1 into
+    assets/office/tex/screens.png under the pavilion's screens - 6 x 3 cells of 682.67 x 981 px
+    from row 1152 of 4096. uv = that cell (v + 2: tells cube.frag it is a picture on paper, not
+    one of the displays, which share the texture)."""
+    h = w * 1.5; e = 0.03; off = 0.016
+    col, row = i % 6, i // 6
+    u0, u1 = (col + 0.006) / 6.0, (col + 0.994) / 6.0
+    v0, v1 = 2.0 + (1152 + row * 981 + 4) / 4096.0, 2.0 + (1152 + (row + 1) * 981 - 4) / 4096.0
+    if face == 'N':
+        box(BLACK, (x - w / 2 - e, y, z0 - e), (x + w / 2 + e, y + 0.012, z0 + h + e))
+        a, b, c, d = (x + w / 2, y + off, z0), (x - w / 2, y + off, z0), (x - w / 2, y + off, z0 + h), (x + w / 2, y + off, z0 + h)
+    else:
+        box(BLACK, (x, y - w / 2 - e, z0 - e), (x + 0.012, y + w / 2 + e, z0 + h + e))
+        a, b, c, d = (x + off, y - w / 2, z0), (x + off, y + w / 2, z0), (x + off, y + w / 2, z0 + h), (x + off, y - w / 2, z0 + h)
+    a, b, c, d = Vector(a), Vector(b), Vector(c), Vector(d)
+    n = (b - a).cross(d - a).normalized()
+    uv = [(u0, v1), (u1, v1), (u1, v0), (u0, v0)]
+    G.setdefault('g_poster', []).extend([(a, n, uv[0]), (b, n, uv[1]), (c, n, uv[2]), (a, n, uv[0]), (c, n, uv[2]), (d, n, uv[3])])
+
+
 def diner():
     E, N = BX1 - 0.3, BY1 - 0.3
     W = BX0 + 0.3
@@ -711,7 +734,7 @@ def diner():
         table_setting(x, y, FL + 0.77)
         for k in range(4):
             a = TAU * k / 4 + 0.6 + RNG.uniform(-0.2, 0.2)
-            chair(x + 0.78 * math.sin(a), y - 0.78 * math.cos(a), a + math.pi + RNG.uniform(-0.15, 0.15))
+            chair(x + 0.78 * math.sin(a), y - 0.78 * math.cos(a), a + RNG.uniform(-0.15, 0.15))       # (its back - local -y - away from the table: whoever sits on it faces the table)
             if RNG.random() < 0.5: plate(x + 0.3 * math.sin(a), y - 0.3 * math.cos(a), FL + 0.77)
     jx, jy = -16.5, PARTY + 0.5                                                                        # the jukebox, against the party wall
     box('g_p_brown', (jx - 0.42, jy - 0.3, FL), (jx + 0.42, jy + 0.3, FL + 1.0)); cyl('g_p_brown', (jx, jy - 0.3, FL + 1.0), (jx, jy + 0.3, FL + 1.0), 0.42, 16)
@@ -724,9 +747,15 @@ def diner():
     for k in range(16): ball(PRODUCTS[k % 5], (gx + RNG.uniform(-0.09, 0.09), gy + RNG.uniform(-0.09, 0.09), FL + 1.02 + RNG.uniform(0.0, 0.1)), 0.025, seg=5, rings=3)
     planter_box(-19.0, 3.4, -17.2, 4.0, FL, 0.5); planter_box(-11.6, PARTY + 0.2, -9.6, PARTY + 0.7, FL, 0.5)
     # ---- on the walls: frames, a clock, a neon in the window, the specials
-    for k, x in enumerate((-20.0, -17.8, -15.6, -11.2)):
-        box(BLACK, (x - 0.38, PARTY + 0.12, 1.5), (x + 0.38, PARTY + 0.14, 2.1)); box(PRODUCTS[(k * 2) % 7], (x - 0.33, PARTY + 0.14, 1.55), (x + 0.33, PARTY + 0.145, 2.05))
-        box(WHITE, (x - 0.2, PARTY + 0.145, 1.7), (x + 0.2, PARTY + 0.15, 1.9))
+    # THE BASE'S POSTERS. The diner is where the launch site's people eat: its walls carry what
+    # the base pins up - recruiting, the anniversary, a party, the rules, its history, the
+    # softball game, a lost cat. Ten at eye level along the party wall (the one over the
+    # jukebox higher), eight in the band over the kitchen's pass, left and right of the menu.
+    for k, (i, x) in enumerate(((0, -20.75), (2, -19.85), (6, -18.95), (7, -18.05), (3, -16.5), (4, -15.0),
+                                (8, -11.95), (16, -11.05), (15, -10.15), (17, -9.25))):
+        poster(i, x, PARTY + 0.12, 1.62 if i == 3 else 1.32, 'N')
+    for i, y in ((1, 5.95), (11, 6.85), (5, 7.75), (13, 8.65), (9, 15.6), (10, 16.5), (12, 17.4), (14, 18.3)):
+        poster(i, KX + 0.1, y, 2.24, 'E')
     cyl(WHITE, (-13.4, PARTY + 0.12, 2.7), (-13.4, PARTY + 0.15, 2.7), 0.24, 20); cyl(BLACK, (-13.4, PARTY + 0.115, 2.7), (-13.4, PARTY + 0.135, 2.7), 0.26, 20)
     box(BLACK, (-13.41, PARTY + 0.15, 2.7), (-13.39, PARTY + 0.155, 2.88)); box(BLACK, (-13.4, PARTY + 0.15, 2.69), (-13.28, PARTY + 0.155, 2.71))
     text('g_neon_r', 'OPEN', 0.34, (E + 0.05, 4.1, 2.45), 'E', depth=0.03)

@@ -354,6 +354,8 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/sites.cpp
     src/engine/vk_engine/highway_field.cpp
     src/engine/vk_engine/highway_furniture.cpp
+    src/engine/vk_engine/lane_edge.cpp
+    src/engine/vk_engine/river_stream.cpp
     src/engine/vk_engine/jeep.cpp
     src/engine/vk_engine/gfx_quality.cpp
     src/engine/vk_engine/bridges.cpp
@@ -386,6 +388,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/veg_stream.cpp
     src/engine/vk_engine/wm_cache.cpp
     src/engine/vk_engine/grass_trail.cpp
+    src/engine/vk_engine/wind_fluid.cpp
     src/engine/vk_engine/ssdm.cpp
     src/engine/vk_engine/flashlight.cpp
     src/engine/vk_engine/player_body.cpp

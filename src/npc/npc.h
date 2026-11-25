@@ -29,6 +29,7 @@ namespace vibe::npc {
 
 constexpr int   kMaxAgents = 100;
 constexpr float kStep = 0.1f;                  // seconds a step
+constexpr float kTakeSpeed = 1.5f;             // m/s: a car no faster than this can be taken (take_car)
 
 enum class Kind : uint8_t { Person = 0, Car = 1 };
 enum class Pose : uint8_t {
@@ -95,13 +96,24 @@ public:
     void set_run_path(std::vector<glm::vec3> pts);
     void populate(uint32_t seed);
     // SHOT (the authority's): that person is dead - gone from the world (the renderer has the
-    // body), and after a while somebody new walks on to the site. False: not a person on foot.
+    // body), and after a while somebody new walks on to the site. Somebody on foot, on a seat or
+    // IN A CAR; and `id` may be a car that drives with nobody of this world at its wheel (the
+    // traffic the other way): then it is that car's driver. A car whose driver is shot rolls to
+    // a stop on its lane (pose Park from that moment: no driver is shown), whoever else is in it
+    // gets out, and two minutes later it is cleared away (the traffic gets another). False:
+    // nobody there to shoot.
     bool kill(int id);
-    // TAKEN (the authority's): a car that stands with nobody in it is the player's now - it
-    // leaves this world (its people stay behind, on foot for good); later another joins the
-    // traffic. False: not a car that can be taken now.
+    // TAKEN (the authority's): a car that stands or barely rolls (kTakeSpeed) is the player's now
+    // - it leaves this world; later another joins the traffic. Whoever sits in it is put out
+    // beside it, its people who are out on foot stay behind: at the site they go about as the
+    // locals do, out on the road they stand there a while and are gone. False: not a car that
+    // can be taken now (it drives, or it is gone).
     bool take_car(int id);
     bool can_take_car(int id) const;
+    // The players on foot (where their feet are; the authority's, given every frame): a car
+    // does not drive into them - on the road it brakes in good time and waits while one stands
+    // on its lane, on the site it waits as it does for its own people.
+    void set_walkers(const std::vector<glm::vec3>& feet);
 
     // Authority: steps the world in fixed steps for the time passed. Replica: moves its clock.
     void update(float frame_dt);

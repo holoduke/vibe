@@ -13,6 +13,7 @@
 #include "engine/vk_engine/internal.h"
 #include "engine/vk_engine/state/environment.h"
 #include "engine/vk_engine/state/static_clusters.h"
+#include "engine/vk_engine/river_stream.h"
 #include <unordered_map>
 #include <cmath>
 #include "engine/log.h"
@@ -173,6 +174,7 @@ const std::vector<const VulkanEngine::CastleMeshGpu*>& VulkanEngine::mesh_parts_
 void VulkanEngine::destroy_castle_meshes() {
     destroy_sites();
     hw_objects_destroy();
+    river_stream::destroy(allocator_);
     destroy_jeep();
     destroy_mesh_parts(castle_meshes_);
 }

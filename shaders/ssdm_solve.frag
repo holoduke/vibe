@@ -4,7 +4,7 @@
 // See ssdm_grid.vert for the whole method.
 //
 // What decides how the stones meet at corners, outlines and other materials is here, and it
-// is the rule the SSDM_Background_TileVS shader of Crimson Desert uses (read from the compiled
+// is the rule the SSDM_Background_TileVS shader of the reference game uses (read from the compiled
 // shader of the game; this is our own code for it):
 //
 //   * The height is averaged with the pixels around it. A neighbour only adds to the sum

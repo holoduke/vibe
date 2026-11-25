@@ -7,6 +7,7 @@
 #include "engine/vk_engine/state/terrain_raymarch.h"
 #include "engine/vk_engine/state/environment.h"
 #include "engine/vk_engine/state/spacejets.h"
+#include "engine/vk_engine/river_stream.h"
 #include "engine/gltf_loader.h"
 #include "engine/grass.h"
 #include "engine/skybox.h"
@@ -1111,11 +1112,14 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
             vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages,
                                0, sizeof(PushConstants), &ppc);
             for (int sp = 0; sp < ScatterSet::kPlantSpecies; ++sp) {
-                if (scatter_.plant_count[sp] == 0) continue;
+                if (scatter_.plant_count[sp] == 0 && sp != 15 && sp < 17) continue;      // (the grass placed on the GPU is in no list here)
                 ppc.grass_params.x = plant_max_d(sp);   // per-group draw distance (settings)
+                // (the two grass meshes: height, blades, root radius, root depth - tuft_cd.glsl)
+                if (sp == 15 || sp >= 17) { const float* s = sp == 15 ? ScatterSet::kTuftShape : sp == 17 ? ScatterSet::kTurfShape : ScatterSet::kMeadowShape; ppc.tex_params = glm::vec4(s[0], s[1], s[2], s[3]); }
                 vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &ppc);
                 // GPU path: only the plants that can be seen, each with the mesh its distance needs.
                 if (draw_plants_gpu(cmd, sp)) continue;
+                if (scatter_.plant_count[sp] == 0) continue;
                 VkBuffer pb[2] = { scatter_.plant_mesh[sp].vertex_buffer, scatter_.plant_buffer };
                 VkDeviceSize po[2] = { 0, 0 };
                 vkCmdBindVertexBuffers(cmd, 0, 2, pb, po);
@@ -1142,6 +1146,15 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
                                        [&](const ScatterCell& c) { return band(c) == l && cell_in(c, plant_d); });
                 }
             }
+            // The river's plants beyond the home tile (river_stream.cpp): the same pipeline and meshes.
+            if (globe::current().home)
+                river_stream::draw(cmd, scatter_, eye_c,
+                                   [&](int sp) {
+                                       ppc.grass_params.x = plant_max_d(sp);
+                                       vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &ppc);
+                                       return ppc.grass_params.x;
+                                   },
+                                   [&](const ScatterCell& c, float d) { return cell_in(c, d); });
         }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());
         vkCmdBindVertexBuffers(cmd, 0, 1, &cube_mesh_.vertex_buffer, &offset);
@@ -1282,7 +1295,8 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // cleared sky background. Was running before the brush loops,
     // which made translucent blades in front of the castle show sky
     // colour through them.
-    if (rt_.grass_enabled && rt_.grass_raymarch_enabled &&
+    // (not when the short grass is drawn as turf clumps - plant_gpu.cpp, tuft_place.comp)
+    if (rt_.grass_enabled && rt_.grass_raymarch_enabled && !turf_on() &&
         grass_rm_pipeline_ != VK_NULL_HANDLE) {
         render_grass_raymarch(cmd);
         // Restore the world cube pipeline + cube mesh for the

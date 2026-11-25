@@ -74,7 +74,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 27 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
+            kTextureCount * 2 + 30 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -94,7 +94,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[43]{};
+    VkDescriptorSetLayoutBinding bindings[46]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -194,7 +194,7 @@ void VulkanEngine::init_descriptors() {
     bindings[13].binding = 13;
     bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[13].descriptorCount = 1;
-    bindings[13].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[13].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT;      // (vertex: the grass blades are cut where the mask has none - tuft_cd.glsl)
 
     // Binding 14: fog wisp pattern (R8 256², REPEAT). One textureLod()
     // replaces the 3-octave noise2 calls in terrain_raymarch.frag's
@@ -371,11 +371,19 @@ void VulkanEngine::init_descriptors() {
     bindings[41].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[42] = bindings[31];
     bindings[42].binding = 42;
+    // 43 / 44: the trail's heights, this frame's and last frame's (grass_trail.cpp).
+    // 45: the wind field round the camera, a 3D texture (wind_fluid.cpp).
+    bindings[43] = bindings[41];
+    bindings[43].binding = 43;
+    bindings[44] = bindings[31];
+    bindings[44].binding = 44;
+    bindings[45] = bindings[41];
+    bindings[45].binding = 45;
 
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 43, .pBindings = bindings,
+        .bindingCount = 46, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -449,18 +457,36 @@ void VulkanEngine::update_scene_ubo() {
         // Road lanterns (dusk / night only): the two nearest to the eye.
         const float night = env_->night >= 0.0f ? env_->night
                                                : 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
-        // Up to 8, nearest the eye first.
+        // Up to kLampSlots (24; it was 8), nearest the eye first - those the camera looks toward before
+        // those behind it. Chosen from kLampPick metres (it was 220: looking down a road at night only
+        // the nearest few lamps lit it). VIBE_LAMPS_OLD=1: as it was (8 from 220 m), to compare.
+        static const bool kLampsOld = std::getenv("VIBE_LAMPS_OLD") != nullptr;
+        const size_t kLampSlots = kLampsOld ? 8 : std::size(data.lamp_lights);
+        const float  kLampPick = kLampsOld ? 220.0f : 800.0f;
         for (auto& l : data.lamp_lights) l = glm::vec4(0.0f);
+        // A light with a slot of its own (a room's, the rocket's flame) does not put out the
+        // lantern that had the slot: that one moves to a free slot further up.
+        auto put = [&](size_t slot, glm::vec4 v) {
+            if (data.lamp_lights[slot].w != 0.0f && !kLampsOld)
+                for (size_t k = 8; k < std::size(data.lamp_lights); ++k)
+                    if (data.lamp_lights[k].w == 0.0f) { data.lamp_lights[k] = data.lamp_lights[slot]; break; }
+            data.lamp_lights[slot] = v;
+        };
         // (with the road's street lamps near the eye: highway_furniture.cpp - they come and go with
         //  the place, so they are not in lamp_lights_)
         std::vector<glm::vec3> all_lamps = lamp_lights_;
-        if (night > 0.01f) hw_lamps_near(player_.eye_position(), 220.0f, all_lamps);
+        if (night > 0.01f) hw_lamps_near(player_.eye_position(), kLampPick, all_lamps);
         if (night > 0.01f && !all_lamps.empty()) {
             const glm::vec3 eye = player_.eye_position();
             std::vector<std::pair<float, size_t>> order;
+            const glm::vec3 look = -glm::vec3(current_frame_view_.inv_view[2]);
             for (size_t i = 0; i < all_lamps.size(); ++i) {
                 const float d = glm::distance(eye, all_lamps[i]);
-                if (d < 220.0f) order.push_back({ d, i });
+                if (d >= kLampPick) continue;
+                // (a lamp more than 60 m off and behind the camera counts as twice as far: its pool
+                //  of light is not in the picture, one ahead is)
+                const bool behind = !kLampsOld && d > 60.0f && glm::dot(all_lamps[i] - eye, look) < 0.0f;
+                order.push_back({ behind ? d * 2.0f : d, i });
             }
             std::sort(order.begin(), order.end());
             lamp_map_slot_ = -1;
@@ -482,7 +508,7 @@ void VulkanEngine::update_scene_ubo() {
                 static const bool kNoLampMap = std::getenv("VIBE_NO_LAMP_SHADOWMAP") != nullptr;   // A/B test hook
                 data.lamp_info = glm::vec4(kNoLampMap ? 0.0f : float(lamp_map_valid_), 0.0f, 0.0f, 0.0f);
             } else {
-                for (size_t k = 0; k < order.size() && k < 8; ++k)
+                for (size_t k = 0; k < order.size() && k < kLampSlots; ++k)
                     data.lamp_lights[k] = glm::vec4(all_lamps[order[k].second], (order[k].second >= lamp_lights_.size() ? 16.0f : 5.0f) * night);      // (a street lamp hangs at 8 m: three times a lantern's light)
             }
         } else {
@@ -492,23 +518,23 @@ void VulkanEngine::update_scene_ubo() {
         // deep room is not lit by its windows alone.
         if (night <= 0.01f && !office_lights_.empty() && glm::distance(player_.eye_position(), office_pos_) < 110.0f)
             for (size_t k = 0; k < office_lights_.size() && k < 6; ++k)
-                data.lamp_lights[k] = glm::vec4(office_lights_[k], 3.4f);
+                put(k, glm::vec4(office_lights_[k], 3.4f));
         // ... and the service station's, the six nearest the eye.
         if (night <= 0.01f && !station_lights_.empty() && glm::distance(player_.eye_position(), station_pos_) < 110.0f) {
             std::vector<std::pair<float, size_t>> st_near;
             for (size_t k = 0; k < station_lights_.size(); ++k) st_near.push_back({ glm::distance(player_.eye_position(), station_lights_[k]), k });
             std::sort(st_near.begin(), st_near.end());
             for (size_t k = 0; k < st_near.size() && k < 6; ++k)
-                data.lamp_lights[k] = glm::vec4(station_lights_[st_near[k].second], 3.4f);
+                put(k, glm::vec4(station_lights_[st_near[k].second], 3.4f));
         }
         // The launch site's own lights, day and night: the lamp in the control house, and the
         // rocket's exhaust while it burns nearby.
         if (launch_site_placed_) {
             const glm::vec3 leye = player_.eye_position();
             if (glm::distance(leye, launch_house_) < 45.0f)
-                data.lamp_lights[7] = glm::vec4(launch_house_ + glm::vec3(0.0f, 2.95f, 0.0f), 2.4f);
+                put(7, glm::vec4(launch_house_ + glm::vec3(0.0f, 2.95f, 0.0f), 2.4f));
             if (rocket_.thr_vis > 0.02f && rocket_.stage != 3 && glm::distance(leye, glm::vec3(rocket_.pos)) < 1200.0f)
-                data.lamp_lights[6] = glm::vec4(glm::vec3(rocket_.pos) - rocket_.axis * 10.0f, 70.0f * rocket_.thr_vis);
+                put(6, glm::vec4(glm::vec3(rocket_.pos) - rocket_.axis * 10.0f, 70.0f * rocket_.thr_vis));
         }
     }
     // Candles in the chapel burn day and night. Each is a small light AT its
@@ -528,7 +554,26 @@ void VulkanEngine::update_scene_ubo() {
                 { -1.3f, 2.53f, 2.3f, -1.5f }, { -1.3f, 2.53f, -2.3f, -1.5f },
                 { 1.3f, 2.53f, 2.3f, -1.5f }, { 1.3f, 2.53f, -2.3f, -1.5f },
             };
-            for (int i = 0; i < 5; ++i) data.lamp_lights[3 + i] = glm::vec4(church_pos_ + glm::vec3(c[i]), c[i].w);
+            for (int i = 0; i < 5; ++i) {
+                // (the lantern that had the slot moves up to a free one, as for the rooms' lights above)
+                static const bool lamps_old = std::getenv("VIBE_LAMPS_OLD") != nullptr;
+                if (data.lamp_lights[3 + i].w != 0.0f && !lamps_old)
+                    for (size_t k = 8; k < std::size(data.lamp_lights); ++k)
+                        if (data.lamp_lights[k].w == 0.0f) { data.lamp_lights[k] = data.lamp_lights[3 + i]; break; }
+                data.lamp_lights[3 + i] = glm::vec4(church_pos_ + glm::vec3(c[i]), c[i].w);
+            }
+        }
+    }
+    // How many slots the shaders walk (lamp_info.y): up to the last one that is lit.
+    {
+        int used = 0;
+        for (int k = 0; k < int(std::size(data.lamp_lights)); ++k) if (data.lamp_lights[k].w != 0.0f) used = k + 1;
+        data.lamp_info.y = float(used);
+        if (static const bool lg = std::getenv("VIBE_LOG_LAMPS") != nullptr; lg && frame_number_ % 120 == 0) {
+            float far_d = 0.0f; int lit = 0;
+            for (int k = 0; k < used; ++k)
+                if (data.lamp_lights[k].w != 0.0f) { ++lit; far_d = (std::max)(far_d, glm::distance(glm::vec3(data.lamp_lights[k]), player_.eye_position())); }
+            log::infof("[lamps] %d light(s) lit (slots walked: %d), the furthest %.0f m from the eye", lit, used, double(far_d));
         }
     }
     float pitch = glm::radians(rt_.sun_pitch_deg);

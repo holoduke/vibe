@@ -2,14 +2,15 @@
 //
 // Far trees are drawn as one camera-facing card each (vegetation.cpp: LOD 4). What the card
 // shows is baked here, once at start-up, from the tree's own full-detail mesh: every tree
-// archetype is drawn from 8 directions round it (straight on, orthographic) by a small
-// software rasteriser into two atlases -
+// archetype is drawn from 8 x 8 directions on a hemi-octahedron (orthographic, framed on the
+// sphere round its middle - the reference game's impostors, veg_leaf.glsl) by a small software
+// rasteriser into two atlases -
 //
 //   colour : rgb = the leaf / bark colour as cube.frag would give it without the per-tree
 //            tint and the season (those are applied per pixel, so one bake serves all
 //            seasons); a = coverage (the silhouette)
-//   normal : rgb = the surface normal in the tree's own space (0.5 + 0.5 n), a = 1 for
-//            leaves, 0 for wood (bare trees in winter drop the leaf texels)
+//   normal : rg = the surface normal in the tree's own space (octahedral), b = depth along
+//            the view, a = 1 for leaves, 0 for wood (bare trees in winter drop the leaf texels)
 //
 // One row per archetype, one 128 x 128 tile per direction. veg.vert picks the row and the
 // direction, veg_leaf.glsl (veg_imp_uv) the texel; cube.frag and veg_depth.frag cut the
@@ -32,10 +33,10 @@
 namespace vibe {
 
 namespace {
-constexpr int   kViews = 8;
-constexpr int   kTile = 128;
+constexpr int   kN = 8;                        // views each way on the hemi-octahedron (veg_leaf.glsl kImpN)
+constexpr int   kTile = 96;                    // (kImpTile)
+constexpr int   kCols = 6;                     // blocks of kN x kN tiles in a row of the atlas (kImpCols)
 constexpr int   kSS = 2;                       // samples per texel, each way
-constexpr float kMargin = 3.0f / 128.0f;
 
 float srgb_to_linear(float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
 float linear_to_srgb(float c) { c = glm::clamp(c, 0.0f, 1.0f); return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f; }
@@ -66,17 +67,48 @@ BV decode(const game::LevelVertex& v) {
     }
     return o;
 }
+// A baked view's direction and axes (veg_leaf.glsl veg_imp_dir / veg_imp_axes: keep in step).
+glm::vec3 imp_dir(float ex, float ey) {
+    const float tx = (ex + ey) * 0.5f, tz = (ex - ey) * 0.5f;
+    return glm::normalize(glm::vec3(tx, 1.0f - std::abs(tx) - std::abs(tz), tz));
+}
+void imp_axes(const glm::vec3& f, glm::vec3& rt, glm::vec3& up) {
+    rt = glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), f) + glm::vec3(1e-6f, 0.0f, 0.0f));
+    up = glm::cross(f, rt);
+}
+// A unit vector as two numbers 0..1 (veg_leaf.glsl veg_oct_dec undoes it).
+glm::vec2 oct_enc(glm::vec3 n) {
+    n /= std::abs(n.x) + std::abs(n.y) + std::abs(n.z);
+    if (n.y < 0.0f) {
+        const float x = (1.0f - std::abs(n.z)) * (n.x >= 0.0f ? 1.0f : -1.0f);
+        const float z = (1.0f - std::abs(n.x)) * (n.z >= 0.0f ? 1.0f : -1.0f);
+        n.x = x; n.z = z;
+    }
+    return glm::vec2(n.x, n.z) * 0.5f + 0.5f;
+}
 } // namespace
 
-VegImpostorAtlas bake_veg_impostors(const std::vector<VegArchetype>& archs,
+// The sphere a tree is baked in: its middle's height and its radius, from the stored
+// positions (vegetation.cpp gives the card the same two numbers).
+void veg_impostor_frame(const game::LevelMesh& m, float& cy, float& radius) {
+    float ymax = 0.0f;
+    for (const auto& v : m.verts) ymax = std::max(ymax, v.p.y);
+    cy = 0.5f * ymax;
+    float r2 = 1e-6f;
+    for (const auto& v : m.verts) { const glm::vec3 q = v.p - glm::vec3(0.0f, cy, 0.0f); r2 = std::max(r2, glm::dot(q, q)); }
+    radius = std::sqrt(r2) * 1.02f;
+}
+
+VegImpostorAtlas bake_veg_impostors
+(const std::vector<VegArchetype>& archs,
                                     const unsigned char* leaf_px, int leaf_w, int leaf_h) {
     VegImpostorAtlas out;
     out.row.assign(archs.size(), -1);
     for (size_t a = 0; a < archs.size(); ++a)
         if (archs[a].species <= 1 && !archs[a].lods[0].verts.empty()) out.row[a] = out.rows++;
     if (out.rows == 0) return out;
-    out.w = kViews * kTile;
-    out.h = out.rows * kTile;
+    out.w = kCols * kN * kTile;
+    out.h = ((out.rows + kCols - 1) / kCols) * kN * kTile;
     out.color.assign(size_t(out.w) * out.h * 4, 0);
     out.normal.assign(size_t(out.w) * out.h * 4, 0);
 
@@ -103,6 +135,10 @@ VegImpostorAtlas bake_veg_impostors(const std::vector<VegArchetype>& archs,
         std::vector<glm::vec3> cb(size_t(R) * R), nb(size_t(R) * R);
         std::vector<float> lb(size_t(R) * R);
         std::vector<glm::vec4> tc(size_t(kTile) * kTile), tn(size_t(kTile) * kTile);
+        std::vector<float> td(size_t(kTile) * kTile);
+        float cy = 0.0f, Rcap = 1.0f;
+        veg_impostor_frame(archs[a].lods[0], cy, Rcap);
+        const glm::vec3 c0(0.0f, cy, 0.0f);
         const game::LevelMesh& m = archs[a].lods[0];
         std::vector<BV> bv(m.verts.size());
         float rmax = 0.0f, ymax = 0.0f;
@@ -174,17 +210,18 @@ VegImpostorAtlas bake_veg_impostors(const std::vector<VegArchetype>& archs,
             return true;
         };
 
-        for (int view = 0; view < kViews; ++view) {
-            const float ang = 6.2831853f * float(view) / float(kViews);
-            const glm::vec3 d(std::sin(ang), 0.0f, std::cos(ang));       // from the tree to the camera
-            const glm::vec3 rt(d.z, 0.0f, -d.x);                          // the card's right (veg.vert)
+        for (int view = 0; view < kN * kN; ++view) {
+            const int fi = view % kN, fj = view / kN;
+            const glm::vec3 d = imp_dir(float(fi) / float(kN - 1) * 2.0f - 1.0f, float(fj) / float(kN - 1) * 2.0f - 1.0f);   // from the tree to the camera
+            glm::vec3 rt, upv;
+            imp_axes(d, rt, upv);
             std::fill(zb.begin(), zb.end(), -1e30f);
             std::fill(lb.begin(), lb.end(), 0.0f);
             auto to_px = [&](const glm::vec3& p) {
-                const float u = glm::dot(p, rt) / rmax, v = p.y / ymax;
-                return glm::vec3((kMargin + (u * 0.5f + 0.5f) * (1.0f - 2.0f * kMargin)) * float(R),
-                                 (kMargin + (1.0f - v) * (1.0f - 2.0f * kMargin)) * float(R),
-                                 glm::dot(p, d));
+                const glm::vec3 q = p - c0;
+                return glm::vec3((glm::dot(q, rt) / (2.0f * Rcap) + 0.5f) * float(R),
+                                 (0.5f - glm::dot(q, upv) / (2.0f * Rcap)) * float(R),
+                                 glm::dot(q, d));
             };
             for (size_t t = 0; t + 2 < m.idx.size(); t += 3) {
                 const BV& v0 = bv[m.idx[t]]; const BV& v1 = bv[m.idx[t + 1]]; const BV& v2 = bv[m.idx[t + 2]];
@@ -213,14 +250,15 @@ VegImpostorAtlas bake_veg_impostors(const std::vector<VegArchetype>& archs,
             // Down to the tile: coverage in alpha, colour and normal over what is covered.
             for (int y = 0; y < kTile; ++y)
                 for (int x = 0; x < kTile; ++x) {
-                    glm::vec3 c(0.0f), n(0.0f); float lf = 0.0f; int cnt = 0;
+                    glm::vec3 c(0.0f), n(0.0f); float lf = 0.0f, zs = 0.0f; int cnt = 0;
                     for (int sy = 0; sy < kSS; ++sy)
                         for (int sx = 0; sx < kSS; ++sx) {
                             const size_t k = size_t(y * kSS + sy) * R + size_t(x * kSS + sx);
                             if (zb[k] < -1e29f) continue;
-                            c += cb[k]; n += nb[k]; lf += lb[k]; ++cnt;
+                            c += cb[k]; n += nb[k]; lf += lb[k]; zs += zb[k]; ++cnt;
                         }
                     const size_t k = size_t(y) * kTile + size_t(x);
+                    td[k] = cnt > 0 ? zs / float(cnt) : 0.0f;
                     if (cnt > 0) {
                         tc[k] = glm::vec4(c / float(cnt), float(cnt) / float(kSS * kSS));
                         tn[k] = glm::vec4(glm::normalize(n + glm::vec3(0.0f, 1e-5f, 0.0f)), lf / float(cnt));
@@ -232,27 +270,29 @@ VegImpostorAtlas bake_veg_impostors(const std::vector<VegArchetype>& archs,
             // filtering and the smaller mips mix in neighbouring leaves, not black.
             for (int pass = 0; pass < 6; ++pass) {
                 std::vector<glm::vec4> c2 = tc, n2 = tn;
+                std::vector<float> d2 = td;
                 for (int y = 0; y < kTile; ++y)
                     for (int x = 0; x < kTile; ++x) {
                         const size_t k = size_t(y) * kTile + size_t(x);
                         if (tc[k].a > 0.0f || tn[k].a < -0.5f) continue;
-                        glm::vec3 c(0.0f), n(0.0f); float lf = 0.0f; int cnt = 0;
+                        glm::vec3 c(0.0f), n(0.0f); float lf = 0.0f, zs = 0.0f; int cnt = 0;
                         for (int j = -1; j <= 1; ++j)
                             for (int i = -1; i <= 1; ++i) {
                                 const int xx = x + i, yy = y + j;
                                 if (xx < 0 || yy < 0 || xx >= kTile || yy >= kTile) continue;
                                 const size_t q = size_t(yy) * kTile + size_t(xx);
                                 if (tc[q].a <= 0.0f && tn[q].a > -0.5f) continue;    // (still empty)
-                                c += glm::vec3(tc[q]); n += glm::vec3(tn[q]); lf += std::abs(tn[q].a) > 1.5f ? tn[q].a + 3.0f : tn[q].a; ++cnt;
+                                c += glm::vec3(tc[q]); n += glm::vec3(tn[q]); lf += std::abs(tn[q].a) > 1.5f ? tn[q].a + 3.0f : tn[q].a; zs += td[q]; ++cnt;
                             }
                         if (cnt == 0) continue;
                         c2[k] = glm::vec4(c / float(cnt), 0.0f);
+                        d2[k] = zs / float(cnt);
                         // (marked as filled - a < -0.5 - with its leaf share kept: -3 + share)
                         n2[k] = glm::vec4(glm::normalize(n + glm::vec3(0.0f, 1e-5f, 0.0f)), -3.0f + glm::clamp(lf / float(cnt), 0.0f, 1.0f));
                     }
-                tc.swap(c2); tn.swap(n2);
+                tc.swap(c2); tn.swap(n2); td.swap(d2);
             }
-            const int ox = view * kTile, oy = out.row[a] * kTile;
+            const int ox = ((out.row[a] % kCols) * kN + fi) * kTile, oy = ((out.row[a] / kCols) * kN + fj) * kTile;
             for (int y = 0; y < kTile; ++y)
                 for (int x = 0; x < kTile; ++x) {
                     const size_t k = size_t(y) * kTile + size_t(x);
@@ -263,9 +303,10 @@ VegImpostorAtlas bake_veg_impostors(const std::vector<VegArchetype>& archs,
                     out.color[o + 1] = b(linear_to_srgb(tc[k].g));
                     out.color[o + 2] = b(linear_to_srgb(tc[k].b));
                     out.color[o + 3] = b(tc[k].a);
-                    out.normal[o]     = b(tn[k].x * 0.5f + 0.5f);
-                    out.normal[o + 1] = b(tn[k].y * 0.5f + 0.5f);
-                    out.normal[o + 2] = b(tn[k].z * 0.5f + 0.5f);
+                    const glm::vec2 on = oct_enc(glm::normalize(glm::vec3(tn[k]) + glm::vec3(0.0f, 1e-5f, 0.0f)));
+                    out.normal[o]     = b(on.x);
+                    out.normal[o + 1] = b(on.y);
+                    out.normal[o + 2] = b(0.5f + td[k] / (2.0f * Rcap));      // depth along the view: 0.5 = the plane through the middle
                     out.normal[o + 3] = b(lf);
                 }
         }

@@ -261,12 +261,12 @@ float river_shrub_density(float x, float z, float h, float ny, float wl) {
         return glm::mix(glm::mix(hv(ix, iz), hv(ix + 1, iz), tx), glm::mix(hv(ix, iz + 1), hv(ix + 1, iz + 1), tx), tz);
     };
     const float thick = hn(x / 17.0f, z / 17.0f) * 0.65f + hn(x / 6.0f + 9.0f, z / 6.0f) * 0.35f;
-    d *= glm::smoothstep(0.34f, 0.62f, thick);
+    d *= glm::smoothstep(0.27f, 0.55f, thick);          // (2026-11-25: the gaps a little narrower - about a quarter more scrub)
     // Down the river: the reeds have the banks by the castle's lake; the scrub takes over
     // toward the sea (the river runs away from the castle, so distance from it is how far
     // downstream this is).
     const float down = glm::smoothstep(150.0f, 620.0f, std::sqrt(x * x + z * z));
-    return d * glm::mix(0.10f, 1.0f, down);
+    return d * glm::mix(0.22f, 1.0f, down);
 }
 
 std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,

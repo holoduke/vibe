@@ -290,6 +290,8 @@ TEST_CASE("npc: a standing car with nobody in it can be taken, and the traffic g
         for (const npc::View& c : v) if (c.kind == npc::Kind::Car) { if (parked < 0 && w.can_take_car(int(c.id))) parked = int(c.id); if (c.pose == npc::Pose::Drive && moving < 0) moving = int(c.id); }
     }
     REQUIRE(parked >= 0);
+    moving = -1;
+    for (const npc::View& c : w.state()) if (c.kind == npc::Kind::Car && c.speed > 5.0f && moving < 0) moving = int(c.id);
     REQUIRE(moving >= 0);
     REQUIRE_FALSE(w.take_car(moving));                 // (not one that drives)
     REQUIRE(w.take_car(parked));
@@ -338,4 +340,110 @@ TEST_CASE("npc: the soldiers run their path there and back, in step", "[npc]") {
     REQUIRE(r.apply(bytes.data(), bytes.size()));
     REQUIRE(r.state().size() == w.state().size());
     for (size_t k = 0; k < r.state().size(); ++k) { REQUIRE(r.state()[k].pose == w.state()[k].pose); REQUIRE(r.state()[k].style == w.state()[k].style); }
+}
+
+TEST_CASE("npc: a car on the road stops for a player on its lane, and can be taken with its people in it", "[npc]") {
+    npc::World w;
+    REQUIRE(w.load_site_text(kSite, glm::vec3(0.0f)));
+    w.set_road(ring_road());
+    w.populate(7);
+    run(w, 30.0f);
+    std::vector<npc::View> v;
+    w.views(v);
+    // a place on the lane of the cars that carry people: where one of them is now, far from the site
+    glm::vec3 P(0.0f); bool found = false;
+    for (const npc::View& p : v) {
+        if (p.kind != npc::Kind::Person || !p.hidden || p.car == 255) continue;
+        const npc::View& c = v[p.car];
+        if (c.pose == npc::Pose::Drive && c.speed > 15.0f && std::abs(c.pos.z) > 200.0f) { P = c.pos; found = true; break; }
+    }
+    REQUIRE(found);
+    run(w, 3.0f);                                      // (that car has gone on)
+    w.set_walkers({ P });
+    int stopped = -1; float nearest = 1e9f;
+    for (int i = 0; i < 2400 && stopped < 0; ++i) {
+        w.update(0.05f);
+        for (const npc::View& c : w.state()) {
+            if (c.kind != npc::Kind::Car || c.hidden) continue;
+            const float d = glm::distance(c.pos, P);
+            nearest = std::min(nearest, d);
+            if (d < 14.0f && std::abs(c.speed) < 0.05f) stopped = int(c.id);
+        }
+    }
+    REQUIRE(stopped >= 0);                             // one came, and stands in front of the player
+    REQUIRE(nearest > 3.0f);                           // ... and nobody was driven into
+    run(w, 5.0f);
+    REQUIRE(std::abs(w.state()[size_t(stopped)].speed) < 0.05f);      // it waits as long as he stands there
+    const glm::vec3 where = w.state()[size_t(stopped)].pos;
+    std::vector<int> inside;
+    for (const npc::View& p : w.state()) if (p.kind == npc::Kind::Person && p.hidden && int(p.car) == stopped) inside.push_back(int(p.id));
+    REQUIRE(!inside.empty());
+    REQUIRE(w.can_take_car(stopped));
+    REQUIRE(w.take_car(stopped));
+    REQUIRE(w.state()[size_t(stopped)].hidden);
+    for (int id : inside) {                            // its people stand beside where it stood
+        const npc::View& p = w.state()[size_t(id)];
+        REQUIRE_FALSE(p.hidden);
+        REQUIRE(p.car == 255);
+        REQUIRE(glm::distance(p.pos, where) < 3.0f);
+        REQUIRE(glm::distance(p.pos, where) > 1.0f);
+    }
+    w.set_walkers({});
+    run(w, 60.0f);                                     // out on the road there is nowhere to walk to: they are gone
+    for (int id : inside) REQUIRE(w.state()[size_t(id)].hidden);
+    run(w, 900.0f);
+    REQUIRE(w.sane());
+    REQUIRE(w.census().cars_moving > 10);              // the traffic drives on
+}
+
+TEST_CASE("npc: a driver shot in his car - it rolls to a stop, the others get out, and it is cleared away", "[npc]") {
+    npc::World w;
+    REQUIRE(w.load_site_text(kSite, glm::vec3(0.0f)));
+    w.set_road(ring_road());
+    w.populate(21);
+    run(w, 20.0f);
+    // ---- a driver of the world's own
+    int driver = -1, car = -1;
+    for (const npc::View& p : w.state()) {
+        if (p.kind != npc::Kind::Person || !p.hidden || p.car == 255 || p.seat != 0) continue;
+        const npc::View& c = w.state()[p.car];
+        if (c.pose == npc::Pose::Drive && c.speed > 15.0f && std::abs(c.pos.z) > 200.0f) { driver = int(p.id); car = int(p.car); break; }
+    }
+    REQUIRE(driver >= 0);
+    std::vector<int> others;
+    for (const npc::View& p : w.state()) if (p.kind == npc::Kind::Person && p.hidden && int(p.car) == car && int(p.id) != driver) others.push_back(int(p.id));
+    REQUIRE_FALSE(w.can_take_car(car));                // (it drives)
+    REQUIRE_FALSE(w.take_car(car));
+    REQUIRE(w.kill(driver));
+    REQUIRE_FALSE(w.kill(driver));
+    REQUIRE(w.state()[size_t(car)].pose == npc::Pose::Park);       // (nobody at the wheel from this moment)
+    const glm::vec3 from = w.state()[size_t(car)].pos;
+    float step_max = 0.0f; glm::vec3 last = from;
+    for (int i = 0; i < 300; ++i) { w.update(0.05f); const glm::vec3 p = w.state()[size_t(car)].pos; step_max = std::max(step_max, glm::distance(p, last)); last = p; }
+    REQUIRE(std::abs(w.state()[size_t(car)].speed) < 0.05f);       // it stands, some way on
+    REQUIRE(glm::distance(w.state()[size_t(car)].pos, from) > 20.0f);
+    REQUIRE(step_max < 2.5f);                                      // rolled there: not put
+    for (int id : others) REQUIRE_FALSE(w.state()[size_t(id)].hidden);      // whoever sat beside him got out
+    REQUIRE(w.can_take_car(car));                      // a car that stands can be taken
+    // ---- the driver of a car nobody of the world sits in: by the car's number
+    int ghost = -1;
+    for (const npc::View& c : w.state()) {
+        if (c.kind != npc::Kind::Car || c.pose != npc::Pose::Drive || c.speed < 15.0f || int(c.id) == car) continue;
+        bool people = false;
+        for (const npc::View& p : w.state()) if (p.kind == npc::Kind::Person && int(p.car) == int(c.id)) people = true;
+        if (!people) { ghost = int(c.id); break; }
+    }
+    REQUIRE(ghost >= 0);
+    REQUIRE(w.kill(ghost));
+    REQUIRE_FALSE(w.kill(ghost));
+    REQUIRE(w.state()[size_t(ghost)].pose == npc::Pose::Park);
+    run(w, 15.0f);
+    REQUIRE(std::abs(w.state()[size_t(ghost)].speed) < 0.05f);
+    // ---- two minutes on both are cleared away, and later the traffic has them again
+    run(w, 400.0f);
+    REQUIRE(w.state()[size_t(car)].pose == npc::Pose::Drive);
+    REQUIRE(w.state()[size_t(ghost)].pose == npc::Pose::Drive);
+    REQUIRE_FALSE(w.state()[size_t(car)].hidden);
+    run(w, 900.0f);
+    REQUIRE(w.sane());
 }

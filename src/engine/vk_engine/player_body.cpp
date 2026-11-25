@@ -422,14 +422,26 @@ void VulkanEngine::update_player_body(float dt) {
         glm::vec3 v = body_animator_->weapon.ads_shift_fp;
         if (std::sscanf(e, "%f,%f,%f", &v.x, &v.y, &v.z) == 3) body_animator_->weapon.ads_shift_fp = v;
     }
+    // The support hand goes under THIS gun's fore-end (measured from the model: props.cpp).
+    {
+        const glm::vec4 fore = gun_fore_[weapon_ == 2 && !rifle_gltf_.empty() ? 1 : 0];
+        body_animator_->weapon.grip_l = fore.w > 0.5f ? glm::vec3(fore) : anim::default_rifle().grip_l;
+    }
+    // (VIBE_READY="x,y,z": where the weapon is held when NOT aiming, in the player's own view - right, up, towards the eye)
+    if (static const char* e = std::getenv("VIBE_READY"); e) {
+        glm::vec3 v = body_animator_->weapon.ready_shift_fp;
+        if (std::sscanf(e, "%f,%f,%f", &v.x, &v.y, &v.z) == 3) body_animator_->weapon.ready_shift_fp = v;
+    }
     // At the wheel: the body sits in the car's seat, its hands on the steering wheel (jeep.cpp).
     body_seated_ = false;
-    if (glm::mat4 hip; jeep_driver(hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs)) {
+    anim::CharacterAnimationInput::SeatExtras seat_more;
+    if (glm::mat4 hip; jeep_driver(hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs, &seat_more)) {
         const anim::IAnimationRuntime& art = *anim_set_.runtime;
         const int hj = art.rig()[anim::Role::Hips];
         const glm::vec3 rest = hj >= 0 ? art.skeleton().rest_pos[size_t(hj)] : glm::vec3(0.0f, 0.95f, 0.0f);
         body_model_ = hip * glm::translate(glm::mat4(1.0f), -rest);
         const glm::mat4 inv = glm::inverse(body_model_);
+        in.take_seat(seat_more, inv);                    // (the wheel's frame, the feet's places, the backrest: this car's own)
         in.seat_hand_l = glm::vec3(inv * glm::vec4(in.seat_hand_l, 1.0f));
         in.seat_hand_r = glm::vec3(inv * glm::vec4(in.seat_hand_r, 1.0f));
         in.seated = true;

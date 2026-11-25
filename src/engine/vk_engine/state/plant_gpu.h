@@ -26,6 +26,20 @@ struct VulkanEngine::PlantGpuState {
     VkPipelineLayout      layout = VK_NULL_HANDLE;
     VkPipeline            pipeline = VK_NULL_HANDLE;
     VkShaderModule        module = VK_NULL_HANDLE;
+    // The automatic grass - long tufts and turf - placed on the GPU every frame (tuft_place.comp):
+    // the rules picture it reads (ScatterSet::tuft_rules, binding 5), the height map and lawn
+    // mask last bound at 6 and 7, its pipeline, and how many each list of species 15 (tufts)
+    // and 17 (turf) has room for.
+    VkImage        tuft_img = VK_NULL_HANDLE;
+    VmaAllocation  tuft_img_alloc = nullptr;
+    VkImageView    tuft_view = VK_NULL_HANDLE;
+    VkImageView    ground_view = VK_NULL_HANDLE, lawn_view = VK_NULL_HANDLE;
+    VkSampler      tuft_sampler = VK_NULL_HANDLE;
+    VkPipeline     tuft_pipeline = VK_NULL_HANDLE;
+    VkShaderModule tuft_module = VK_NULL_HANDLE;
+    uint32_t       tuft_room = 0, turf_room = 0, meadow_room = 0;
+    VkImageView    near_view = VK_NULL_HANDLE;      // the ground beyond the home tile, last bound at 8
+    uint32_t       tuft_gen = 0;
 };
 
 } // namespace vibe

@@ -448,7 +448,7 @@ void reed_blade(std::vector<Vertex>& v, std::vector<uint32_t>& ix, glm::vec3 bas
 // cards (no alpha test, proper shading and shadows). Part 8: uv.x = 8 +-
 // 0.4 across the blade, uv.y = along-blade coordinate (the sway weight).
 void grass_blade(std::vector<Vertex>& v, std::vector<uint32_t>& ix, glm::vec3 base, glm::vec3 lean,
-                 float len, float wid, float arch, float twist) {
+                 float len, float wid, float arch, float twist, int blade = 0, float part = 8.0f, float head = 0.0f) {
     const glm::vec3 up(0.0f, 1.0f, 0.0f);
     const glm::vec3 L = glm::normalize(glm::vec3(lean.x, 0.0f, lean.z) + glm::vec3(1e-4f));
     const glm::vec3 side = glm::normalize(glm::cross(up, L));
@@ -463,14 +463,16 @@ void grass_blade(std::vector<Vertex>& v, std::vector<uint32_t>& ix, glm::vec3 ba
         const glm::vec3 tg = glm::normalize(spine(std::min(t + 0.05f, 1.0f)) - spine(std::max(t - 0.05f, 0.0f)));
         const float tw = twist * t;
         const glm::vec3 sd = glm::normalize(side * std::cos(tw) + glm::cross(tg, side) * std::sin(tw));
-        const float w = wid * (1.0f - 0.92f * t * t);              // tapers to a point
+        float w = wid * (1.0f - 0.92f * t * t);                    // tapers to a point
+        // (a flowering stalk, part 9: a thin stem that swells into a head `head` wide below its tip)
+        if (head > 0.0f) w = wid * 0.45f + head * glm::smoothstep(0.55f, 0.80f, t) * (1.0f - 0.7f * glm::smoothstep(0.85f, 1.0f, t));
         glm::vec3 nrm = glm::normalize(glm::cross(sd, tg));
         if (glm::dot(nrm, L) < 0.0f) nrm = -nrm;
         const glm::vec3 keel = -nrm * (w * 0.30f);                 // folded along the midrib
-        const float pk = t * (0.98f / 32.0f);
-        v.push_back({ p - sd * w + keel, nrm, { 8.0f - 0.4f, pk } });
-        v.push_back({ p,                 nrm, { 8.0f,        pk } });
-        v.push_back({ p + sd * w + keel, nrm, { 8.0f + 0.4f, pk } });
+        const float pk = (float(blade & 31) + t * 0.98f) / 32.0f;        // (which blade, how far along it)
+        v.push_back({ p - sd * w + keel, nrm, { part - 0.4f, pk } });
+        v.push_back({ p,                 nrm, { part,        pk } });
+        v.push_back({ p + sd * w + keel, nrm, { part + 0.4f, pk } });
     }
     for (int s = 0; s < segs; ++s) {
         const uint32_t r0 = b0 + uint32_t(s) * 3u, r1 = r0 + 3u;
@@ -478,23 +480,89 @@ void grass_blade(std::vector<Vertex>& v, std::vector<uint32_t>& ix, glm::vec3 ba
     }
 }
 
+// Where blade `i` of `n` stands in a clump of radius R: a sunflower spiral. The vertex shader
+// works the same place out again from the blade's number (shaders/tuft_cd.glsl tuft_pivot:
+// keep in step) - it is the pivot the blade turns about when it is walked through or tumbles
+// in the wind, which the reference game's meshes carry in every vertex and ours have no room for.
+glm::vec3 tuft_root(int i, int n, float R, float depth) {
+    const float a = 2.39996323f * float(i);
+    const float r = R * std::sqrt((float(i) + 0.5f) / float(n));
+    return glm::vec3(std::cos(a) * r, -depth, std::sin(a) * r);
+}
+
+// Species 15: a clump of long grass. 32 blades from a 0.28 m wide base: upright in the
+// middle, the outer ones shorter and arching over. (kTuft* in vk_engine.h / plant_gpu.cpp
+// tell the shaders its height, blade count, radius and root depth.)
 void build_grass_tuft(std::vector<Vertex>& v, std::vector<uint32_t>& ix) {
     uint32_t seed = 0x6A55u;
     auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return float((seed >> 8) & 0xFFFFu) / 65535.0f; };
-    // 34 blades from a ~0.3 m wide base: upright in the middle, the outer
-    // ones shorter and arching over.
-    for (int i = 0; i < 34; ++i) {
-        const float a = 6.2831853f * rnd();
-        const float outer = std::sqrt(rnd());
-        const float r = 0.14f * outer;
-        // Roots well below the ground line, the outer ones deepest: on a
-        // slope the downhill side of the clump would otherwise hang in the air.
-        const float root = 0.05f + 1.1f * r;
-        const glm::vec3 base(std::cos(a) * r, -root, std::sin(a) * r);
-        const float len = root + 0.45f + 0.45f * rnd() - 0.12f * outer;
+    const int n = 32;
+    for (int i = 0; i < n; ++i) {
+        // Roots well below the ground line: on a slope the downhill side of the clump would
+        // otherwise hang in the air.
+        const glm::vec3 base = tuft_root(i, n, 0.14f, 0.12f);
+        const float outer = glm::length(glm::vec2(base.x, base.z)) / 0.14f;
+        const float a = std::atan2(base.z, base.x);
+        const float len = 0.12f + 0.45f + 0.45f * rnd() - 0.12f * outer;
         const glm::vec3 lean(std::cos(a) + (rnd() - 0.5f) * 0.9f, 0.0f, std::sin(a) + (rnd() - 0.5f) * 0.9f);
         grass_blade(v, ix, base, lean, len, 0.0080f + 0.0050f * rnd(), 0.25f + 0.95f * outer * rnd(),
-                    (rnd() - 0.5f) * 1.8f);
+                    (rnd() - 0.5f) * 1.8f, i);
+    }
+}
+
+// Species 17: turf - the short grass that covers the ground, as the reference game covers its
+// ground: the same instanced clumps as the long grass, only short and placed densely
+// (shaders/tuft_place.comp), instead of a lawn of its own kind. 16 blades from a 0.44 m wide
+// base, 0.2 - 0.4 m long, leaning outward so neighbouring clumps close up.
+// `level`: 0 (to 22 m) all 32 blades - seen from above, close by, 16 left the ground showing
+// between them in a disc round the camera; 1 every other blade; 2 (from 48 m) every fourth, wider.
+void build_grass_turf(std::vector<Vertex>& v, std::vector<uint32_t>& ix, int level = 0) {
+    uint32_t seed = 0x7A31u;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return float((seed >> 8) & 0xFFFFu) / 65535.0f; };
+    const int n = 32;
+    for (int i = 0; i < n; ++i) {
+        const glm::vec3 base = tuft_root(i, n, 0.22f, 0.06f);
+        const float outer = glm::length(glm::vec2(base.x, base.z)) / 0.22f;
+        const float a = std::atan2(base.z, base.x) + (rnd() - 0.5f) * 2.4f;
+        const float len = 0.06f + 0.20f + 0.20f * rnd();
+        const glm::vec3 lean(std::cos(a), 0.0f, std::sin(a));
+        const float wid = 0.0095f + 0.0045f * rnd(), ar = 0.15f + 0.75f * outer * rnd(), tw = (rnd() - 0.5f) * 1.6f;
+        if ((level == 1 && (i & 1)) || (level == 2 && (i & 3))) continue;
+        grass_blade(v, ix, base, lean, len, wid * (level == 2 ? 2.0f : level == 1 ? 1.4f : 1.0f), ar, tw, i);
+    }
+}
+
+// Species 18: flowering meadow - the dense, low, yellow-flowered plants of a field (the
+// reference game's flower fields are its ordinary placed clumps with their own meshes; ours: a clump of
+// 16 from a 0.4 m wide base - leaf blades round the outside, and stalks that end in a flower
+// head (part 9: scatter.frag colours the head) standing a little above them. Placed by
+// shaders/tuft_place.comp in the fields the engine lists (flower_fields_).
+// `level`: 0 the full clump; 1 (from 22 m) the stalks alone, one blade each; 2 (from 48 m) every
+// other stalk with a head twice as wide - the same yellow from far off with a sixth of the
+// triangles (the general simplifier lost the heads: the field turned green in a ring round
+// the camera).
+void build_meadow(std::vector<Vertex>& v, std::vector<uint32_t>& ix, int level = 0) {
+    uint32_t seed = 0x51F7u;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return float((seed >> 8) & 0xFFFFu) / 65535.0f; };
+    const int n = 16;
+    for (int i = 0; i < n; ++i) {
+        const glm::vec3 base = tuft_root(i, n, 0.20f, 0.05f);
+        const float outer = glm::length(glm::vec2(base.x, base.z)) / 0.20f;
+        const float a = std::atan2(base.z, base.x) + (rnd() - 0.5f) * 2.0f;
+        const glm::vec3 lean(std::cos(a), 0.0f, std::sin(a));
+        if (i % 3 != 2) {
+            // a stalk with its head: two crossed blades with one number (they turn as one)
+            const float len = 0.05f + 0.24f + 0.20f * rnd();
+            const float arch = 0.10f + 0.35f * outer * rnd(), hw = 0.011f + 0.006f * rnd();
+            if (level == 2 && (i % 2) == 1) continue;
+            const float wide = level == 2 ? 2.0f : level == 1 ? 1.35f : 1.0f;
+            grass_blade(v, ix, base, lean, len, 0.0050f * wide, arch, 0.0f, i, 9.0f, hw * wide);
+            if (level == 0) grass_blade(v, ix, base, lean, len, 0.0050f, arch, 2.2f, i, 9.0f, hw * 0.8f);
+        } else {
+            const float len = 0.05f + 0.16f + 0.16f * rnd();
+            const float wid = 0.0100f + 0.0050f * rnd(), ar = 0.25f + 0.75f * outer * rnd(), tw = (rnd() - 0.5f) * 1.6f;
+            if (level == 0) grass_blade(v, ix, base, lean, len, wid, ar, tw, i);
+        }
     }
 }
 

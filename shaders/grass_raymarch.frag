@@ -1038,7 +1038,7 @@ void main() {
     }
     // Road lanterns on the lawn, with a shadow ray each: bushes, trees, posts
     // and walls keep the lantern light off the grass behind them.
-    for (int li = 0; li < 8; ++li) {
+    for (int li = 0, li_n = int(scene.lamp_info.y + 0.5); li < li_n; ++li) {
         float lI = scene.lamp_lights[li].w;
         if (lI < 1e-3) continue;
         vec3 lto = scene.lamp_lights[li].xyz - p;

@@ -112,6 +112,7 @@ const Mat kMats[] = {
     { "o_screen",    36, { 1.25f, 1.25f, 1.25f }, 1.0f, { 0.0f, 0.0f, 0.0f }, true },        // (pictures: slot 36, an atlas - cube.frag)
     { "o_screen_b",  -1, { 1.0f, 0.62f, 0.20f }, 1.0f, { 0.95f, 0.50f, 0.10f }, true },
     // The service station (tools/gasstation/make_gasstation.py). Texture slots 37..42.
+    { "g_poster",    36, { 0.62f, 0.62f, 0.62f }, 1.0f, { 0.0f, 0.0f, 0.0f }, true },        // (the diner's posters: the lower part of the same atlas, uv = the cell itself, v + 2)
     { "g_brick",     37, { 1.05f, 1.00f, 0.97f }, 1.6f, {}, false },
     { "g_asphalt",   38, { 0.85f, 0.85f, 0.87f }, 3.0f, {}, false },
     { "g_checker",   39, { 1.05f, 1.05f, 1.05f }, 2.4f, { 0.05f, 0.05f, 0.05f }, false },
@@ -263,10 +264,12 @@ void VulkanEngine::place_launch_site() {
     place_gasstation();
     place_parking();
     place_bridges();
-    place_lane_rocks();
     place_castle_parking();
 
     launch_pad_ = pad;
+    // A field of yellow flowers round the site: on the level terrace, from the apron out.
+    flower_fields_.clear();
+    flower_fields_.push_back(glm::vec4(pad.x, pad.z, 205.0f, 30.0f));
     launch_house_ = hp;
     launch_button_ = hp + kButton;
     launch_site_placed_ = true;

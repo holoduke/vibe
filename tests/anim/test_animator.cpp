@@ -1185,3 +1185,78 @@ TEST_CASE("real asset: the face blinks, looks and lets go", "[anim][animator][as
     for (int i = 0; i < 600; ++i) b.update(in);
     CHECK(b.blinks() == 0);
 }
+
+// A driver is fitted to the car's own seat (CharacterAnimationInput::SeatExtras): the numbers
+// are the cars' (assets/<car>/car.json, measured from their models), in the car's frame.
+TEST_CASE("real asset: at the wheel the body is fitted to the car's seat, wheel and pedals", "[anim][animator][asset]") {
+    AnimationSet set;
+    std::string why;
+    if (!set.load((std::string(VIBE_SOURCE_DIR) + "/assets/character/soldier.qanim").c_str(), &why)) {
+        WARN("assets/character/soldier.qanim not loaded (" << why << "): skipped");
+        return;
+    }
+    const Rig& rig = set.runtime->rig();
+    const glm::vec3 rest = set.runtime->skeleton().rest_pos[size_t(rig[Role::Hips])];
+    struct Car { const char* name; glm::vec3 hip, hub; float tilt, rim, floor; glm::vec3 pedal; glm::vec2 rest_l; float back; };
+    const Car cars[4] = {
+        { "saloon",    { -0.37f, 0.48f, 0.05f }, { -0.37f, 0.85f, -0.40f }, 24.0f, 0.17f, 0.20f, { -0.285f, 0.34f, -0.77f }, { -0.53f, -0.52f }, 13.0f },
+        { "sports car",{ -0.37f, 0.40f, 0.13f }, { -0.37f, 0.67f, -0.38f }, 22.0f, 0.17f, 0.18f, { -0.30f, 0.30f, -0.99f },  { -0.52f, -0.70f }, 16.0f },
+        { "pickup",    { -0.42f, 0.88f, 0.12f }, { -0.42f, 1.14f, -0.42f }, 25.0f, 0.18f, 0.49f, { -0.33f, 0.65f, -0.83f },  { -0.58f, -0.55f }, 11.0f },
+        { "jeep",      { -0.40f, 0.73f, 0.50f }, { -0.40f, 1.00f, -0.02f }, 38.0f, 0.18f, 0.44f, { -0.30f, 0.53f, -0.31f },  { -0.57f, -0.10f }, 8.0f },
+    };
+    for (const Car& c : cars) {
+        INFO(c.name);
+        const glm::mat4 to_model = glm::translate(glm::mat4(1.0f), rest - c.hip);          // the car's frame -> the model's (its hips on the seat)
+        const glm::mat4 W = glm::translate(glm::mat4(1.0f), c.hub) * glm::rotate(glm::mat4(1.0f), glm::radians(-c.tilt), glm::vec3(1.0f, 0.0f, 0.0f));
+        auto rim = [&](float deg) { return glm::vec3(W * glm::vec4(c.rim * std::cos(glm::radians(deg)), c.rim * std::sin(glm::radians(deg)), 0.0f, 1.0f)); };
+        CharacterAnimationInput::SeatExtras e;
+        e.wheel = true; e.hub = c.hub; e.axis = glm::vec3(W[2]);
+        e.feet = true; e.back = c.back;
+        const float foot = 0.19f, rise = c.pedal.y - c.floor;
+        e.heel_r = glm::vec3(c.pedal.x, c.floor, c.pedal.z + std::sqrt(foot * foot - rise * rise)); e.ball_r = c.pedal;
+        e.heel_l = glm::vec3(c.rest_l.x, c.floor, c.rest_l.y); e.ball_l = e.heel_l + glm::vec3(0.0f, foot * 0.42f, -foot * 0.907f);
+        CharacterAnimator a(set);
+        CharacterAnimationInput in;
+        in.dt = 1.0f / 60.0f;
+        in.seated = true;
+        in.held = HeldItem::None;
+        const glm::vec3 rim_l = rim(172.0f), rim_r = rim(8.0f);
+        in.seat_hand_l = glm::vec3(to_model * glm::vec4(rim_l, 1.0f));
+        in.seat_hand_r = glm::vec3(to_model * glm::vec4(rim_r, 1.0f));
+        in.take_seat(e, to_model);
+        for (int i = 0; i < 90; ++i) a.update(in);
+        REQUIRE(pose_is_valid(a.model()));
+        auto at = [&](Role r) { return glm::vec3(a.model()[size_t(rig[r])][3]) - (rest - c.hip); };      // back in the car's frame
+        // the hips are where the caller put them
+        CHECK(glm::length(at(Role::Hips) - c.hip) < 0.01f);
+        // the hands: a wrist's length from its place on the rim, and the elbows bent
+        const Role arm[2][3] = { { Role::LeftArm, Role::LeftForeArm, Role::LeftHand }, { Role::RightArm, Role::RightForeArm, Role::RightHand } };
+        for (int s = 0; s < 2; ++s) {
+            const glm::vec3 sh = at(arm[s][0]), el = at(arm[s][1]), wr = at(arm[s][2]);
+            const float d = glm::length(wr - (s == 0 ? rim_l : rim_r));
+            INFO("hand " << s << ": wrist " << d << " m from the rim");
+            CHECK(d < 0.115f);
+            CHECK(d > 0.03f);
+            CHECK(glm::length(wr - sh) < 0.975f * (glm::length(el - sh) + glm::length(wr - el)));
+            CHECK(el.y < sh.y);                                    // (the elbows hang)
+        }
+        // the feet: the ankles a boot's height over the floor, in front of the hips, the knees up and bent
+        const Role leg[2][3] = { { Role::LeftUpLeg, Role::LeftLeg, Role::LeftFoot }, { Role::RightUpLeg, Role::RightLeg, Role::RightFoot } };
+        for (int s = 0; s < 2; ++s) {
+            const glm::vec3 hp = at(leg[s][0]), kn = at(leg[s][1]), an = at(leg[s][2]);
+            INFO("foot " << s << ": ankle " << an.y - c.floor << " m over the floor, " << c.hip.z - an.z << " m ahead of the hips");
+            CHECK(an.y - c.floor > 0.04f);
+            CHECK(an.y - c.floor < 0.24f);
+            CHECK(an.z < c.hip.z - 0.35f);
+            CHECK(kn.y > an.y + 0.10f);
+            CHECK(glm::length(an - hp) < 0.975f * (glm::length(kn - hp) + glm::length(an - kn)));
+        }
+        // the right foot is the one on the accelerator: nearer its pad than the left
+        CHECK(glm::length(at(Role::RightFoot) - c.pedal) < glm::length(at(Role::LeftFoot) - c.pedal));
+        // the back leans no further than the backrest, and the head is over the hips' seat, not ahead of the wheel
+        const glm::vec3 head = at(Role::Head);
+        CHECK(head.z > c.hub.z + 0.15f);
+        CHECK(head.z < c.hip.z + 0.45f * std::tan(glm::radians(c.back)) + 0.20f);
+        CHECK(head.y > c.hip.y + 0.45f);
+    }
+}

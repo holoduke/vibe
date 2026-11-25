@@ -267,7 +267,7 @@
     // a soft shadow (ray toward a random point of the lantern glass).
     {
         vec2 lseed = gl_FragCoord.xy + vec2(float(scene.rt_flags.w & 31)) * vec2(17.13, 9.71);
-        for (int li = 0; li < 8; ++li) {
+        for (int li = 0, li_n = int(scene.lamp_info.y + 0.5); li < li_n; ++li) {
             float lI = scene.lamp_lights[li].w;
             if (lI < 1e-3) continue;
             vec3 lpos = scene.lamp_lights[li].xyz;

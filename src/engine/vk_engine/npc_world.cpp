@@ -216,8 +216,23 @@ void VulkanEngine::npc_tick(float dt) {
     }
     // (VIBE_NPC_FAST=<n>: n times as fast - to watch an hour of their life in minutes)
     static const float kFast = std::getenv("VIBE_NPC_FAST") ? float(std::atof(std::getenv("VIBE_NPC_FAST"))) : 1.0f;
+    // The players on foot, for the machine that steps the world: its cars do not drive into
+    // them (npc::World::set_walkers) - which is also how a car on the road is made to stop, to
+    // be taken. (VIBE_NPC_NO_WALKERS=1: the cars see nobody, as before.)
+    if (!npc_->replica()) {
+        static const bool kNoWalkers = std::getenv("VIBE_NPC_NO_WALKERS") != nullptr;
+        std::vector<glm::vec3> feet;
+        const float half = game::Player::kHalfExtents.y;
+        if (!kNoWalkers) {
+            if (!jeep_driving() && jeep_ride_ < 0 && !fly_mode_) feet.push_back(player_.position - glm::vec3(0.0f, half, 0.0f));
+            if (mp_) for (const MpAvatar& a : mp_->avatars)
+                if (a.id && a.present && !a.seated && a.ride == 0 && !a.corpse) feet.push_back(glm::vec3(a.st.px, a.st.py - half, a.st.pz));
+        }
+        npc_->set_walkers(feet);
+    }
     for (float left = dt * kFast; left > 1e-5f; left -= 0.1f) npc_->update(std::min(left, 0.1f));
     npc_->views(npc_views_);
+    for (float& t : npc_nodriver_) t = std::max(0.0f, t - dt);
     // (shot or taken a moment ago, and this copy of the host's world has not heard yet)
     for (size_t i = 0; i < npc_views_.size() && i < 100; ++i) {
         if (npc_gone_[i] <= 0.0f) continue;
@@ -243,6 +258,59 @@ void VulkanEngine::npc_tick(float dt) {
                 log::infof("[npc] test: person %d (pose %d style %d, speed %.1f) at %.1f m", who[i].second, int(v.pose), int(v.style), v.speed, double(who[i].first));
                 npc_hit(who[i].second, chest, glm::normalize(chest - current_frame_view_.eye_pos));
             }
+        }
+    }
+    // VIBE_NPC_CAM=<who>[,<metres>[,<degrees>[,<height>]]]: the eye is put beside somebody and
+    // stays with them (tests and captures; use it with VIBE_TEST_HOLD). <who>: bar, table (eat,
+    // talk), counter, look, walk or walk<0..7> (the way of walking), run, driver (a car that
+    // drives), id<n>. The nearest to where the game started that fits. <degrees>: 0 looks them
+    // in the face, 90 from their right side, 180 from behind; <height> above their feet.
+    if (static const char* nc = std::getenv("VIBE_NPC_CAM"); nc) {
+        char who[32] = { 0 }; float dist = 3.0f, ang = 35.0f, up = 1.45f;
+        std::sscanf(nc, "%31[^,],%f,%f,%f", who, &dist, &ang, &up);
+        const std::string w(who);
+        static int held = -1;
+        auto fits = [&](const npc::View& v) {
+            if (v.kind == npc::Kind::Car) return w == "driver" && v.pose == npc::Pose::Drive && std::abs(v.speed) > 3.0f;
+            if (v.hidden) return false;
+            if (w.rfind("id", 0) == 0) return int(v.id) == std::atoi(w.c_str() + 2);
+            if (v.act != npc::Act::None) return false;
+            if (w == "bar") return v.pose == npc::Pose::Sit && v.style == 1;
+            if (w == "table") return v.pose == npc::Pose::Sit && (v.style == 2 || v.style == 3);
+            if (w == "eat") return v.pose == npc::Pose::Sit && v.style == 2;
+            if (w == "talk") return v.pose == npc::Pose::Sit && v.style == 3;
+            if (w == "counter") return v.pose == npc::Pose::Work && v.style == 1;
+            if (w == "look") return v.pose == npc::Pose::Stand && v.style > 0;
+            if (w == "run") return v.pose == npc::Pose::Run;
+            if (w.rfind("walk", 0) == 0) return v.pose == npc::Pose::Walk && std::abs(v.speed) > 0.3f && (w.size() == 4 || int(v.look % 8) == std::atoi(w.c_str() + 4));
+            return false;
+        };
+        if (held < 0 || size_t(held) >= npc_views_.size() || !fits(npc_views_[size_t(held)])) {
+            held = -1; float bd = 1e18f;
+            for (size_t i = 0; i < npc_views_.size(); ++i) {
+                if (!fits(npc_views_[i])) continue;
+                const float d = glm::distance(npc_views_[i].pos, player_.position);
+                if (d < bd) { bd = d; held = int(i); }
+            }
+            if (held >= 0) {
+                const npc::View& v = npc_views_[size_t(held)];
+                log::infof("[npc] the eye goes to %s %d (pose %d style %d look %d) at (%.1f, %.1f, %.1f) yaw %.2f", v.kind == npc::Kind::Car ? "car" : "person", held, int(v.pose), int(v.style), int(v.look), v.pos.x, v.pos.y, v.pos.z, v.yaw);
+            }
+        }
+        if (held >= 0) {
+            const npc::View& v = npc_views_[size_t(held)];
+            const bool sits = v.kind == npc::Kind::Person && v.pose == npc::Pose::Sit;
+            glm::vec3 feet = v.pos;
+            if (sits) feet.y -= float(npc::kSeatHeightCm[v.style == 1 ? 1 : 0]) * 0.01f;
+            const float a = v.yaw + glm::radians(ang);
+            const glm::vec3 eye = feet + glm::vec3(std::sin(a) * dist, up, -std::cos(a) * dist);
+            const glm::vec3 d = glm::normalize(feet + glm::vec3(0.0f, sits ? 0.95f : 1.05f, 0.0f) - eye);
+            player_.position = eye - (player_.eye_position() - player_.position);
+            player_.velocity = glm::vec3(0.0f);
+            player_.yaw = std::atan2(d.x, -d.z);
+            player_.pitch = std::asin(glm::clamp(d.y, -1.0f, 1.0f));
+            prev_player_position_ = player_.position;
+            globe_moved_player_ = true;                    // (VIBE_TEST_HOLD holds this place now)
         }
     }
     if (static const bool lg = std::getenv("VIBE_LOG_NPC") != nullptr; lg && frame_number_ % 300 == 0) {
@@ -290,6 +358,7 @@ void VulkanEngine::npc_pose(float dt) {
     for (size_t i = 0; i < npc_views_.size(); ++i) {
         const npc::View& v = npc_views_[i];
         if (v.kind != npc::Kind::Car || has_driver[i] || v.pose != npc::Pose::Drive) continue;
+        if (i < 100 && npc_nodriver_[i] > 0.0f) continue;      // (that driver was shot a moment ago: npc_hit)
         const float d = glm::distance(v.pos, cam);
         if (d < kNpcCarBodyReach) near_.push_back({ d, int(i), int(i), 0, 1000u + uint32_t(v.id) });
     }
@@ -344,12 +413,33 @@ void VulkanEngine::npc_pose(float dt) {
         bool loop_seat = false, loop_walk = false;
         if (near_[k].car < 0 && v.act == npc::Act::None) {
             static const char* kShow = std::getenv("VIBE_NPC_ACT");
-            static const char* kLook[5] = { nullptr, "look_crossed", "look_hips", "look_phone", "look_far" };
-            static const char* kWalkClip[8] = { nullptr, "walk_brisk", "walk_tired", "walk_pockets", "walk_phone", nullptr, nullptr, nullptr };
-            if (v.pose == npc::Pose::Sit) { loop_nm = v.style == 1 ? ((v.id & 1) ? "bar_talk" : "bar_sit") : v.style == 2 ? "table_eat" : v.style == 3 ? "table_talk" : nullptr; loop_seat = loop_nm != nullptr; }
-            else if (v.pose == npc::Pose::Work) loop_nm = v.style == 1 ? ((v.id & 1) ? "cashier_take" : "cashier") : (v.style == 2 || v.car != 255) ? "fuel" : "till";
-            else if (v.pose == npc::Pose::Stand) loop_nm = kLook[v.style % 5];
-            else if (v.pose == npc::Pose::Walk && std::abs(v.speed) > 0.3f) { loop_nm = kWalkClip[v.look % 8]; loop_walk = loop_nm != nullptr; }
+            // Somebody who stays does not do one thing for ever: at the bar they drink, talk and
+            // sit; at a table eat, drink, talk, lean back; the cashier scans, takes, waits. Each
+            // in turn, a quarter of a minute or so, everybody at their own moment (`turn`: this
+            // machine's own clock - the network sends where somebody is and what they do, not
+            // which clip). A way of WALKING is the person's own and never changes (`look`).
+            static double life_clock = 0.0;
+            static uint64_t life_frame = ~0ull;
+            if (life_frame != frame_number_) { life_frame = frame_number_; life_clock += double(dt); }
+            auto turn = [&](int n, double period) { return int((uint32_t(v.id) * 7u + uint32_t((life_clock + double(v.id) * 3.7) / period)) % uint32_t(n)); };
+            static const char* kBar[3] = { "bar_sit", "bar_talk", "bar_idle" };
+            static const char* kEat[3] = { "table_eat", "table_drink", "table_eat" };
+            static const char* kTalk[3] = { "table_talk", "table_idle", "table_drink" };
+            static const char* kTill[3] = { "cashier", "cashier_take", "cashier_idle" };
+            static const char* kLook[5][2] = { { nullptr, nullptr }, { "look_crossed", "look_around" }, { "look_hips", "look_hips" }, { "look_phone", "look_watch" }, { "look_far", "look_far" } };
+            static const char* kWalkClip[8] = { nullptr, "walk_brisk", "walk_tired", "walk_pockets", "walk_phone", "walk_relaxed", "walk_swagger", nullptr };
+            auto have = [&](const char* nm) { return nm && rtm0.find_clip(nm) >= 0; };
+            if (v.pose == npc::Pose::Sit) {
+                loop_nm = v.style == 1 ? kBar[turn(3, 17.0)] : v.style == 2 ? kEat[turn(3, 15.0)] : v.style == 3 ? kTalk[turn(3, 16.0)] : nullptr;
+                if (!have(loop_nm)) loop_nm = v.style == 1 ? "bar_sit" : v.style == 2 ? "table_eat" : v.style == 3 ? "table_talk" : nullptr;      // (a set cooked before these were made)
+                loop_seat = loop_nm != nullptr;
+            } else if (v.pose == npc::Pose::Work) {
+                loop_nm = v.style == 1 ? kTill[turn(3, 12.0)] : (v.style == 2 || v.car != 255) ? "fuel" : "till";
+                if (!have(loop_nm) && v.style == 1) loop_nm = "cashier";
+            } else if (v.pose == npc::Pose::Stand) {
+                loop_nm = kLook[v.style % 5][v.id & 1];
+                if (!have(loop_nm)) loop_nm = kLook[v.style % 5][0];
+            } else if (v.pose == npc::Pose::Walk && std::abs(v.speed) > 0.3f) { loop_nm = kWalkClip[v.look % 8]; loop_walk = loop_nm != nullptr; }
             if (kShow && v.pose != npc::Pose::Walk && v.pose != npc::Pose::Run && !loop_seat) loop_nm = kShow;
             if (loop_nm && rtm0.find_clip(loop_nm) < 0) { loop_nm = nullptr; loop_seat = loop_walk = false; }
         }
@@ -390,8 +480,10 @@ void VulkanEngine::npc_pose(float dt) {
         if (near_[k].car >= 0) {
             // In a car: at its wheel (the hands on it, going round with it) or beside the driver.
             glm::mat4 hip; glm::vec3 hl, hr; float legs = 0.0f;
-            if (!npc_car_seat(near_[k].car, near_[k].seat, hip, hl, hr, legs)) { a.present = false; a.id = 0; continue; }      // (that car is not shown)
+            anim::CharacterAnimationInput::SeatExtras more;
+            if (!npc_car_seat(near_[k].car, near_[k].seat, hip, hl, hr, legs, &more)) { a.present = false; a.id = 0; continue; }      // (that car is not shown)
             sit(hip, hl, hr, legs);
+            in.take_seat(more, glm::inverse(rf.model));      // (the wheel's frame, the feet's places, the backrest: this car's own)
             if (static const bool lg = std::getenv("VIBE_LOG_NPC") != nullptr; lg && frame_number_ % 300 == 0)
                 log::infof("[npc]   in car %d seat %d: body %u (last frame: level %d, palette %d, drawn %d, mesh %d) at %.1f %.1f %.1f, %.0f m from the eye", near_[k].car, near_[k].seat, a.id, a.lod, a.palette_prev, int(a.drawn), a.mesh_lod, rf.eye.x, rf.eye.y, rf.eye.z, double(near_[k].d));
         } else if (v.pose == npc::Pose::Sit && !loop_seat) {
@@ -460,6 +552,14 @@ void VulkanEngine::npc_pose(float dt) {
         a.lod = std::max(anim::select_lod(li), near_[k].d < 12.0f ? 0 : 1);      // (full detail only close by: there are many of them)
         in.dt = dt;
         in.variation = a.id * 7919u;
+        // (VIBE_LOG_NPC: what each body that is shown plays - a clip by its name, or which of the animator's own poses)
+        if (static const bool lg = std::getenv("VIBE_LOG_NPC") != nullptr; lg && frame_number_ % 300 == 0) {
+            const char* plays = in.seated ? (near_[k].car >= 0 ? (near_[k].seat == 0 ? "the driver's pose" : "the passenger's pose") : "the seat pose")
+                              : in.action_clip >= 0 ? rtm.clip(in.action_clip).name.c_str()
+                              : run ? "the motion-matched run" : v.pose == npc::Pose::Walk ? "the motion-matched walk" : "the motion-matched stand";
+            log::infof("[npc]   plays: %s %d (pose %d style %d look %d, %.0f m off) - %s at %.2f s", near_[k].car >= 0 ? "in car" : "person", near_[k].car >= 0 ? near_[k].car : int(v.id),
+                       int(v.pose), int(v.style), int(v.look), double(near_[k].d), plays, in.action_clip >= 0 ? double(in.action_time) : 0.0);
+        }
         // somebody near looks at the player
         if (near_[k].d < 7.0f && !a.seated && !run && !loop_seat) { in.has_look_at = true; in.look_at = glm::vec3(glm::inverse(rf.model) * glm::vec4(cam, 1.0f)); }
         in.teleported = a.fresh_pose && !a.seated;
@@ -492,13 +592,17 @@ void VulkanEngine::npc_pose(float dt) {
             const glm::mat4 vi(glm::vec4(std::cos(a.dying_st.yaw), 0.0f, std::sin(a.dying_st.yaw), 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
                                glm::vec4(-std::sin(a.dying_st.yaw), 0.0f, std::cos(a.dying_st.yaw), 0.0f), glm::vec4(r.rf.eye, 1.0f));
             if (npc_ && a.id >= 1 && a.id <= 100) { if (npc_->replica()) npc_gone_[a.id - 1] = 3.0f; else npc_->kill(int(a.id) - 1); }
+            // (the driver of a car that has nobody of the NPC world at its wheel: the car's to lose)
+            if (npc_ && a.id >= 1000u && a.id < 1100u) { if (npc_->replica()) npc_nodriver_[a.id - 1000u] = 3.0f; else npc_->kill(int(a.id - 1000u)); }
             // On its feet: the reaction first (npc_dying_pose). On a seat, or in the middle of
             // sitting down or getting into a car (the hips carried by a warp): the physics' at once.
             const glm::vec3 fwd(std::sin(a.dying_st.yaw), 0.0f, -std::cos(a.dying_st.yaw));
             const ShotClip& sc = pick_shot_clip(a.hit_pos.y - r.rf.model[3].y, glm::dot(a.hit_dir, fwd) < 0.0f, glm::length(r.in.velocity), a.id);
             const int clip = (r.in.seated || r.in.action_warp || std::getenv("VIBE_NO_DEATH_CLIPS")) ? -1 : anim_set_.runtime->find_clip(sc.name);
             if (clip < 0) {
-                corpse_spawn(r.rf.model, vi, r.in.velocity, a.hit_pos, a.hit_dir, std::max(a.hit_power, 0.6f));
+                // (shot in a car that drives: the body goes on at the car's speed - npc_hit put it in dying_st)
+                const glm::vec3 vel = r.in.seated ? glm::vec3(a.dying_st.vx, 0.0f, a.dying_st.vz) : r.in.velocity;
+                corpse_spawn(r.rf.model, vi, vel, a.hit_pos, a.hit_dir, std::max(a.hit_power, 0.6f));
                 a.id = 0; a.present = false; a.drawn = false; a.palette = -1;
                 continue;
             }
@@ -540,6 +644,17 @@ bool VulkanEngine::npc_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
         float t = 0.0f;
         if (seg_aabb(a, b, mn, mx, t) && t < bt) { bt = t; best = int(i); }
     }
+    // Whoever sits in a car that is shown - the driver, the one beside him: the body drawn there
+    // (its head and trunk). A driver nobody of the NPC world sits for goes by his car's number.
+    for (const MpAvatar& av : npc_bodies_) {
+        if (!av.present || !av.id) continue;
+        const int agent = av.id >= 1000u ? int(av.id - 1000u) : int(av.id) - 1;
+        if (agent < 0 || size_t(agent) >= npc_views_.size() || agent >= 100) continue;
+        if (av.id < 1000u && !npc_views_[size_t(agent)].hidden) continue;      // (on foot: above)
+        const glm::vec3 mn = av.eye + glm::vec3(-0.27f, -0.70f, -0.27f), mx = av.eye + glm::vec3(0.27f, 0.22f, 0.27f);
+        float t = 0.0f;
+        if (seg_aabb(a, b, mn, mx, t) && t < bt) { bt = t; best = agent; }
+    }
     if (best < 0) return false;
     hit = a + (b - a) * bt;
     const glm::vec3 dir = glm::normalize(b - a + glm::vec3(1e-6f, 0.0f, 0.0f));
@@ -562,21 +677,69 @@ bool VulkanEngine::npc_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
 void VulkanEngine::npc_hit(int agent, glm::vec3 hit, glm::vec3 dir) {
     if (!npc_ || agent < 0 || size_t(agent) >= npc_views_.size() || agent >= 100) return;
     const npc::View& v = npc_views_[size_t(agent)];
-    if (v.kind != npc::Kind::Person || v.hidden) return;       // (gone already: two players shot the same one)
+    // Who: somebody on foot or on a seat; somebody in a car (hidden, with a car); or - `agent`
+    // is a car - the driver of a car that drives with nobody of the NPC world at its wheel.
+    const bool phantom = v.kind == npc::Kind::Car;
+    const npc::View* car = phantom ? &v : (v.hidden && size_t(v.car) < npc_views_.size()) ? &npc_views_[v.car] : nullptr;
+    if (phantom ? (v.hidden || v.pose != npc::Pose::Drive || npc_nodriver_[agent] > 0.0f) : (v.hidden && !car)) return;       // (gone already: two players shot the same one)
     spawn_blood(hit, dir);
-    const uint32_t id = uint32_t(v.id) + 1u;
+    const uint32_t id = phantom ? 1000u + uint32_t(v.id) : uint32_t(v.id) + 1u;
     bool body = false;
     for (MpAvatar& av : npc_bodies_)
         if (av.id == id && av.present) {
             av.die = true; av.hit_pos = hit; av.hit_dir = dir; av.hit_power = 1.0f; av.hit_age = 0.0f;
             av.dying_st.yaw = v.yaw;
+            av.dying_st.vx = car ? std::sin(car->yaw) * car->speed : 0.0f;       // (in a car: the body goes on as the car went)
+            av.dying_st.vz = car ? -std::cos(car->yaw) * car->speed : 0.0f;
             body = true;
             break;
         }
     if (!body) {
-        if (npc_->replica()) npc_gone_[agent] = 3.0f; else npc_->kill(agent);
+        if (npc_->replica()) (phantom ? npc_nodriver_ : npc_gone_)[agent] = 3.0f; else npc_->kill(agent);
     }
-    log::infof("[npc] person %d shot at (%.1f, %.1f, %.1f)%s", agent, hit.x, hit.y, hit.z, body ? "" : " (no body drawn: gone at once)");
+    log::infof("[npc] %s %d shot at (%.1f, %.1f, %.1f)%s%s", phantom ? "the driver of car" : "person", agent, hit.x, hit.y, hit.z, car && !phantom ? " in a car" : "", body ? "" : " (no body drawn: gone at once)");
+}
+
+// VIBE_TEST_NPC_SHOOT=<frame>[,<who>[,<skip>]]: at that frame the player turns to somebody of
+// the NPC world and fires one shot - a real bolt out of the gun, so the whole way from the
+// trigger to the body on the ground is what is tested (VIBE_TEST_NPC_KILL calls npc_hit
+// itself). who 0: the nearest on foot or on a seat; 1: the nearest who sits in a car (aimed
+// ahead of it by the bolt's flight time). skip: after that many nearer ones. Called from
+// loop_test_input, before the weapons.
+void VulkanEngine::npc_test_input(InputFrame& in) {
+    static const char* spec = std::getenv("VIBE_TEST_NPC_SHOOT");
+    if (!spec || !npc_) return;
+    int at = 0, who = 0, skip = 0;
+    std::sscanf(spec, "%d,%d,%d", &at, &who, &skip);
+    if (int(frame_number_) != at) return;
+    const glm::vec3 eye = player_.eye_position();
+    struct Target { float d; glm::vec3 p, v; int agent; };
+    std::vector<Target> ts;
+    for (const MpAvatar& a : npc_bodies_) {
+        if (!a.present || !a.id) continue;
+        const bool phantom = a.id >= 1000u;
+        const int agent = phantom ? int(a.id - 1000u) : int(a.id) - 1;
+        if (agent < 0 || size_t(agent) >= npc_views_.size()) continue;
+        const npc::View& v = npc_views_[size_t(agent)];
+        const bool in_car = phantom || v.hidden;
+        if (in_car != (who == 1)) continue;
+        const npc::View& mv = (!phantom && v.hidden && size_t(v.car) < npc_views_.size()) ? npc_views_[v.car] : v;
+        const glm::vec3 p = in_car ? a.eye - glm::vec3(0.0f, 0.25f, 0.0f) : v.pos + glm::vec3(0.0f, v.pose == npc::Pose::Sit ? 0.45f : 1.25f, 0.0f);
+        // (only somebody the bolt can reach: it is a body of the physics, and a table, a pane or a wall stops it)
+        const float dist = glm::distance(p, eye);
+        if (physics_ && dist > 0.6f) { const auto h = physics_->raycast(eye, (p - eye) / dist, dist); if (h.hit && h.distance < dist - 0.4f) continue; }
+        ts.push_back({ dist, p, glm::vec3(std::sin(mv.yaw), 0.0f, -std::cos(mv.yaw)) * mv.speed, agent });
+    }
+    std::sort(ts.begin(), ts.end(), [](const Target& a, const Target& b) { return a.d < b.d; });
+    if (size_t(skip) >= ts.size()) { log::warnf("[npc] test: nobody to shoot at (%zu %s)", ts.size(), who == 1 ? "in cars" : "on foot"); return; }
+    const Target& t = ts[size_t(skip)];
+    const glm::vec3 d = glm::normalize(t.p + t.v * (t.d / 220.0f) - eye);
+    player_.yaw = std::atan2(d.x, -d.z);
+    player_.pitch = std::asin(glm::clamp(d.y, -1.0f, 1.0f));
+    in.fire = true; in.fire_held = true;
+    const auto near_hit = physics_ ? physics_->raycast(eye, d, 0.15f) : PhysicsWorld::RayHit{};
+    log::infof("[npc] test: a shot at %s %d, %.1f m away, moving %.1f m/s (yaw %.3f pitch %.3f)%s; weapon %d, cooldown %.2f", who == 1 ? "somebody in car / person" : "person", t.agent, double(t.d), double(glm::length(t.v)), player_.yaw, player_.pitch,
+               near_hit.hit ? " - BUT something is right in front of the muzzle: no bolt will leave" : "", int(weapon_), double(fire_cooldown_));
 }
 
 // From the network (multiplayer.cpp hands them over).

@@ -22,12 +22,7 @@ void main() {
     // (Rocks are plain meshes: they take part in the depth pre-pass.)
     if (vVegInfo.z < -0.5) return;
     if (vVegInfo.z > 0.5) {
-        // The baked card (veg_impostor.cpp): the same cut as cube.frag, to the bit.
-        float rows = float(textureSize(u_normal[15], 0).y) / kImpTile;
-        vec2 iuv = veg_imp_uv(vUv, vObjectNormal, veg_imp_noise(gl_FragCoord.xy, uint(scene.rt_flags.w)), rows);
-        float ilod = veg_imp_lod(vUv);
-        if (textureLod(u_normal[15], iuv, ilod).a < 0.26) discard;
-        if (veg_imp_bare(iuv, textureLod(u_normal[18], iuv, ilod).a, vVegInfo.z, scene.season.w)) discard;
+        discard;       // (the far cards have their own pre-pass shader: veg_imp_depth.frag)
     } else {
         int vm = int(vUv.y + 0.5);
         if ((vm == 2 || vm == 3) && veg_leaf_cut(vObjectPos, vWorldPos, vNormal, scene.camera_pos.xyz)) discard;

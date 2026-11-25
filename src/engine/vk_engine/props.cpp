@@ -91,7 +91,7 @@ void VulkanEngine::init_viewmodel() {
     // and its fore-end near grip_l (the hands are fitted there) - another model needs it
     // measured again. Returns false when the file is missing.
     auto load_gun = [&](const char* path, glm::vec3 place, std::vector<ViewmodelMesh>& meshes,
-                        glm::mat4& root, glm::vec3& muzzle) {
+                        glm::mat4& root, glm::vec3& muzzle, glm::vec4& fore) {
         GltfModel gltf = load_gltf(path);
         if (gltf.primitives.empty()) return false;
         glm::vec3 center = (gltf.aabb_min + gltf.aabb_max) * 0.5f;
@@ -125,6 +125,27 @@ void VulkanEngine::init_viewmodel() {
             if (n > 0.0f) muzzle = glm::vec3(acc.x / n, acc.y / n, zmin);
             log::infof("viewmodel: %s muzzle at (%.3f, %.3f, %.3f) in view space", path, muzzle.x, muzzle.y, muzzle.z);
         }
+        {   // The fore-end where the support hand holds it (WeaponDef::grip_l's distance ahead): the
+            // slice of the model there, its lowest point and the middle of what lies within 3 cm
+            // above that - the hand goes UNDER the gun, wherever this model's underside is.
+            const float gz = anim::default_rifle().grip_l.z;
+            float ylo = 1e9f, yhi = -1e9f;
+            for (const auto& prim : gltf.primitives)
+                for (const auto& v : prim.vertices) {
+                    const glm::vec3 p(root * glm::vec4(v.position, 1.0f));
+                    if (std::abs(p.z - gz) < 0.02f) { ylo = std::min(ylo, p.y); yhi = std::max(yhi, p.y); }
+                }
+            float xlo = 1e9f, xhi = -1e9f;
+            for (const auto& prim : gltf.primitives)
+                for (const auto& v : prim.vertices) {
+                    const glm::vec3 p(root * glm::vec4(v.position, 1.0f));
+                    if (std::abs(p.z - gz) < 0.02f && p.y < ylo + 0.03f) { xlo = std::min(xlo, p.x); xhi = std::max(xhi, p.x); }
+                }
+            if (xhi > xlo) {
+                fore = glm::vec4(0.5f * (xlo + xhi), ylo, gz, 1.0f);
+                log::infof("viewmodel: %s fore-end at z %.3f: underside y %.3f (top %.3f), x %.3f .. %.3f", path, gz, ylo, yhi, xlo, xhi);
+            }
+        }
         for (const auto& prim : gltf.primitives) {
             ViewmodelMesh vm{};
             vm.mesh = create_mesh_from_data(device_, allocator_, graphics_queue_,
@@ -142,13 +163,13 @@ void VulkanEngine::init_viewmodel() {
     };
 
     // Weapon 0: the LR-9 laser rifle. Weapon 2: the MR-7 rifle.
-    if (load_gun("assets/gun.glb", glm::vec3(0.1615f, -0.2270f, -0.2782f), viewmodel_gltf_, viewmodel_root_offset_, viewmodel_muzzle_)) {
+    if (load_gun("assets/gun.glb", glm::vec3(0.1615f, -0.2270f, -0.2782f), viewmodel_gltf_, viewmodel_root_offset_, viewmodel_muzzle_, gun_fore_[0])) {
         viewmodel_proc_parts_.clear();
     } else {
         log::info("viewmodel: using procedural placeholder "
                   "(drop assets/gun.glb to override)");
     }
-    if (!load_gun("assets/rifle.glb", glm::vec3(0.1617f, -0.2798f, -0.2809f), rifle_gltf_, rifle_root_offset_, rifle_muzzle_))
+    if (!load_gun("assets/rifle.glb", glm::vec3(0.1617f, -0.2798f, -0.2809f), rifle_gltf_, rifle_root_offset_, rifle_muzzle_, gun_fore_[1]))
         log::info("viewmodel: no assets/rifle.glb - weapon 3 draws the laser gun");
 }
 

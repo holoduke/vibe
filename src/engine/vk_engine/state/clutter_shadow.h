@@ -24,6 +24,9 @@ struct VulkanEngine::ClutterShadowState {
     VkPipelineLayout shadow_layout = VK_NULL_HANDLE;
     VkPipeline     shadow_pipeline = VK_NULL_HANDLE;
     VkShaderModule shadow_vert = VK_NULL_HANDLE;
+    // The grass placed on the GPU (tuft_shadow.vert, on the world pipeline layout).
+    VkPipeline     grass_pipeline = VK_NULL_HANDLE;
+    VkShaderModule grass_vert = VK_NULL_HANDLE;
     glm::mat4      shadow_vp{0.0f};
 };
 

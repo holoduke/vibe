@@ -108,6 +108,13 @@ public:
     void     engine_update(uint32_t h, glm::vec3 pos, glm::vec3 vel, float rpm, float load, float volume, float lpf_hz, bool simple = false);   // simple: one loop only (a car far off)
     void     engine_stop(uint32_t h);
     void     set_listener_velocity(glm::vec3 v);
+    void     engine_counts(int& voices, int& loops_playing) const;       // engine voices held, and how many of their loops are being mixed
+
+    // What the mixer costs: the time the audio thread spent filling the device's buffer since the
+    // last call, and how much sound that was (ms / ms = the share of one core). Two clock reads a
+    // block (about every 10 ms); everything the engine plays is in it, not only the cars.
+    struct MixerCost { double mix_ms = 0.0, audio_ms = 0.0; uint64_t blocks = 0; };
+    MixerCost mixer_cost_take();
 
     // Master volume (0..1). Persisted via settings.cpp.
     void set_master_volume(float v);

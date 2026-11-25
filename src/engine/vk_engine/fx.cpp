@@ -859,14 +859,41 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // the tower.
     if (globe::current().home && !pad_lights_.empty() && glm::distance(eye, launch_pad_) < 9000.0f) {
         const float night = env_->night >= 0.0f ? env_->night : 1.0f - glm::smoothstep(-2.0f, 14.0f, rt_.sun_pitch_deg);
-        for (const PadLight& L : pad_lights_) {
+        // A LAMP BEHIND A MOUNTAIN IS NOT SEEN. These flares are drawn over the picture, and far
+        // land is not in the depth buffer they are tested against: from across the hills the
+        // whole site's lights shone through them. So each lamp further than 350 m has its line
+        // of sight marched over the ground (the world's formula) - three lamps a frame in turn,
+        // the answer kept and eased, so a lamp comes out from behind a ridge without a pop.
+        static std::vector<float> seen;
+        if (seen.size() != pad_lights_.size()) seen.assign(pad_lights_.size(), 1.0f);
+        for (size_t li = 0; li < pad_lights_.size(); ++li) {
+            const PadLight& L = pad_lights_[li];
             const glm::vec3 to = L.pos - eye;
             const float d = glm::length(to);
             if (d < 1.0f || glm::dot(to, cam_fwd) < 0.0f) continue;
+            if (d < 350.0f) seen[li] = 1.0f;
+            else {
+                static std::vector<uint8_t> clear_now;
+                if (clear_now.size() != pad_lights_.size()) clear_now.assign(pad_lights_.size(), 1);
+                if ((li + size_t(frame_number_)) % ((pad_lights_.size() + 2) / 3) == 0 || frame_number_ < 4) {
+                    const glm::vec3 dir = to / d;
+                    static const bool through = std::getenv("VIBE_TEST_PAD_LIGHTS_THROUGH") != nullptr;       // (tests: as it was)
+                    bool clear = true;
+                    for (float t = 40.0f; t < d - 30.0f; t += 22.0f + t * 0.025f) {
+                        const glm::vec3 p = eye + dir * t;
+                        if (p.y > 900.0f && dir.y >= 0.0f) break;
+                        if (p.y < world_ground_height(p.x, p.z, rt_.water_level, 6) - 1.0f) { clear = false; break; }
+                    }
+                    clear_now[li] = clear || through ? 1 : 0;
+                }
+                seen[li] += ((clear_now[li] ? 1.0f : 0.0f) - seen[li]) * 0.15f;
+            }
+            if (seen[li] < 0.02f) continue;
+            const float vis = seen[li];
             if (L.kind == 0) {
                 // (a floodlight is seen bright only from where it points)
                 const float facing = glm::clamp(glm::dot(-to / d, L.dir) * 1.4f + 0.35f, 0.0f, 1.0f);
-                const float k = glm::mix(0.10f, 1.0f, night) * (0.25f + 0.75f * facing);
+                const float k = glm::mix(0.10f, 1.0f, night) * (0.25f + 0.75f * facing) * vis;
                 const glm::vec3 c(1.0f, 0.93f, 0.78f);
                 const float r = std::max(glm::mix(1.2f, 4.5f, night) * (0.5f + 0.5f * facing), d * px_ang * 3.0f);
                 flash.billboard(L.pos, r, cam_right, cam_up, c * (1.6f * k));
@@ -874,17 +901,17 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
                 if (night > 0.05f) {
                     const float sl = r * 3.4f * night * facing;                      // the streak
                     glow.strip({ L.pos - cam_right * sl, L.pos, L.pos + cam_right * sl },
-                               { r * 0.02f, min_w(L.pos, r * 0.07f, 1.2f), r * 0.02f }, { 0.0f, 0.9f * night * facing, 0.0f }, c);
+                               { r * 0.02f, min_w(L.pos, r * 0.07f, 1.2f), r * 0.02f }, { 0.0f, 0.9f * night * facing * vis, 0.0f }, c);
                     // The beam: the air it shines through - soft discs along it, wider and
                     // fainter toward the pad (a strip seen end-on twists into a line).
                     for (int q = 1; q <= 7; ++q) {
                         const float u = float(q) / 7.0f;
                         const glm::vec3 bp = L.pos + L.dir * (4.0f + 46.0f * u * u);
-                        flash.billboard(bp, 1.0f + 8.0f * u, cam_right, cam_up, c * (0.11f * night * (1.0f - u) * (1.0f - u)));
+                        flash.billboard(bp, 1.0f + 8.0f * u, cam_right, cam_up, c * (0.11f * night * vis * (1.0f - u) * (1.0f - u)));
                     }
                 }
             } else {
-                float k = glm::mix(0.35f, 1.0f, night);
+                float k = glm::mix(0.35f, 1.0f, night) * vis;
                 if (L.kind == 2) {                      // one flash a second and a half, the tower's lamps together
                     const float ph = glm::fract(now / 1.5f);
                     k *= glm::smoothstep(0.0f, 0.06f, ph) * (1.0f - glm::smoothstep(0.30f, 0.55f, ph)) * 1.6f;
@@ -895,6 +922,37 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
                 flash.billboard(L.pos, r, cam_right, cam_up, c * (2.2f * k));
                 flash.billboard(L.pos, r * 0.3f, cam_right, cam_up, glm::vec3(1.0f, 0.35f, 0.25f) * (4.0f * k));
             }
+        }
+    }
+    // Lanterns and street lamps seen from afar: a point of light each, at night. The lit head is a
+    // panel a hand wide facing the ground - beyond a few dozen metres it is under a pixel and the
+    // lamp was dark, so a road at night showed only the nearest few. A soft disc and a core, never
+    // smaller than a couple of pixels, from 20 m (nearer the head itself is seen) out to
+    // kLampGlowFar. VIBE_LAMPS_OLD=1: none (as it was).
+    {
+        static const bool lamps_old = std::getenv("VIBE_LAMPS_OLD") != nullptr;
+        const float night = env_->night >= 0.0f ? env_->night : 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
+        constexpr float kLampGlowFar = 1600.0f;
+        if (night > 0.01f && !lamps_old) {
+            static std::vector<glm::vec3> lamps;       // reused every frame
+            lamps.assign(lamp_lights_.begin(), lamp_lights_.end());
+            const size_t n_lantern = lamps.size();
+            hw_lamps_near(eye, kLampGlowFar, lamps);
+            int drawn = 0;
+            for (size_t i = 0; i < lamps.size(); ++i) {
+                const glm::vec3 to = lamps[i] - eye;
+                const float d = glm::length(to);
+                if (d < 20.0f || d > kLampGlowFar || glm::dot(to, cam_fwd) < 0.0f) continue;
+                const bool street = i >= n_lantern;
+                const float k = night * glm::smoothstep(20.0f, 60.0f, d) * (1.0f - glm::smoothstep(0.8f * kLampGlowFar, kLampGlowFar, d));
+                const glm::vec3 c = street ? glm::vec3(1.0f, 0.90f, 0.72f) : glm::vec3(1.0f, 0.66f, 0.32f);
+                const float r = std::max(street ? 0.55f : 0.36f, d * px_ang * 2.6f);
+                flash.billboard(lamps[i], r, cam_right, cam_up, c * (1.1f * k));
+                flash.billboard(lamps[i], r * 0.4f, cam_right, cam_up, c * (3.6f * k));
+                ++drawn;
+            }
+            if (static const bool lg = std::getenv("VIBE_LOG_LAMPS") != nullptr; lg && frame_number_ % 120 == 0)
+                log::infof("[lamps] %d glow(s) drawn of %zu lamps within %.0f m (%zu lanterns, %zu street lamps)", drawn, lamps.size(), double(kLampGlowFar), n_lantern, lamps.size() - n_lantern);
         }
     }
     for (const auto& t : tracer_segs_) {

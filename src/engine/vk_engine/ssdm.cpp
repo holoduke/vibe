@@ -1,9 +1,9 @@
-// Screen-space displacement mapping (SSDM), the way Crimson Desert does it.
+// Screen-space displacement mapping (SSDM), the way the reference game does it.
 //
 // The stonework is drawn flat; then, on the G-buffer and before the lighting, its pixels are
 // moved to where the stones really stand out. The method is described in
 // shaders/ssdm_grid.vert, the rule that keeps corners and borders closed in
-// shaders/ssdm_solve.frag. (Our own code for the method of the game's screenspacetessellation
+// shaders/ssdm_solve.frag. (Our own code for the method of the game's screen-space tessellation
 // shaders, which were read in compiled form. An earlier version of this file was a port of
 // TechArtAlex's Unreal plugin, which finds each pixel's source by a screen-space march
 // instead; see the git history.)

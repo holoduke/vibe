@@ -127,6 +127,14 @@ void VulkanEngine::init_clutter_shadow() {
         sc.vattrs = { a0, k3, k4, k5 };
         skin_shadow_pipeline_ = vkpipe::build_graphics_pipeline(device_, sc);
     }
+    // The grass placed on the GPU: the plants' instance layout, the colour pass's blade maths.
+    clutter_->grass_vert = vkpipe::load_shader_module(device_, std::string(VIBE_SHADER_DIR) + "/tuft_shadow.vert.spv");
+    if (clutter_->grass_vert && pipeline_layout_) {
+        vkpipe::GraphicsPipelineConfig gc = cfg;
+        gc.vert = clutter_->grass_vert;
+        gc.layout = pipeline_layout_;
+        clutter_->grass_pipeline = vkpipe::build_graphics_pipeline(device_, gc);
+    }
     {
         VkDescriptorImageInfo ii{ clutter_->shadow_sampler, clutter_->shadow_array_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkWriteDescriptorSet w{};
@@ -145,6 +153,9 @@ void VulkanEngine::destroy_clutter_shadow() {
     if (skin_shadow_vert_) vkDestroyShaderModule(device_, skin_shadow_vert_, nullptr);
     skin_shadow_pipeline_ = VK_NULL_HANDLE;
     skin_shadow_vert_ = VK_NULL_HANDLE;
+    if (clutter_->grass_pipeline) vkDestroyPipeline(device_, clutter_->grass_pipeline, nullptr);
+    if (clutter_->grass_vert) vkDestroyShaderModule(device_, clutter_->grass_vert, nullptr);
+    clutter_->grass_pipeline = VK_NULL_HANDLE; clutter_->grass_vert = VK_NULL_HANDLE;
     deferred_desc_sig_ = 0;   // handles may be recreated (even at the same address)
     if (clutter_->shadow_pipeline) vkDestroyPipeline(device_, clutter_->shadow_pipeline, nullptr);
     if (clutter_->shadow_layout) vkDestroyPipelineLayout(device_, clutter_->shadow_layout, nullptr);
@@ -287,6 +298,28 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
                     scatter_draw_cells(cmd, lods[l]->index_count, scatter_.plant_cells[sp],
                                        [&](const ScatterCell& c) { return band(c) == l && in_box(c); });
                 }
+            }
+        }
+        // The grass placed on the GPU (long tufts, turf): from the lists the placement filled
+        // this frame - what the camera sees, so grass out of view casts no shadow into it.
+        // VIBE_NO_GRASS_SHADOW=1: none; VIBE_GRASS_SHADOW=1: the long tufts only, 2: the near map only.
+        static const int kGrassSh = std::getenv("VIBE_NO_GRASS_SHADOW") ? 0 : std::getenv("VIBE_GRASS_SHADOW") ? std::atoi(std::getenv("VIBE_GRASS_SHADOW")) : 3;
+        if (layer <= 2 && kGrassSh && clutter_->grass_pipeline && !(kGrassSh == 2 && layer != 1)) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clutter_->grass_pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &scene_desc_set_, 0, nullptr);
+            PushConstants gpc{};
+            gpc.mvp = cvp;
+            gpc.model[0] = glm::vec4(cam, half * 1.42f);
+            gpc.grass_params = glm::vec4(0.0f, 1.0f, anim_time_, rt_.terrain_raymarch_enabled ? 1.0f : 0.0f);
+            gpc.emissive = grass_trail_window();
+            gpc.color = glm::vec4(0.871f, 0.490f, glm::clamp(rt_.grass_wind * 12.5f, 0.0f, 1.0f), 0.0f);   // (as world_render.cpp)
+            for (int sp : { 15, 17, 18 }) {
+                if (sp != 15 && kGrassSh == 1) continue;
+                if (sp != 15 && layer == 0) continue;        // (turf and meadow: in the near map only - in the 64 m map their blades are thinner than a texel and cost a millisecond)
+                const float* s = sp == 15 ? ScatterSet::kTuftShape : sp == 17 ? ScatterSet::kTurfShape : ScatterSet::kMeadowShape;
+                gpc.tex_params = glm::vec4(s[0], s[1], s[2], s[3]);
+                vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &gpc);
+                draw_plants_gpu(cmd, sp);
             }
         }
         // The soldiers: in the sun's two maps, and in the flashlight's (not the one holding it).

@@ -184,6 +184,22 @@ void VulkanEngine::make_crater(glm::vec3 pos, float size) {
     reseat(scatter_.inst_cpu, scatter_.inst_mapped, scatter_.inst_dy);
     reseat(scatter_.plant_cpu, scatter_.plant_mapped, scatter_.plant_dy);
     ++scatter_.plant_gen;
+    // ... and no long grass in the bowl (the rules picture of tuft_place.comp; the height it\n    // stands on is the terrain's own height map, already changed above).
+    if (!scatter_.tuft_rules.empty()) {
+        const int N = ScatterSet::kTuftCapN;
+        const float ext = scatter_.tuft_cap_ext, texel = 2.0f * ext / float(N);
+        const int i0 = std::clamp(int((pos.x - Rmax + ext) / texel) - 1, 0, N - 1), i1 = std::clamp(int((pos.x + Rmax + ext) / texel) + 1, 0, N - 1);
+        const int j0 = std::clamp(int((pos.z - Rmax + ext) / texel) - 1, 0, N - 1), j1 = std::clamp(int((pos.z + Rmax + ext) / texel) + 1, 0, N - 1);
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i) {
+                const float wx = -ext + (float(i) + 0.5f) * texel, wz = -ext + (float(j) + 0.5f) * texel;
+                const float dx = wx - pos.x, dz = wz - pos.z, r2 = dx * dx + dz * dz;
+                if (r2 >= Rmax * Rmax) continue;
+                const size_t k = (size_t(j) * size_t(N) + size_t(i)) * 4;
+                if (r2 < (0.85f * Rc + texel) * (0.85f * Rc + texel)) scatter_.tuft_rules[k] = 0;      // blasted away
+            }
+        ++scatter_.tuft_cap_gen;
+    }
 
     tp[4] = lap();   // plant / stone reseat
     // Mud: remember the crater for the terrain shader (newest kMaxCraters).

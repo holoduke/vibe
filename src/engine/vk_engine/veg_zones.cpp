@@ -366,6 +366,8 @@ void VulkanEngine::build_scatter_from(const Heightmap& hm) {
     if (church_placed_) sp.keep_rects.push_back(glm::vec4(church_pos_.x - 7.0f, church_pos_.z + 5.0f, church_pos_.x + 8.2f, church_pos_.z + 15.0f));
     if (church_placed_) sp.keep_rects.push_back(glm::vec4(church_pos_.x - 6.2f, church_pos_.z - 3.9f, church_pos_.x + 8.0f, church_pos_.z + 3.9f));
     sp.rm_params = &terrain_hp_;   // offsets onto the raymarched surface
+    // (without the plants' GPU pass the automatic tufts are placed here, as they were)
+    sp.tufts_cpu = std::getenv("VIBE_NO_PLANT_GPU") != nullptr || std::getenv("VIBE_TUFTS_CPU") != nullptr;
     if (!paint_.empty()) sp.paint = &paint_;
     scatter_ = build_scatter(device_, allocator_, graphics_queue_, graphics_queue_family_, hm, sp);
     scatter_set_raymarch_surface(scatter_, rt_.terrain_raymarch_enabled);

@@ -72,6 +72,9 @@ struct Agent {
     int bay = -1, stop = -1;
     int riders[3] = { -1, -1, -1 }; int out = 0;       // its people, and how many are out of it
     float wait = 0.0f; bool decided = false; bool leaving = false; float stuck = 0.0f; float visit = 0.0f;
+    bool driverless = false; float abandoned = 0.0f;   // its driver was shot: it rolls to a stop, and how long it has stood since
+    // ---- a person put out of a car out on the road: stands there so many seconds more, then is gone
+    float leave = 0.0f;
 };
 
 float poly_len(const std::vector<glm::vec3>& p) {
@@ -125,6 +128,7 @@ struct World::Impl {
     std::vector<Agent> agents;
     Rng rng;
     std::vector<glm::vec3> run_path; float run_len = 0.0f;
+    std::vector<glm::vec3> walkers;          // the players on foot (set_walkers): cars do not drive into them
     int steps = 0;
     float acc = 0.0f;
     std::vector<View> prev, cur;             // the last two states, for views()
@@ -502,6 +506,11 @@ struct World::Impl {
     }
     void step_person(Agent& a, float dt) {
         if (a.gone > 0.0f) { a.gone -= dt; if (a.gone <= 0.0f) respawn(a); return; }
+        if (a.leave > 0.0f) {                  // (put out of a car out on the road - put_out: there is nowhere to walk to)
+            a.leave -= dt; a.pose = Pose::Stand; a.speed = 0.0f;
+            if (a.leave <= 0.0f) { a.hidden = true; a.gone = 45.0f; a.pos.y -= 20000.0f; }
+            return;
+        }
         if (a.role == Runner) { step_runner(a, dt); return; }
         if (a.hidden) { if (a.car >= 0) { a.pos = agents[size_t(a.car)].pos; a.yaw = agents[size_t(a.car)].yaw; } return; }
         if (a.tasks.empty()) think(a);
@@ -752,9 +761,54 @@ struct World::Impl {
             ++c.out; first = false;
         }
     }
+    // A CAR THAT IS ITS PEOPLE'S NO LONGER (a player took it, or its driver was shot). Whoever
+    // sits in it is put out beside it - the driver on the left, the others on the right and
+    // behind - and nobody belongs to it any more. At the site they go about as the locals do;
+    // out on the road, far from anywhere one can walk, they stand there a while and are gone.
+    void put_out(Agent& c) {
+        const glm::vec3 right(std::cos(c.yaw), 0.0f, std::sin(c.yaw)), fwd(std::sin(c.yaw), 0.0f, -std::cos(c.yaw));
+        for (int& r : c.riders) {
+            if (r < 0) continue;
+            Agent& p = agents[size_t(r)];
+            if (p.hidden && p.gone <= 0.0f) {
+                const float side = p.car_seat == 1 ? 1.0f : -1.0f;
+                p.pos = c.pos + right * (side * 1.75f) + fwd * (p.car_seat == 2 ? -1.1f : 0.1f);
+                p.yaw = wrap_pi(c.yaw - side * 1.5708f);          // (looking at the car that was theirs)
+                p.hidden = false; p.pose = Pose::Stand; p.style = 0; p.speed = 0.0f; p.walk_v = 0.0f; p.act = 0; p.act_t = 0.0f;
+                p.tasks.clear(); p.route.clear(); p.at_node = -1;
+                const int nd = nodes.empty() ? -1 : nearest_node(p.pos);
+                if (nd < 0 || glm::distance(p.pos, nodes[size_t(nd)].p) > 45.0f) p.leave = 40.0f;
+            }
+            p.car = -1; p.role = Local; r = -1;
+        }
+        c.out = 0;
+    }
+    // ... and the car itself leaves the world for `gone` seconds (then another joins the traffic).
+    void car_leaves(Agent& c, float gone) {
+        const int me = int(&c - agents.data());
+        if (c.stop >= 0 && stops[size_t(c.stop)].user == me) stops[size_t(c.stop)].user = -1;
+        if (c.bay >= 0 && bays[size_t(c.bay)].user == me) bays[size_t(c.bay)].user = -1;
+        c.stop = c.bay = -1; c.out = 0; c.legs.clear(); c.legs_rev.clear(); c.path.clear();
+        c.cs = Parked; c.pose = Pose::Park; c.speed = 0.0f; c.hidden = true; c.gone = gone;
+        c.driverless = false; c.abandoned = 0.0f;
+        c.pos.y -= 20000.0f; c.rear.y -= 20000.0f;
+    }
+    // How fast a car may be `ahead` metres before somebody on foot it must not drive into: it
+    // stands six metres short, braking no harder than a driver does who saw it in time.
+    static float walker_speed(float ahead) { return std::sqrt(2.0f * 2.6f * std::max(ahead - 6.0f, 0.0f)); }
     void step_car(Agent& c, float dt) {
         if (c.gone > 0.0f) { c.gone -= dt; if (c.gone <= 0.0f) { respawn(c); c.hidden = false; } return; }
         const int me = int(&c - agents.data());
+        // Its driver was shot (World::kill): it rolls to a stop where it is going (the branches
+        // below, with no speed asked for); once it stands the others get out, and two minutes
+        // later it is cleared away - nothing may stand for good.
+        if (c.driverless && (std::abs(c.speed) < 0.05f || c.cs == Waiting || c.cs == Parked)) {
+            c.speed = 0.0f; c.pose = Pose::Park;
+            if (c.abandoned <= 0.0f) put_out(c);
+            c.abandoned += dt;
+            if (c.abandoned > 120.0f) car_leaves(c, 20.0f);
+            return;
+        }
         c.visit = (c.cs == OnPath || c.cs == Waiting) ? c.visit + dt : 0.0f;
         switch (c.cs) {
         case Parked: c.speed = 0.0f; c.pose = Pose::Park; break;
@@ -783,14 +837,24 @@ struct World::Impl {
                 // (off the throttle and on the brake in good time: 7 m/s where it turns in)
                 if (c.cs == Approach) v = std::min(v, std::sqrt(49.0f + 2.0f * 1.9f * to_in));
             }
-            if (c.cs == Approach && (to_in <= std::abs(c.speed) * dt + 0.5f || to_in > road.length - 20.0f)) { begin_leg(c); break; }
+            if (c.cs == Approach && !c.driverless && (to_in <= std::abs(c.speed) * dt + 0.5f || to_in > road.length - 20.0f)) { begin_leg(c); break; }
+            // (nor into a player who stands on its lane: it brakes in good time, and waits)
+            for (const glm::vec3& wk : walkers) {
+                if (std::abs(wk.x - c.pos.x) > 95.0f || std::abs(wk.z - c.pos.z) > 95.0f || std::abs(wk.y - c.pos.y) > 4.0f) continue;
+                for (float a = 0.0f; a <= 90.0f; a += 3.0f) {
+                    glm::vec3 q; glm::vec2 qf;
+                    if (!lane_at(c, c.s + a * float(c.dir), q, qf)) break;
+                    if (glm::distance(glm::vec2(q.x, q.z), glm::vec2(wk.x, wk.z)) < 2.3f) { v = std::min(v, walker_speed(a)); break; }
+                }
+            }
+            if (c.driverless) v = 0.0f;
             const float look = std::clamp(std::abs(c.speed) * 0.75f, 5.0f, 17.0f);
             glm::vec3 tp; glm::vec2 tf;
             if (!lane_at(c, c.s + look * float(c.dir), tp, tf)) break;
             c.reverse = false;
             drive(c, tp, v, dt);
             c.pos.y = lp.y + (tp.y - lp.y) * std::min(1.0f, std::abs(c.speed) * dt / look);
-            c.pose = Pose::Drive;
+            c.pose = c.driverless ? Pose::Park : Pose::Drive;
             break; }
         case OnPath: {
             // How far along its line it is: the nearest point of it, never backwards.
@@ -816,6 +880,16 @@ struct World::Impl {
                 if (ahead > 0.0f && ahead < 8.0f && std::abs(to.x * f.y - to.y * f.x) < 1.55f && c.stuck < 20.0f)
                     v = std::min(v, std::max(0.0f, (ahead - 3.6f) * 0.9f));
             }
+            // (nor into a player on foot)
+            for (const glm::vec3& wk : walkers) {
+                if (std::abs(wk.y - c.pos.y) > 4.0f) continue;
+                const glm::vec2 to(wk.x - c.pos.x, wk.z - c.pos.z);
+                const glm::vec2 f(std::sin(c.yaw), -std::cos(c.yaw));
+                const float ahead = glm::dot(to, f) * (c.reverse ? -1.0f : 1.0f);
+                if (ahead > 0.0f && ahead < 8.0f && std::abs(to.x * f.y - to.y * f.x) < 1.55f && c.stuck < 20.0f)
+                    v = std::min(v, std::max(0.0f, (ahead - 3.6f) * 0.9f));
+            }
+            if (c.driverless) v = 0.0f;
             // (not into another car on the site)
             for (const Agent& o : agents) {
                 if (&o == &c || o.kind != Kind::Car || o.cs == Cruise || o.cs == Approach || o.cs == Parked) continue;
@@ -847,8 +921,8 @@ struct World::Impl {
             }
             drive(c, line_at(c.path, c.along + look, c.path_len), v, dt, straighten);
             { glm::vec3 d0; c.pos.y = poly_at(c.path, c.along, d0).y; }
-            c.pose = Pose::Drive;
-            if (left <= (last ? 0.6f : 0.12f)) {
+            c.pose = c.driverless ? Pose::Park : Pose::Drive;
+            if (!c.driverless && left <= (last ? 0.6f : 0.12f)) {
                 if (!c.leaving) { arrive(c); }
                 else if (!c.legs.empty()) { begin_leg(c); }
                 else {                                   // back on the road
@@ -1014,12 +1088,28 @@ bool World::kill(int id) {
     Impl& w = *d_;
     if (w.is_replica || id < 0 || size_t(id) >= w.agents.size()) return false;
     Agent& a = w.agents[size_t(id)];
-    if (a.kind != Kind::Person || a.hidden || a.gone > 0.0f) return false;
+    if (a.gone > 0.0f) return false;
+    if (a.kind == Kind::Car) {
+        // The driver of a car that has nobody of this world at its wheel (the traffic the other
+        // way). One with a driver of its own: that one is shot under his own number.
+        if (a.driverless || a.pose != Pose::Drive) return false;
+        for (int r : a.riders) if (r >= 0 && w.agents[size_t(r)].hidden && w.agents[size_t(r)].car_seat == 0) return false;
+        a.driverless = true; a.abandoned = 0.0f; a.pose = Pose::Park;
+        w.snapshot(w.cur);
+        return true;
+    }
+    if (a.hidden && a.car < 0) return false;
     w.release(a);
     if (a.car >= 0) {
-        // (its car does not wait for it)
         Agent& c = w.agents[size_t(a.car)];
-        for (int& r : c.riders) if (r == id) { r = -1; if (c.out > 0) --c.out; }
+        if (a.hidden) {
+            // (in the car: with its driver dead it rolls to a stop - step_car)
+            for (int& r : c.riders) if (r == id) r = -1;
+            if (a.car_seat == 0 && !c.driverless) { c.driverless = true; c.abandoned = 0.0f; c.pose = Pose::Park; }
+        } else {
+            // (its car does not wait for it)
+            for (int& r : c.riders) if (r == id) { r = -1; if (c.out > 0) --c.out; }
+        }
     }
     const bool runner = a.role == Runner;
     a.tasks.clear(); a.route.clear(); a.act = 0; a.car = -1; a.hidden = true; a.speed = 0.0f;
@@ -1033,21 +1123,18 @@ bool World::can_take_car(int id) const {
     const Impl& w = *d_;
     if (w.is_replica || id < 0 || size_t(id) >= w.agents.size()) return false;
     const Agent& c = w.agents[size_t(id)];
-    if (c.kind != Kind::Car || c.gone > 0.0f || !(c.cs == Parked || c.cs == Waiting) || std::abs(c.speed) > 0.3f) return false;
-    for (int r : c.riders) if (r >= 0 && w.agents[size_t(r)].hidden) return false;        // (somebody sits in it)
-    return true;
+    // (whatever it is doing and whoever sits in it: a car that stands, or barely rolls)
+    return c.kind == Kind::Car && c.gone <= 0.0f && std::abs(c.speed) <= kTakeSpeed;
 }
+
+void World::set_walkers(const std::vector<glm::vec3>& feet) { d_->walkers = feet; }
 
 bool World::take_car(int id) {
     if (!can_take_car(id)) return false;
     Impl& w = *d_;
     Agent& c = w.agents[size_t(id)];
-    for (int& r : c.riders) if (r >= 0) { Agent& p = w.agents[size_t(r)]; p.car = -1; p.role = Local; r = -1; }
-    if (c.stop >= 0 && w.stops[size_t(c.stop)].user == id) w.stops[size_t(c.stop)].user = -1;
-    if (c.bay >= 0 && w.bays[size_t(c.bay)].user == id) w.bays[size_t(c.bay)].user = -1;
-    c.stop = c.bay = -1; c.out = 0; c.legs.clear(); c.legs_rev.clear(); c.path.clear();
-    c.cs = Parked; c.pose = Pose::Park; c.speed = 0.0f; c.hidden = true; c.gone = 150.0f;
-    c.pos.y -= 20000.0f; c.rear.y -= 20000.0f;
+    w.put_out(c);
+    w.car_leaves(c, 150.0f);
     w.snapshot(w.cur);
     return true;
 }

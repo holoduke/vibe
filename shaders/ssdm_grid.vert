@@ -1,5 +1,5 @@
 #version 460
-// Screen-space displacement mapping (SSDM), the way Crimson Desert does it - the grid pass.
+// Screen-space displacement mapping (SSDM), the way the reference game does it - the grid pass.
 //
 // THE METHOD. The stonework is drawn flat, like everything else. Then, before lighting:
 //   1. ssdm_height   the displaced meshes once more, against the scene's depth: per visible

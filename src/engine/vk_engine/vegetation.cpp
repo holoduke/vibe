@@ -91,16 +91,14 @@ void VulkanEngine::init_vegetation_data(const Heightmap& hm) {
         game::LevelMesh imp;
         const int sp = veg_arch_[a].species;
         if (sp <= 1 && !veg_arch_[a].lods[0].verts.empty()) {
-            float rmax = 0.0f, ymax = 0.0f;
-            for (const auto& v : veg_arch_[a].lods[0].verts) {
-                rmax = std::max(rmax, std::max(std::abs(v.p.x), std::abs(v.p.z)));
-                ymax = std::max(ymax, v.p.y);
-            }
+            // (a square facing the camera over the sphere the tree was baked in: veg.vert)
+            float cy = 0.0f, rcap = 1.0f;
+            veg_impostor_frame(veg_arch_[a].lods[0], cy, rcap);
             const float kind = (sp == 0) ? 1.0f : 2.0f;
-            const float us[4] = { -1.0f, 1.0f, 1.0f, -1.0f }, vs[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+            const float us[4] = { -1.0f, 1.0f, 1.0f, -1.0f }, vs[4] = { -1.0f, -1.0f, 1.0f, 1.0f };
             for (int k = 0; k < 4; ++k)
-                imp.verts.push_back({ glm::vec3(us[k] * rmax, vs[k] * ymax, 0.0f),
-                                      glm::vec3(us[k], vs[k], kind), 0.0f, 5.0f });
+                imp.verts.push_back({ glm::vec3(us[k], vs[k], rcap),
+                                      glm::vec3(cy, kind, 0.0f), 0.0f, 5.0f });
             imp.idx = { 0, 1, 2, 0, 2, 3 };
             veg_has_imp_[a] = 1;
         }
@@ -321,6 +319,9 @@ void VulkanEngine::init_vegetation_pipelines() {
     d.color_attachment_count = 0;
     d.depth_compare = VK_COMPARE_OP_LESS;
     veg_depth_pipeline_ = vkpipe::build_graphics_pipeline(device_, d);
+    // The far cards write the baked tree's own depth: their own pre-pass shader.
+    veg_imp_depth_frag_module_ = vkpipe::load_shader_module(device_, sd + "/veg_imp_depth.frag.spv");
+    if (veg_imp_depth_frag_module_) { d.frag = veg_imp_depth_frag_module_; veg_imp_depth_pipeline_ = vkpipe::build_graphics_pipeline(device_, d); }
     log::info("[veg] cull + draw pipelines built");
 }
 
@@ -413,6 +414,7 @@ void VulkanEngine::draw_vegetation(VkCommandBuffer cmd, bool depth_only) {
     pc.model = glm::mat4(1.0f);
     pc.prev_mvp = prev_view_proj_valid_ ? prev_view_proj_ : fv.vp;
     pc.color = glm::vec4(1.0f);
+    pc.emissive = grass_trail_window();                    // (veg.vert: low plants lean away from who walks through them)
     pc.tex_params = glm::vec4(-1.0f, -1.0f, 1.0f, 0.0f);
     pc.grass_params = glm::vec4(1.0f, 1.0f, 1.0f, -1.0f);   // veg draw, mesh mode, triplanar
     vkCmdPushConstants(cmd, veg_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
@@ -424,10 +426,13 @@ void VulkanEngine::draw_vegetation(VkCommandBuffer cmd, bool depth_only) {
     {
         const uint32_t n_arch = uint32_t(veg_cmd_template_.size()) / uint32_t(kVegDrawLods);
         const bool by_level = !std::getenv("VIBE_VEG_NO_ORDER");
-        if (by_level) {
-            for (int l = 0; l < kVegDrawLods; ++l)
+        if (by_level || depth_only) {
+            for (int l = 0; l < kVegDrawLods; ++l) {
+                if (depth_only && l == kVegDrawLods - 1 && veg_imp_depth_pipeline_) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, veg_imp_depth_pipeline_);
                 vkCmdDrawIndexedIndirect(cmd, veg_ind_buf_, VkDeviceSize(l) * sizeof(VkDrawIndexedIndirectCommand), n_arch,
                                          uint32_t(kVegDrawLods) * sizeof(VkDrawIndexedIndirectCommand));
+            }
+            if (depth_only && veg_imp_depth_pipeline_) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);      // (the rocks' clusters below)
         } else {
             vkCmdDrawIndexedIndirect(cmd, veg_ind_buf_, 0, uint32_t(veg_cmd_template_.size()),
                                      sizeof(VkDrawIndexedIndirectCommand));
@@ -535,7 +540,7 @@ void VulkanEngine::destroy_vegetation() {
         if (B.buf) vmaDestroyBuffer(allocator_, B.buf, B.alloc);
     }
     veg_blas_.clear();
-    for (VkPipeline* p : { &veg_cull_pipeline_, &veg_color_pipeline_, &veg_gbuf_pipeline_, &veg_depth_pipeline_ })
+    for (VkPipeline* p : { &veg_cull_pipeline_, &veg_color_pipeline_, &veg_gbuf_pipeline_, &veg_depth_pipeline_, &veg_imp_depth_pipeline_ })
         if (*p) { vkDestroyPipeline(device_, *p, nullptr); *p = VK_NULL_HANDLE; }
     if (veg_layout_) vkDestroyPipelineLayout(device_, veg_layout_, nullptr);
     if (veg_cull_layout_) vkDestroyPipelineLayout(device_, veg_cull_layout_, nullptr);
@@ -543,7 +548,7 @@ void VulkanEngine::destroy_vegetation() {
     destroy_veg_hiz();
     destroy_veg_hiz_pipeline();
     if (veg_fade_buf_) { vmaDestroyBuffer(allocator_, veg_fade_buf_, veg_fade_alloc_); veg_fade_buf_ = VK_NULL_HANDLE; }
-    for (VkShaderModule* m : { &veg_vert_module_, &veg_cull_module_, &veg_depth_frag_module_, &veg_hiz_module_ })
+    for (VkShaderModule* m : { &veg_vert_module_, &veg_cull_module_, &veg_depth_frag_module_, &veg_hiz_module_, &veg_imp_depth_frag_module_ })
         if (*m) { vkDestroyShaderModule(device_, *m, nullptr); *m = VK_NULL_HANDLE; }
     if (veg_pool_) vkDestroyDescriptorPool(device_, veg_pool_, nullptr);
     if (veg_set_layout_) vkDestroyDescriptorSetLayout(device_, veg_set_layout_, nullptr);

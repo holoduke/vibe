@@ -49,7 +49,7 @@ struct ScatterSet {
     // fern, daisy, poppy, bluebell, cornflower, buttercup, lupin, reed,
     // clover, plantain, dandelion, nettle, foxglove, thistle, mushrooms,
     // grass tuft (a clump of long blades; uv.x = 8 +- 0.4 across the blade)
-    static constexpr int kPlantSpecies = 17;   // 16 = water lilies
+    static constexpr int kPlantSpecies = 19;   // 16 = water lilies, 17 = turf (short grass, placed on the GPU only) 18 = flowering meadow (in fields, placed on the GPU only)
     Mesh          plant_mesh[kPlantSpecies]{};
     // Levels of detail for distant cells, made automatically (meshoptimizer
     // simplification; the water lily's first one is hand-built): about a
@@ -75,6 +75,24 @@ struct ScatterSet {
     bool               rm_surface = false;
     std::vector<ScatterCell> rock_cells;
     std::vector<ScatterCell> plant_cells[kPlantSpecies];
+    // The automatic grass - long tufts (species 15) and turf (17) - is placed on the GPU every
+    // frame (shaders/tuft_place.comp, vk_engine/plant_gpu.cpp). The ground's height comes from
+    // the terrain's own height map there. This is the rest of what that pass has to know about
+    // the ground: a top-down picture of kTuftCapN x kTuftCapN texels over
+    // [-tuft_cap_ext, +tuft_cap_ext] in x and z, 4 bytes a texel:
+    //   0  how much long grass may grow (0 = none: painted grass, buildings, the road, water,
+    //      bare rock; less under the trees)
+    //   1  how dry it is there
+    // Empty = no automatic grass (or it was placed on the CPU: ScatterParams::tufts_cpu).
+    static constexpr int kTuftCapN = 1024;
+    float                tuft_cap_ext = 0.0f;
+    std::vector<uint8_t> tuft_rules;
+    uint32_t             tuft_cap_gen = 0;       // bumped when the picture changes (a crater)
+    // The two grass meshes as the shaders need them: height at size 1, blades, the radius the
+    // blades' roots lie within, how deep they are (scatter_plant_meshes.inl tuft_root).
+    static constexpr float kTuftShape[4] = { 0.90f, 32.0f, 0.14f, 0.12f };
+    static constexpr float kTurfShape[4] = { 0.36f, 32.0f, 0.22f, 0.06f };
+    static constexpr float kMeadowShape[4] = { 0.44f, 16.0f, 0.20f, 0.05f };
 };
 
 struct ScatterParams {
@@ -108,6 +126,9 @@ struct ScatterParams {
     // precomputed (`rm_octaves` FBM octaves, the near-camera detail).
     const HeightmapParams* rm_params = nullptr;
     int   rm_octaves = 14;
+    // true: the automatic grass tufts are placed here, as instances (the path without the
+    // plants' GPU pass). false: only the ground picture for the GPU placement is made.
+    bool  tufts_cpu = false;
 };
 
 // Builds the rock mesh + places instances. Boulders: 0.15-0.55 m on

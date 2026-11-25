@@ -89,6 +89,7 @@ bool AnimationSet::init(const AnimAsset& asset, std::string* why) {
             if (h.n0.y > 0.0f) h.n0 = -h.n0;                       // palms face down in the rest pose
             h.b0 = glm::cross(h.a0, h.n0);
             h.palm = glm::length(s.rest_pos[size_t(m1)] - s.rest_pos[size_t(hd)]);
+            h.index_side = glm::dot(h.b0, s.rest_pos[size_t(i1)] - s.rest_pos[size_t(p1)]) < 0.0f ? 1.0f : -1.0f;
         }
     }
     // Standing height of the hips: the median over the idle captures.
@@ -314,8 +315,11 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
     dbg_.update_ms = float(now_ms() - t0);
 }
 
-// A driver: from the rest pose, the thighs forward and the shins down to the pedals, the back
-// against the seat, the wrists on the wheel (see CharacterAnimationInput::seated).
+// On a seat (CharacterAnimationInput::seated): from the rest pose. Where the car says where its
+// things are (seat_wheel, seat_feet, seat_back - jeep.cpp reads them from the car's file, which
+// has them measured from its model) the body is fitted to THEM: the back against the backrest,
+// the heels on the floor and the right foot on the accelerator, the hands round the rim.
+// Without them: the thighs forward, the shins down, the wrists where the caller says.
 void CharacterAnimator::seated(const CharacterAnimationInput& in) {
     const IAnimationRuntime& rt = *set_.runtime;
     const Rig& rig = rt.rig();
@@ -338,30 +342,148 @@ void CharacterAnimator::seated(const CharacterAnimationInput& in) {
     };
     // (about +X a bone that hangs down swings forward, one that stands up leans back)
     const float legs = std::clamp(in.seat_legs, 0.0f, 1.0f);
-    const float thigh = glm::mix(78.0f, 84.0f, legs), shin = glm::mix(-62.0f, -30.0f, legs), back = glm::mix(9.0f, 22.0f, legs);
-    turn(Role::Spine, back, X);
-    turn(Role::LeftUpLeg, thigh, X);  turn(Role::RightUpLeg, thigh, X);
-    turn(Role::LeftUpLeg, 7.0f, Y);   turn(Role::RightUpLeg, -7.0f, Y);        // knees a little apart
-    rt.local_to_model(*ctx_, pose_, model_);
-    turn(Role::LeftLeg, shin, X);     turn(Role::RightLeg, shin, X);
-    turn(Role::Neck, -back * 0.8f, X);                                         // the head stays level
-    rt.local_to_model(*ctx_, pose_, model_);
-    turn(Role::LeftFoot, -(thigh + shin) * 0.6f, X); turn(Role::RightFoot, -(thigh + shin) * 0.6f, X);
-    rt.local_to_model(*ctx_, pose_, model_);
-    // The arms: wrists to the wheel, elbows down and out.
+    const float thigh = glm::mix(78.0f, 84.0f, legs), shin = glm::mix(-62.0f, -30.0f, legs);
+    float back = in.seat_back >= 0.0f ? in.seat_back : glm::mix(9.0f, 22.0f, legs);
     const Role arm[2][3] = { { Role::LeftArm, Role::LeftForeArm, Role::LeftHand }, { Role::RightArm, Role::RightForeArm, Role::RightHand } };
+    const Role leg[2][3] = { { Role::LeftUpLeg, Role::LeftLeg, Role::LeftFoot }, { Role::RightUpLeg, Role::RightLeg, Role::RightFoot } };
+    // The feet at rest: how high the ankle stands over the sole, which way the sole points.
+    glm::quat foot_rest[2]{};
+    glm::vec3 sole0[2]{};
+    float ankle_h[2] = { 0.09f, 0.09f };
+    for (int s = 0; s < 2; ++s) {
+        const int f = rig[leg[s][2]];
+        if (f < 0) continue;
+        foot_rest[s] = model_rotation(f);
+        ankle_h[s] = std::clamp(model_[size_t(f)][3].y, 0.05f, 0.16f);
+        glm::vec3 d = sk.rest_tail[size_t(f)] - sk.rest_pos[size_t(f)];
+        d.y = 0.0f;
+        sole0[s] = glm::dot(d, d) > 1e-8f ? glm::normalize(d) : glm::vec3(0.0f, 0.0f, -1.0f);
+    }
+    // WHERE THE HANDS GO. On a wheel (seat_wheel): the palm on the outside of the rim, the
+    // knuckles along it, the fingers forward round it - the wrist is worked back from there, as
+    // for a weapon's grip (arms()). Otherwise the caller's points are the wrists (on the knees).
+    glm::vec3 wrist[2] = { in.seat_hand_l, in.seat_hand_r }, a1[2]{}, n1[2]{};
+    bool grip[2] = { false, false };
+    if (in.seat_wheel && glm::dot(in.seat_axis, in.seat_axis) > 1e-6f) {
+        const glm::vec3 ax = glm::normalize(in.seat_axis);
+        for (int s = 0; s < 2; ++s) {
+            const AnimationSet::Hand& H = set_.hand[s];
+            if (!H.ok) continue;
+            const glm::vec3 P = s == 0 ? in.seat_hand_l : in.seat_hand_r;
+            glm::vec3 er = (P - in.seat_hub) - ax * glm::dot(P - in.seat_hub, ax);
+            if (glm::dot(er, er) < 1e-8f) continue;
+            er = glm::normalize(er);
+            glm::vec3 up = glm::cross(ax, er);                  // (along the rim, the way that goes up)
+            if (up.y < 0.0f) up = -up;
+            a1[s] = glm::normalize(-ax + up * 0.30f);
+            n1[s] = glm::normalize(-er - a1[s] * glm::dot(-er, a1[s]));
+            wrist[s] = P + er * 0.016f - a1[s] * (H.palm * 0.80f) - n1[s] * 0.028f;
+            grip[s] = true;
+        }
+    }
+    // THE TRUNK: against the backrest - unless the arms then do not reach the wheel with the
+    // elbows still bent: then it comes forward off the backrest as far as it takes (a driver
+    // whose wheel is far away sits up to it). Twice is enough: the reach changes little.
+    auto trunk = [&](float lean) {
+        rt.rest_pose(pose_);
+        rt.local_to_model(*ctx_, pose_, model_);
+        turn(Role::Spine, lean, X);
+        rt.local_to_model(*ctx_, pose_, model_);
+    };
+    trunk(back);
+    for (int it = 0; it < 3 && (grip[0] || grip[1]); ++it) {
+        float short_by = 0.0f, lever = 0.4f;
+        for (int s = 0; s < 2; ++s) {
+            const int a = rig[arm[s][0]], b = rig[arm[s][1]], c = rig[arm[s][2]], sp = rig[Role::Spine];
+            if (!grip[s] || a < 0 || b < 0 || c < 0) continue;
+            const glm::vec3 pa(model_[size_t(a)][3]);
+            const float reach = (glm::length(glm::vec3(model_[size_t(b)][3]) - pa) + glm::length(glm::vec3(model_[size_t(c)][3]) - glm::vec3(model_[size_t(b)][3]))) * 0.95f;
+            short_by = std::max(short_by, glm::length(wrist[s] - pa) - reach);
+            if (sp >= 0) lever = std::max(pa.y - model_[size_t(sp)][3].y, 0.2f);
+        }
+        if (short_by < 0.004f) break;
+        const float fwd = glm::degrees(short_by / lever) * 1.15f;
+        const float to = std::max(back - fwd, -8.0f);
+        if (to >= back - 0.05f) break;
+        back = to;
+        trunk(back);
+    }
+    const float ph = float(in.variation % 1024u) * 0.0061f;
+    turn(Role::Spine1, 0.5f * std::sin(time_ * 1.6f + ph), X);                 // breathing
+    turn(Role::Neck, -back * 0.8f, X);                                         // the head stays level
+    // (the head: into the bend with the wheel, and never quite still)
+    turn(Role::Neck, -in.seat_steer * 7.0f + 1.5f * std::sin(time_ * 0.31f + ph), Y);
+    turn(Role::Head, -in.seat_steer * 11.0f + 2.5f * std::sin(time_ * 0.23f + ph * 2.0f), Y);
+    turn(Role::Head, 1.2f * std::sin(time_ * 0.41f + ph * 3.0f), X);
+    rt.local_to_model(*ctx_, pose_, model_);
+    // THE LEGS. Where the feet have places (seat_feet): the heel on the floor, the sole from
+    // there to where the ball of the foot presses, the knee up between. A leg too short for
+    // its pedal keeps its heel on the floor and stops short of it (never a straight leg).
+    if (in.seat_feet) {
+        for (int s = 0; s < 2; ++s) {
+            const int a = rig[leg[s][0]], b = rig[leg[s][1]], c = rig[leg[s][2]];
+            if (a < 0 || b < 0 || c < 0) continue;
+            const glm::vec3 heel = s == 0 ? in.seat_heel_l : in.seat_heel_r, ball = s == 0 ? in.seat_ball_l : in.seat_ball_r;
+            glm::vec3 f1 = ball - heel;
+            f1 = glm::dot(f1, f1) > 1e-8f ? glm::normalize(f1) : glm::vec3(0.0f, 0.0f, -1.0f);
+            glm::vec3 up = glm::cross(X, f1);
+            up = glm::dot(up, up) > 1e-8f ? glm::normalize(up) : Y;
+            if (up.y < 0.0f) up = -up;
+            glm::vec3 ankle = heel + f1 * 0.055f + up * ankle_h[s];
+            const glm::vec3 pa(model_[size_t(a)][3]);
+            const float len = glm::length(glm::vec3(model_[size_t(b)][3]) - pa) + glm::length(glm::vec3(model_[size_t(c)][3]) - glm::vec3(model_[size_t(b)][3]));
+            const float most = len * 0.965f;
+            if (glm::length(ankle - pa) > most) {
+                const float dx = ankle.x - pa.x, dy = ankle.y - pa.y;
+                ankle.z = pa.z - std::sqrt(std::max(most * most - dx * dx - dy * dy, 0.01f));      // (forward is -z)
+            }
+            const glm::vec3 pole(s == 0 ? -0.22f : 0.22f, 1.0f, -0.10f);
+            fit_limb(a, b, c, ankle, &pole);
+            rt.local_to_model(*ctx_, pose_, model_);
+            const glm::mat3 F0(sole0[s], Y, glm::cross(sole0[s], Y)), F1(f1, up, glm::cross(f1, up));
+            const glm::quat want = glm::quat_cast(F1 * glm::transpose(F0)) * foot_rest[s];
+            pose_[size_t(c)].r = glm::normalize(glm::inverse(model_rotation(b)) * want);
+            rt.local_to_model(*ctx_, pose_, model_);
+        }
+    } else {
+        turn(Role::LeftUpLeg, thigh, X);  turn(Role::RightUpLeg, thigh, X);
+        turn(Role::LeftUpLeg, 7.0f, Y);   turn(Role::RightUpLeg, -7.0f, Y);        // knees a little apart
+        rt.local_to_model(*ctx_, pose_, model_);
+        turn(Role::LeftLeg, shin, X);     turn(Role::RightLeg, shin, X);
+        rt.local_to_model(*ctx_, pose_, model_);
+        turn(Role::LeftFoot, -(thigh + shin) * 0.6f, X); turn(Role::RightFoot, -(thigh + shin) * 0.6f, X);
+        rt.local_to_model(*ctx_, pose_, model_);
+    }
+    // THE ARMS: the elbows down and out.
     for (int s = 0; s < 2; ++s) {
         const int a = rig[arm[s][0]], b = rig[arm[s][1]], c = rig[arm[s][2]];
         if (a < 0 || b < 0 || c < 0) continue;
         const glm::vec3 pole(s == 0 ? -0.55f : 0.55f, -1.0f, 0.25f);
-        fit_limb(a, b, c, s == 0 ? in.seat_hand_l : in.seat_hand_r, &pole);
+        fit_limb(a, b, c, wrist[s], &pole, grip[s]);
         rt.local_to_model(*ctx_, pose_, model_);
-        // The hand: its fingers forward over the rim, up and a little inward.
-        const glm::vec3 cur = glm::normalize(model_rotation(c) * glm::inverse(rest_rot[s]) * fingers[s]);
-        const glm::vec3 want = glm::normalize(glm::vec3(s == 0 ? 0.40f : -0.40f, 0.55f, -0.70f));
-        const glm::vec3 ax = glm::cross(cur, want);
-        const float sl = glm::length(ax), cl = glm::dot(cur, want);
-        if (sl > 1e-5f) rotate_in_model(c, glm::angleAxis(std::atan2(sl, cl), ax / sl));
+        if (grip[s]) {
+            // The hand round the rim (its rest frame on to the grip's, as arms() does), the fingers closed.
+            const AnimationSet::Hand& H = set_.hand[s];
+            const glm::mat3 F0(H.a0, H.n0, H.b0), F1(a1[s], n1[s], glm::cross(a1[s], n1[s]));
+            pose_[size_t(c)].r = glm::normalize(glm::inverse(glm::quat_cast(glm::mat3(model_[size_t(b)]))) * glm::quat_cast(F1 * glm::transpose(F0)));
+            if (in.lod < 2) {
+                static const float kCurl[3] = { 1.10f, 1.35f, 0.85f };
+                for (int f = 0; f < 4; ++f)
+                    for (int j = 0; j < 3; ++j)
+                        if (H.finger[f][j] >= 0) pose_[size_t(H.finger[f][j])].r = glm::angleAxis(kCurl[j], H.b0);
+                const float sx = s == 0 ? -1.0f : 1.0f;
+                for (int j = 0; j < 3; ++j)
+                    if (H.thumb[j] >= 0) pose_[size_t(H.thumb[j])].r = glm::angleAxis(-sx * (j == 0 ? 0.85f : 0.0f), H.a0) * glm::angleAxis(j == 0 ? 0.35f : 0.55f, H.b0);
+            }
+        } else {
+            // A hand that lies somewhere (a knee): its fingers forward, down a little and inward.
+            const glm::vec3 cur = glm::normalize(model_rotation(c) * glm::inverse(rest_rot[s]) * fingers[s]);
+            const glm::vec3 want = in.seat_wheel || in.seat_feet ? glm::normalize(glm::vec3(s == 0 ? 0.22f : -0.22f, -0.20f, -0.95f))
+                                                                 : glm::normalize(glm::vec3(s == 0 ? 0.40f : -0.40f, 0.55f, -0.70f));
+            const glm::vec3 ax = glm::cross(cur, want);
+            const float sl = glm::length(ax), cl = glm::dot(cur, want);
+            if (sl > 1e-5f) rotate_in_model(c, glm::angleAxis(std::atan2(sl, cl), ax / sl));
+        }
         rt.local_to_model(*ctx_, pose_, model_);
     }
     // (through the inertialiser: no pop from the end of "sitting down" into this, or out of it)
@@ -1150,6 +1272,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
         float curl[3] = { 0.9f, 1.15f, 0.8f };
         float index_curl = 1.0f;
         bool free_arm = false, grip_thumb = false;
+        const HandPose* hp = nullptr;                           // (the fingers one by one, where what is held has a pose for them)
         if (held_ == HeldItem::Torch && side == 1) {
             // Fist round the torch body, thumb forward along it.
             const glm::vec3 f = glm::normalize(in.torch_fwd), r = glm::normalize(in.torch_right), u = glm::cross(r, f);
@@ -1164,6 +1287,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
             a1 = glm::normalize(Wr * weapon.r_fingers);
             n1 = glm::normalize(Wr * weapon.r_palm);
             index_curl = 0.45f;
+            hp = &weapon.pose_r;
         } else if (held_ == HeldItem::Rifle && side == 0) {
             // Left hand under the fore-end; during a reload it goes to the magazine and back.
             grip = wpt(weapon.grip_l);
@@ -1184,6 +1308,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
             n1 = glm::normalize(Wr * weapon.l_palm);
             curl[0] = 1.05f; curl[1] = 1.30f; curl[2] = 0.85f;
             grip_thumb = true;
+            hp = &weapon.pose_l;
         } else if (held_ == HeldItem::Tablet && side == 1) {
             // The tablet lies on the right hand.
             grip = wpt(weapon.tablet_centre + glm::vec3(0.015f, -0.035f, 0.025f));
@@ -1230,6 +1355,20 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
             dbg_.hand_target[side] = glm::vec3(model_[size_t(hd)][3]);
         }
         if (in.lod >= 2) continue;
+        if (hp) {
+            for (int f = 0; f < 4; ++f) {
+                const float fan = hp->spread[f] * (f <= 1 ? 1.0f : -1.0f) * H.index_side;
+                for (int j = 0; j < 3; ++j) {
+                    if (H.finger[f][j] < 0) continue;
+                    const glm::quat bend = glm::angleAxis(hp->curl[f][j], H.b0);
+                    pose_[size_t(H.finger[f][j])].r = j == 0 ? glm::angleAxis(fan, H.n0) * bend : bend;
+                }
+            }
+            for (int j = 0; j < 3; ++j)
+                if (H.thumb[j] >= 0)
+                    pose_[size_t(H.thumb[j])].r = glm::angleAxis(-sx * (j == 0 ? hp->thumb[0] : 0.0f), H.a0) * glm::angleAxis(j == 0 ? hp->thumb[1] : hp->thumb[2], H.b0);
+            continue;
+        }
         // Fingers close round the grip; the thumb swings in over them.
         for (int f = 0; f < 4; ++f) {
             const float k = f == 0 ? index_curl : 1.0f;

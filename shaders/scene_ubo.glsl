@@ -74,7 +74,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   grass_rm_params2;
     mat4   clutter_vp;
     vec4   atmo_params;
-    vec4   lamp_lights[8];   // road lanterns nearest the eye: xyz pos, w intensity (0 = off)
+    vec4   lamp_lights[24];  // lanterns and street lamps, nearest the eye first: xyz pos, w intensity (0 = off); lamp_info.y = how many slots are in use
     vec4   rm_ground_dry;    // rgb, w = green amount
     vec4   rm_ground_green;  // rgb, w = red sand amount
     vec4   rm_red_sand;      // rgb, w = patch scale
@@ -89,7 +89,7 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   flash_dir;        // xyz beam direction, w cos(outer cone angle)
     vec4   flash_col;        // rgb colour x intensity, w cos(inner cone angle)
     mat4   flash_vp;         // flashlight shadow map (small plants): world -> clip, [3][3] = 0 when off
-    vec4   lamp_info;        // x = bit mask: lantern i has a small-plant shadow map
+    vec4   lamp_info;        // x = bit mask: lantern i has a small-plant shadow map; y = slots of lamp_lights in use (loop bound)
     vec4   cloud_a;          // the cloud layer, as clouds.comp sees it: x coverage, y size, z base altitude (m), w tallest (m)
     vec4   cloud_b;          // xy = wind offset of the weather field (m), z = density
     vec4   footprints[32];   // prints in the snow: xy = world xz, z = heading (player yaw), w = depth 0..1 (0 = unused)
@@ -390,7 +390,8 @@ vec3 flashlight_beam(vec3 ro, vec3 rd, float t_max, float jitter) {
 // e.g. the raymarched lawn): warm light, gone at 13 m.
 vec3 lamp_lights_unshadowed(vec3 p, vec3 n) {
     vec3 sum = vec3(0.0);
-    for (int i = 0; i < 8; ++i) {
+    int lamp_n = int(scene.lamp_info.y + 0.5);
+    for (int i = 0; i < lamp_n; ++i) {
         float li = scene.lamp_lights[i].w;
         if (li < 1e-3) continue;
         vec3 to = scene.lamp_lights[i].xyz - p;

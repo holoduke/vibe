@@ -243,13 +243,15 @@ void VulkanEngine::mp_pose_avatars(float dt) {
         // driver and the car cannot come apart; what is sent as this player's position while
         // driving is their camera, behind the car, and is not used.
         a.seated = false;
-        if (glm::mat4 hip; !dying && (jeep_seat_of(a.id, hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs) ||
-                                     (a.ride > 0 && jeep_passenger_seat(a.ride - 1, hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs)))) {
+        anim::CharacterAnimationInput::SeatExtras seat_more;
+        if (glm::mat4 hip; !dying && (jeep_seat_of(a.id, hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs, &seat_more) ||
+                                     (a.ride > 0 && jeep_passenger_seat(a.ride - 1, hip, in.seat_hand_l, in.seat_hand_r, in.seat_legs, &seat_more)))) {
             const anim::IAnimationRuntime& art = *anim_set_.runtime;
             const int hj = art.rig()[anim::Role::Hips];
             const glm::vec3 rest = hj >= 0 ? art.skeleton().rest_pos[size_t(hj)] : glm::vec3(0.0f, 0.95f, 0.0f);
             rf.model = hip * glm::translate(glm::mat4(1.0f), -rest);
             const glm::mat4 inv = glm::inverse(rf.model);
+            in.take_seat(seat_more, inv);
             in.seat_hand_l = glm::vec3(inv * glm::vec4(in.seat_hand_l, 1.0f));
             in.seat_hand_r = glm::vec3(inv * glm::vec4(in.seat_hand_r, 1.0f));
             in.seated = true;

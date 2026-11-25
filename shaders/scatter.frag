@@ -101,6 +101,19 @@ void main() {
         albedo = mix(albedo, albedo * vec3(0.52, 0.47, 0.38), stone_ground * 0.85);
     }
     int part = plant ? int(vUv.x + 0.5) : -1;
+    // (part 9 = a flowering stalk of the meadow: a grass blade in everything but its head)
+    float stalk_u = 0.0;
+    bool  stalk = part == 9;
+    if (stalk) { part = 8; stalk_u = 1.0; }
+    if (part == 8 && vRotSeed.y < 0.999) {
+        // Grass tufts at the end of their range dissolve (the reference game's foliage pixel
+        // shader: interleaved gradient noise against the instance's fade, a new pattern
+        // every frame for the temporal filter to even out).
+        uint  fr = uint(pc.grass_params.z * 60.0);
+        float nn = float((((fr * 73u) & 255u) * 73u + uint(gl_FragCoord.w * 65536.0)) & 255u);
+        float noise = fract(52.98292 * fract(dot(gl_FragCoord.xy + nn * vec2(32.665, 11.815), vec2(0.06711056, 0.00583715))));
+        if (noise < 1.0 - vRotSeed.y) discard;
+    }
     if (plant) {
         // Part colours: stems / leaves green (ferns carry their own
         // tint), petals = instance colour, flower centre golden.
@@ -184,14 +197,14 @@ void main() {
             // Grass tuft blade: the instance tint is the grass colour. Darker
             // and shaded toward the root (the clump shades itself), a pale
             // midrib, lighter and a little yellower toward the tip.
-            float u = clamp((vUv.x - 8.0) / 0.4, -1.0, 1.0);
+            float u = clamp((vUv.x - 8.0 - stalk_u) / 0.4, -1.0, 1.0);
             float t = clamp(fract(vUv.y * 32.0) / 0.98, 0.0, 1.0);
             float mid = 1.0 - smoothstep(0.0, 0.35, abs(u));
             albedo = vColor * mix(0.42, 1.12, smoothstep(0.0, 0.75, t));
             albedo = mix(albedo, albedo * vec3(1.25, 1.18, 0.80), smoothstep(0.6, 1.0, t) * 0.6);
             albedo *= 1.0 + 0.18 * mid;
-            // One surface with the ground (Crimson Desert's foliage tint, read from its compiled
-            // tree.hlsl pixel shader): the blade takes the HUE of the ground it stands on and
+            // One surface with the ground (the reference game's foliage tint, read from its compiled
+            // foliage shader pixel shader): the blade takes the HUE of the ground it stands on and
             // keeps its own brightness - albedo -> sqrt(ground * albedo), scaled back to the
             // albedo's luminance. Wholly at the root (where blade and turf meet), partly above.
             {
@@ -203,6 +216,14 @@ void main() {
             }
             // (the game brightens the face turned from the camera a little: thin blades let light through)
             if (!gl_FrontFacing) albedo *= 1.1;
+            // The meadow's flower head: yellow from where the stalk swells, a little deeper at its
+            // base and paler at the tip, each clump its own shade (from its tint).
+            if (stalk) {
+                float hd = smoothstep(0.58, 0.68, t);
+                float sh = dot(vColor, vec3(2.0, 1.2, 4.0));
+                vec3  yel = mix(vec3(0.80, 0.50, 0.02), vec3(0.93, 0.72, 0.05), clamp(sh * 0.9 - 0.25 + 0.4 * t, 0.0, 1.0));
+                albedo = mix(albedo, yel * (gl_FrontFacing ? 1.0 : 1.08), hd);
+            }
         }
         if (part == 3) {
             // Leaf blade with real leaf-space coordinates: u across (-1..1),
@@ -289,7 +310,8 @@ void main() {
     // Material 1: the deferred pass re-shades with RT sun shadows, AO and
     // GI like the rest of the world (was pre-lit material 5 with only
     // the coarse shadow map).
-    outGBuffer0 = vec4(clamp(albedo, vec3(0.0), vec3(1.0)), 1.0 / 255.0);
+    // (material 2 = a grass tuft: lit as a leaf, with the game's back-light - deferred_lighting.frag)
+    outGBuffer0 = vec4(clamp(albedo, vec3(0.0), vec3(1.0)), (part == 8 ? 2.0 : 1.0) / 255.0);
     // Plants: flagged as leaves so the deferred pass lights them with the
     // foliage scattering model (wrap + transmission).
     // Mushrooms (parts 6 / 7) are solid vegetation: no leaf transmission.
