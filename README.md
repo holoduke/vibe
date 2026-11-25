@@ -6,10 +6,17 @@ planet, motion-matched characters and LAN multiplayer.
 
 Important: This engine was written by AI for humans. No code was (and never will be) seen by humans in development. 
 
-![Vibe game engine: a castle on a lake in an open world (Vulkan, C++)](docs/screenshots/castle_lake.jpg)
+![Vibe game engine: soldiers running beside a jeep on the lane along the river (Vulkan, C++)](docs/screenshots/lane_soldiers_jeep.jpg)
 
 | | |
 |---|---|
+| ![The castle on its lake, seen over the forest, snow mountains behind](docs/screenshots/castle_lake_forest.jpg) | ![The castle gate and its cobbled road](docs/screenshots/castle_gate.jpg) |
+| ![The home valley from above: river, roads and snow ridges](docs/screenshots/valley_from_above.jpg) | ![The coast highway under the mountains, a car on it](docs/screenshots/highway_mountains.jpg) |
+| ![A lamp on the cobbled path at night](docs/screenshots/lamp_path_night.jpg) | ![The chapel lit at night](docs/screenshots/chapel_night.jpg) |
+| ![A field of yellow flowers by the launch tower, traffic on the highway](docs/screenshots/flower_field_launch.jpg) | ![The launch site on the coast from the air](docs/screenshots/launch_site_coast.jpg) |
+| ![Inside the diner: checkered floor, posters, guests](docs/screenshots/diner.jpg) | ![Inside the launch office: desks with screens, glass walls](docs/screenshots/launch_office.jpg) |
+| ![The coast from high up, snow fields and the sea](docs/screenshots/coast_high.jpg) | ![The planet under clouds from the edge of space](docs/screenshots/planet_clouds.jpg) |
+| ![The procedural planet from orbit, a continent under clouds](docs/screenshots/planet_orbit_2.jpg) | ![A castle on a lake in an open world](docs/screenshots/castle_lake.jpg) |
 | ![Another player, a soldier, in daylight](docs/screenshots/soldier_day.png) | ![The same soldier at night under a lamp](docs/screenshots/soldier_night.png) |
 | ![A sports car on the coast highway, snow mountains behind](docs/screenshots/car_bend.jpg) | ![The highway running toward the mountains, the car seen from above](docs/screenshots/car_road.jpg) |
 | ![Inside the launch pavilion: glass walls, the rocket outside](docs/screenshots/pavilion.jpg) | ![A river valley at dusk, the launch tower on the horizon](docs/screenshots/valley_dusk.jpg) |
