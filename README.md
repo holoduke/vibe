@@ -7,7 +7,7 @@ LAN multiplayer.
 
 The goal is see how far you can get with AI. Feel free to let your agent work on this game. Create pull requests if you want.
 
-Important: This engine was written by AI for humans. No code was (and never will be) seen by humans in development. 
+Important: This engine was written by AI for humans. No code was (and never will be) seen by humans in development. Same for object, sounds, animations and level design. Everything is done by prompts only
 
 ![Vibe game engine: soldiers running beside a jeep on the lane along the river (Vulkan, C++)](docs/screenshots/lane_soldiers_jeep.jpg)
 
