@@ -133,6 +133,8 @@ bool Session::start(const std::string& player_name) {
     d_->enet_ok = true;
     std::random_device rd;
     do { id_ = (uint32_t(rd()) << 1) ^ uint32_t(rd()) ^ uint32_t(GetTickCount64()); } while (id_ == 0);
+    // (VIBE_NET_ID=<n>: this id - tests: of two instances the lower one hosts)
+    if (const char* e = std::getenv("VIBE_NET_ID"); e && std::atoi(e) > 0) id_ = uint32_t(std::atoi(e));
 
     for (uint16_t k = 0; k < 8 && !d_->host; ++k) {
         ENetAddress a; a.host = ENET_HOST_ANY; a.port = uint16_t(game_port() + k);

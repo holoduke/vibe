@@ -1,8 +1,8 @@
-700 pickup_00700_on.wav pickup_00700_off.wav
-1514 pickup_01514_on.wav pickup_01514_off.wav
-2329 pickup_02329_on.wav pickup_02329_off.wav
-3143 pickup_03143_on.wav pickup_03143_off.wav
-3957 pickup_03957_on.wav pickup_03957_off.wav
-4771 pickup_04771_on.wav pickup_04771_off.wav
-5586 pickup_05586_on.wav pickup_05586_off.wav
-6400 pickup_06400_on.wav pickup_06400_off.wav
+650 pickup_00650_on.wav pickup_00650_off.wav
+1300 pickup_01300_on.wav pickup_01300_off.wav
+1950 pickup_01950_on.wav pickup_01950_off.wav
+2600 pickup_02600_on.wav pickup_02600_off.wav
+3250 pickup_03250_on.wav pickup_03250_off.wav
+3900 pickup_03900_on.wav pickup_03900_off.wav
+4550 pickup_04550_on.wav pickup_04550_off.wav
+5200 pickup_05200_on.wav pickup_05200_off.wav

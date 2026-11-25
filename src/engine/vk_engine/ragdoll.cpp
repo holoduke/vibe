@@ -56,8 +56,24 @@ float seg_dist(glm::vec3 p, glm::vec3 a, glm::vec3 b) {
 
 }  // namespace
 
+// Where the ragdoll's parts are (their capsules' middles, in the world) in the pose that was
+// made last (body_P_): two of these a frame apart say how fast each part moves.
+bool VulkanEngine::corpse_part_centres(const glm::mat4& model, glm::vec3* out) const {
+    if (body_bones_.empty()) return false;
+    const glm::mat3 Mr(model);
+    const glm::vec3 o(model[3]);
+    for (int k = 0; k < kCorpseParts; ++k) {
+        const PartDef& d = kParts[k];
+        const int bf = body_bone(d.from), bt = d.to[0] ? body_bone(d.to) : -1;
+        if (bf < 0) return false;
+        const glm::vec3 a = o + Mr * body_P_[size_t(bf)];
+        out[k] = bt >= 0 ? (a + o + Mr * body_P_[size_t(bt)]) * 0.5f : a;
+    }
+    return true;
+}
+
 void VulkanEngine::corpse_spawn(const glm::mat4& model, const glm::mat4& view_inv, glm::vec3 velocity,
-                                glm::vec3 hit_pos, glm::vec3 hit_dir, float power) {
+                                glm::vec3 hit_pos, glm::vec3 hit_dir, float power, const glm::vec3* part_velocity) {
     if (!physics_ || body_bones_.empty()) return;
     static_assert(kCorpseParts == 11, "parts table");
     // A free slot, or the oldest.
@@ -123,6 +139,9 @@ void VulkanEngine::corpse_spawn(const glm::mat4& model, const glm::mat4& view_in
         c->q0[k] = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         c->p0[k] = (parts[k].a + parts[k].b) * 0.5f;
         physics_->ragdoll_part(c->rag, size_t(k), c->p0[k], c->q0[k]);
+        c->half0[k] = (parts[k].b - parts[k].a) * 0.5f; c->rad[k] = parts[k].radius; c->mass[k] = parts[k].mass;
+        // (it was in the middle of a movement: each part goes on as it went)
+        if (part_velocity) physics_->ragdoll_set_velocity(c->rag, size_t(k), part_velocity[k]);
     }
     // The shot: a hard knock on the part it hit, a shove for the whole body.
     if (power > 0.0f && glm::dot(hit_dir, hit_dir) > 0.25f) {
@@ -134,8 +153,9 @@ void VulkanEngine::corpse_spawn(const glm::mat4& model, const glm::mat4& view_in
             if (dd < near_d) { near_d = dd; near_k = k; }
         }
         for (int k = 0; k < kCorpseParts; ++k)
-            physics_->ragdoll_impulse(c->rag, size_t(k), dir * (parts[k].mass * 1.5f * power), c->p0[k]);
-        const float knock = std::min(parts[near_k].mass * 7.0f, 150.0f) * power;
+            physics_->ragdoll_impulse(c->rag, size_t(k), dir * (parts[k].mass * 0.7f * power), c->p0[k]);
+        // (a jolt, not a throw: 3.5 m/s for a limb, 2 m/s for the trunk - it was 7 and 5, and a body slid off)
+        const float knock = std::min(parts[near_k].mass * 3.5f, 60.0f) * power;
         // (at the point the shot struck, brought onto the part: off its centre it spins it)
         const glm::vec3 ab = parts[near_k].b - parts[near_k].a;
         const float tt = glm::clamp(glm::dot(hit_pos - parts[near_k].a, ab) / std::max(glm::dot(ab, ab), 1e-8f), 0.0f, 1.0f);
@@ -143,6 +163,7 @@ void VulkanEngine::corpse_spawn(const glm::mat4& model, const glm::mat4& view_in
         log::infof("[ragdoll] hit on %s, power %.2f", kParts[near_k].bone, power);
     }
     c->age = 0.0f;
+    c->went = c->fastest = 0.0f; c->told = false; c->pelvis_last = c->p0[0];
     c->av.id = 1;
     c->av.corpse = true;
     c->av.drawn = true;
@@ -151,6 +172,38 @@ void VulkanEngine::corpse_spawn(const glm::mat4& model, const glm::mat4& view_in
     c->av.muzzle_t = 0.0f;
     c->av.recoil_t = 0.0f;
     c->av.settle = 0.0f;        // frames skinned since the physics went to sleep
+}
+
+// A bolt through a body that fell or is falling. The bolt's own body does not touch it (the
+// physics' CORPSE layer: it would throw it out of sight); the part it passes through gets a
+// knock a body can take - it jerks, and bleeds. True: the bolt ends here.
+bool VulkanEngine::corpse_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
+    if (!physics_ || std::getenv("VIBE_TEST_BOLTS_HIT_BODIES")) return false;
+    const glm::vec3 d = b - a;
+    const float dd = glm::dot(d, d);
+    if (dd < 1e-8f) return false;
+    Corpse* best_c = nullptr; int best_k = -1; float best_t = 2.0f;
+    for (Corpse& c : corpses_) {
+        if (!c.rag) continue;
+        for (int k = 0; k < kCorpseParts; ++k) {
+            glm::vec3 p = c.p0[k]; glm::quat q = c.q0[k];
+            if (!physics_->ragdoll_part(c.rag, size_t(k), p, q)) continue;
+            if (glm::distance(p, a) > glm::length(d) + 1.5f) continue;
+            // (the nearest the bolt's path comes to the part's axis: a few samples along the capsule do)
+            const glm::vec3 h = (q * glm::inverse(c.q0[k])) * c.half0[k];
+            for (int s = -2; s <= 2; ++s) {
+                const glm::vec3 w = p + h * (float(s) * 0.5f);
+                const float t = glm::clamp(glm::dot(w - a, d) / dd, 0.0f, 1.0f);
+                if (glm::distance(a + d * t, w) < c.rad[k] + 0.05f && t < best_t) { best_t = t; best_c = &c; best_k = k; }
+            }
+        }
+    }
+    if (!best_c) return false;
+    hit = a + d * best_t;
+    const glm::vec3 dir = glm::normalize(d);
+    physics_->ragdoll_impulse(best_c->rag, size_t(best_k), dir * std::min(best_c->mass[best_k] * 2.5f, 22.0f), hit);
+    spawn_blood(hit, dir);
+    return true;
 }
 
 void VulkanEngine::corpses_update(float dt) {
@@ -167,6 +220,11 @@ void VulkanEngine::corpses_update(float dt) {
             c.rag = 0;
             c.av.drawn = false;
             continue;
+        }
+        if (!c.told && c.age >= 3.0f) {
+            c.told = true;
+            if (c.went > 8.0f) log::warnf("[ragdoll] a body flew %.1f m from (%.1f, %.1f, %.1f), top speed %.1f m/s", double(c.went), c.p0[0].x, c.p0[0].y, c.p0[0].z, double(c.fastest));
+            else log::infof("[ragdoll] fell within %.1f m of (%.1f, %.1f, %.1f), top speed %.1f m/s", double(c.went), c.p0[0].x, c.p0[0].y, c.p0[0].z, double(c.fastest));
         }
         // Lying still: the final pose is sent again, nothing more to do.
         if (!physics_->ragdoll_active(c.rag)) {
@@ -189,6 +247,11 @@ void VulkanEngine::corpses_update(float dt) {
             dq[k] = q * glm::inverse(c.q0[k]);
             pp[k] = p;
         }
+        // How far it went and how fast: said once, three seconds on. A body shot dead falls where
+        // it stood - a few metres at most; one that flew is a fault to be found (WARN).
+        c.went = std::max(c.went, glm::distance(pp[0], c.p0[0]));
+        if (dt > 1e-4f) c.fastest = std::max(c.fastest, glm::distance(pp[0], c.pelvis_last) / dt);
+        c.pelvis_last = pp[0];
         std::vector<int> part_of(nb, -1);
         for (int k = 0; k < kCorpseParts; ++k) {
             const int b = body_bone(kParts[k].bone);

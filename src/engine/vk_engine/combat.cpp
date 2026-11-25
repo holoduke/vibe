@@ -253,6 +253,11 @@ void VulkanEngine::update_projectiles(float dt) {
                     glm::vec3 np_hit;
                     if (npc_bolt_hits(std::isnan(it->prev_pos.x) ? it->spawn_origin : it->prev_pos, bp, np_hit)) drop = true;
                 }
+                // Somebody who fell already (ragdoll.cpp): a knock, not the bolt's own weight.
+                if (!drop) {
+                    glm::vec3 c_hit;
+                    if (corpse_bolt_hits(std::isnan(it->prev_pos.x) ? it->spawn_origin : it->prev_pos, bp, c_hit)) drop = true;
+                }
                 // Pre-compute segment midpoint + half-length for the
                 // cheap sphere-vs-sphere distance gate below.
                 const glm::vec3 seg_mid = 0.5f * (bp + b_prev);

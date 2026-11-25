@@ -14,7 +14,7 @@
 
 namespace vibe::net {
 
-constexpr uint8_t  kProtocolVersion = 6;       // 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in. 5: the NPC world (kMsgNpc). 6: its wire format 4 (styles, runners)
+constexpr uint8_t  kProtocolVersion = 7;       // 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in. 5: the NPC world (kMsgNpc). 6: its wire format 4 (styles, runners). 7: shots at NPCs and their cars taken, as events
 constexpr uint32_t kInterpDelayMs = 100;       // remote players are shown at least this far in the past
 constexpr uint32_t kMaxInterpDelayMs = 500;    // ... and at most this far, however slow the link
 constexpr uint32_t kMaxExtrapolateMs = 250;    // nothing newer: carry on along the last velocity this long at most
@@ -48,7 +48,10 @@ struct PackedState {
     uint16_t shot_seq;
 };
 struct Event {
-    enum Kind : uint8_t { Fire = 1, Hit = 2, Death = 3, Leave = 4, Airstrike = 5 };   // Airstrike: a = target, b = run direction
+    enum Kind : uint8_t { Fire = 1, Hit = 2, Death = 3, Leave = 4, Airstrike = 5,      // Airstrike: a = target, b = run direction
+                          NpcHit = 6,        // somebody of the NPC world was shot: to = which, a = where, b = the shot's direction
+                          NpcCarTake = 7,    // a client asks the host for an NPC car that stands empty: to = which
+                          NpcCarTaken = 8 }; // that car is a players' car now: from = who gets in, to/a/b = pack_taken()
     uint8_t  kind;
     uint32_t from;             // Fire: shooter. Hit: shooter. Death: the one who died. Leave: who left
     uint32_t to;               // Hit: victim. Death: killer
@@ -60,6 +63,32 @@ struct Event {
 };
 #pragma pack(pop)
 static_assert(sizeof(PackedState) == 35, "wire size of a player state");
+
+// An NPC car that became a players' car (Event::NpcCarTaken): which agent it was, the number it
+// has from now on in every machine's list of cars, its kind and paint, and where it stands.
+struct NpcCarTaken {
+    uint8_t  agent = 0, car = 0, kind = 0, look = 0;
+    float    p[3]{ 0, 0, 0 };
+    float    yaw = 0;
+    uint32_t taker = 0;                        // the player who gets in (0: nobody - told again for somebody who joined)
+};
+inline Event pack_taken(const NpcCarTaken& t) {
+    Event e{};
+    e.kind = Event::NpcCarTaken; e.from = t.taker;
+    e.to = uint32_t(t.agent) | (uint32_t(t.car) << 8) | (uint32_t(t.kind) << 16) | (uint32_t(t.look) << 24);
+    e.a[0] = t.p[0]; e.a[1] = t.p[1]; e.a[2] = t.p[2]; e.b[0] = t.yaw;
+    return e;
+}
+inline NpcCarTaken unpack_taken(const Event& e) {
+    NpcCarTaken t;
+    t.agent = uint8_t(e.to); t.car = uint8_t(e.to >> 8); t.kind = uint8_t(e.to >> 16); t.look = uint8_t(e.to >> 24);
+    t.p[0] = e.a[0]; t.p[1] = e.a[1]; t.p[2] = e.a[2]; t.yaw = e.b[0]; t.taker = e.from;
+    return t;
+}
+inline bool taken_is_sane(const NpcCarTaken& t, int max_cars) {
+    for (float f : { t.p[0], t.p[1], t.p[2], t.yaw }) if (!std::isfinite(f) || std::abs(f) > 2.0e6f) return false;
+    return int(t.car) < max_cars && t.kind < 3 && t.agent < 100;
+}
 
 inline PackedState pack_state(const PlayerState& s) {
     constexpr float kTwoPi = 6.28318530718f, kHalfPi = 1.57079632679f;

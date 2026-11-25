@@ -1324,6 +1324,9 @@ private:
     struct Corpse {
         uint32_t  rag = 0;                             // physics ragdoll; 0 = free slot
         float     age = 0.0f;
+        float     went = 0.0f, fastest = 0.0f;         // how far the pelvis got from where it fell, and its top speed (told in the log once: a body that flies off is a fault)
+        glm::vec3 pelvis_last{0.0f};
+        bool      told = false;
         MpAvatar  av;                                  // palette + matrices, drawn like a player
         glm::vec3 origin{0.0f};
         std::vector<glm::mat3> R0;                     // per bone at the moment of death (world)
@@ -1331,10 +1334,29 @@ private:
         glm::quat q0[kCorpseParts]{};
         glm::vec3 p0[kCorpseParts]{};
         glm::mat4 eye0{1.0f};                          // the head's frame then
+        glm::vec3 half0[kCorpseParts]{};               // each part's capsule then: half its length (world), ...
+        float     rad[kCorpseParts]{}, mass[kCorpseParts]{};      // ... its radius and mass (corpse_bolt_hits)
     };
     std::array<Corpse, 6> corpses_{};
     void corpse_spawn(const glm::mat4& model, const glm::mat4& view_inv, glm::vec3 velocity,
-                      glm::vec3 hit_pos, glm::vec3 hit_dir, float power);     // from the pose in body_R_/body_P_
+                      glm::vec3 hit_pos, glm::vec3 hit_dir, float power, const glm::vec3* part_velocity = nullptr);     // from the pose in body_R_/body_P_
+    bool corpse_part_centres(const glm::mat4& model, glm::vec3* out) const;      // where the ragdoll's parts are in the pose in body_P_ (kCorpseParts of them)
+    bool corpse_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit);              // a bolt through a body that fell: a knock, blood
+    // Somebody of the NPC world who was shot standing or walking: the body plays the reaction made
+    // for where it was hit (a death clip: docs/animation/actions.md) and, as it loses its balance,
+    // becomes the physics' (npc_world.cpp npc_dying_pose).
+    struct NpcDying {
+        MpAvatar  av;
+        anim::CharacterAnimationInput in;
+        glm::mat4 model{1.0f}, view_inv{1.0f};
+        int       clip = -1;
+        float     t = 0.0f, hand = 1.0f;               // seconds into the clip; when the physics takes over
+        glm::vec3 hit_pos{0.0f}, hit_dir{0.0f};
+        glm::vec3 parts_prev[kCorpseParts]{};
+        bool      fresh = true, have_prev = false;
+    };
+    std::vector<NpcDying> npc_dying_;
+    void npc_dying_pose(float dt);
     void corpses_update(float dt);
     void corpses_destroy();
     void draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp);
@@ -2087,6 +2109,19 @@ private:
     void      spawn_blood(glm::vec3 pos, glm::vec3 dir);
     void      blood_update(float dt);
     bool      npc_take_car(float reach);          // (jeep.cpp) the standing NPC car within reach becomes one of the player's
+    // Multiplayer (docs/ARCHITECTURE.md "NPCs and every player"): a shot at somebody and a car that is
+    // taken are events; the host's NPC world decides, every machine shows it.
+    float     npc_gone_[100] = {};                // seconds an agent is not shown here although the copy of the host's world still has it (a replica: shot or taken a moment ago)
+    std::vector<net::NpcCarTaken> npc_taken_;     // the NPC cars that became players' cars, in the order of their numbers
+    std::vector<net::NpcCarTaken> npc_taken_wait_; // ... told of before the ones in front of them
+    float     npc_taken_resend_ = -1.0f;          // seconds until this machine tells a player who joined of them
+    size_t    npc_players_seen_ = 0;
+    float     npc_take_asked_ = 0.0f;             // (a client asked the host for a car: not again for a moment)
+    void      npc_hit(int agent, glm::vec3 hit, glm::vec3 dir);      // (npc_world.cpp) somebody was shot, by whoever
+    void      npc_event(const net::Event& e);     // (npc_world.cpp) from the network
+    bool      npc_host_take(int agent, uint32_t taker);              // (jeep.cpp) the authority lets the car go and tells everybody
+    bool      npc_car_make(const net::NpcCarTaken& t);               // (jeep.cpp) ... and every machine makes it one of the players' cars
+    void      npc_taken_tick(float dt);
     void      car_audio_tick(float dt);          // (jeep.cpp) the engines' sound: the player's car and the nearest others
     std::unordered_map<JeepState*, uint32_t> car_voices_;
     glm::vec3 car_ear_last_{0.0f}, car_ear_vel_{0.0f};

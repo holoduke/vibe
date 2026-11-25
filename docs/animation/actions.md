@@ -39,6 +39,24 @@ are made with Tencent HY-Motion 1.0 (text to motion) on this PC.
   Loops: `action_in_place` (a walk played while the caller moves the body) and `action_warp_full`
   (hips on the seat for the whole loop).
 
+## Death (2026-11-25): shot people react, then fall
+
+- Takes: `vibe_prompts/shot.txt` (8 prompts x seeds 11, 23, 37). Every take stands still for one or two seconds before it reacts, so the chosen ones are CUT with `vibe_trim.sh <in> <out> <first> <last>` (in the hy-motion folder) to begin at the reaction. Chosen by the numbers of the hips (height at start / lowest, when they pass 85 % and 70 % of the start, travel):
+
+  | clip | take | frames kept | the physics takes over at |
+  |---|---|---|---|
+  | `shot_front` | s37 | 6 - 80 | 1.63 s |
+  | `shot_gut` | s11 | 43 - 100 | 1.07 s |
+  | `shot_back` | s11 | 43 - 90 | 0.73 s |
+  | `shot_head` | s11 | 28 - 70 | 0.63 s |
+  | `shot_leg` | s11 | 7 - 55 | 0.77 s |
+  | `shot_spin` | s11 | 33 - 90 | 1.00 s |
+  | `shot_run` | s23 | 12 - 50 | 0.43 s |
+  | `shot_walk` | s11 | 30 - 95 | 1.30 s |
+
+- Played by `npc_world.cpp` (`pick_shot_clip`, `npc_dying_pose`): which clip follows from where the bolt struck (above 1.5 m the head, under 0.75 m a leg), from which side, and how fast the person moved. At the hand-over time (the hips have begun to drop) the pose becomes a ragdoll whose parts go on at the speed the clip moved them (`corpse_spawn(..., part_velocity)`); the fall and the landing are the physics'. On a seat, or in the middle of an act that warps the hips: the ragdoll at once.
+- Not yet: players killed in multiplayer still buckle for 0.38 s and fall (multiplayer.cpp); seated people have no clip of their own.
+
 ## 3. Playing one (`CharacterAnimationInput`, `CharacterAnimator::action`)
 
 - `action_clip` (from `find_clip`) and `action_time`: the caller owns the time. The clip's own

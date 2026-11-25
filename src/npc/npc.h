@@ -14,7 +14,7 @@
 //            parking bay - wait for their people and leave again; a few stand parked.
 //
 // MULTIPLAYER. One machine is the AUTHORITY: it calls update(). It serialises the state a few
-// times a second (serialize(): 27 bytes an agent); the others apply() what they receive and
+// times a second (serialize(): 27 bytes an agent - no bones or clips: place, heading, speed, pose, act, style); the others apply() what they receive and
 // call update() too, which for them only moves the clock that views() blends two states with.
 // Nothing here depends on frame rate or on who is watching: the same seed and the same number
 // of steps give the same world (tests/test_npc.cpp).

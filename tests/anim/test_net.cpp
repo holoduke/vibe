@@ -635,3 +635,38 @@ TEST_CASE("net: the shared clock is steady under late packets", "[net][car]") {
     const double d0 = b.delay_now;
     CHECK(b.advance_delay(10.0) - d0 <= 0.1 + 1e-9);
 }
+
+TEST_CASE("net: shots at NPCs and their cars taken are events that pass at once", "[net][npc]") {
+    using namespace vibe::net;
+    // The car that was taken: which agent, its number in every machine's list, kind, paint, place, who gets in.
+    NpcCarTaken t;
+    t.agent = 97; t.car = 31; t.kind = 2; t.look = 203; t.p[0] = 2540.25f; t.p[1] = 31.5f; t.p[2] = -1201.75f; t.yaw = -2.5f; t.taker = 0xDEADBEEFu;
+    const Event e = pack_taken(t);
+    CHECK(e.kind == Event::NpcCarTaken);
+    const NpcCarTaken u = unpack_taken(e);
+    CHECK(u.agent == 97); CHECK(u.car == 31); CHECK(u.kind == 2); CHECK(u.look == 203); CHECK(u.taker == 0xDEADBEEFu);
+    CHECK(u.p[0] == t.p[0]); CHECK(u.p[1] == t.p[1]); CHECK(u.p[2] == t.p[2]); CHECK(u.yaw == t.yaw);
+    CHECK(taken_is_sane(u, kMaxCars));
+    // what is damaged or absurd makes no car
+    NpcCarTaken bad = u; bad.car = uint8_t(kMaxCars);
+    CHECK_FALSE(taken_is_sane(bad, kMaxCars));
+    bad = u; bad.kind = 3;
+    CHECK_FALSE(taken_is_sane(bad, kMaxCars));
+    bad = u; bad.p[1] = std::numeric_limits<float>::quiet_NaN();
+    CHECK_FALSE(taken_is_sane(bad, kMaxCars));
+    bad = u; bad.agent = 100;
+    CHECK_FALSE(taken_is_sane(bad, kMaxCars));
+    // They are gameplay, as hits are: none waits for the picture, none is taken for a repeat
+    // (two cars taken by one player carry the same sender).
+    EventGate g;
+    Event h{}; h.kind = Event::NpcHit; h.from = 5; h.to = 12; h.t = 900000; h.seq = 1;
+    Event k = e; k.t = 900000; k.seq = 1;
+    Event k2 = k; k2.to += 1u << 8;
+    Event ask{}; ask.kind = Event::NpcCarTake; ask.from = 5; ask.to = 40; ask.t = 900000; ask.seq = 1;
+    CHECK(g.push(h)); CHECK(g.push(k)); CHECK(g.push(k2)); CHECK(g.push(ask));
+    std::vector<Event> out;
+    g.release([](uint32_t) { return 0u; }, out);
+    REQUIRE(out.size() == 4);
+    CHECK(out[0].kind == Event::NpcHit); CHECK(out[3].kind == Event::NpcCarTake);
+    CHECK(unpack_taken(out[2]).car == 32);
+}

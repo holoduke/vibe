@@ -154,6 +154,7 @@ public:
                          const glm::vec3* floor_point = nullptr, glm::vec3 floor_normal = glm::vec3(0.0f, 1.0f, 0.0f));
     bool ragdoll_part(uint32_t id, size_t part, glm::vec3& pos, glm::quat& rot) const;   // centre + orientation
     void ragdoll_impulse(uint32_t id, size_t part, glm::vec3 impulse, glm::vec3 at);
+    void ragdoll_set_velocity(uint32_t id, size_t part, glm::vec3 v);      // (a body that was moving when it became the physics')
     bool ragdoll_active(uint32_t id) const;
     void remove_ragdoll(uint32_t id);
 
@@ -197,6 +198,32 @@ public:
         float     antiroll = 2600.0f;
         float     max_steer = 0.58f;                  // rad
         float     engine_torque = 310.0f, engine_max_rpm = 4600.0f, final_drive = 4.4f;
+        // THE ENGINE'S CHARACTER AND HOW THE BOX CHANGES (docs/ARCHITECTURE.md "Engines and gearboxes").
+        // All as shares of engine_max_rpm, so a kind of car is a handful of numbers.
+        //   torque_peak:   where the engine pulls hardest (a truck's low down, a racing engine's high up)
+        //   shift_up_full: the change up with the pedal down;  shift_up_easy: when only keeping speed
+        //   shift_down_easy / _full: the change down, pedal up / pedal down (the kick-down)
+        //   shift_time:    seconds a change takes (the drive is cut that long)
+        //   engine_loudness: how loud it is beside the others (car_audio_tick; 1 = a sports car)
+        float     engine_idle_rpm = 800.0f, engine_inertia = 0.35f, torque_peak = 0.35f;
+        float     shift_up_full = 0.88f, shift_up_easy = 0.45f, shift_down_easy = 0.22f, shift_down_full = 0.40f;
+        float     shift_time = 0.30f;
+        float     engine_loudness = 0.8f;
+        // The speeds the box changes at for a pedal position (0..1). The change down is kept under
+        // what the engine turns right after a change up (the widest step between two gears), or the
+        // box would go up and down without end.
+        float shift_up_rpm(float throttle) const {
+            const float t = throttle < 0.0f ? 0.0f : throttle > 1.0f ? 1.0f : throttle;
+            return engine_max_rpm * (shift_up_easy + (shift_up_full - shift_up_easy) * t * t);
+        }
+        float shift_down_rpm(float throttle) const {
+            const float t = throttle < 0.0f ? 0.0f : throttle > 1.0f ? 1.0f : throttle;
+            float step = 0.6f;                          // (the default four gears' widest step)
+            for (size_t i = 0; i + 1 < gears.size(); ++i) { const float r = gears[i + 1] / gears[i]; if (i == 0 || r < step) step = r; }
+            const float want = engine_max_rpm * (shift_down_easy + (shift_down_full - shift_down_easy) * t * t);
+            const float cap = shift_up_rpm(throttle) * step * 0.72f;      // (0.8: a change up is allowed from 0.8 of the speed by the road - vehicle_input)
+            return want < cap ? want : cap;
+        }
         float     brake_torque = 2400.0f, handbrake_torque = 5200.0f;
         float     grip = 1.0f;
         // The air: the force pressing the car down and the one holding it back, in newtons per
@@ -217,7 +244,9 @@ public:
     uint32_t vehicle_create(const VehicleDesc& d);
     void     vehicle_remove();
     bool     vehicle_exists() const;
-    void     vehicle_input(float forward, float right, float brake, float handbrake);
+        // `pedal`: how far the DRIVER has the throttle down (0..1) - what the gearbox goes by; `forward` is what
+    // reaches the engine (traction control may have taken some away). Under 0: the same as forward.
+    void     vehicle_input(float forward, float right, float brake, float handbrake, float dt = 1.0f / 60.0f, float pedal = -1.0f);
     bool     vehicle_state(VehicleState& out) const;
     bool     vehicle_state_prev(VehicleState& out) const;      // before the last step (for drawing between two steps)
     void     vehicle_keep_prev();                             // (step() calls it)

@@ -64,7 +64,12 @@ namespace Layers {
     // live voxel raycast (VoxelWorld::raycast), so the debounced collision
     // body must not stop bullets at a stale (pre-hole) surface.
     static constexpr JPH::ObjectLayer VOXEL      = 4;
-    static constexpr JPH::ObjectLayer NUM        = 5;
+    // The parts of a body that fell (add_ragdoll). They lie on the world and are pushed by what
+    // moves, but a BOLT DOES NOT TOUCH THEM: a bolt is a 10 kg body at 220 m/s (2200 N s), a
+    // forearm weighs 2 kg - one that struck a body sent it out of sight. A bolt through a body
+    // is found by the game (ragdoll.cpp corpse_bolt_hits) and gives it a knock of its own size.
+    static constexpr JPH::ObjectLayer CORPSE     = 5;
+    static constexpr JPH::ObjectLayer NUM        = 6;
 }
 
 namespace BPLayers {
@@ -81,6 +86,7 @@ public:
         map_[Layers::BULLET]     = BPLayers::MOVING;
         map_[Layers::SPARK]      = BPLayers::MOVING;
         map_[Layers::VOXEL]      = BPLayers::NON_MOVING;  // static
+        map_[Layers::CORPSE]     = BPLayers::MOVING;
     }
     unsigned int GetNumBroadPhaseLayers() const override { return BPLayers::NUM; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer l) const override {
@@ -106,6 +112,7 @@ public:
             case Layers::MOVING:
             case Layers::BULLET:
             case Layers::SPARK:
+            case Layers::CORPSE:
                 // Movables sweep the whole broadphase; pair filter below
                 // does the actual game-logic culling.
                 return true;
@@ -147,6 +154,8 @@ public:
         matrix_[Layers::SPARK][Layers::MOVING]      = yes;
         // VOXEL
         matrix_[Layers::VOXEL][Layers::MOVING]      = yes;
+        // CORPSE: the world, what moves, other bodies - not bolts, not sparks
+        for (JPH::ObjectLayer o : { Layers::NON_MOVING, Layers::MOVING, Layers::VOXEL, Layers::CORPSE }) { matrix_[Layers::CORPSE][o] = yes; matrix_[o][Layers::CORPSE] = yes; }
     }
 
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
@@ -793,9 +802,14 @@ uint32_t PhysicsWorld::add_ragdoll(const RagdollPart* parts, size_t n, glm::vec3
         if (sr.HasError()) { log::errorf("[jolt] ragdoll shape: %s", sr.GetError().c_str()); rg.bodies.push_back(JPH::BodyID()); continue; }
         const glm::vec3 c = (p.a + p.b) * 0.5f;
         JPH::BodyCreationSettings bcs(sr.Get(), JPH::RVec3(c.x, c.y, c.z), JPH::Quat(q.x, q.y, q.z, q.w),
-                                      JPH::EMotionType::Dynamic, Layers::MOVING);
+                                      JPH::EMotionType::Dynamic, Layers::CORPSE);
+        // (VIBE_TEST_BOLTS_HIT_BODIES=1: as it was - a bolt's own body strikes the parts. To show the fault.)
+        static const bool kOld = std::getenv("VIBE_TEST_BOLTS_HIT_BODIES") != nullptr;
+        if (kOld) bcs.mObjectLayer = Layers::MOVING;
         bcs.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         bcs.mMassPropertiesOverride.mMass = p.mass;
+        // (whatever hits it: a body does not leave faster than one thrown by a blast)
+        if (!kOld) { bcs.mMaxLinearVelocity = 25.0f; bcs.mMaxAngularVelocity = 30.0f; }
         bcs.mLinearVelocity = JPH::Vec3(linvel.x, linvel.y, linvel.z);
         bcs.mLinearDamping = 0.08f;
         bcs.mAngularDamping = 0.55f;
@@ -864,6 +878,12 @@ void PhysicsWorld::ragdoll_impulse(uint32_t id, size_t part, glm::vec3 impulse, 
     if (it == impl_->ragdolls.end() || part >= it->second.bodies.size() || it->second.bodies[part].IsInvalid()) return;
     impl_->system.GetBodyInterface().AddImpulse(it->second.bodies[part], JPH::Vec3(impulse.x, impulse.y, impulse.z),
                                                 JPH::RVec3(at.x, at.y, at.z));
+}
+
+void PhysicsWorld::ragdoll_set_velocity(uint32_t id, size_t part, glm::vec3 v) {
+    auto it = impl_->ragdolls.find(id);
+    if (it == impl_->ragdolls.end() || part >= it->second.bodies.size() || it->second.bodies[part].IsInvalid()) return;
+    impl_->system.GetBodyInterface().SetLinearVelocity(it->second.bodies[part], JPH::Vec3(v.x, v.y, v.z));
 }
 
 bool PhysicsWorld::ragdoll_active(uint32_t id) const {
@@ -1040,6 +1060,11 @@ void PhysicsWorld::apply_impulse_h(BodyHandle h, glm::vec3 impulse) {
 // grip falls off as they slip. One vehicle at a time.
 // =====================================================================================
 struct PhysicsWorld::VehicleImpl {
+    VehicleDesc desc;                  // (what it was made from: the gearbox's rule reads it)
+    float pedal = 0.0f;                // the throttle, evened out
+    float over_t = 0.0f;               // how long the engine has been over the speed to change up at
+    bool  own_shift = false;           // a change up of our own is under way (vehicle_input)
+    int   own_gear = 0; float own_t = 0.0f;
     // The air on the car, every physics step: downforce along the car's own down, drag against its motion.
     struct Aero : JPH::PhysicsStepListener {
         JPH::BodyID body; float down = 0.0f, drag = 0.0f;
@@ -1201,23 +1226,29 @@ uint32_t PhysicsWorld::vehicle_create(const VehicleDesc& d) {
     { JPH::VehicleAntiRollBar b; b.mLeftWheel = 2; b.mRightWheel = 3; b.mStiffness = d.antiroll * 0.7f; vs.mAntiRollBars.push_back(b); }
     JPH::WheeledVehicleControllerSettings* cs2 = new JPH::WheeledVehicleControllerSettings;
     cs2->mEngine.mMaxTorque = d.engine_torque;
-    cs2->mEngine.mMinRPM = 800.0f;
+    cs2->mEngine.mMinRPM = d.engine_idle_rpm;
     cs2->mEngine.mMaxRPM = d.engine_max_rpm;
-    cs2->mEngine.mInertia = 0.35f;
-    cs2->mEngine.mNormalizedTorque.Clear();              // a low-revving four: strongest in the middle
-    cs2->mEngine.mNormalizedTorque.AddPoint(0.0f, 0.72f);
-    cs2->mEngine.mNormalizedTorque.AddPoint(0.35f, 1.0f);
-    cs2->mEngine.mNormalizedTorque.AddPoint(0.75f, 0.92f);
-    cs2->mEngine.mNormalizedTorque.AddPoint(1.0f, 0.60f);
+    cs2->mEngine.mInertia = d.engine_inertia;
+    // The torque curve, from where the engine pulls hardest: weaker below it, falling off to
+    // the limit (the jeep's four: peak at 0.35 - 0.72, 1.0, 0.92, 0.60 as it was).
+    {
+        const float pk = std::clamp(d.torque_peak, 0.15f, 0.85f);
+        cs2->mEngine.mNormalizedTorque.Clear();
+        cs2->mEngine.mNormalizedTorque.AddPoint(0.0f, 0.80f - 0.23f * pk);
+        cs2->mEngine.mNormalizedTorque.AddPoint(pk, 1.0f);
+        cs2->mEngine.mNormalizedTorque.AddPoint(pk + (1.0f - pk) * 0.6f, 0.93f);
+        cs2->mEngine.mNormalizedTorque.AddPoint(1.0f, 0.60f + 0.28f * (pk - 0.35f) / 0.5f);
+    }
     cs2->mTransmission.mMode = JPH::ETransmissionMode::Auto;
     cs2->mTransmission.mGearRatios = { 3.60f, 2.10f, 1.40f, 1.00f };
     if (!d.gears.empty()) { cs2->mTransmission.mGearRatios.clear(); for (float g : d.gears) cs2->mTransmission.mGearRatios.push_back(g); }
     cs2->mTransmission.mReverseGearRatios = { -3.40f };
-    cs2->mTransmission.mSwitchTime = 0.35f;
-    cs2->mTransmission.mClutchReleaseTime = 0.25f;
-    cs2->mTransmission.mSwitchLatency = 0.4f;
-    cs2->mTransmission.mShiftUpRPM = d.engine_max_rpm * 0.74f;
-    cs2->mTransmission.mShiftDownRPM = d.engine_max_rpm * 0.36f;
+    cs2->mTransmission.mSwitchTime = d.shift_time;
+    cs2->mTransmission.mClutchReleaseTime = d.shift_time * 0.7f;
+    cs2->mTransmission.mSwitchLatency = std::max(0.25f, d.shift_time * 1.3f);      // (no second change right after one)
+    cs2->mTransmission.mShiftUpRPM = d.shift_up_rpm(0.0f);       // (vehicle_input moves both with the pedal)
+    cs2->mTransmission.mShiftDownRPM = d.shift_down_rpm(0.0f);
+    vehicle_->desc = d;
     cs2->mTransmission.mClutchStrength = 12.0f;
     // Four-wheel drive: a differential on each axle, 40 % of the torque to the front.
     cs2->mDifferentials.resize(2);
@@ -1272,9 +1303,51 @@ void PhysicsWorld::vehicle_remove() {
 
 bool PhysicsWorld::vehicle_exists() const { return vehicle_ && !vehicle_->body.IsInvalid(); }
 
-void PhysicsWorld::vehicle_input(float forward, float right, float brake, float handbrake) {
+void PhysicsWorld::vehicle_input(float forward, float right, float brake, float handbrake, float dt, float pedal) {
     if (!vehicle_exists()) return;
     auto* c = static_cast<JPH::WheeledVehicleController*>(vehicle_->constraint->GetController());
+    VehicleImpl& V = *vehicle_;
+    JPH::VehicleTransmission& tr = c->GetTransmission();
+    dt = std::clamp(dt, 1e-4f, 0.1f);
+    // THE BOX CHANGES AS A DRIVER WOULD (VehicleDesc::shift_up_rpm / shift_down_rpm): early when
+    // the pedal is only held, at the top of the engine's range with the pedal down, and down a
+    // gear when it is floored at low revs.
+    V.pedal += (std::clamp(pedal < 0.0f ? forward : pedal, 0.0f, 1.0f) - V.pedal) * std::min(1.0f, dt * 8.0f);
+    const float up = V.desc.shift_up_rpm(V.pedal);
+    // (what the engine would turn if no wheel slipped: a change up needs the ROAD to ask for it
+    //  too. Spinning wheels alone take the engine up there; a change then, and the next gear
+    //  finds the car at half the speed - the box went 1-2-1-2 through every wheelspin.)
+    const JPH::BodyInterface& bi = impl_->system.GetBodyInterfaceNoLock();
+    const float along = std::abs(bi.GetLinearVelocity(V.body).Dot(bi.GetRotation(V.body) * JPH::Vec3(0.0f, 0.0f, -1.0f)));
+    const float road_rpm = along / (6.2831853f * (std::max)(V.desc.wheel_radius, 0.1f)) * 60.0f * std::abs(tr.GetCurrentRatio()) * V.desc.final_drive;
+    const bool road_ok = road_rpm > up * 0.80f;
+    tr.mShiftUpRPM = road_ok ? up : 1e9f;
+    tr.mShiftDownRPM = V.desc.shift_down_rpm(V.pedal);
+    // Jolt's automatic does not change up while a driven tyre slips more than a tenth or the
+    // engine's speed is not rising - and a car under full power has its tyres right there (they
+    // grip best at 0.12): every car ran into its limiter and stayed on it until the slip
+    // happened to fall. So a change up that is due and has not come within a tenth of a second
+    // is made here. The box is ours for that change (drive cut for shift_time, the clutch let
+    // in over 0.7 of it, the throttle following the clutch so the engine does not race), then
+    // the automatic's again.
+    if (V.own_shift) {
+        V.own_t += dt;
+        const float cut = V.desc.shift_time, in = (std::max)(V.desc.shift_time * 0.7f, 0.02f);
+        const float clutch = V.own_t < cut ? 0.0f : (std::min)(1.0f, (V.own_t - cut) / in);
+        tr.Set(V.own_gear, clutch);
+        if (forward > 0.0f) forward *= clutch;
+        if (clutch >= 1.0f) { tr.mMode = JPH::ETransmissionMode::Auto; V.own_shift = false; }
+    } else {
+        const int g = tr.GetCurrentGear();
+        const bool due = g >= 1 && g < int(tr.mGearRatios.size()) && forward > 0.0f && tr.GetClutchFriction() >= 1.0f && c->GetEngine().GetCurrentRPM() > up && road_ok;
+        V.over_t = due ? V.over_t + dt : 0.0f;
+        if (V.over_t > 0.10f) {
+            V.over_t = 0.0f; V.own_shift = true; V.own_gear = g + 1; V.own_t = 0.0f;
+            tr.mMode = JPH::ETransmissionMode::Manual;
+            tr.Set(V.own_gear, 0.0f);
+            forward = 0.0f;
+        }
+    }
     c->SetDriverInput(forward, right, brake, handbrake);
     if (forward != 0.0f || right != 0.0f || brake != 0.0f || handbrake != 0.0f)
         impl_->system.GetBodyInterface().ActivateBody(vehicle_->body);

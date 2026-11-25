@@ -180,12 +180,12 @@ void AudioEngine::engine_update(uint32_t h, glm::vec3 pos, glm::vec3 vel, float 
         if (w < 0.5f) { g_lo = 1.0f; g_hi = 0.0f; } else { g_lo = 0.0f; g_hi = 1.0f; }
         if (load > 0.35f) { g_on = 1.0f; g_off = 0.0f; } else { g_on = 0.0f; g_off = 1.0f; }
     }
-    if (volume < 0.0015f) g_lo = g_hi = 0.0f;       // inaudible: nothing plays
+    if (volume < 0.0004f) g_lo = g_hi = 0.0f;       // inaudible (-68 dB): nothing plays
     for (size_t i = 0; i < v.snd.size(); ++i) {
         if (!v.ok[i]) continue;
         const size_t band = i / 2;
         const float g = (band == b ? g_lo : band == b + 1 ? g_hi : 0.0f) * ((i & 1) ? g_off : g_on) * volume;
-        if (g > 0.002f) {
+        if (g > 0.0003f) {
             ma_sound_set_pitch(&v.snd[i], std::clamp(rpm / es.rpm[band], 0.35f, 2.6f));
             ma_sound_set_volume(&v.snd[i], g);
             ma_sound_set_position(&v.snd[i], pos.x, pos.y, pos.z);

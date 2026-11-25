@@ -45,6 +45,84 @@ bool seg_aabb(glm::vec3 a, glm::vec3 b, glm::vec3 mn, glm::vec3 mx, float& t_hit
 }
 }
 
+// HOW SOMEBODY WHO IS SHOT GOES DOWN. Not a doll thrown by the shot: the body first REACTS - a
+// clip made for where the shot struck and what the person was doing (text to motion,
+// docs/animation/actions.md "Death") - and at the moment that reaction loses its balance the
+// physics takes the body, each part moving as the clip moved it (corpse_spawn's part_velocity),
+// and lets it fall on whatever is there. `hand`: seconds into the clip at which the hips have
+// begun to drop (from the take's own numbers; the clips are cut to begin at the reaction).
+namespace {
+struct ShotClip { const char* name; float hand; };
+const ShotClip kShotFront = { "shot_front", 1.63f };      // staggers back, collapses on the back
+const ShotClip kShotGut   = { "shot_gut",   1.07f };      // doubles over, to the knees, forward
+const ShotClip kShotSpin  = { "shot_spin",  1.00f };      // spun round by a shoulder hit
+const ShotClip kShotBack  = { "shot_back",  0.73f };      // thrown forward on the face
+const ShotClip kShotHead  = { "shot_head",  0.63f };      // limp at once, straight down
+const ShotClip kShotLeg   = { "shot_leg",   0.77f };      // the leg gives way, down sideways
+const ShotClip kShotRun   = { "shot_run",   0.43f };      // trips at a run, tumbles
+const ShotClip kShotWalk  = { "shot_walk",  1.30f };      // stops, staggers, collapses
+}
+
+// Which reaction: by where the shot struck (head, legs, trunk), from which side (the bolt's
+// direction against the way the person faces) and how fast the person was moving. The same on
+// every machine: all of it comes from the hit that was sent and the person's own state.
+static const ShotClip& pick_shot_clip(float height, bool from_front, float speed, uint32_t id) {
+    if (height > 1.50f) return kShotHead;
+    if (speed > 2.4f) return kShotRun;
+    if (height < 0.75f) return kShotLeg;
+    if (!from_front) return kShotBack;
+    if (speed > 0.5f) return kShotWalk;
+    switch (id % 3u) { case 0: return kShotFront; case 1: return kShotGut; default: return kShotSpin; }
+}
+
+void VulkanEngine::npc_dying_pose(float dt) {
+    if (npc_dying_.empty() || body_bones_.empty() || !anim_set_.ok()) { npc_dying_.clear(); return; }
+    dt = glm::clamp(dt, 1e-4f, 0.1f);
+    const anim::IAnimationRuntime& rtm = *anim_set_.runtime;
+    for (size_t i = 0; i < npc_dying_.size();) {
+        NpcDying& d = npc_dying_[i];
+        if (d.fresh) { d.fresh = false; ++i; continue; }      // (posed this frame already, as it stood)
+        d.t += dt;
+        anim::CharacterAnimationInput in = d.in;
+        in.dt = dt;
+        in.action_clip = d.clip;
+        in.action_time = std::min(d.t, rtm.clip(d.clip).duration);
+        in.action_in_place = false; in.action_warp = false; in.action_warp_full = false;
+        in.action_warp_from_start = false; in.action_end_at_origin = false;
+        in.velocity = in.desired_velocity = glm::vec3(0.0f);
+        in.has_look_at = false; in.teleported = false; in.seated = false;
+        in.lod = std::min(d.av.lod, 1);
+        d.av.palette_prev = d.av.palette;
+        d.av.palette = -1;
+        pose_character(*d.av.animator, in, &d.av.palette, &d.av.pose_rows);
+        glm::vec3 now[kCorpseParts];
+        const bool have = corpse_part_centres(d.model, now);
+        if (d.t >= d.hand || !have) {
+            // The physics' from here: every part goes on as the clip moved it (no faster than a
+            // falling body moves), and the shot itself adds nothing - the reaction was the clip.
+            glm::vec3 vel[kCorpseParts];
+            for (int k = 0; k < kCorpseParts; ++k) {
+                vel[k] = d.have_prev && have ? (now[k] - d.parts_prev[k]) / dt : glm::vec3(0.0f);
+                const float sp = glm::length(vel[k]);
+                if (sp > 7.0f) vel[k] *= 7.0f / sp;
+            }
+            glm::mat4 vi = d.view_inv;
+            if (have) vi[3] = glm::vec4(now[2], 1.0f);        // (the head, where it is now)
+            corpse_spawn(d.model, vi, glm::vec3(0.0f), d.hit_pos, d.hit_dir, 0.0f, vel);
+            npc_dying_.erase(npc_dying_.begin() + ptrdiff_t(i));
+            continue;
+        }
+        for (int k = 0; k < kCorpseParts; ++k) d.parts_prev[k] = now[k];
+        d.have_prev = true;
+        d.av.prev_model = d.av.model = d.model;
+        d.av.eye = now[2];
+        d.av.view_inv = d.view_inv; d.av.view_inv[3] = glm::vec4(now[2], 1.0f);
+        d.av.mesh_lod = body_mesh_lod(d.av.eye, d.av.mesh_lod);
+        d.av.drawn = d.av.palette >= 0;
+        ++i;
+    }
+}
+
 void VulkanEngine::npc_tick(float dt) {
     // Made once the road and the station are there (the road is built on another thread).
     if (!npc_) {
@@ -140,9 +218,33 @@ void VulkanEngine::npc_tick(float dt) {
     static const float kFast = std::getenv("VIBE_NPC_FAST") ? float(std::atof(std::getenv("VIBE_NPC_FAST"))) : 1.0f;
     for (float left = dt * kFast; left > 1e-5f; left -= 0.1f) npc_->update(std::min(left, 0.1f));
     npc_->views(npc_views_);
+    // (shot or taken a moment ago, and this copy of the host's world has not heard yet)
+    for (size_t i = 0; i < npc_views_.size() && i < 100; ++i) {
+        if (npc_gone_[i] <= 0.0f) continue;
+        npc_gone_[i] -= dt;
+        npc::View& v = npc_views_[i];
+        v.hidden = true; v.car = 255; v.pos.y -= 20000.0f;
+    }
     npc_cars_place(npc_views_, dt);
     npc_pose(dt);
+    npc_dying_pose(dt);
     blood_update(dt);
+    // VIBE_TEST_NPC_KILL=<frame>[,<skip>]: at that frame the six people nearest the eye that have a
+    // body are shot from where the eye is (after the <skip> nearest) - tests of how they fall.
+    if (static const char* tk = std::getenv("VIBE_TEST_NPC_KILL"); tk) {
+        int at = 0, skip = 0; std::sscanf(tk, "%d,%d", &at, &skip);
+        if (int(frame_number_) == at) {
+            std::vector<std::pair<float, int>> who;
+            for (const MpAvatar& a : npc_bodies_) if (a.present && a.id >= 1 && a.id <= 100 && !npc_views_[a.id - 1].hidden) who.push_back({ glm::distance(a.eye, current_frame_view_.eye_pos), int(a.id) - 1 });
+            std::sort(who.begin(), who.end());
+            for (size_t i = size_t(skip); i < who.size() && i < size_t(skip) + 6; ++i) {
+                const npc::View& v = npc_views_[size_t(who[i].second)];
+                const glm::vec3 chest = v.pos + glm::vec3(0.0f, v.pose == npc::Pose::Sit ? 0.45f : 1.25f, 0.0f);
+                log::infof("[npc] test: person %d (pose %d style %d, speed %.1f) at %.1f m", who[i].second, int(v.pose), int(v.style), v.speed, double(who[i].first));
+                npc_hit(who[i].second, chest, glm::normalize(chest - current_frame_view_.eye_pos));
+            }
+        }
+    }
     if (static const bool lg = std::getenv("VIBE_LOG_NPC") != nullptr; lg && frame_number_ % 300 == 0) {
         const npc::World::Census c = npc_->census();
         int drawn = 0; for (const MpAvatar& a : npc_bodies_) drawn += a.drawn ? 1 : 0;
@@ -383,15 +485,32 @@ void VulkanEngine::npc_pose(float dt) {
         a.model = r.rf.model;
         if (a.die) {
             // Shot (npc_bolt_hits): this pose goes to the physics as a body that falls, pushed by
-            // the shot; the NPC engine has that person leave its world (a replica cannot: there
-            // the body falls and the host's person stands on - shots at NPCs are the host's).
+            // the shot; the NPC engine has that person leave its world (the authority's; a copy
+            // of it keeps the person out of sight until it has followed: npc_gone_).
             a.die = false;
             if (a.lod >= 3) { r.in.lod = 2; r.in.dt = 0.0f; pose_character(*a.animator, r.in, nullptr); }
             const glm::mat4 vi(glm::vec4(std::cos(a.dying_st.yaw), 0.0f, std::sin(a.dying_st.yaw), 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
                                glm::vec4(-std::sin(a.dying_st.yaw), 0.0f, std::cos(a.dying_st.yaw), 0.0f), glm::vec4(r.rf.eye, 1.0f));
-            corpse_spawn(r.rf.model, vi, r.in.velocity, a.hit_pos, a.hit_dir, std::max(a.hit_power, 0.6f));
-            if (npc_ && a.id >= 1 && a.id < 1000) npc_->kill(int(a.id) - 1);
-            a.id = 0; a.present = false; a.drawn = false; a.palette = -1;
+            if (npc_ && a.id >= 1 && a.id <= 100) { if (npc_->replica()) npc_gone_[a.id - 1] = 3.0f; else npc_->kill(int(a.id) - 1); }
+            // On its feet: the reaction first (npc_dying_pose). On a seat, or in the middle of
+            // sitting down or getting into a car (the hips carried by a warp): the physics' at once.
+            const glm::vec3 fwd(std::sin(a.dying_st.yaw), 0.0f, -std::cos(a.dying_st.yaw));
+            const ShotClip& sc = pick_shot_clip(a.hit_pos.y - r.rf.model[3].y, glm::dot(a.hit_dir, fwd) < 0.0f, glm::length(r.in.velocity), a.id);
+            const int clip = (r.in.seated || r.in.action_warp || std::getenv("VIBE_NO_DEATH_CLIPS")) ? -1 : anim_set_.runtime->find_clip(sc.name);
+            if (clip < 0) {
+                corpse_spawn(r.rf.model, vi, r.in.velocity, a.hit_pos, a.hit_dir, std::max(a.hit_power, 0.6f));
+                a.id = 0; a.present = false; a.drawn = false; a.palette = -1;
+                continue;
+            }
+            log::infof("[npc] person %u goes down: %s", a.id - 1, sc.name);
+            NpcDying d;
+            d.in = r.in; d.model = r.rf.model; d.view_inv = vi; d.clip = clip; d.hand = sc.hand;
+            d.hit_pos = a.hit_pos; d.hit_dir = a.hit_dir;
+            a.view_inv = r.rf.view_inv; a.eye = r.rf.eye; a.drawn = a.lod < 3 && a.palette >= 0;
+            d.av = std::move(a);
+            a = MpAvatar{};
+            d.av.id = 5000u + d.av.id;
+            if (npc_dying_.size() < 8) npc_dying_.push_back(std::move(d));
             continue;
         }
         a.view_inv = r.rf.view_inv;
@@ -402,8 +521,10 @@ void VulkanEngine::npc_pose(float dt) {
 }
 
 // A bolt of ours against the station's people (combat.cpp, beside mp_bolt_hits): whoever is on
-// foot or on a seat can be shot. Blood where it hits; the body that is drawn for that person is
-// told to fall (npc_pose); somebody too far off to have a body is simply gone.
+// foot or on a seat can be shot - by any player. The shooter decides the hit against what is
+// drawn on the shooter's screen (as for players), shows it at once (npc_hit) and tells
+// everybody (Event::NpcHit); every machine shows the same, and the machine whose NPC world is
+// the world takes that person out of it.
 bool VulkanEngine::npc_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
     if (static const bool lg = std::getenv("VIBE_LOG_NPC") != nullptr; lg) log::infof("[npc] bolt (%.2f %.2f %.2f) -> (%.2f %.2f %.2f), %zu views", a.x, a.y, a.z, b.x, b.y, b.z, npc_views_.size());
     if (!npc_ || npc_views_.empty()) return false;
@@ -422,20 +543,59 @@ bool VulkanEngine::npc_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
     if (best < 0) return false;
     hit = a + (b - a) * bt;
     const glm::vec3 dir = glm::normalize(b - a + glm::vec3(1e-6f, 0.0f, 0.0f));
+    npc_hit(best, hit, dir);
+    if (net_) {
+        net::Event e{};
+        e.kind = net::Event::NpcHit; e.from = net_->id(); e.to = uint32_t(best);
+        e.a[0] = hit.x; e.a[1] = hit.y; e.a[2] = hit.z; e.b[0] = dir.x; e.b[1] = dir.y; e.b[2] = dir.z;
+        net_->send_event(e);
+    }
+    mp_->hitmark = 0.25f;
+    return true;
+}
+
+// Somebody was shot - by this machine's player or (told by the network) by another's. Blood
+// where it hit; the body that is drawn for that person here is told to fall (npc_pose hands it
+// to the physics, each machine its own fall from the same pose); and the person leaves the NPC
+// world: the authority's kill(), which the copies follow. Until a copy has followed, the person
+// is kept from being drawn again beside their own body (npc_gone_).
+void VulkanEngine::npc_hit(int agent, glm::vec3 hit, glm::vec3 dir) {
+    if (!npc_ || agent < 0 || size_t(agent) >= npc_views_.size() || agent >= 100) return;
+    const npc::View& v = npc_views_[size_t(agent)];
+    if (v.kind != npc::Kind::Person || v.hidden) return;       // (gone already: two players shot the same one)
     spawn_blood(hit, dir);
-    const uint32_t id = uint32_t(npc_views_[size_t(best)].id) + 1u;
+    const uint32_t id = uint32_t(v.id) + 1u;
     bool body = false;
     for (MpAvatar& av : npc_bodies_)
         if (av.id == id && av.present) {
             av.die = true; av.hit_pos = hit; av.hit_dir = dir; av.hit_power = 1.0f; av.hit_age = 0.0f;
-            av.dying_st.yaw = npc_views_[size_t(best)].yaw;
+            av.dying_st.yaw = v.yaw;
             body = true;
             break;
         }
-    if (!body) npc_->kill(best);
-    log::infof("[npc] person %d shot at (%.1f, %.1f, %.1f)%s", best, hit.x, hit.y, hit.z, body ? "" : " (no body drawn: gone at once)");
-    mp_->hitmark = 0.25f;
-    return true;
+    if (!body) {
+        if (npc_->replica()) npc_gone_[agent] = 3.0f; else npc_->kill(agent);
+    }
+    log::infof("[npc] person %d shot at (%.1f, %.1f, %.1f)%s", agent, hit.x, hit.y, hit.z, body ? "" : " (no body drawn: gone at once)");
+}
+
+// From the network (multiplayer.cpp hands them over).
+void VulkanEngine::npc_event(const net::Event& e) {
+    if (!npc_ || !net_) return;
+    if (e.kind == net::Event::NpcHit) {
+        const glm::vec3 hit(e.a[0], e.a[1], e.a[2]), dir(e.b[0], e.b[1], e.b[2]);
+        if (!std::isfinite(hit.x + hit.y + hit.z + dir.x + dir.y + dir.z)) return;
+        npc_hit(int(e.to), hit, dir);
+    } else if (e.kind == net::Event::NpcCarTake) {
+        // (the host's to answer; refused without a word when the car drove off meanwhile)
+        if (net_->role() == net::Role::Host && e.to < 100) npc_host_take(int(e.to), e.from);
+    } else if (e.kind == net::Event::NpcCarTaken) {
+        const net::NpcCarTaken t = net::unpack_taken(e);
+        if (npc_car_make(t) && t.taker == net_->id() && jeep_ && !jeep_driving() && jeep_ride_ < 0) {
+            const bool in = jeep_use();                        // (the car we asked for: in)
+            log::infof("[jeep] the host gave us NPC car %d: number %d, in it %d", int(t.agent), int(t.car), int(in && jeep_driving()));
+        }
+    }
 }
 
 // BLOOD. A shot that hits somebody throws a spray the way the bolt went (and a little back at
@@ -485,6 +645,13 @@ VkCommandBuffer cmd, const glm::mat4& vp) {
         if (!a.id || !a.drawn) continue;
         mp_->draw = &a;
         draw_viewmodel(cmd, vp, a.view_inv);       // (the body alone: `unarmed`)
+        mp_->draw = nullptr;
+    }
+    for (NpcDying& d : npc_dying_) {
+        if (!d.av.drawn) continue;
+        d.av.unarmed = true;
+        mp_->draw = &d.av;
+        draw_viewmodel(cmd, vp, d.av.view_inv);
         mp_->draw = nullptr;
     }
 }

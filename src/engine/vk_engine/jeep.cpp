@@ -53,6 +53,15 @@ struct VulkanEngine::JeepState {
     std::vector<Mark> marks[4];
     struct Puff { glm::vec3 p, v; float age, life, size, seed, bright; };
     std::vector<Puff> puffs;
+    // The body's box in the car's frame (between the wheels' outer faces, nose to tail): what smoke stays out of.
+    void body_box(float& hx, float& z0, float& z1) const {
+        hx = 0.0f; z0 = 0.0f; z1 = 0.0f;
+        for (int w = 0; w < 4; ++w) {
+            hx = std::max(hx, std::abs(wheel_pos[w].x) + 0.5f * wheel_width);
+            z0 = std::min(z0, wheel_pos[w].z - wheel_radius - 0.45f); z1 = std::max(z1, wheel_pos[w].z + wheel_radius + 0.45f);
+        }
+        hx += 0.12f;
+    }
     float puff_acc = 0.0f;
     float test_t = 0.0f;
     float tc = 1.0f;                   // traction control: the share of the throttle let through
@@ -67,6 +76,8 @@ struct VulkanEngine::JeepState {
     int       snd_set = -2;            // -2: not asked for yet; -1: none
     bool      snd_running = false, snd_has_last = false;
     float     snd_rpm = 900.0f, snd_load = 0.0f, throttle_in = 0.0f;
+    float     snd_vol = 0.0f;                   // the loudness its voice has now: it follows what it should be, never jumps
+    bool      snd_far = false;                  // ... and whether it is the cheap far voice
     int       snd_gear = 0;
     glm::vec3 snd_last{0.0f}, snd_vel{0.0f};
     bool      dusk_lit = false;        // its lights were put on by the dusk (once: L still switches them)
@@ -223,6 +234,10 @@ void VulkanEngine::init_jeep() {
     if (JeepState* c = jeep_load("assets/jeep", "jeep.json")) {
         c->tune.com_height = 0.54f; c->tune.front_weight = 0.52f;
         c->tune.grip = 0.90f; c->tune.drag = 0.75f;                 // (all-terrain tyres, a brick in the wind)
+        // (a flat four of the old kind: pulls from low down, done by 4600; a slow, sure box)
+        c->tune.engine_idle_rpm = 800.0f; c->tune.torque_peak = 0.35f;
+        c->tune.shift_up_full = 0.90f; c->tune.shift_up_easy = 0.50f; c->tune.shift_down_easy = 0.26f; c->tune.shift_down_full = 0.42f;
+        c->tune.shift_time = 0.35f; c->tune.engine_loudness = 0.80f;
         jeep_all_.push_back(c);
     }
     // The others: a kind (its folder and what it drives like) in one or more colours.
@@ -233,35 +248,47 @@ void VulkanEngine::init_jeep() {
         if (legs >= 0.0f) c->legs = legs;
         jeep_all_.push_back(c);
     };
-    // A mid-engined sports car: low, stiff, rear-wheel drive, a high-revving engine.
+    // A mid-engined sports car: low, stiff, rear-wheel drive. A flat-plane V8 that revs to 9000,
+    // pulls hardest high up and is held to 8600 before the box - fast, a tenth of a second - changes.
     auto sports = [](PhysicsWorld::VehicleDesc& t) {
         t.mass = 1480.0f; t.com_height = 0.40f; t.front_weight = 0.42f;
         t.front_drive = 0.0f;
         t.gears = { 3.08f, 2.19f, 1.63f, 1.29f, 1.03f, 0.84f };
-        t.engine_torque = 640.0f; t.engine_max_rpm = 8400.0f; t.final_drive = 4.2f;
+        t.engine_torque = 610.0f; t.engine_max_rpm = 9000.0f; t.final_drive = 4.2f;
+        t.engine_idle_rpm = 1000.0f; t.engine_inertia = 0.20f; t.torque_peak = 0.68f;
+        t.shift_up_full = 0.955f; t.shift_up_easy = 0.40f; t.shift_down_easy = 0.20f; t.shift_down_full = 0.45f;
+        t.shift_time = 0.11f; t.engine_loudness = 1.0f;
         t.suspension_rest = 0.20f; t.suspension_travel_up = 0.07f; t.suspension_travel_down = 0.08f;
         t.suspension_hz = 2.3f; t.suspension_damping = 0.62f; t.antiroll = 9000.0f;
         t.max_steer = 0.50f; t.brake_torque = 4200.0f; t.handbrake_torque = 6500.0f;
         t.grip = 1.30f; t.wheel_mass = 20.0f;
         t.downforce = 1.9f; t.drag = 0.45f;
     };
-    // An executive saloon: heavy, quiet, soft; most of its power to the rear.
+    // An executive saloon: heavy, soft; most of its power to the rear. A four-cylinder that is
+    // hardly heard: it changes up early and smoothly and only revs out when the pedal is down.
     auto saloon = [](PhysicsWorld::VehicleDesc& t) {
         t.mass = 1750.0f; t.com_height = 0.52f; t.front_weight = 0.54f;
         t.front_drive = 0.30f;
         t.gears = { 3.50f, 2.10f, 1.45f, 1.10f, 0.90f, 0.74f };
         t.engine_torque = 430.0f; t.engine_max_rpm = 6500.0f; t.final_drive = 3.5f;
+        t.engine_idle_rpm = 750.0f; t.engine_inertia = 0.30f; t.torque_peak = 0.45f;
+        t.shift_up_full = 0.92f; t.shift_up_easy = 0.34f; t.shift_down_easy = 0.17f; t.shift_down_full = 0.42f;
+        t.shift_time = 0.28f; t.engine_loudness = 0.42f;
         t.suspension_rest = 0.24f; t.suspension_travel_up = 0.09f; t.suspension_travel_down = 0.10f;
         t.suspension_hz = 1.5f; t.suspension_damping = 0.58f; t.antiroll = 5500.0f;
         t.max_steer = 0.55f; t.brake_torque = 3400.0f; t.handbrake_torque = 5600.0f;
         t.grip = 1.08f; t.downforce = 0.35f; t.drag = 0.38f;
     };
-    // A pickup: tall, heavy at the front, long travel, four-wheel drive, a slow strong engine.
+    // A pickup: tall, heavy at the front, long travel, four-wheel drive. A big V6 that pulls from
+    // idle and is done by 4800; a slow box that changes early.
     auto pickup = [](PhysicsWorld::VehicleDesc& t) {
         t.mass = 2150.0f; t.com_height = 0.70f; t.front_weight = 0.57f;
         t.front_drive = 0.40f;
         t.gears = { 3.80f, 2.30f, 1.50f, 1.10f, 0.85f };
-        t.engine_torque = 520.0f; t.engine_max_rpm = 4600.0f; t.final_drive = 3.9f;
+        t.engine_torque = 520.0f; t.engine_max_rpm = 4800.0f; t.final_drive = 3.9f;
+        t.engine_idle_rpm = 650.0f; t.engine_inertia = 0.50f; t.torque_peak = 0.38f;
+        t.shift_up_full = 0.90f; t.shift_up_easy = 0.46f; t.shift_down_easy = 0.24f; t.shift_down_full = 0.40f;
+        t.shift_time = 0.40f; t.engine_loudness = 0.85f;
         t.suspension_rest = 0.30f; t.suspension_travel_up = 0.13f; t.suspension_travel_down = 0.16f;
         t.suspension_hz = 1.5f; t.suspension_damping = 0.55f; t.antiroll = 3600.0f;
         t.max_steer = 0.56f; t.brake_torque = 3600.0f; t.handbrake_torque = 6200.0f;
@@ -670,6 +697,7 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
         else J.dusk_lit = false;
         const bool mm = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
         if (mm && !J.prev_mm) J.cam_mode = (J.cam_mode + 1) % 3;
+        if (static const char* tv = std::getenv("VIBE_TEST_JEEP_VIEW")) J.cam_mode = std::clamp(std::atoi(tv), 0, 2);       // (tests: which view)
         J.prev_mm = mm;
     }
     float throttle = (in.fwd ? 1.0f : 0.0f) - (in.back ? 1.0f : 0.0f);
@@ -783,7 +811,7 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
         }
     }
     J.throttle_in = std::abs(forward);       // (what the engine is asked for: its sound's load)
-    physics_->vehicle_input(forward, J.steer, brake, hand);
+    physics_->vehicle_input(forward, J.steer, brake, hand, dt, forward > 0.0f ? std::max(forward, std::clamp(throttle, 0.0f, 1.0f)) : 0.0f);
     J.brake_in = std::max(brake, hand);
     // The driver's hands are full: no walking, shooting or jumping.
     in.fwd = in.back = in.left = in.right = in.jump = in.sprint = in.crawl = false;
@@ -894,6 +922,17 @@ void VulkanEngine::jeep_after_sim(float dt) {
     if (static const bool lg2 = std::getenv("VIBE_LOG_JEEP") != nullptr; lg2 && frame_number_ % 60 == 0) {
         log::infof("[jeep] uneven by %.3f m at most over the last 60 frames (frame %.1f ms)", double(uneven), double(dt) * 1000.0);
         uneven = 0.0f;
+    }
+    // (VIBE_LOG_JEEP: every change of gear - from which engine speed, at what road speed, how hard the pedal was down)
+    if (static const bool lg3 = std::getenv("VIBE_LOG_JEEP") != nullptr; lg3) {
+        static int gear_was = 0; static float rpm_was = 0.0f, rpm_top = 0.0f;
+        rpm_top = std::max(rpm_top, J.st.rpm);
+        if (J.st.gear != gear_was) {
+            log::infof("[jeep] %s: gear %d -> %d from %.0f rpm (the most in that gear %.0f of %.0f) at %.0f km/h, pedal %.2f", J.dir.c_str(), gear_was, J.st.gear,
+                       double(rpm_was), double(rpm_top), double(J.tune.engine_max_rpm), double(glm::length(J.st.velocity) * 3.6f), double(J.throttle_in));
+            gear_was = J.st.gear; rpm_top = 0.0f;
+        }
+        rpm_was = J.st.rpm;
     }
     if (static const bool lg = std::getenv("VIBE_LOG_JEEP") != nullptr; lg && frame_number_ % 60 == 0)
         log::infof("[jeep] pos (%.1f, %.2f, %.1f) speed %.1f km/h gear %d rpm %.0f contact %d%d%d%d up %.2f driving %d | springs %.2f %.2f %.2f %.2f ground %.2f",
@@ -1087,12 +1126,27 @@ void VulkanEngine::jeep_marks(JeepState& J, float dt) {
                 JeepState::Puff p;
                 p.p = g + up * 0.12f + glm::vec3(rnd01() - 0.5f, 0.0f, rnd01() - 0.5f) * 0.25f;
                 p.v = v * 0.18f + glm::vec3(rnd01() - 0.5f, 0.9f + rnd01() * 0.8f, rnd01() - 0.5f) * 0.9f;
+                p.v += axle * ((J.wheel_pos[w].x < 0.0f ? -1.0f : 1.0f) * (glm::dot(axle, glm::vec3(B[0])) < 0.0f ? -1.0f : 1.0f) * (0.7f + 0.8f * rnd01()));      // (thrown out from under the car, to its side)
                 p.age = 0.0f; p.life = (hard ? 1.9f : 1.2f) * (0.7f + 0.6f * rnd01());
                 p.size = 0.28f + 0.2f * rnd01(); p.seed = rnd01() * 40.0f;
                 p.bright = hard ? 1.0f : 0.62f;
                 J.puffs.push_back(p);
             }
         }
+    }
+    // SMOKE STAYS OUTSIDE THE CAR. A puff grows to a metre and more and drifts; the body is in
+    // its way. One that would be inside the body's box (between the wheels' outer faces, nose to
+    // tail, floor to roof) is put out at the nearer side and loses its speed towards the car.
+    const glm::mat4 Binv = glm::inverse(B);
+    float hx, z0, z1; J.body_box(hx, z0, z1);
+    for (auto& p : J.puffs) {
+        const glm::vec3 l(Binv * glm::vec4(p.p, 1.0f));
+        if (std::abs(l.x) >= hx || l.z <= z0 || l.z >= z1 || l.y >= 2.1f || l.y < 0.0f) continue;
+        const float side = l.x < 0.0f ? -1.0f : 1.0f;
+        const glm::vec3 out = glm::normalize(glm::vec3(B[0])) * side;
+        p.p += out * (hx - std::abs(l.x));
+        const float in = glm::dot(p.v - J.st.velocity, -out);
+        if (in > 0.0f) p.v += out * in;
     }
     for (auto& p : J.puffs) {
         p.age += dt; p.p += p.v * dt;
@@ -1125,11 +1179,12 @@ bool VulkanEngine::jeep_headlights(glm::vec4& pos, glm::vec4& dir, glm::vec4& co
 // ---------------------------------------------------------------------------------------
 // CAR SOUND. Every car that runs has an engine (audio.h "ENGINES"; the loops come out of
 // an engine simulation - docs/ARCHITECTURE.md "Car sound"): the jeep a flat four, the sports
-// car a flat-plane V8, the saloon a straight six, the pickup a big V8. The player's car, the
+// car a flat-plane V8 to 9000, the saloon a quiet four-cylinder, the pickup a V6. The player's car, the
 // NPC engine's traffic and the cars other players drive: the nearest kVoices of them within
 // 280 m sound.
 //   speed of the engine: the driven car's own (the physics); any other car's from its road
-//     speed through its gears (it changes up at 72 % of its limit, down at 32 %).
+//     speed through its gears, changed by the rule the driven car's box has
+//     (VehicleDesc::shift_up_rpm / shift_down_rpm: each kind of car its own).
 //   load: the driver's throttle; another car's from how it gains or loses speed.
 //   far away: quieter by the square of the distance, and duller - the low-pass comes down
 //     from 18 kHz to 600 Hz by 320 m (what is left of a car far off is its drone).
@@ -1137,8 +1192,8 @@ bool VulkanEngine::jeep_headlights(glm::vec4& pos, glm::vec4& dir, glm::vec4& co
 //     outside through 1.4 kHz and at less than half.
 void VulkanEngine::car_audio_tick(float dt) {
     if (!audio_ || !audio_->ok() || dt <= 0.0f) return;
-    constexpr size_t kVoices = 5;
-    constexpr float  kHear = 170.0f;        // (beyond it a car is not heard)
+    constexpr size_t kVoices = 6;           // cars heard at once (one that is let go fades out first: a few more may sound meanwhile)
+    constexpr float  kHear = 240.0f;        // (beyond it a car is not heard)
     static const float kGain = std::getenv("VIBE_CAR_SOUND_GAIN") ? float(std::atof(std::getenv("VIBE_CAR_SOUND_GAIN"))) : 1.0f;
     static const bool off = std::getenv("VIBE_NO_CAR_SOUND") != nullptr;
     const glm::vec3 eye = player_.eye_position();
@@ -1148,7 +1203,7 @@ void VulkanEngine::car_audio_tick(float dt) {
         car_ear_last_ = eye; car_ear_has_ = true;
         audio_->set_listener_velocity(car_ear_vel_);
     }
-    struct Cand { JeepState* J; float d; };
+    struct Cand { JeepState* J; float d; bool wanted = true; };
     std::vector<Cand> cand;
     const bool home = globe::current().home;
     if (home && !off) {
@@ -1161,11 +1216,17 @@ void VulkanEngine::car_audio_tick(float dt) {
     }
     std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
     while (!cand.empty() && (cand.size() > kVoices || cand.back().d > kHear)) cand.pop_back();
-    // voices: kept by car; those whose car is no longer heard are let go
+    // NOTHING STOPS AT ONCE. A voice whose car is no longer one of the heard (it parked and
+    // switched off, a nearer car took its place, it left the reach) is turned down to nothing
+    // first - a third of a second - and only then let go: a voice cut while it sounds is a click
+    // and a hole in the traffic's noise.
     for (auto it = car_voices_.begin(); it != car_voices_.end();) {
         bool keep = false;
         for (const Cand& c : cand) if (c.J == it->first) { keep = true; break; }
-        if (!keep) { audio_->engine_stop(it->second); it = car_voices_.erase(it); } else ++it;
+        if (keep) { ++it; continue; }
+        if (it->first->snd_vol < 0.0008f || !home || off || car_voices_.size() > kVoices + 4) { it->first->snd_vol = 0.0f; audio_->engine_stop(it->second); it = car_voices_.erase(it); continue; }
+        cand.push_back({ it->first, glm::distance(glm::vec3(it->first->st.body[3]), eye), false });
+        ++it;
     }
     const bool cabin = jeep_ && jeep_->driving && jeep_->cam_mode == 0;
     for (const Cand& c : cand) {
@@ -1180,7 +1241,7 @@ void VulkanEngine::car_audio_tick(float dt) {
             const uint32_t h = audio_->engine_start(J.snd_set);
             if (!h) continue;
             it = car_voices_.emplace(&J, h).first;
-            J.snd_has_last = false; J.snd_rpm = 900.0f; J.snd_load = 0.0f;
+            J.snd_has_last = false; J.snd_rpm = 900.0f; J.snd_load = 0.0f; J.snd_vol = 0.0f; J.snd_far = false;
         }
         const glm::vec3 pos = glm::vec3(J.st.body * glm::vec4(0.0f, 0.7f, -1.2f, 1.0f));       // (the engine: ahead of the cabin)
         const glm::vec3 vel_now = J.snd_has_last ? (pos - J.snd_last) / dt : glm::vec3(0.0f);
@@ -1190,7 +1251,7 @@ void VulkanEngine::car_audio_tick(float dt) {
         const float sp = glm::length(J.snd_vel), limit = std::max(J.tune.engine_max_rpm, 3000.0f);
         float rpm_t, load_t;
         if (J.driving && &J == jeep_) {
-            rpm_t = std::max(std::abs(J.st.rpm), 850.0f);
+            rpm_t = std::max(std::abs(J.st.rpm), J.tune.engine_idle_rpm);
             load_t = std::clamp(J.throttle_in, 0.0f, 1.0f);
         } else {
             // through its gears
@@ -1201,10 +1262,10 @@ void VulkanEngine::car_audio_tick(float dt) {
             };
             J.snd_gear = std::clamp(J.snd_gear, 0, int(ng) - 1);
             // (as a driver changes: early when he is only keeping his speed, late when he is on it)
-            const float up = (0.30f + 0.42f * J.snd_load) * limit, down = 0.19f * limit;
+            const float up = J.tune.shift_up_rpm(J.snd_load), down = J.tune.shift_down_rpm(J.snd_load);
             if (rpm_in(J.snd_gear) > up && J.snd_gear + 1 < int(ng)) ++J.snd_gear;
             else if (rpm_in(J.snd_gear) < down && J.snd_gear > 0) --J.snd_gear;
-            rpm_t = std::max(rpm_in(J.snd_gear), 850.0f);
+            rpm_t = std::max(rpm_in(J.snd_gear), J.tune.engine_idle_rpm);
             const float accel = (sp - sp_prev) / dt;
             load_t = std::clamp(0.24f + accel * 0.30f, 0.0f, 1.0f);
         }
@@ -1212,21 +1273,29 @@ void VulkanEngine::car_audio_tick(float dt) {
         J.snd_load += (load_t - J.snd_load) * std::min(1.0f, dt * 9.0f);
         const bool own = J.driving && &J == jeep_;
         const float d = own ? glm::distance(pos, eye) : c.d;
-        // Loudness: half at 9 m, a tenth at 27 m, gone by kHear. Tone: the further, the duller -
+        // Loudness: half at 14 m, an eighth at 50 m, a twentieth at 100 m, and from 100 m on down to
+        // nothing at kHear - one even slope all the way (it was inverse-square from 9 m: at 100 m
+        // under what is played at all, so a car leaving went quiet fast and then cut out). Tone: the further, the duller -
         // from outside a car you hear its exhaust and little of its top end (7 kHz at arm's
         // length on foot, 12 kHz for the own car seen from behind), down to 350 Hz far off.
-        const float fade = 1.0f - glm::smoothstep(0.75f * kHear, kHear, d);
-        float vol = 0.62f * (0.50f + 0.50f * J.snd_load) * (0.60f + 0.40f * std::clamp(J.snd_rpm / limit, 0.0f, 1.0f)) / (1.0f + (d / 9.0f) * (d / 9.0f)) * fade * kGain;
-        if (own) vol = 0.62f * (0.50f + 0.50f * J.snd_load) * (0.60f + 0.40f * std::clamp(J.snd_rpm / limit, 0.0f, 1.0f)) * 0.42f * kGain;       // (the own car: the camera's distance is not the driver's)
+        const float fade = 1.0f - glm::smoothstep(100.0f, kHear, d);
+        float vol = 0.62f * (0.50f + 0.50f * J.snd_load) * (0.60f + 0.40f * std::clamp(J.snd_rpm / limit, 0.0f, 1.0f)) / (1.0f + std::pow(d / 14.0f, 1.5f)) * fade * kGain * J.tune.engine_loudness;
+        if (own) vol = 0.62f * (0.50f + 0.50f * J.snd_load) * (0.60f + 0.40f * std::clamp(J.snd_rpm / limit, 0.0f, 1.0f)) * 0.42f * kGain * J.tune.engine_loudness;       // (the own car: the camera's distance is not the driver's)
         float hz = (own ? 12000.0f : 7000.0f) * std::pow(350.0f / 7000.0f, glm::smoothstep(3.0f, 120.0f, own ? 0.0f : d));
-        if (cabin) { if (own) { hz = 2400.0f; vol *= 0.9f; } else { hz = std::min(hz, 1400.0f); vol *= 0.45f; } }
-        // (a far car: its voice is brought up to date every fourth frame, and plays one loop)
-        const bool far_off = !own && d > 45.0f;
-        if (!far_off || ((frame_number_ + uint64_t(it->second)) & 3) == 0)
-            audio_->engine_update(it->second, pos, J.snd_vel, J.snd_rpm, J.snd_load, vol, hz, far_off);
+        if (cabin) { if (own) { hz = 2400.0f * (0.55f + 0.45f * J.tune.engine_loudness); vol *= 0.9f; } else { hz = std::min(hz, 1400.0f); vol *= 0.45f; } }
+        if (!c.wanted) vol = 0.0f;
+        // (the loudness follows: up in a tenth of a second, down in a third - also when the
+        //  player gets out of the car, or a car is let go)
+        J.snd_vol += (vol - J.snd_vol) * std::min(1.0f, dt / (vol > J.snd_vol ? 0.10f : 0.33f));
+        // A quiet car plays one loop instead of four (the blend is not heard under the others).
+        // By loudness, not by distance, and with a margin: the change is made where it is
+        // quietest and not back and forth. It is brought up to date every frame all the same -
+        // every fourth frame made its fading a staircase.
+        if (own) J.snd_far = false; else if (J.snd_vol < 0.006f) J.snd_far = true; else if (J.snd_vol > 0.010f) J.snd_far = false;
+        audio_->engine_update(it->second, pos, J.snd_vel, J.snd_rpm, J.snd_load, J.snd_vol, hz, J.snd_far);
         if (static const bool lg = std::getenv("VIBE_LOG_CAR_SOUND") != nullptr; lg && frame_number_ % 90 == 0)
-            log::infof("[car-sound] %s%s: %.0f m, %.1f m/s, gear %d, %.0f rpm, load %.2f, volume %.3f, low-pass %.0f Hz", J.dir.c_str(), own ? " (driven)" : "", double(d), double(sp),
-                       J.snd_gear + 1, double(J.snd_rpm), double(J.snd_load), double(vol), double(hz));
+            log::infof("[car-sound] %s%s: %.0f m, %.1f m/s, gear %d, %.0f rpm, load %.2f, volume %.4f (wanted %.4f)%s%s, low-pass %.0f Hz", J.dir.c_str(), own ? " (driven)" : "", double(d), double(sp),
+                       J.snd_gear + 1, double(J.snd_rpm), double(J.snd_load), double(J.snd_vol), double(vol), J.snd_far ? " far voice" : "", c.wanted ? "" : " fading out", double(hz));
     }
 }
 
@@ -1240,6 +1309,7 @@ bool VulkanEngine::cars_need_lights() const {
 
 void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puffs, std::vector<Vertex>& glow, glm::vec3 eye, glm::vec3 R, glm::vec3 U) {
     if (!globe::current().home) return;
+    static const bool smoke_old = std::getenv("VIBE_TEST_SMOKE_OLD") != nullptr;       // (tests: as it was, to compare)
     auto flare = [&](glm::vec3 p, glm::vec3 out, float r, glm::vec3 tint) {
         const glm::vec3 to = eye - p;
         const float d = glm::length(to);
@@ -1287,11 +1357,24 @@ void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puff
                 marks.insert(marks.end(), { q0, q1, q2, q0, q2, q3 });
             }
         }
+        // SMOKE IS NOT DRAWN INTO THE CAR. A puff is a flat round picture turned to the eye, grown
+        // to a metre and a half: one at a rear wheel reached right across the car, and from behind
+        // everything ahead of it - the seats, the driver - stood in smoke. A puff is drawn no wider
+        // than its distance from the body's box allows (jeep_marks keeps its middle outside): small
+        // at the tyre, full size once the car has left it behind or it has drifted clear.
+        float hx, z0, z1; c->body_box(hx, z0, z1);
+        const glm::mat4 Binv = c->puffs.empty() || !c->posed ? glm::mat4(1.0f) : glm::inverse(c->st.body);
         for (const auto& p : c->puffs) {
             const float f = p.age / p.life;
             const float a = 0.34f * std::min(1.0f, p.age * 9.0f) * (1.0f - f) * (1.0f - f);
+            float size = p.size;
+            if (c->posed && !smoke_old) {
+                const glm::vec3 l(Binv * glm::vec4(p.p, 1.0f));
+                const glm::vec3 o(std::max(std::abs(l.x) - hx, 0.0f), std::max(std::max(-l.y, l.y - 1.6f), 0.0f), std::max(std::max(z0 - l.z, l.z - z1), 0.0f));
+                size = std::min(size, glm::length(o) + 0.30f);
+            }
             const glm::vec3 t(a, p.bright, p.seed);
-            const glm::vec3 r = R * p.size, u = U * p.size;
+            const glm::vec3 r = R * size, u = U * size;
             const Vertex q0{ p.p - r - u, t, { -1.0f, -1.0f } }, q1{ p.p + r - u, t, { 1.0f, -1.0f } };
             const Vertex q2{ p.p + r + u, t, { 1.0f, 1.0f } }, q3{ p.p - r + u, t, { -1.0f, 1.0f } };
             puffs.insert(puffs.end(), { q0, q1, q2, q0, q2, q3 });
@@ -1590,38 +1673,146 @@ void VulkanEngine::jeep_player_colliders(std::vector<collision::AABB>& out) cons
 // thirty of them round the course, so a few cars are made once (copies of the loaded kinds:
 // the same meshes, their own places) and lent each frame to the NPC cars nearest the eye.
 // One that is lent to nobody stands far under the ground.
-// EVERY CAR CAN BE DRIVEN. A car of the NPC engine's that stands (parked in a bay, or at a
-// pump with its people in the shop) and has nobody in it is taken by walking up to it and
-// getting in: the NPC engine lets it go (npc::World::take_car - its people stay behind on
-// foot, and later another car joins the traffic), and the car's model leaves the pool of
-// lent cars and becomes one of the player's own cars, where it stands. The host's only: a
-// client's NPC world is a copy. The taken car is not sent to other players (they have no car
-// of that number) - noted in docs/ARCHITECTURE.md.
+// EVERY CAR CAN BE DRIVEN, BY EVERY PLAYER. A car of the NPC engine's that stands (parked in a
+// bay, or at a pump with its people in the shop) and has nobody in it is taken by walking up to
+// it and getting in. Three steps, the same alone and on a network:
+//   1. whoever wants it asks (npc_take_car): the host and a machine that plays alone ask
+//      themselves; a client sends Event::NpcCarTake and waits;
+//   2. the authority decides (npc_host_take): npc::World::take_car lets the car go (its people
+//      stay behind on foot, and later another car joins the traffic), the car gets the next
+//      number in the list of players' cars, and everybody is told (Event::NpcCarTaken: which
+//      agent, which number, kind, paint, where it stands, who gets in);
+//   3. every machine makes it (npc_car_make): a model of that kind leaves the pool of lent
+//      cars and joins jeep_all_ under that number - from then on it is a car like the others
+//      (jeep_net_send / jeep_net_receive carry it). The one who asked gets in.
+// Somebody who joins later is told of all of them again (npc_taken_tick).
+namespace {
+const glm::vec3 kNpcPaint[10] = {
+    { 0.55f, 0.56f, 0.58f }, { 0.03f, 0.03f, 0.035f }, { 0.70f, 0.70f, 0.68f }, { 0.36f, 0.02f, 0.02f }, { 0.02f, 0.06f, 0.20f },
+    { 0.10f, 0.11f, 0.12f }, { 0.04f, 0.14f, 0.08f }, { 0.45f, 0.32f, 0.16f }, { 0.30f, 0.33f, 0.37f }, { 0.62f, 0.40f, 0.05f } };
+}
+
 bool VulkanEngine::npc_take_car(float reach) {
-    if (!npc_ || npc_->replica() || npc_cars_.size() <= 4) return false;      // (four stay for the traffic's looks)
+    if (!npc_ || npc_cars_.size() <= 4 || jeep_all_.size() >= size_t(net::kMaxCars)) return false;      // (four stay for the traffic's looks)
+    const bool replica = npc_->replica();
+    // (what a copy of the host's world can see of it: it stands, and nobody of its people sits in it)
+    auto stands_empty = [&](int agent) {
+        if (!replica) return npc_->can_take_car(agent);
+        if (agent < 0 || size_t(agent) >= npc_views_.size()) return false;
+        const npc::View& v = npc_views_[size_t(agent)];
+        if (v.kind != npc::Kind::Car || v.hidden || v.pose != npc::Pose::Park || std::abs(v.speed) > 0.3f) return false;
+        for (const npc::View& p : npc_views_) if (p.kind == npc::Kind::Person && p.hidden && int(p.car) == agent) return false;
+        return true;
+    };
     int best = -1; float bd = reach;
     for (size_t k = 0; k < npc_cars_.size(); ++k) {
         const NpcCar& c = npc_cars_[k];
-        if (c.agent < 0 || !c.car->posed || !npc_->can_take_car(c.agent)) continue;
+        if (c.agent < 0 || !c.car->posed || !stands_empty(c.agent)) continue;
         const float dd = glm::distance(player_.eye_position(), glm::vec3(c.car->st.body[3]) + glm::vec3(0.0f, 1.0f, 0.0f));
         if (dd < bd) { bd = dd; best = int(k); }
     }
     if (best < 0) return false;
-    // (not when one of the player's own cars is nearer: that one is meant)
+    // (not when one of the players' own cars is nearer: that one is meant)
     for (const JeepState* c : jeep_all_)
         if (c->posed && glm::distance(player_.eye_position(), glm::vec3(c->st.body[3]) + glm::vec3(0.0f, 1.0f, 0.0f)) < bd) return false;
-    JeepState* J = npc_cars_[size_t(best)].car;
-    if (!npc_->take_car(npc_cars_[size_t(best)].agent)) return false;
-    npc_cars_.erase(npc_cars_.begin() + best);
-    J->net_owner = 0; J->net_driven = false; J->snd_running = false; J->lights_on = false;
+    const int agent = npc_cars_[size_t(best)].agent;
+    if (!replica) return npc_host_take(agent, net_ ? net_->id() : 0u);
+    if (!net_ || npc_take_asked_ > 0.0f) return false;
+    net::Event e{};
+    e.kind = net::Event::NpcCarTake; e.from = net_->id(); e.to = uint32_t(agent);
+    net_->send_event(e);
+    npc_take_asked_ = 0.6f;
+    log::infof("[jeep] asked the host for NPC car %d", agent);
+    return false;                                              // (not ours yet: the host's answer puts us in it)
+}
+
+// The authority's part. `taker`: the player who gets in (this machine's id, or a client's).
+bool VulkanEngine::npc_host_take(int agent, uint32_t taker) {
+    if (!npc_ || npc_->replica() || npc_cars_.size() <= 4 || jeep_all_.size() >= size_t(net::kMaxCars) || jeep_all_.size() < 4) return false;
+    if (agent < 0 || size_t(agent) >= npc_->state().size() || !npc_->can_take_car(agent)) return false;
+    const npc::View v = npc_->state()[size_t(agent)];          // (before it is let go: that moves it away)
+    net::NpcCarTaken t;
+    t.agent = uint8_t(agent); t.car = uint8_t(jeep_all_.size()); t.look = v.look; t.kind = uint8_t(v.look % 3);
+    t.p[0] = v.pos.x; t.p[1] = v.pos.y; t.p[2] = v.pos.z; t.yaw = -v.yaw; t.taker = taker;
+    // (the model it is shown with here says what kind it is: the look only asks for one)
+    for (const NpcCar& c : npc_cars_)
+        if (c.agent == agent)
+            for (uint8_t k = 0; k < 3; ++k) if (jeep_all_[1 + size_t(k)]->dir == c.car->dir) t.kind = k;
+    if (!npc_->take_car(agent)) return false;
+    if (!npc_car_make(t)) return false;
+    if (net_) net_->send_event(net::pack_taken(t));
+    return true;
+}
+
+// Every machine's part: the car with that number is made of a model from the pool. True when
+// it is there afterwards (made now, or known already).
+bool VulkanEngine::npc_car_make(const net::NpcCarTaken& t) {
+    if (!net::taken_is_sane(t, net::kMaxCars) || jeep_all_.size() < 4) return false;
+    if (size_t(t.car) < jeep_all_.size()) return true;        // (told again: we have it)
+    if (size_t(t.car) > jeep_all_.size()) {                    // (the ones in front of it first: npc_taken_tick)
+        for (const net::NpcCarTaken& w : npc_taken_wait_) if (w.car == t.car) return false;
+        npc_taken_wait_.push_back(t);
+        return false;
+    }
+    if (npc_cars_.empty()) return false;
+    const std::string& kind = jeep_all_[1 + size_t(t.kind)]->dir;
+    // the model that is shown as this very car, else a free one of its kind, else one of its kind, else any
+    int pick = -1, rank = 0;
+    for (size_t k = 0; k < npc_cars_.size(); ++k) {
+        const NpcCar& c = npc_cars_[k];
+        const bool same = c.car->dir == kind;
+        const int r = (same && c.agent == int(t.agent)) ? 4 : (same && c.agent < 0) ? 3 : same ? 2 : 1;
+        if (r > rank) { rank = r; pick = int(k); }
+    }
+    JeepState* J = npc_cars_[size_t(pick)].car;
+    npc_cars_.erase(npc_cars_.begin() + pick);
+    const glm::vec3 paint = kNpcPaint[(t.look / 3) % 10];
+    for (size_t i = 0; i < J->painted.size(); ++i)
+        if (J->painted[i]) { CastleMeshGpu& g = jeep_draw_[J->draw_first + i]; g.tint = paint; g.fallback = paint; }
+    J->net_owner = 0; J->net_driven = false; J->net_mine = false; J->snd_running = false; J->lights_on = false; J->brake_in = 0.0f;
     J->door_want[0] = J->door_want[1] = 0.0f; J->door_hold = 0.0f;
     // (upright where it stands: the lean and dip it was shown with are the NPC engine's)
-    const glm::vec3 p(J->st.body[3]);
-    const glm::vec3 f = -glm::vec3(J->st.body[2]);
-    jeep_park(*J, p, std::atan2(-f.x, -f.z));
+    const glm::vec3 p(t.p[0], t.p[1], t.p[2]);
+    jeep_park(*J, p, t.yaw);
     jeep_all_.push_back(J);
-    log::infof("[jeep] an NPC car (%s) at (%.1f, %.1f, %.1f) is the player's now: %zu cars", J->dir.c_str(), p.x, p.y, p.z, jeep_all_.size());
+    npc_taken_.push_back(t);
+    // (a copy of the host's world still has the car for a moment: not shown twice)
+    if (npc_ && npc_->replica() && t.agent < 100) npc_gone_[t.agent] = 3.0f;
+    log::infof("[jeep] NPC car %d (%s) at (%.1f, %.1f, %.1f) is a players' car now: number %d of %zu", int(t.agent), J->dir.c_str(), p.x, p.y, p.z, int(t.car), jeep_all_.size());
     return true;
+}
+
+// Once a frame (multiplayer.cpp): the cars that waited for the ones in front of them; and a
+// second after somebody joined, every machine tells of the cars it knows - where they stand
+// now - so the newcomer's list of cars is the others'.
+void VulkanEngine::npc_taken_tick(float dt) {
+    npc_take_asked_ = std::max(0.0f, npc_take_asked_ - dt);
+    for (bool again = true; again && !npc_taken_wait_.empty();) {
+        again = false;
+        for (size_t i = 0; i < npc_taken_wait_.size(); ++i) {
+            const net::NpcCarTaken t = npc_taken_wait_[i];
+            if (size_t(t.car) > jeep_all_.size()) continue;
+            npc_taken_wait_.erase(npc_taken_wait_.begin() + ptrdiff_t(i));
+            npc_car_make(t);
+            again = true;
+            break;
+        }
+    }
+    if (!net_) return;
+    const size_t now = net_->players().size();
+    if (now > npc_players_seen_ && !npc_taken_.empty()) npc_taken_resend_ = 1.0f;
+    npc_players_seen_ = now;
+    if (npc_taken_resend_ < 0.0f) return;
+    npc_taken_resend_ -= dt;
+    if (npc_taken_resend_ >= 0.0f) return;
+    for (net::NpcCarTaken t : npc_taken_) {
+        if (size_t(t.car) >= jeep_all_.size()) continue;
+        const JeepState& J = *jeep_all_[t.car];
+        const glm::vec3 p(J.st.body[3]), f = -glm::vec3(J.st.body[2]);
+        t.p[0] = p.x; t.p[1] = p.y; t.p[2] = p.z; t.yaw = std::atan2(-f.x, -f.z); t.taker = 0;
+        net_->send_event(net::pack_taken(t));
+    }
+    log::infof("[jeep] told the newcomer of %zu taken NPC cars", npc_taken_.size());
 }
 
 void VulkanEngine::npc_cars_init() {
@@ -1669,9 +1860,7 @@ void VulkanEngine::npc_cars_place(const std::vector<npc::View>& views, float dt)
             c.car->posed = false;
         }
     }
-    static const glm::vec3 kPaint[10] = {
-        { 0.55f, 0.56f, 0.58f }, { 0.03f, 0.03f, 0.035f }, { 0.70f, 0.70f, 0.68f }, { 0.36f, 0.02f, 0.02f }, { 0.02f, 0.06f, 0.20f },
-        { 0.10f, 0.11f, 0.12f }, { 0.04f, 0.14f, 0.08f }, { 0.45f, 0.32f, 0.16f }, { 0.30f, 0.33f, 0.37f }, { 0.62f, 0.40f, 0.05f } };
+    const glm::vec3* kPaint = kNpcPaint;
     for (const auto& w : want) {
         bool has = false;
         for (const NpcCar& c : npc_cars_) if (c.agent == w.second) { has = true; break; }
