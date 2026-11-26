@@ -667,6 +667,7 @@ void place_river_boulders(const Env& env) {
         if ((i = find(("boulder_m" + std::to_string(k)).c_str())) >= 0) M.push_back(i);
         if ((i = find(("boulder_l" + std::to_string(k)).c_str())) >= 0) L.push_back(i);
     }
+    log::infof("[rocks] river boulders: %zu small, %zu medium, %zu large pieces in the kit", S.size(), M.size(), L.size());
     if (S.empty() && M.empty() && L.empty()) return;
     auto pick = [&](Rng& r, float big_ok) -> int {
         const float u = r();
@@ -699,21 +700,33 @@ void place_river_boulders(const Env& env) {
             // how stony this reach is: a slow swell along the river
             const float sw = 0.5f + 0.5f * std::sin(along * 0.011f + 1.3f) * std::cos(along * 0.0047f + 0.4f);
             const float chance = 0.15f + 0.65f * sw * sw;
-            const float big_ok = glm::smoothstep(6.0f, 12.0f, hw);
             for (int side = 0; side < 2; ++side) {
                 Rng r(hash_u(uint32_t(idx), 0xB0D1E5u, uint32_t(side) + 3u));
                 if (r() > chance) continue;
                 const float sd = side == 0 ? -1.0f : 1.0f;
-                const int piece = pick(r, big_ok);
+                // the water's edge on this side: out from the river's line until the ground stands
+                // above the water (the channel is wider than its nominal half-width in places)
+                const glm::vec2 qa = q + qd * r.in(-3.0f, 3.0f);
+                float edge = -1.0f;
+                for (float e = 0.5f * hw; e < 70.0f; e += 0.5f) {
+                    const glm::vec2 wq = world_of(qa + nrm * (sd * e));
+                    if (env.ground(wq.x, wq.y) > env.water + 0.12f) { edge = e; break; }
+                }
+                if (edge < 0.0f) continue;
+                // the size: fewer large where the channel is narrow (its real width: the edge found)
+                const int piece = pick(r, glm::smoothstep(5.0f, 11.0f, edge));
                 const Piece& P = g_kit[size_t(piece)];
                 const bool large = std::find(L.begin(), L.end(), piece) != L.end();
                 const bool small = std::find(S.begin(), S.end(), piece) != S.end();
-                // across the bank: the large at the water's edge, the small further up
-                const float up = large ? r.in(0.0f, 1.5f) : (small ? r.in(0.5f, 5.0f) : r.in(0.0f, 3.5f));
-                const glm::vec2 c = world_of(q + qd * r.in(-3.0f, 3.0f) + nrm * (sd * (hw * 0.85f + up)));
+                // across the bank from there: the large at the edge (feet in the water), the small further up
+                const float up = large ? r.in(-0.6f, 1.2f) : (small ? r.in(0.4f, 5.0f) : r.in(0.0f, 3.0f));
+                const glm::vec2 c = world_of(qa + nrm * (sd * (edge + up)));
                 const float sc = r.in(0.8f, 1.25f);
-                const float wade = large ? 0.6f : (small ? 0.0f : 0.3f);
-                if (!try_add(env, piece, c, r.in(-3.14f, 3.14f), sc, 9, 0.25f * P.bmax.y, true, wade)) continue;
+                const float wade = large ? 1.2f : (small ? 0.0f : 0.4f);        // (how far below the water the footprint may reach: try_add)
+                if (!try_add(env, piece, c, r.in(-3.14f, 3.14f), sc, 9, 0.25f * P.bmax.y, true, wade)) {
+                    if (std::getenv("VIBE_LOG_ROCKS")) log::infof("[rocks] boulder refused at (%.1f, %.1f): ground %.2f, water %.2f, wade %.1f, blocked %d", double(c.x), double(c.y), double(env.ground(c.x, c.y)), double(env.water), double(wade), env.blocked ? int(env.blocked(c.x, c.y, radius_of(P, sc))) : -1);
+                    continue;
+                }
                 // the smaller ones round it
                 const int kids = int(r() * 3.999f);
                 for (int k = 0; k < kids; ++k) {
