@@ -1,80 +1,129 @@
 #version 460
-// Auto-exposure (eye adaptation) — scene luminance reduction.
+// Auto-exposure (eye adaptation) - histogram metering, after the reference game.
 //
-// One 16x16 workgroup samples the final HDR image (TAA / upscaler output)
-// on a 64x64 grid, takes a centre-weighted average of log2 luminance and
-// adapts the stored value toward it over time (faster when it gets
-// brighter, like the eye). compose.frag reads the adapted value.
+// One 16x16 workgroup reads the final HDR image (TAA / upscaler output) on a 128x128 grid
+// into a 256-bin histogram of log2 luminance; sky pixels count 1, geometry 4 (the sky
+// entering the view must not pump the exposure). The average is the mean of the bins
+// between a low and a high percentile (the darkest corners and the sun / lamps do not
+// count). The exposure it aims for is K / avg, lowered by a curve of the average itself -
+// dark scenes stay dark (0 stops at a reference-units avg >= 0.01, -3 stops at 0.0001) - and
+// by how enclosed the camera is (indoors -0.5 .. -1.5 stops). It adapts with separate
+// speeds: when it must rise it is 1 / exposure that is interpolated (slow into the dark).
+// compose.frag applies pfx.exposure (post_fx.glsl pfx_exposure).
 //
-// Replaces the old estimate (one texel of the threshold-filtered bloom
-// mip 4 at the screen centre), which followed the crosshair and pumped.
-//
-// Sky pixels hold the scene clear colour in the HDR target (compose
-// reconstructs the real sky later), so they are counted with a sky
-// luminance passed in from the CPU instead.
+// Sky pixels hold the scene clear colour in the HDR target when the sky is drawn only by
+// compose (TAA path), so those are counted with a sky luminance from the CPU instead; with
+// DLSS / FSR 3 the sky is already in the colour (pfx.expo3.z = 1).
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(set = 0, binding = 0) uniform sampler2D u_scene;
 layout(set = 0, binding = 1) uniform sampler2D u_depth;
 layout(std430, set = 0, binding = 2) buffer Exposure {
-    float log_avg;     // adapted log2 luminance
-    float valid;       // 0 until the first frame wrote it
-    float cur_log;     // this frame's measurement (debug)
+    float log_avg;     // log2 of the metered average (kept for anything that still reads it)
+    float valid;
+    float cur_log;
     float pad;
 } ex;
+#include "post_fx.glsl"
+layout(std430, set = 0, binding = 3) buffer PostFxB { PostFxData d; } pfx;
 
 layout(push_constant) uniform PC {
-    float dt;          // seconds since the previous frame
-    float speed_up;    // adaptation rate toward brighter (1/s)
-    float speed_down;  // adaptation rate toward darker (1/s)
-    float sky_lum;     // luminance used for sky pixels
+    float dt;
+    float speed_up;
+    float speed_down;
+    float sky_lum;
 } pc;
 
-shared float s_sum[256];
-shared float s_w[256];
+shared uint s_hist[256];
+
+const float kLogMin = -16.0, kLogRange = 24.0;    // bins cover 2^-16 .. 2^8
 
 void main() {
     uint i = gl_LocalInvocationIndex;
-    vec2 cell = (vec2(gl_LocalInvocationID.xy) + 0.5) / 16.0;
-    float sum = 0.0, wsum = 0.0;
-    for (int y = 0; y < 4; ++y) {
-        for (int x = 0; x < 4; ++x) {
-            vec2 uv = cell + (vec2(x, y) - 1.5) / 64.0;
+    s_hist[i] = 0u;
+    barrier();
+    bool sky_in_colour = pfx.d.expo3.z > 0.5;
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            vec2 uv = (vec2(gl_LocalInvocationID.xy * 8u + uvec2(x, y)) + 0.5) / 128.0;
+            bool sky = textureLod(u_depth, uv, 0.0).r >= 0.99999;
             float l;
-            if (textureLod(u_depth, uv, 0.0).r >= 0.99999) {
-                l = pc.sky_lum;
+            if (sky && !sky_in_colour) {
+                l = pfx.d.expo3.y;
             } else {
                 vec3 c = textureLod(u_scene, uv, 0.0).rgb;
                 l = dot(c, vec3(0.2126, 0.7152, 0.0722));
             }
             if (!(l == l) || l > 1e4) l = 1.0;            // NaN / Inf guard
-            l = clamp(l, 1e-4, 1e4);
-            vec2 d = uv - 0.5;
-            float w = exp(-dot(d, d) * 3.0);              // mild centre weight
-            sum  += log2(l) * w;
-            wsum += w;
+            float b = clamp((log2(max(l, 1e-7)) - kLogMin) / kLogRange, 0.0, 1.0) * 255.0;
+            atomicAdd(s_hist[uint(b + 0.5)], sky ? 1u : 4u);
         }
     }
-    s_sum[i] = sum;
-    s_w[i]   = wsum;
     barrier();
-    for (uint s = 128u; s > 0u; s >>= 1u) {
-        if (i < s) {
-            s_sum[i] += s_sum[i + s];
-            s_w[i]   += s_w[i + s];
-        }
-        barrier();
-    }
     if (i == 0u) {
-        float cur = s_sum[0] / max(s_w[0], 1e-6);
-        ex.cur_log = cur;
-        if (ex.valid < 0.5 || !(ex.log_avg == ex.log_avg)) {
-            ex.log_avg = cur;
-            ex.valid = 1.0;
-        } else {
-            float rate = (cur > ex.log_avg) ? pc.speed_up : pc.speed_down;
-            ex.log_avg += (cur - ex.log_avg) * (1.0 - exp(-max(pc.dt, 0.0) * rate));
+        uint total = 0u;
+        for (int k = 0; k < 256; ++k) total += s_hist[k];
+        float lo = float(total) * pfx.d.expo2.x, hi = float(total) * pfx.d.expo2.y;
+        // Mean of log2 luminance over the part of the histogram between the two fractions.
+        float acc = 0.0, sumw = 0.0, run = 0.0;
+        for (int k = 0; k < 256; ++k) {
+            float c = float(s_hist[k]);
+            float a = max(run, lo), b = min(run + c, hi);
+            if (b > a) {
+                float lg = kLogMin + (float(k) / 255.0) * kLogRange;
+                acc += lg * (b - a);
+                sumw += b - a;
+            }
+            run += c;
         }
+        float lg_avg = (sumw > 0.0) ? acc / sumw : -2.5;
+        float avg = exp2(lg_avg);
+        // The reference's target, in its units (avg_r): 0.104 / avg_r, lowered by the dark-scene
+        // curve and the indoor term. expo.w scales Vibe's luminance to those units so that the
+        // owner's daylight look (exposure 1) is where the reference's curve has 0 stops.
+        float ar = clamp(avg * pfx.d.expo.w, 1e-5, 50.0);
+        float k = clamp((ar - 0.0001) * 101.0, 0.0, 1.0);
+        float m = clamp((ar - 0.01) / 6.99, 0.0, 1.0);
+        float inn = clamp(pfx.d.expo.z, 0.0, 1.0);
+        float A = (3.0 * k - 3.0) * (1.0 - m);
+        float B = (2.0 * k - 3.5) + (3.0 - 2.0 * k) * m;
+        float stops = A + (B - A) * inn;
+        // (expo3.w: Vibe's key - the owner's daylight look is exposure 1 - and at most one stop of
+        // lift: Vibe's nights and rooms are lit to be seen; the reference's are physically dark)
+        float target = pfx.d.expo3.w * 0.104 * exp2(stops) / ar;
+        target = clamp(target, 1.0 / 8.0, 2.0);
+        float e = pfx.d.exposure;
+        if (pfx.d.valid < 0.5 || !(e == e) || e <= 0.0) {
+            e = target;
+        } else {
+            float dt = max(pfx.d.expo3.x, 0.0);
+            if (target > e) {   // brightening the picture (into the dark): 1 / e is interpolated
+                float ie = 1.0 / e;
+                ie += (1.0 / target - ie) * (1.0 - exp2(-pfx.d.expo2.z * dt));
+                e = 1.0 / ie;
+            } else {
+                e += (target - e) * (1.0 - exp2(-pfx.d.expo2.w * dt));
+            }
+        }
+        pfx.d.exposure = e;
+        pfx.d.avg = avg;
+        pfx.d.target = target;
+        pfx.d.valid = 1.0;
+        ex.log_avg = lg_avg;
+        ex.cur_log = lg_avg;
+        ex.valid = 1.0;
+        // Depth of field autofocus: the nearest of four taps round the centre, smoothed
+        // (the reference: 0.75 of the old value each frame). Sky = far.
+        float zf = 1e9;
+        for (int k = 0; k < 4; ++k) {
+            vec2 uv = vec2(0.5) + vec2((k & 1) == 0 ? -0.02 : 0.02, (k & 2) == 0 ? -0.02 : 0.02);
+            float dz = textureLod(u_depth, uv, 0.0).r;
+            float zl = pfx_lin_depth(pfx.d, dz);
+            if (dz < 0.99999 && zl > 1.2) zf = min(zf, zl);     // (not the weapon in the hands)
+        }
+        zf = min(zf, 2000.0);
+        float fo = pfx.d.focus;
+        pfx.d.focus = (fo > 0.0 && fo == fo) ? mix(zf, fo, 0.75) : zf;
     }
 }

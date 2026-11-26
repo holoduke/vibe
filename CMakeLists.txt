@@ -356,9 +356,11 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/private_state.cpp
     src/engine/vk_engine/terrain_patches.cpp
     src/engine/vk_engine/terrain_bake.cpp
+    src/engine/vk_engine/ground_fx.cpp
     src/engine/vk_engine/regions.cpp
     src/engine/vk_engine/sites.cpp
     src/engine/vk_engine/highway_field.cpp
+    src/engine/vk_engine/light_port.cpp
     src/engine/vk_engine/highway_furniture.cpp
     src/engine/vk_engine/lane_edge.cpp
     src/engine/vk_engine/rock_formations.cpp
@@ -381,6 +383,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/rt.cpp
     src/engine/vk_engine/castle_mesh.cpp
     src/engine/vk_engine/fx.cpp
+    src/engine/vk_engine/lens_fx.cpp
     src/engine/vk_engine/glass.cpp
     src/engine/vk_engine/vegetation.cpp
     src/engine/vk_engine/veg_impostor.cpp
@@ -388,6 +391,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/aa.cpp
     src/engine/vk_engine/rocket.cpp
     src/engine/vk_engine/post.cpp
+    src/engine/vk_engine/post_fx.cpp
     src/engine/vk_engine/atmosphere.cpp
     src/engine/vk_engine/radiance_cache.cpp
     src/engine/vk_engine/craters.cpp
@@ -399,6 +403,9 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/wm_cache.cpp
     src/engine/vk_engine/grass_trail.cpp
     src/engine/vk_engine/wind_fluid.cpp
+    src/engine/vk_engine/water_sim.cpp
+    src/engine/vk_engine/water_solver.cpp
+    src/engine/vk_engine/water_spray.cpp
     src/engine/vk_engine/ssdm.cpp
     src/engine/vk_engine/flashlight.cpp
     src/engine/vk_engine/player_body.cpp
@@ -448,6 +455,7 @@ add_library(vibe_engine STATIC
     src/engine/crash_handler.cpp
     src/engine/audio.cpp
     src/engine/terrain.cpp
+    src/engine/water_course.cpp
     src/engine/terrain_clod.cpp
     src/engine/grass.cpp
     src/engine/scatter.cpp
@@ -626,6 +634,19 @@ add_custom_command(
     COMMENT "Compiling shader cube_gbuf_terrain.frag (terrain-only G-buffer variant)"
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${CUBE_GBUF_TERRAIN_SPV})
+
+# Deferred lighting that reads a hit triangle's corners (VK_KHR_ray_tracing_position_fetch): the
+# true normal at a bounce / reflection hit (light_port.cpp). Bound when the GPU has it.
+set(DEFERRED_PF_SPV "${SHADER_OUTPUT_DIR}/deferred_lighting_pf.frag.spv")
+add_custom_command(
+    OUTPUT ${DEFERRED_PF_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DVIBE_LP_POSFETCH=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/deferred_lighting.frag -o ${DEFERRED_PF_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/deferred_lighting.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader deferred_lighting_pf.frag (position-fetch variant)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${DEFERRED_PF_SPV})
 
 # Sun-shaft variant of compose.frag: the light shafts through silhouettes are
 # added to the render-resolution scene colour BEFORE the upscaler, so their

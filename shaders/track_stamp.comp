@@ -1,0 +1,44 @@
+#version 460
+// Tracks in snow and sand, step 1 of 2 (post_fx.cpp post_fx_tracks): the depth pressed into
+// the ground round the player, after the reference game's snow stamp - depth only grows
+// (max with what is there), the picture follows the player in whole texels, what leaves it is
+// gone. Each body stamps a short capsule (where it is, back along how far it went this frame,
+// so a fast car leaves an unbroken rut): a car its four wheels, a person a trodden path.
+// With no snow lying the tracks slowly fill again (pc decay).
+//   1024 x 1024 texels of 6.25 cm (a 64 m square).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_prev;        // (depth, rim) of the frame before
+layout(set = 0, binding = 1, r16f) uniform writeonly image2D o_depth;
+struct Stamp { vec4 seg; vec4 par; };   // seg: xz, the way back this frame (xz); par: x radius (m), y depth (m)
+layout(std430, set = 0, binding = 2) readonly buffer Stamps {
+    vec4 head;          // x: stamps, y: decay this frame, z: metres a texel, w: texels a side
+    vec4 org;           // xy: this frame's window corner (world x, z), zw: the frame before's
+    vec4 flags;         // x: 2 = show the tracks in colour (VIBE_TEST_TRACKS=2)
+    Stamp s[];
+} st;
+#include "post_fx.glsl"
+layout(std430, set = 0, binding = 3) buffer PostFxB { PostFxData d; } pfx;
+
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    int N = int(st.head.w);
+    if (t.x >= N || t.y >= N) return;
+    if (t == ivec2(0)) { pfx.d.trk_x = st.org.x; pfx.d.trk_z = st.org.y; pfx.d.trk_on = max(st.flags.x, 1.0); }
+    float tex = st.head.z;
+    vec2 w = st.org.xy + (vec2(t) + 0.5) * tex;
+    ivec2 pt = t + ivec2(round((st.org.xy - st.org.zw) / tex));
+    float D = 0.0;
+    if (all(greaterThanEqual(pt, ivec2(0))) && all(lessThan(pt, ivec2(N))))
+        D = texelFetch(u_prev, pt, 0).x * st.head.y;
+    int n = int(st.head.x + 0.5);
+    for (int i = 0; i < n; ++i) {
+        vec2 a = st.s[i].seg.xy, b = a - st.s[i].seg.zw;
+        vec2 ab = b - a;
+        float h = clamp(dot(w - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+        float d = length(w - (a + ab * h));
+        float r = st.s[i].par.x;
+        if (d < r) D = max(D, st.s[i].par.y * smoothstep(r, r * 0.45, d));
+    }
+    imageStore(o_depth, t, vec4(D));
+}

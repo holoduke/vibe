@@ -1,11 +1,11 @@
 #version 460
 // Screen-space displacement mapping - the height pass (fragment stage).
 //
-// Written per visible pixel of the displaced stonework, for ssdm_solve.frag:
+// Written per visible pixel of the displaced stonework (the reference game writes the same
+// into its G-buffer: the vertex normal, and the height as a byte):
 //   .rgb  the surface's own (geometric) normal, world space - the direction it is displaced in
-//   .a    how far this point stands out from the drawn surface, in metres, plus a hair
-//         (so .a > 0 marks "this pixel can be displaced", also in the joints where the
-//         height is 0); 0 = nothing to displace here
+//   .a    the height 0..1 in 1/255 steps (the target is cleared to -1: "nothing fed here");
+//         ssdm_displace.glsl turns it into metres, with the fade over distance
 //
 // The height is the wall's own height texture, with exactly the UVs cube.frag shades the
 // mesh with, so the stones that stand out are the drawn ones. Its 1 is the top of a stone,
@@ -29,7 +29,7 @@ layout(push_constant) uniform PC {
     vec4 color;
     vec4 emissive;
     vec4 tex_params;    // x albedo index, y normal index, z uv scale
-    vec4 grass_params;  // x displacement amplitude (m), y fade start (m), z fade end (m), w 1 = box brush (texture laid on by world position)
+    vec4 grass_params;  // x the material's height factor (0..1: its amplitude over the pass's full amplitude), w 1 = box brush (texture laid on by world position)
 } pc;
 
 layout(location = 0) in vec3 vWorldPos;
@@ -46,32 +46,28 @@ int height_idx_for_albedo(int a) {         // (cube.frag)
     return -1;
 }
 
+// The height byte as the reference game's G-buffer pass writes it: the height texture's value
+// times the material's factor (at most 1), rounded to 1/255.
+vec4 feed(vec3 n, float h) { return vec4(n, round(clamp(h * pc.grass_params.x, 0.0, 1.0) * 255.0) / 255.0); }
+
 void main() {
-    float fade = 1.0 - smoothstep(pc.grass_params.y, pc.grass_params.z,
-                                  distance(vWorldPos, scene.camera_pos.xyz));
     int hix = height_idx_for_albedo(int(pc.tex_params.x + 0.5));
     int rlook = int(pc.tex_params.y - 0.5);
     if (rlook == -9 || rlook == -10) {
-        // A rock formation: what of the scan stands above a third of its height rises (ribs,
-        // knobs, the edges of plates); its pores and cracks stay where the mesh is.
-        // Chalk (-10): its blocks rise between their partings and joints (rf_chalk_h), the
-        // scan's grain on top of them.
-        if (fade <= 0.0) { outHeight = vec4(0.0); return; }
+        // A rock formation: the scan's own height. Chalk (-10): its blocks between their
+        // partings and joints (rf_chalk_h), the scan's grain on top of them.
         vec3  rn = normalize(vNormal);
         RfMat rf = rf_material(vWorldPos, rn, dFdx(vWorldPos), dFdy(vWorldPos), distance(vWorldPos, scene.camera_pos.xyz));
-        float rh = smoothstep(0.30, 0.95, rf.h);
+        float rh = rf.h;
         if (rlook == -10) {
             float fl;
-            float ch = rf_chalk_h(vWorldPos, rn, fl);
-            // (blocks finer than a few pixels: their mean, or the grid is combed)
-            float px = length(dFdx(vWorldPos)) + length(dFdy(vWorldPos));
-            rh = mix(0.8 * ch + 0.2 * rh, 0.7, smoothstep(0.03, 0.10, px));
+            rh = 0.8 * rf_chalk_h(vWorldPos, rn, fl) + 0.2 * rf.h;
         }
         if (dot(rn, scene.camera_pos.xyz - vWorldPos) < 0.0) rn = -rn;
-        outHeight = vec4(rn, rh * pc.grass_params.x * fade + 1e-4);
+        outHeight = feed(rn, rh);
         return;
     }
-    if (fade <= 0.0 || hix < 0) { outHeight = vec4(0.0); return; }
+    if (hix < 0) { outHeight = vec4(normalize(vNormal), 0.0); return; }
     vec3  n = normalize(vNormal);
     vec2  muv;
     if (pc.grass_params.w > 0.5) {
@@ -82,18 +78,13 @@ void main() {
         else if (an.y >= an.z)            muv = vec2(wp.x, wp.z * sign(n.y));
         else                              muv = vec2(wp.x * sign(n.z), wp.y);
         // (floor tiles only have relief on their top: cube.frag spom_path)
-        if ((hix == 2 || hix == 3) && n.y < 0.9) { outHeight = vec4(0.0); return; }
+        if ((hix == 2 || hix == 3) && n.y < 0.9) { outHeight = vec4(n, 0.0); return; }
     } else {
         muv = vUv * pc.tex_params.z;                          // mesh part: its own UVs
     }
     if (hix == 0 || hix == 2) muv.x *= 0.5;                    // 2:1 masonry (as cube.frag)
-    // The mip level of the LONG side of the pixel's footprint (the sampler's own choice follows
-    // the short side): seen at a slant, neighbouring pixels are far apart on the wall, and
-    // heights that jump from one pixel to the next comb the grid into stripes. Blurred like
-    // this the stones still stand out of the outline, as one smooth swell each.
-    vec2  tsz = vec2(textureSize(u_height[hix], 0));
-    float fp  = max(length(dFdx(muv) * tsz), length(dFdy(muv) * tsz));
-    float h   = textureLod(u_height[hix], muv, log2(max(fp, 1.0)) + 0.5).r;
+    // (the game samples its height map with the sampler's own level of detail)
+    float h = texture(u_height[hix], muv).r;
     if (dot(n, scene.camera_pos.xyz - vWorldPos) < 0.0) n = -n;     // (the side that is seen)
-    outHeight = vec4(n, h * pc.grass_params.x * fade + 1e-4);
+    outHeight = feed(n, h);
 }

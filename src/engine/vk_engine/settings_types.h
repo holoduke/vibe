@@ -657,6 +657,14 @@ struct RtSettings {
         // The baked ground texture (vk_engine/terrain_bake.cpp): the ground's material read from
         // pictures kept round the camera instead of worked out per pixel. With the patches only.
         bool  terrain_bake               = true;
+        // The ground and the objects on it, after the reference game (vk_engine/ground_fx.cpp,
+        // shaders/ground_fx.glsl): meshes pasted into the ground at their contact line; the far
+        // ground carrying the colour of placed objects (a top-down capture round the camera);
+        // deferred decals with height-aware blending; small debris scattered on the GPU.
+        bool  ground_paste               = true;   // VIBE_NO_GROUND_PASTE=1
+        bool  ground_lsd                 = true;   // VIBE_NO_GROUND_LSD=1
+        bool  ground_decals              = true;   // VIBE_NO_GROUND_DECALS=1
+        bool  ground_debris              = true;   // VIBE_NO_GROUND_DEBRIS=1
         bool  terrain_rm_prepass         = true;  // march at low resolution first; the full pass starts from it
         int   terrain_rm_prepass_div     = 2;     // that march's pixel: 2, 3 or 4 full pixels wide
         float terrain_rm_converge        = 0.8f;  // fast final approach to the ground (0 = off, the old small steps)
@@ -723,6 +731,15 @@ struct RtSettings {
         // search and far shadows take a card as solid, 2 = all rays do.
         int   foliage_ray_mode = 1;
         bool  gi_leaf_lite = true;     // leaves take one bounce-light ray and no second-bounce ray (deferred_lighting.frag gi_leaf1)
+        // The lighting ports (light_port.cpp, docs/ARCHITECTURE.md "Lighting ports"); each has an
+        // environment override VIBE_LP_<NAME>=0/1 (light_port.cpp).
+        bool  lp_contact_shadows = true;   // screen-space contact shadow toward the sun (contact_shadow.glsl)
+        bool  lp_far_ao = false;           // AO radius that grows with distance + the bent cone for sky light / specular
+        bool  lp_leaf_tint = true;         // sun through leaf cards: part passes, tinted by the leaf
+        bool  lp_sky_rescale = true;       // a sudden drop of the sky's light scales the bounce-light caches down at once
+        bool  lp_bounce_albedo = false;    // bounce / reflection hits take the hit's own colour (materials table) and normal
+        bool  lp_lamp_pick = true;         // all lamps in one list, one picked per pixel (+ the nearest few looped)
+        bool  lp_screen_march = false;     // a short depth-buffer march before the reflection / bounce ray
         // FSR3 Frame Generation. Only meaningful when fsr_backend == 1.
         // Session 3 dispatches FG to a private output image without
         // presenting it — sessions 4-6 wire it into the swapchain
@@ -756,6 +773,9 @@ struct RtSettings {
         // around the screen center, samples ghosts along the light axis,
         // adds a halo ring + chromatic aberration. Runs in the compose pass.
         bool  lens_flare_enabled    = true;
+        // Rain on the lens (lens_fx.cpp): drops land on the camera in the rain under open
+        // sky, run down and dry; the picture is refracted through them.
+        bool  lens_rain             = true;
         float lens_flare_strength   = 0.5f;
         float lens_flare_threshold  = 1.4f;   // HDR luminance cutoff
         float lens_flare_dispersal  = 0.30f;  // ghost spacing along axis
@@ -823,6 +843,21 @@ struct RtSettings {
         float grade_split_tone  = 0.25f;   // teal shadows / warm highlights
         float film_grain        = 0.12f;
         float vignette_strength = 0.30f;
+        // Post-processing after the reference game (post_fx.cpp; docs/ARCHITECTURE.md "Post
+        // effects"). Each has an environment override VIBE_PFX_<KEY in capitals>.
+        int   agx_look = 1;                // AgX path: day saturation / shadow gain, the night look
+        float exposure_comp_ev = 0.0f;     // manual exposure compensation (stops), with or without auto exposure
+        float exposure_indoor = 1.0f;      // indoor term of the metering (0 off .. 1 the reference's 0.5-1.5 stops)
+        float exposure_speed_up = 1.2f;    // adaptation toward a brighter picture (1/s, exp2)
+        float exposure_speed_down = 3.0f;  // toward a darker picture
+        float ltm_strength = 0.5f;         // local tone mapping (exposure fusion), 0 = off
+        float glare_strength = 1.0f;       // star / streak sprites on very bright pixels, 0 = off
+        float motion_blur = 0.5f;          // translation / object motion blur strength, 0 = off
+        bool  motion_blur_camera = false;  // also blur the camera's own turning
+        float dof_strength = 1.0f;         // depth of field while aiming down sights, 0 = off
+        int   colorblind_mode = 0;         // 0 off, 1 protan, 2 deutan, 3 tritan (a simulation view)
+        bool  particle_fog_light = true;   // smoke / dust lit and fogged from the froxel volume
+        bool  snow_tracks = true;          // wheel ruts and NPC tracks with raised rims in snow / sand
         // Raymarched-terrain RT (shadows / AO / GI) cutoff distance.
         // Effect fades smoothly from `* 0.6` to this value, then turns
         // off entirely past it. 250 m default keeps gameplay-range

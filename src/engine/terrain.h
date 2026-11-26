@@ -92,6 +92,10 @@ void world_ground_without_station(bool on);
 // The landscape formula's land / sea value at a place in home's chart (0 at the waterline,
 // rising inland).
 float world_continent_home(float x, float z);
+// The same at a place in the CURRENT chart (shaders: rm_continent; any chart), and its distance
+// from home (m; shaders: rm_home_dist - 1e9 on a chart beyond home's rules, globe::Ring).
+float world_continent_at(float x, float z);
+float world_home_distance(float x, float z);
 // The river (the formula's wm::river): its course from the spring by the castle to its mouth,
 // and the slow sideways wander of the whole channel - the channel's middle lies at a course
 // point less the wander there. For what is laid out along it (highway.cpp: the castle lane).

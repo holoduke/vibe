@@ -79,6 +79,27 @@ layout(set = 0, binding = 7) uniform sampler3D u_atmo_ap;
 layout(set = 0, binding = 8) uniform sampler2D u_clouds;
 // Froxel volumetric fog, integrated (rgb in-scatter, a transmittance).
 layout(set = 0, binding = 9) uniform sampler3D u_fog;
+// Post-processing parameters + the metered exposure (vk_engine/post_fx.cpp, shaders/post_fx.glsl).
+#include "post_fx.glsl"
+layout(std430, set = 0, binding = 10) readonly buffer PostFxB { PostFxData d; } pfx;
+// Local tone mapping: the guided fit (a, b) of the fused luma against the luma, low resolution (ltm_guide.comp).
+layout(set = 0, binding = 11) uniform sampler2D u_ltm;
+#include "tonemap.glsl"
+// Camera weather, heat and the moon (vk_engine/lens_fx.cpp, shaders/lens_fx.comp): the water
+// on the lens (r thickness), the heat-shimmer offsets (uv), and their block.
+layout(set = 0, binding = 12) uniform sampler2D u_lens;
+layout(set = 0, binding = 13) uniform sampler2D u_shimmer;
+layout(std430, set = 0, binding = 14) readonly buffer LensFx {
+    vec4 moon_dir;     // xyz toward the moon, w radiance scale (0 = not drawn)
+    vec4 sun_true;     // xyz toward the real sun, w 1 = pc.sun_dir is not the sun (no sun disc there)
+    vec4 moon_misc;    // x angular radius (rad), y earthshine share
+    vec4 lens;         // x rain on the lens shown, y shimmer drawn, z time (s), w frame
+    vec4 rain;
+    vec4 cam;
+    mat4 inv_vp;
+    vec4 sh_info;
+    vec4 src[32];
+} lfx;
 
 vec3 atmo_sun_illum() {
     // x pi: the engine folds 1/pi into its sun intensity (diffuse =
@@ -395,6 +416,46 @@ vec4 planet_surface(vec3 dir, vec3 sun) {
     return vec4(seen * ext + hazed * (1.0 - ext), k);
 }
 
+// ---- The moon: a sphere lit by the sun ------------------------------
+// Where it stands and where the real sun stands come from environment.cpp (lens_fx.cpp hands
+// them over), so the phase is the geometry's: the sunlit half of a ball seen from here. The
+// surface scatters as dust does (Lommel-Seeliger: an evenly bright full disc, a soft
+// terminator), a little darker toward the limb; the dark part gets earthshine (most at new
+// moon, when the earth seen from the moon is full); the maria are darker patches in the
+// disc's own frame. Through the atmosphere's transmittance (redder low down); the clouds and
+// the fog are laid over it by the caller as over the rest of the sky.
+float moon_maria(vec2 q) {
+    const vec4 m[7] = vec4[7](vec4(-0.30, 0.42, 0.28, 0.9), vec4(0.14, 0.40, 0.18, 0.8), vec4(0.30, 0.12, 0.22, 0.8),
+                              vec4(0.66, 0.30, 0.12, 0.9), vec4(0.48, -0.18, 0.16, 0.7), vec4(-0.16, -0.40, 0.18, 0.6),
+                              vec4(-0.58, 0.05, 0.34, 0.7));
+    float s = 0.0;
+    for (int i = 0; i < 7; ++i) { vec2 d = q - m[i].xy; s += m[i].w * exp(-dot(d, d) / (m[i].z * m[i].z)); }
+    float n = sin(q.x * 23.0 + 1.3) * sin(q.y * 19.0 - 0.7) * 0.5 + sin(q.x * 51.0 - q.y * 37.0) * 0.25;
+    return clamp(s + 0.12 * n, 0.0, 1.0);
+}
+vec3 atmo_moon(vec3 dir) {
+    float k = lfx.moon_dir.w;
+    if (k <= 0.0 || dir.y < -0.02) return vec3(0.0);
+    vec3 M = normalize(lfx.moon_dir.xyz);
+    float r = lfx.moon_misc.x;
+    if (dot(dir, M) < cos(r * 1.15)) return vec3(0.0);
+    vec3 rt = normalize(cross(M, abs(M.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 up = cross(rt, M);
+    vec2 q = vec2(dot(dir, rt), dot(dir, up)) / r;
+    float q2 = dot(q, q);
+    float edge = 1.0 - smoothstep(0.90, 1.0, sqrt(q2));
+    if (edge <= 0.0) return vec3(0.0);
+    vec3 n = q.x * rt + q.y * up - sqrt(max(1.0 - q2, 0.0)) * M;      // the sphere's normal (toward us)
+    vec3 S = normalize(lfx.sun_true.xyz);
+    float mu0 = dot(n, S), mu = max(dot(n, -dir), 0.0);
+    float lit = mu0 > 0.0 ? 2.0 * mu0 / (mu0 + mu + 1e-3) : 0.0;
+    lit *= 0.78 + 0.22 * mu;                                            // (limb darkening)
+    float earth = lfx.moon_misc.y * 0.5 * (1.0 + dot(S, M)) * (0.4 + 0.6 * mu);
+    float alb = 1.0 - 0.42 * moon_maria(q);
+    vec3 ts = textureLod(u_atmo_trans, trans_uv(pc.atmo.z, dir.y), 0.0).rgb;
+    return vec3(1.0, 0.97, 0.92) * (alb * (lit + earth) * edge * k) * ts;
+}
+
 vec3 atmo_sky(vec3 dir) {
     vec3 sun = normalize(pc.sun_dir.xyz);
     float elev = asin(clamp(dir.y, -1.0, 1.0));
@@ -407,11 +468,13 @@ vec3 atmo_sky(vec3 dir) {
     // hidden below the horizon.
     float c = dot(dir, sun);
     float disc = smoothstep(0.99996, 0.999985, c);
-    if (disc > 0.0 && dir.y > -0.02) {
+    // (only when the light is the sun: at night pc.sun_dir is the moon or the glow under the
+    //  horizon - the moon is drawn as itself below)
+    if (disc > 0.0 && dir.y > -0.02 && lfx.sun_true.w < 0.5) {
         vec3 ts = textureLod(u_atmo_trans, trans_uv(pc.atmo.z, dir.y), 0.0).rgb;
         L += ts * disc * 60.0;
     }
-    vec3 sky = L * atmo_sun_illum();
+    vec3 sky = L * atmo_sun_illum() + atmo_moon(dir);
     // From high up: the planet below (0 at ground level - nothing changes there).
     vec4 pl = planet_surface(dir, sun);
     // Above the atmosphere the sky-view LUT no longer applies (it is made for a
@@ -530,56 +593,7 @@ vec4 atmo_aerial(vec2 uv, float d_km) {
     return textureLod(u_atmo_ap, vec3(uv, (w + 0.5) / 32.0), 0.0);
 }
 
-// AgX (Troy Sobotka, Blender 4) - minimal version with the 6th-order
-// sigmoid fit (Benjamin Wrensch). Smooth highlight desaturation toward
-// white instead of ACES' hue skews; outputs display-referred sRGB-linear.
-vec3 agx(vec3 c) {
-    const mat3 agx_in = mat3(0.842479062253094, 0.0423282422610123, 0.0423756549057051,
-                             0.0784335999999992, 0.878468636469772, 0.0784336,
-                             0.0792237451477643, 0.0791661274605434, 0.879142973793104);
-    const mat3 agx_out = mat3(1.19687900512017, -0.0528968517574562, -0.0529716355144438,
-                              -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
-                              -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
-    const float min_ev = -12.47393, max_ev = 4.026069;
-    c = agx_in * max(c, vec3(1e-10));
-    c = clamp(log2(c), min_ev, max_ev);
-    c = (c - min_ev) / (max_ev - min_ev);
-    vec3 x2 = c * c, x4 = x2 * x2;
-    c = 15.5 * x4 * x2 - 40.14 * x4 * c + 31.96 * x4 - 6.868 * x2 * c
-        + 0.4298 * x2 + 0.1191 * c - 0.00232;
-    c = agx_out * c;
-    return pow(max(c, vec3(0.0)), vec3(2.2));   // AgX base is ~gamma 2.2 encoded
-}
-// Khronos PBR Neutral (2024): hue-preserving, keeps base colours exact
-// below 0.8 and compresses only the highlights.
-vec3 pbr_neutral(vec3 color) {
-    const float start = 0.8 - 0.04, desat = 0.15;
-    float x = min(color.r, min(color.g, color.b));
-    float off = x < 0.08 ? x - 6.25 * x * x : 0.04;
-    color -= off;
-    float peak = max(color.r, max(color.g, color.b));
-    if (peak < start) return color;
-    float d = 1.0 - start;
-    float np = 1.0 - d * d / (peak + d - start);
-    color *= np / peak;
-    float g = 1.0 - 1.0 / (desat * (peak - np) + 1.0);
-    return mix(color, vec3(np), g);
-}
-
-vec3 aces_fitted(vec3 x) {
-    const mat3 in_m = mat3(
-        0.59719, 0.07600, 0.02840,
-        0.35458, 0.90834, 0.13383,
-        0.04823, 0.01566, 0.83777);
-    const mat3 out_m = mat3(
-         1.60475, -0.10208, -0.00327,
-        -0.53108,  1.10813, -0.07276,
-        -0.07367, -0.00605,  1.07602);
-    vec3 v = in_m * x;
-    vec3 a = v * (v + 0.0245786) - 0.000090537;
-    vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
-    return clamp(out_m * (a / b), 0.0, 1.0);
-}
+// (the tone curves - AgX with its look, PBR Neutral, ACES fitted - are in tonemap.glsl)
 
 // Exact piecewise sRGB OETF (the old pow(1/2.2) lifted near-black:
 // linear 0.01 -> 0.123 instead of 0.0998, which washed out shadows).
@@ -1049,18 +1063,54 @@ vec4 fog_at(vec2 uvp, float dm) {
     vec2 fp = uvp * fdim.xy - 0.5;
     vec2 f0 = floor(fp), ff = fp - f0;
     ivec2 dsz = textureSize(history_depth, 0);
+    // A froxel column whose centre ray hits geometry NEARER than this pixel's depth carries,
+    // beyond that hit, fog from inside / behind the object (lit by nothing: the object shades
+    // it) - it must not be used for a pixel whose ray passes the object. The 2x2 columns round
+    // the pixel first; where none of them sees as far as the pixel (the background just beside
+    // a silhouette), the 4x4 block round it, the nearer columns weighing more; where none of
+    // those either, each column's fog only up to its own hit (what lies in front of the
+    // object). Before 2026-11-26 the hidden columns were averaged in that case: a dark outline
+    // round everything in front of brightly lit fog (the lamps' and car beams' halos).
     vec4 acc = vec4(0.0); float wsum = 0.0;
+    vec4 acc_c = vec4(0.0); float wsum_c = 0.0;
     for (int k = 0; k < 4; ++k) {
         vec2 o = vec2(k & 1, k >> 1);
         vec2 cuv = clamp((f0 + o + 0.5) / fdim.xy, vec2(0.0), vec2(1.0));
         float cd = texelFetch(history_depth, clamp(ivec2(cuv * vec2(dsz)), ivec2(0), dsz - 1), 0).r;
         float cdist = (cd < 0.99999) ? eye_dist(cuv, cd) : 1e9;
         float bw = (o.x > 0.5 ? ff.x : 1.0 - ff.x) * (o.y > 0.5 ? ff.y : 1.0 - ff.y);
-        float w = bw * ((cdist >= dm * 0.85 - 1.0) ? 1.0 : 0.001);
-        acc += textureLod(u_fog, vec3(cuv, wz), 0.0) * w;
-        wsum += w;
+        if (cdist >= dm * 0.85 - 1.0) {
+            acc += textureLod(u_fog, vec3(cuv, wz), 0.0) * bw;
+            wsum += bw;
+        } else {
+            float sc = sqrt(min(cdist, dm) / pc.tone.y) * 64.0 - 1.0;
+            vec4 v = textureLod(u_fog, vec3(cuv, (max(sc, 0.0) + 0.5) / 64.0), 0.0);
+            if (sc < 0.0) v = mix(vec4(0.0, 0.0, 0.0, 1.0), v, clamp(sc + 1.0, 0.0, 1.0));
+            acc_c += v * (bw + 1e-4);
+            wsum_c += bw + 1e-4;
+        }
     }
-    vec4 fs = (wsum > 1e-7) ? acc / wsum : textureLod(u_fog, vec3(uvp, wz), 0.0);
+    vec4 fs;
+    if (wsum > 0.02) {
+        fs = acc / wsum;
+    } else {
+        vec4 acc2 = vec4(0.0); float w2 = 0.0;
+        for (int j = -1; j <= 2; ++j)
+            for (int i = -1; i <= 2; ++i) {
+                if (i >= 0 && i <= 1 && j >= 0 && j <= 1) continue;     // (the 2x2 above)
+                vec2 cuv = clamp((f0 + vec2(i, j) + 0.5) / fdim.xy, vec2(0.0), vec2(1.0));
+                float cd = texelFetch(history_depth, clamp(ivec2(cuv * vec2(dsz)), ivec2(0), dsz - 1), 0).r;
+                float cdist = (cd < 0.99999) ? eye_dist(cuv, cd) : 1e9;
+                if (cdist < dm * 0.85 - 1.0) continue;
+                vec2 dd = vec2(i, j) - ff;
+                float w = exp(-dot(dd, dd));
+                acc2 += textureLod(u_fog, vec3(cuv, wz), 0.0) * w;
+                w2 += w;
+            }
+        if (w2 > 1e-4) fs = (acc + acc2) / (wsum + w2);
+        else if (wsum_c > 0.0) return (wsum > 1e-6) ? (acc + acc_c) / (wsum + wsum_c) : acc_c / wsum_c;
+        else fs = textureLod(u_fog, vec3(uvp, wz), 0.0);
+    }
     return (s < 0.0) ? mix(vec4(0.0, 0.0, 0.0, 1.0), fs, clamp(s + 1.0, 0.0, 1.0)) : fs;
 }
 
@@ -1186,6 +1236,28 @@ void main() {
         vec2 cq = sample_uv - 0.5;
         sample_uv = clamp(sample_uv + wob * (0.0016 + 0.006 * dot(cq, cq)), vec2(0.002), vec2(0.998));
     }
+    // Rain on the lens and heat shimmer (lens_fx.cpp): the picture is looked up through the
+    // water's surface on the glass (its slope bends the view) and through the hot air's offsets.
+    // The highlight and the drops' dark rims are added further down (after the fog).
+    float lens_spec = 0.0, lens_rim = 0.0;
+    if (!uw && lfx.lens.x > 0.5) {
+        vec2 luv = gl_FragCoord.xy * pc.viewport.zw;
+        vec2 lt = 1.0 / vec2(textureSize(u_lens, 0));
+        float h0 = textureLod(u_lens, luv, 0.0).r;
+        if (h0 > 0.02) {
+            vec2 sl = vec2(textureLod(u_lens, luv + vec2(lt.x, 0.0), 0.0).r - textureLod(u_lens, luv - vec2(lt.x, 0.0), 0.0).r,
+                           textureLod(u_lens, luv + vec2(0.0, lt.y), 0.0).r - textureLod(u_lens, luv - vec2(0.0, lt.y), 0.0).r) * 0.5;
+            // (a full drop is a strong lens: what lies behind it is seen shifted by about its size)
+            vec2 loff = -sl * 0.22;
+            loff *= min(1.0, 0.035 / max(length(loff), 1e-5));
+            sample_uv = clamp(sample_uv + loff - vec2(0.0, 0.006) * min(h0, 1.0), vec2(0.001), vec2(0.999));
+            vec3 ln = normalize(vec3(-sl * 7.0, 1.0));
+            lens_spec = pow(max(dot(ln, normalize(vec3(-0.30, -0.55, 0.78))), 0.0), 16.0) * smoothstep(0.05, 0.3, h0);
+            lens_rim = clamp(length(sl) * 5.0, 0.0, 1.0) * smoothstep(0.02, 0.2, h0);
+        }
+    }
+    if (!uw && lfx.lens.y > 0.5)
+        sample_uv = clamp(sample_uv + textureLod(u_shimmer, gl_FragCoord.xy * pc.viewport.zw, 0.0).rg, vec2(0.001), vec2(0.999));
     // FSR1 EASU upscale for the colour history — edge-adaptive 12-tap
     // reconstruction that's much sharper than bilinear or Catmull-Rom
     // at non-100 % render scale, with no ringing halos.
@@ -1441,6 +1513,11 @@ void main() {
         }
     }
     hdr = hdr_obj + hdr_sky;
+    // Rain on the lens: the drops' rims bend light away (darker), their tops catch a highlight.
+    if (lens_spec + lens_rim > 0.0) {
+        float hl = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
+        hdr = hdr * (1.0 - 0.45 * lens_rim) + vec3(lens_spec) * (1.5 * hl + 0.03);
+    }
 
     // ---- Underwater ----
     // Water absorbs red within a few metres and green / blue more slowly,
@@ -1609,28 +1686,11 @@ void main() {
     // sharpen_params.y carries auto_exposure_strength (0 = off, 1 =
     // full adaptation). 0.5 default is enough to get the "step out
     // into sun and squint" effect without flattening contrast.
-    if (pc.sharpen_params.y > 0.0) {
-        // Sample the smallest mip for a coarse scene-luminance estimate.
-        // kBloomMips = 5 in the engine, so the smallest mip is index 4.
-        // The previous 6.0 value was stale (from when kBloomMips = 7);
-        // it relied on the sampler's max-LOD clamp, which works but
-        // requires the all-mips view bound at this binding.
-        // Centre-weighted, temporally adapted average from exposure.comp
-        // (was one texel of bloom mip 4 at the crosshair -> pumping).
-        float scene_avg = (u_exposure.valid > 0.5) ? max(0.005, exp2(u_exposure.log_avg)) : 0.18;
-        const float kTarget = 0.18;        // mid-grey target
-        float ratio = kTarget / scene_avg;
-        ratio = clamp(ratio, 0.4, 4.0);    // bound the auto-correction
-        // strength = 0 -> ratio collapses to 1 (no scaling)
-        // strength = 1 -> full ratio applied
-        float exposure = pow(ratio, pc.sharpen_params.y * 0.5);
-        // Halved strength + tighter clamp [0.7, 1.6] above keeps the
-        // exposure from oscillating frame-to-frame when a bright cube
-        // briefly enters the bloom-mip's average — that swing was the
-        // visible "surface flicker" between bright and dark frames.
-        exposure = clamp(exposure, 0.7, 1.6);
-        hdr *= exposure;
-    }
+    // (2026-11-26: the metering is a 256-bin histogram in exposure.comp - percentiles, sky
+    // weighted 1 : 4, the dark-scene curve and the indoor term; see post_fx.cpp. The old
+    // centre-weighted average and its 0.7 - 1.6 clamp are gone. Strength 0 = off: only the
+    // manual compensation applies.)
+    hdr *= pfx_exposure(pfx.d);
 
     // NaN / inf guard — any single corrupt pixel before tonemap (e.g. a
     // path-traced bounce that happened to land on a sun-disk halo and
@@ -1640,7 +1700,10 @@ void main() {
     hdr = clamp(hdr, vec3(0.0), vec3(64.0));
 
     int tm = int(pc.tone.x + 0.5) & 7;
-    vec3 mapped = (tm == 1) ? agx(hdr) : (tm == 2) ? pbr_neutral(hdr) : aces_fitted(hdr);
+    vec3 mapped = tone_curve(hdr, tm, pfx.d.look.x, pfx_look_L(pfx.d), pfx.d.look.y);
+    // Local tone mapping (exposure fusion, ltm_*.comp): the low-resolution guided fit of the
+    // fused luma against this luma gives the gain for this pixel (post_fx.glsl).
+    if (pfx.d.ltm.x > 0.0) mapped = pfx_ltm_apply(mapped, textureLod(u_ltm, gl_FragCoord.xy * pc.viewport.zw, 0.0).xy, pfx.d.ltm.x);
     // Tone controls applied post-tonemap, pre-sRGB. Order: brightness
     // (linear scale) -> contrast (pivot around 0.5) -> gamma curve.
     float brightness = max(pc.sharpen_params.w, 0.001);
@@ -1727,6 +1790,8 @@ void main() {
     // bands), white rather than interleaved-gradient noise (that one has a
     // visible diagonal weave in near-black areas), and re-seeded every
     // frame so the eye averages it away.
+    // Colour-blind filter (accessibility setting): a 3x3 matrix in display-linear (post_fx.glsl).
+    if (pfx.d.look.w > 0.5) mapped = pfx_colorblind(mapped, int(pfx.d.look.w + 0.5));
     vec3 dith;
     {
         uvec2 dp = uvec2(gl_FragCoord.xy);

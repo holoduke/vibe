@@ -16,10 +16,20 @@ struct VulkanEngine::FogState {
     // dominant per-pixel cost on godray-on configs.
     TextureSlot wisp{};
     // Froxel volumetric fog (froxel_fog.comp): inject + integrated volumes.
+    // Two inject volumes, used in turn: this frame's is written while last frame's is read
+    // as the history (temporal accumulation). sets[k] writes inject_k[k] and reads the other.
     AtmoImage              inject, integ;
+    AtmoImage              inject_b;           // the second of the pair
     VkDescriptorSetLayout  set_layout = VK_NULL_HANDLE;
     VkDescriptorPool       pool = VK_NULL_HANDLE;
-    VkDescriptorSet        set = VK_NULL_HANDLE;
+    VkDescriptorSet        set = VK_NULL_HANDLE;     // = sets[0]
+    VkDescriptorSet        sets[2]{ VK_NULL_HANDLE, VK_NULL_HANDLE };
+    int                    cur = 0;                  // the set used last
+    // What last frame's volume was made with (its reprojection), and whether it may be used:
+    // false after start-up, a teleport or a chart change (the eye jumped).
+    glm::mat4              last_vp{1.0f};
+    glm::vec3              last_eye{0.0f};
+    bool                   have_hist = false;
     VkPipelineLayout       pipeline_layout = VK_NULL_HANDLE;
     VkPipeline             pipeline = VK_NULL_HANDLE;
     VkAccelerationStructureKHR tlas_bound = VK_NULL_HANDLE;

@@ -3,6 +3,7 @@
 
 #include "engine/road.h"
 #include "engine/terrain.h"
+#include "engine/water_course.h"
 #include "engine/lsystem.h"
 #include "engine/log.h"
 #include "engine/eztree.h"
@@ -311,6 +312,7 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
     auto excluded = [&](float x, float z) {
         for (const auto& k : P.keep_out)
             if ((x - k.x) * (x - k.x) + (z - k.y) * (z - k.y) < k.z * k.z) return true;
+        if (wc::stream_distance(glm::vec2(x, z), P.water_level) < 2.0f) return true;      // (not in the stream: engine/water_course.h)
         return false;
     };
     const float road_clear = road ? road->half_width + road->shoulder : 0.0f;

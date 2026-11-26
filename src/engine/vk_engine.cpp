@@ -89,6 +89,8 @@ extern "C" __declspec(dllimport) int __stdcall TerminateProcess(void*, unsigned 
 
 namespace vibe {
 void process_memory_mb(double& working, double& committed);      // (mem_log.cpp)
+// Which step of closing the game is running (the exit watchdog in run() logs it if closing hangs).
+static std::atomic<const char*> g_exit_stage{ "running" };
 
 // PushConstants, SceneUBO, debug_callback, spark_blackbody, align_local_y_to,
 // recoil_kick, xorshift32 / frand / frand_range, buffer_device_address,
@@ -204,6 +206,7 @@ void VulkanEngine::init() {
     // below captures — without this the FSR2 path runs with bias 0.
     update_texture_sampler_for_fsr2();
     init_descriptors();
+    init_ground_fx();            // (scene set bindings 60, 61 - written here, with the layout; the deferred set's 30 when that set is made: ground_fx.cpp)
     present_loader_frame("Building ray tracing",  0.50f);
     init_rt();
     {
@@ -310,6 +313,8 @@ void VulkanEngine::init() {
     init_wm_cache();              // (after init_taa: the same full-screen triangle)
     init_grass_trail();           // (the same triangle; scene bindings 41, 42)
     init_wind_fluid();            // (scene binding 45)
+    init_water_sim();             // (scene bindings 51..53)
+    init_water_solver();          // (scene binding 54)
     init_viewmodel();
     init_spacejet();
     init_fx();
@@ -800,6 +805,16 @@ void VulkanEngine::run(const RunOptions& opts) {
                            used / 1048576.0, ours / 1048576.0, static_cast<unsigned long long>(allocs), static_cast<unsigned long long>(blocks),
                            ws, pv, hw_chunks_.size(), mesh_parts_now().size(), world_.aabbs.size() + wv_cols_.size(), double(frame_dt) * 1000.0);
             }
+            // VIBE_SHOT_WAIT_FULL=1: a test copy's frame count and screenshot wait while the full
+            // terrain shader is still compiling (the lite build is drawn meanwhile; how long that takes
+            // depends on the machine's load, not on a number of frames).
+            {
+                static const bool wait_full = std::getenv("VIBE_SHOT_WAIT_FULL") != nullptr;
+                if (wait_full && terrain_rm_build_[0].valid()) {
+                    if (opts_.max_frames >= 0) ++opts_.max_frames;
+                    ++opts_.screenshot_after_frames;
+                }
+            }
             if (opts_.max_frames >= 0 &&
                 static_cast<int>(frame_number_) >= opts_.max_frames) {
 
@@ -827,8 +842,33 @@ void VulkanEngine::run(const RunOptions& opts) {
     }
     // Skip the wait if we already know the device is dead — otherwise we
     // hang in vkDeviceWaitIdle for several seconds before shutdown can run.
+    // The way out is watched: test copies of the game hung after their screenshot (no log line
+    // after "exiting loop"), held their lock and blocked the next run. If closing takes more than
+    // 45 s the watchdog logs the step it stands in (g_exit_stage) and ends the process.
+    g_exit_stage.store("device wait idle (end of run)");
+    // (Not while the terrain shader's background compile is being waited for - destroy_terrain_
+    //  raymarch_pipeline: that is the warm-up a first start after a shader change needs, 1 - 3
+    //  minutes, after which the pipeline cache is saved. That wait was what looked like a hang.)
+    std::thread([] {
+        int waited = 0; bool told = false;
+        while (waited < 45) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            const char* st = g_exit_stage.load();
+            if (std::strncmp(st, "destroy_terrain", 15) == 0) {      // (the terrain's, its water plane's and its bake's shaders compile on threads)
+                if (!told) { told = true; log::info("[exit] waiting for the terrain shader's compile to finish (it is then saved in the pipeline cache)"); }
+                continue;
+            }
+            ++waited;
+        }
+        log::errorf("[exit] still closing after 45 s, stuck in: %s - ending the process", g_exit_stage.load());
+        log::close();
+        std::fflush(nullptr);
+        TerminateProcess(GetCurrentProcess(), 3);
+    }).detach();
     if (device_ && !device_lost_) vkDeviceWaitIdle(device_);
+    g_exit_stage.store("mp_shutdown");
     mp_shutdown();
+    g_exit_stage.store("after run (main)");
 }
 
 void VulkanEngine::shutdown() {
@@ -848,6 +888,7 @@ void VulkanEngine::shutdown() {
     // an earlier unwinding step). Cleanup continues regardless.
     auto guarded = [](const char* label, auto&& fn) {
         try {
+            g_exit_stage.store(label);
             fn();
         } catch (const std::exception& e) {
             // typeid().name() lives in rdata — safe to log even if the
@@ -907,6 +948,7 @@ void VulkanEngine::shutdown() {
     guarded("destroy_rt",     [&]{ destroy_rt(); });
     guarded("physics_.reset", [&]{ physics_.reset(); });
     guarded("jobs::shutdown", [&]{ jobs::shutdown(); });
+    guarded("destroy_ground_fx", [&]{ destroy_ground_fx(); });
     guarded("destroy_descriptors", [&]{ destroy_descriptors(); });
     guarded("destroy_upload_ring", [&]{ destroy_upload_ring(); });
     guarded("destroy_meshes", [&]{
@@ -925,6 +967,8 @@ void VulkanEngine::shutdown() {
     guarded("destroy_wm_cache", [&]{ destroy_wm_cache(); });
     guarded("destroy_grass_trail", [&]{ destroy_grass_trail(); });
     guarded("destroy_wind_fluid", [&]{ destroy_wind_fluid(); });
+    guarded("destroy_water_sim", [&]{ destroy_water_sim(); });
+    guarded("destroy_water_solver", [&]{ destroy_water_solver(); });
     guarded("destroy_grass_pipeline", [&]{ destroy_grass_pipeline(); });
     guarded("destroy_scatter_pipeline", [&]{ destroy_scatter_pipeline(); });
     guarded("destroy_terrain_height_texture", [&]{ destroy_terrain_height_texture(); });

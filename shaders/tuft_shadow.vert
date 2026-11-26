@@ -36,6 +36,18 @@ void main() {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     vec3  base = inPosScale.xyz;
     // Only what the placement made: hand-placed tufts are in the CPU cells' pass.
+    // Small debris (parts 20..27: scatter_debris_meshes.inl, placed by tuft_place.comp): lying flat,
+    // turned about the vertical - its small shadow in the near map (clutter_shadow.cpp, layer 1).
+    if (inPosScale.w < 0.0 && int(inUv.x + 0.5) >= 20) {
+        vec2 dd = base.xz - pc.model[0].xz;
+        if (dot(dd, dd) > pc.model[0].w * pc.model[0].w) return;
+        float c = cos(inRotTint.x), s = sin(inRotTint.x);
+        vec3 lp = inPos * -inPosScale.w;
+        vec3 w = base + vec3(c * lp.x - s * lp.z, lp.y, s * lp.x + c * lp.z);
+        if (pc.grass_params.w > 0.5) w.y += floor(inRotTint.x / 6.2831853) * 0.004 * (1.0 - smoothstep(10.0, 26.0, distance(base, scene.camera_pos.xyz)));
+        gl_Position = pc.mvp * vec4(w, 1.0);
+        return;
+    }
     if (inPosScale.w >= 0.0 || (int(inUv.x + 0.5) != 8 && int(inUv.x + 0.5) != 10)) return;
     float size = -inPosScale.w;
     vec2  d = base.xz - pc.model[0].xz;

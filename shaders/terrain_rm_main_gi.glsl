@@ -183,7 +183,7 @@
 
     vec3 lin = vec3(0.0);
     float cl_sh = cloud_shadow(pos);
-    lin += dif * sha * cl_sh * scene.sun_color.rgb * scene.sun_color.a;
+    lin += dif * sha * cl_sh * scene.sun_color.rgb * scene.sun_color.a * g_rm_sun_tint;   // (g_rm_sun_tint: the hue the leaves let by - rm_rt_sun_shadow)
     // Ambient + Fresnel rim term darkened by RTAO. ao_punch pow-curves
     // the AO so > 1 makes mid-AO drop fast (corners punch dark) while
     // 1.0 keeps the original linear behaviour. Driven by the

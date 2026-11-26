@@ -11,6 +11,7 @@
 #include "engine/vk_engine/state/car_traffic.h"
 #include "engine/vk_engine/state/clutter_shadow.h"
 #include "engine/vk_engine/state/compose.h"
+#include "engine/vk_engine/state/post_fx.h"
 #include "engine/vk_engine/state/dlss.h"
 #include "engine/vk_engine/state/environment.h"
 #include "engine/vk_engine/state/fog.h"
@@ -18,6 +19,7 @@
 #include "engine/vk_engine/state/fsr3.h"
 #include "engine/vk_engine/state/fx.h"
 #include "engine/vk_engine/state/glass.h"
+#include "engine/vk_engine/state/lens_fx.h"
 #include "engine/vk_engine/state/multiplayer.h"
 #include "engine/vk_engine/state/plant_gpu.h"
 #include "engine/vk_engine/state/regions.h"
@@ -32,6 +34,7 @@
 #include "engine/vk_engine/state/taa.h"
 #include "engine/vk_engine/state/taau.h"
 #include "engine/vk_engine/state/terrain_bake.h"
+#include "engine/vk_engine/state/ground_fx.h"
 #include "engine/vk_engine/state/terrain_patches.h"
 #include "engine/vk_engine/state/terrain_raymarch.h"
 #include "engine/vk_engine/state/voxel.h"
@@ -48,6 +51,7 @@ void VulkanEngine::alloc_private_state() {
     clutter_ = new ClutterShadowState();
     cars_x_ = new CarTrafficState();
     compose_ = new ComposeState();
+    pfx_ = new PostFxState();
     dlss_ = new DlssState();
     env_ = new EnvState();
     fog_ = new FogState();
@@ -55,6 +59,7 @@ void VulkanEngine::alloc_private_state() {
     fsr3_ = new Fsr3State();
     fx_ = new FxState();
     glass_ = new GlassState();
+    lens_fx_ = new LensFxState();
     mp_ = new MultiplayerState();
     pg_ = new PlantGpuState();
     rr_ = new RrGuideState();
@@ -69,6 +74,7 @@ void VulkanEngine::alloc_private_state() {
     tr_ = new TerrainRaymarchState();
     tp_ = new TerrainPatchState();
     tb_ = new TerrainBakeState();
+    gfx_ = new GroundFxState();
     rg_ = new RegionState();
     voxel_ = new VoxelState();
 }
@@ -83,6 +89,7 @@ void VulkanEngine::free_private_state() {
     delete clutter_; clutter_ = nullptr;
     delete cars_x_; cars_x_ = nullptr;
     delete compose_; compose_ = nullptr;
+    delete pfx_; pfx_ = nullptr;
     delete dlss_; dlss_ = nullptr;
     delete env_; env_ = nullptr;
     delete fog_; fog_ = nullptr;
@@ -90,6 +97,7 @@ void VulkanEngine::free_private_state() {
     delete fsr3_; fsr3_ = nullptr;
     delete fx_; fx_ = nullptr;
     delete glass_; glass_ = nullptr;
+    delete lens_fx_; lens_fx_ = nullptr;
     delete mp_; mp_ = nullptr;
     delete pg_; pg_ = nullptr;
     delete rr_; rr_ = nullptr;
@@ -104,6 +112,7 @@ void VulkanEngine::free_private_state() {
     delete tr_; tr_ = nullptr;
     delete tp_; tp_ = nullptr;
     delete tb_; tb_ = nullptr;
+    delete gfx_; gfx_ = nullptr;
     delete rg_; rg_ = nullptr;
     delete voxel_; voxel_ = nullptr;
 }

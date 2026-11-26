@@ -740,6 +740,27 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SliderFloat("film grain", &rt_.film_grain, 0.0f, 1.0f);
         ImGui::SliderFloat("vignette", &rt_.vignette_strength, 0.0f, 1.0f);
 
+        ImGui::SeparatorText("Post effects");
+        {
+            bool look = rt_.agx_look != 0;
+            if (ImGui::Checkbox("AgX look (day colour, night look; AgX tone curve only)", &look)) rt_.agx_look = look ? 1 : 0;
+        }
+        ImGui::SliderFloat("exposure compensation (stops)", &rt_.exposure_comp_ev, -4.0f, 4.0f);
+        ImGui::SliderFloat("auto exposure: indoor darkening", &rt_.exposure_indoor, 0.0f, 1.0f);
+        ImGui::SliderFloat("auto exposure: speed to brighter", &rt_.exposure_speed_up, 0.05f, 10.0f);
+        ImGui::SliderFloat("auto exposure: speed to darker", &rt_.exposure_speed_down, 0.05f, 10.0f);
+        ImGui::SliderFloat("local tone mapping", &rt_.ltm_strength, 0.0f, 1.0f);
+        ImGui::SliderFloat("glare on bright lights", &rt_.glare_strength, 0.0f, 4.0f);
+        ImGui::SliderFloat("motion blur", &rt_.motion_blur, 0.0f, 2.0f);
+        ImGui::Checkbox("motion blur also when turning the camera", &rt_.motion_blur_camera);
+        ImGui::SliderFloat("depth of field when aiming", &rt_.dof_strength, 0.0f, 2.0f);
+        ImGui::Checkbox("smoke lit and fogged by the fog volume", &rt_.particle_fog_light);
+        ImGui::Checkbox("tracks in snow and sand", &rt_.snow_tracks);
+        {
+            const char* cb[] = { "off", "protanopia view", "deuteranopia view", "tritanopia view" };
+            ImGui::Combo("colour-blind view", &rt_.colorblind_mode, cb, 4);
+        }
+
         ImGui::SeparatorText("Path-traced GI (multi-bounce)");
         ImGui::SliderInt("GI samples (0=off)", &rt_.gi_samples, 0, 128);
         // ReSTIR-lite (session 1 of multi-session plan — see
@@ -799,6 +820,20 @@ void VulkanEngine::build_menu_ui() {
                 { bool ic = rt_.irradiance_cache != 0;
                   if (ImGui::Checkbox("Bounce light from the cache", &ic)) rt_.irradiance_cache = ic ? 1 : 0;
                   if (ImGui::IsItemHovered()) ImGui::SetTooltip("A pixel reads its bounce light from the world-space cache where the cache\nhas a settled value, instead of tracing its own rays every frame.\nOff: every pixel traces (as before 2026-11-24)."); }
+                ImGui::Checkbox("Contact shadows (screen space)", &rt_.lp_contact_shadows);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("A short march over the depth picture toward the sun: grass, pebbles, relief,\nfar trees and people throw a short shadow where they stand. (VIBE_LP_CONTACT)");
+                ImGui::Checkbox("Far ambient occlusion + bent cone", &rt_.lp_far_ao);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Occlusion reaches out with distance (it ended at 45 m), and its open direction\nsteers the sky light and occludes reflections. (VIBE_LP_FAR_AO)");
+                ImGui::Checkbox("Leaf-coloured sun shadows", &rt_.lp_leaf_tint);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sun through a leaf card: part of it passes, tinted by the leaf. (VIBE_LP_LEAF_TINT)");
+                ImGui::Checkbox("Caches follow a sudden sky change", &rt_.lp_sky_rescale);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("When the sky's light drops by more than 4x at once, bounce-light history\nand caches are scaled down at once instead of fading. (VIBE_LP_SKY_RESCALE)");
+                ImGui::Checkbox("True colour at bounce hits", &rt_.lp_bounce_albedo);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bounce and reflection rays take the colour of what they hit (per object) and\nits real normal where known, not a two-colour guess. (VIBE_LP_BOUNCE_ALBEDO)");
+                ImGui::Checkbox("All lamps: one picked per pixel", &rt_.lp_lamp_pick);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Every lamp in one list (not 24): the nearest few are looped, one more is picked\nper pixel by weight, with one shadow ray. (VIBE_LP_LAMP_PICK)");
+                ImGui::Checkbox("Screen march before reflection rays", &rt_.lp_screen_march);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("A short march over the depth picture first; an on-screen hit takes last\nframe's lit picture (grass and relief show in reflections). (VIBE_LP_SCREEN_MARCH)");
             }
         }
         ImGui::TextDisabled("Phase 1/5 — Halton(2,3) jitter active.\n"
@@ -826,6 +861,8 @@ void VulkanEngine::build_menu_ui() {
 
         ImGui::SeparatorText("Lens flare (Chapman screen-space)");
         ImGui::Checkbox("flare enabled", &rt_.lens_flare_enabled);
+        ImGui::Checkbox("rain on the lens", &rt_.lens_rain);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("In the rain under open sky drops land on the camera, merge, run down and dry.\nNot under a roof, in the car's cabin or under water.");
         ImGui::SliderFloat("flare strength",   &rt_.lens_flare_strength,   0.0f, 2.0f);
         ImGui::SliderFloat("flare threshold",  &rt_.lens_flare_threshold,  0.0f, 4.0f);
         ImGui::SliderFloat("ghost dispersal",  &rt_.lens_flare_dispersal,  0.05f, 0.6f);
@@ -907,6 +944,10 @@ void VulkanEngine::build_menu_ui() {
                                     "and read from there, instead of worked out for every pixel.");
             }
         }
+        ImGui::Checkbox("Objects blend into the ground", &rt_.ground_paste);
+        ImGui::Checkbox("Far ground shows placed objects", &rt_.ground_lsd);
+        ImGui::Checkbox("Ground decals (moss, damp, dirt)", &rt_.ground_decals);
+        ImGui::Checkbox("Small debris on the ground", &rt_.ground_debris);
 
         if (rt_.terrain_raymarch_enabled) {
         ImGui::SeparatorText("FBM raymarch");

@@ -1,0 +1,27 @@
+#version 460
+// Local tone mapping, step 2 of 4 (post_fx.cpp): one level of the Gaussian pyramids of the
+// three exposures' lumas (A) and weights (W): level l -> l + 1, a 4x4 tent (four bilinear taps).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_a;   // all levels
+layout(set = 0, binding = 1) uniform sampler2D u_w;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D o_a;   // level l + 1
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D o_w;
+
+layout(push_constant) uniform PC { vec4 p; } pc;   // x: source level l, zw: destination size
+
+void main() {
+    ivec2 ip = ivec2(gl_GlobalInvocationID.xy);
+    if (ip.x >= int(pc.p.z) || ip.y >= int(pc.p.w)) return;
+    vec2 uv = (vec2(ip) + 0.5) / pc.p.zw;
+    vec2 h = 0.5 / pc.p.zw;                      // half a destination texel = one source texel
+    float l = pc.p.x;
+    vec4 a = vec4(0.0), w = vec4(0.0);
+    for (int k = 0; k < 4; ++k) {
+        vec2 o = vec2((k & 1) == 0 ? -h.x : h.x, (k & 2) == 0 ? -h.y : h.y);
+        a += textureLod(u_a, uv + o, l);
+        w += textureLod(u_w, uv + o, l);
+    }
+    imageStore(o_a, ip, a * 0.25);
+    imageStore(o_w, ip, w * 0.25);
+}

@@ -4,8 +4,13 @@
 // params.w metres. pc.sun.w selects the pass:
 //   0 inject   - per froxel: height-fog density x drifting noise, sun
 //                visibility from an inline ray query against the scene
-//                TLAS (real shafts through trees / castle), HG phase,
-//                ambient sky term -> (in-scatter, extinction)
+//                TLAS (real shafts through trees / castle) x the cloud
+//                layer's shadow map (shafts and dark bands under broken
+//                cloud), HG phase, ambient sky term, the local lights
+//                (lanterns, street and station lamps, a car's beam: one
+//                picked at random per froxel and frame, with a shadow ray),
+//                -> (in-scatter, extinction), blended with last frame's
+//                volume reprojected (temporal accumulation)
 //   1 integrate - front-to-back along each froxel column -> (L, T)
 // compose.frag applies the integrated volume to every pixel by distance.
 #extension GL_EXT_ray_query : require
@@ -13,16 +18,21 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform image3D o_inject;
-layout(set = 0, binding = 1) uniform sampler3D u_inject;
+// (binding 0 is the scene UBO: scene_ubo.glsl)
+layout(set = 0, binding = 1) uniform sampler3D u_inject;     // this frame's injected volume (integrate pass)
 layout(set = 0, binding = 2, rgba16f) uniform writeonly image3D o_integ;
 layout(set = 0, binding = 3) uniform sampler3D u_noise;      // tileable Worley (cloud detail)
 layout(set = 0, binding = 4) uniform accelerationStructureEXT topLevelAS;
 layout(set = 0, binding = 5) uniform sampler2D u_leaf_atlas;   // leaf-card cut-outs (light shafts through canopies)
+layout(set = 0, binding = 6) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
+layout(set = 0, binding = 7) uniform sampler2D u_cloud_shadow;  // sunlight the cloud layer lets through (clouds.comp mode 3)
+layout(set = 0, binding = 8) uniform sampler3D u_hist;         // last frame's injected volume (the other of the pair)
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image3D o_inject;
 #define LEAF_ATLAS u_leaf_atlas
 #include "leaf_rt.glsl"
 #include "sun_horizon.glsl"
-layout(set = 0, binding = 6) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
+#define CLOUD_SHADOW_MAP u_cloud_shadow
+#include "scene_ubo.glsl"
 
 layout(push_constant) uniform PC {
     mat4 inv_vp;
@@ -31,9 +41,9 @@ layout(push_constant) uniform PC {
     vec4 sun_col;   // rgb sun radiance scale (engine E * pi), w ground ref height (m)
     vec4 amb;       // rgb ambient sky radiance, w frame jitter
     vec4 params;    // x density (1/m), y height falloff (1/m), z anisotropy g, w max distance (m)
-    vec4 flash_pos; // hand flashlight: xyz lens, w range (0 = off)
-    vec4 flash_dir; // xyz beam direction, w cos(outer)
-    vec4 flash_col; // rgb colour x intensity, w cos(inner)
+    mat4 prev_vp;   // last frame's view-projection (the one its volume was made with)
+    vec4 hist;      // xyz last frame's eye (m), w 1 = the history may be used
+    vec4 misc;      // x lake mist, y extra scattering for the local lights (rain; 1/m), z local-light strength, w frame (0..255), + 256: no cloud shadow in the fog
 } pc;
 
 const ivec3 kDim = ivec3(160, 90, 64);
@@ -47,14 +57,89 @@ float hg(float c, float g) {
     float g2 = g * g;
     return (1.0 - g2) / (4.0 * kPI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
 }
+float lum3(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+// Interleaved gradient noise of a froxel and the frame (decorrelated per use by `salt`).
+float ign(ivec3 c, float salt) {
+    uvec4 v = uvec4(uvec3(c), uint(mod(pc.misc.w, 256.0)) * 747796405u + uint(salt) * 2891336453u);
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.w; v.y += v.z * v.x; v.z += v.x * v.y; v.w += v.y * v.z;
+    v ^= v >> 16u;
+    v.x += v.y * v.w; v.y += v.z * v.x; v.z += v.x * v.y; v.w += v.y * v.z;
+    return float(v.x >> 8u) * (1.0 / 16777216.0);
+}
+
+// The local lights in the air at p (looking along rd): what each would add, unshadowed;
+// one of them is picked in proportion to that and its shadow ray traced, so the estimate is
+// the whole sum when that one is visible (unbiased; the history averages the picks).
+// Lanterns / street / station lamps (scene.lamp_lights, warm, as deferred_lighting.frag
+// lights the ground with them) and a car's beam (scene.flash_*, when it is a car's - the
+// hand torch has its own per-pixel beam, scene_ubo.glsl flashlight_beam).
+vec3 local_lights(vec3 p, vec3 rd, float u) {
+    const float g = 0.55;                         // droplets: strongly forward-scattering
+    float csum = 0.0, cpick = 0.0;
+    vec3  epick = vec3(0.0), lpick = vec3(0.0);
+    float tpick = 0.0;
+    int lamp_n = int(scene.lamp_info.y + 0.5);
+    // First pass: the total (for the pick); second: walk to the picked one. Cheap - a few dozen
+    // distance tests - so it is done twice rather than kept in an array.
+    for (int pass = 0; pass < 2; ++pass) {
+        float acc = 0.0;
+        float target = u * csum;
+        for (int i = 0; i <= lamp_n; ++i) {
+            vec3 e = vec3(0.0); vec3 lp; float tmax = 0.0;
+            if (i < lamp_n) {
+                float li = scene.lamp_lights[i].w;
+                bool candle = li < 0.0;
+                li = abs(li);
+                if (li < 1e-3) continue;
+                lp = scene.lamp_lights[i].xyz;
+                vec3 to = lp - p;
+                float d = length(to);
+                float R = candle ? 3.2 : 34.0;
+                if (d >= R) continue;
+                float fall = 1.0 - d / R; fall = candle ? fall * fall : fall * fall * fall * fall * fall;
+                e = vec3(1.0, 0.62, 0.28) * (li * fall * kPI) * hg(dot(rd, to / max(d, 1e-3)), g);
+                tmax = d - (candle ? 0.10 : 0.45);
+            } else {
+                if (scene.flash_pos.w < 150.0) continue;          // (a car's beam reaches 270 m; the torch less)
+                vec3 tl; float dist;
+                vec3 fl = flashlight_at(p, tl, dist);
+                if (fl.r + fl.g + fl.b < 1e-5) continue;
+                lp = scene.flash_pos.xyz;
+                e = fl * (kPI * smoothstep(0.6, 3.0, dist)) * hg(dot(rd, tl), g);     // (none at the lens: no glowing ball)
+                tmax = dist - 0.3;
+            }
+            float c = lum3(e);
+            if (c <= 1e-6) continue;
+            if (pass == 0) { csum += c; continue; }
+            acc += c;
+            if (acc >= target) { epick = e; cpick = c; lpick = lp; tpick = tmax; break; }
+        }
+        if (pass == 0 && csum <= 1e-6) return vec3(0.0);
+    }
+    if (cpick <= 0.0) return vec3(0.0);
+    vec3 to = lpick - p;
+    float d = length(to);
+    float vis = 1.0;
+    if (tpick > 0.06) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, p, 0.05, to / max(d, 1e-3), tpick);
+        RQ_PROCEED_LEAVES(rq)
+        vis = (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+    }
+    return epick * (vis * csum / cpick);
+}
 
 void inject(ivec3 c) {
     if (any(greaterThanEqual(c, kDim))) return;
     vec2 uv = (vec2(c.xy) + 0.5) / vec2(kDim.xy);
     vec4 wf = pc.inv_vp * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
     vec3 rd = normalize(wf.xyz / wf.w - pc.eye.xyz);
-    // Jitter inside the slice (frame-varying, decorrelated per froxel).
-    float j = fract(pc.amb.w * 0.618034 + fract(dot(vec3(c), vec3(0.06711056, 0.00583715, 0.1234))) * 52.98);
+    // Jitter inside the slice (frame-varying, decorrelated per froxel): with the history this
+    // integrates the whole slice instead of one plane through it.
+    // (a hash per froxel and frame: the old interleaved-gradient pattern hardly changed along y,
+    //  so whole columns shared their sample depth - vertical streaks in brightly lit fog)
+    float j = ign(c, 2.0);
     float d = slice_dist(float(c.z) + j);
     vec3 p = pc.eye.xyz + rd * d;
 
@@ -70,14 +155,14 @@ void inject(ivec3 c) {
     // (thickest in the first metre, gone by ~3 m), drifting in banks with
     // clear lanes between them.
     float mist = 0.0;
-    if (pc.flash_dir.x > 0.001) {
+    if (pc.misc.x > 0.001) {
         float hb = p.y - (pc.sun_col.w - 1.0);              // height above the water level
         if (hb > -0.3 && hb < 9.0) {
             vec3  mw = vec3(1.0, 0.0, 0.45) * pc.eye.w * 0.35;
             float banks = textureLod(u_noise, (vec3(p.x, p.y * 0.3, p.z) + mw) / 70.0, 0.0).r;
             float wisps = textureLod(u_noise, (p * vec3(1.0, 2.5, 1.0) - mw * 1.6) / 9.0, 0.0).r;
             float m = smoothstep(0.12, 0.60, banks) * mix(0.5, 1.3, wisps);
-            mist = pc.flash_dir.x * 0.075 * m * exp(-max(hb, 0.0) / mix(1.1, 2.6, banks));
+            mist = pc.misc.x * 0.075 * m * exp(-max(hb, 0.0) / mix(1.1, 2.6, banks));
         }
     }
     dens = min(dens + mist, 0.4);
@@ -94,12 +179,42 @@ void inject(ivec3 c) {
         vis = (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
     }
     vis *= sun_horizon_lit(u_sun_horizon, p);   // the ray above only reaches 600 m
+    // The cloud layer between this point and the sun (the same map the ground's cloud shadows
+    // come from): the air under a cloud is in its shade - shafts through the gaps of a broken
+    // deck, dark bands under it. (VIBE_FOG_NO_CLOUD_SHADOW=1: off - engine side)
+    if (vis > 0.0 && pc.misc.w < 256.0) vis *= cloud_shadow(p);
     float ph = hg(dot(rd, sun), pc.params.z);
     vec3 S = (dens - mist) * (pc.sun_col.rgb * vis * ph + pc.amb.rgb * (1.0 / (4.0 * kPI)) * 4.0);
     // Mist is water droplets: it scatters nearly all the light it gets, in
     // every direction - pale in the sun, sky-coloured in the shade.
     S += mist * (pc.sun_col.rgb * vis * (0.5 * ph + 0.5 / (4.0 * kPI)) + pc.amb.rgb * 1.1);
-    imageStore(o_inject, c, vec4(S, dens));
+    // The local lights: halos round lamps, a car's beam as a cone - in mist, fog and rain.
+    // How much shows follows the medium (the fog here plus the rain's drops), so a clear dry
+    // night shows little.
+    float dens_l = dens + pc.misc.y;
+    if (pc.misc.z > 0.0 && dens_l > 1e-6)
+        S += dens_l * pc.misc.z * local_lights(p, rd, ign(c, 1.0));
+
+    // Temporal accumulation: last frame's volume at this point (reprojected through last
+    // frame's view; the slice from the distance to last frame's eye). Its weight falls with
+    // how far the point moved across the grid (0.96 still .. 0.70).
+    vec4 cur = vec4(S, dens);
+    if (pc.hist.w > 0.5) {
+        vec4 q = pc.prev_vp * vec4(p, 1.0);
+        if (q.w > 1e-4) {
+            vec2 puv = q.xy / q.w * 0.5 + 0.5;
+            float pz = sqrt(max(distance(p, pc.hist.xyz), 0.0) / pc.params.w);
+            if (all(greaterThanEqual(puv, vec2(0.0))) && all(lessThanEqual(puv, vec2(1.0))) && pz <= 1.0) {
+                vec3 dv = vec3((puv - uv) * vec2(kDim.xy), pz * float(kDim.z) - (float(c.z) + j));
+                float motion = length(dv);
+                float w = 0.96 - 0.26 * clamp(2.0 * motion, 0.0, 1.0);
+                vec4 hv = textureLod(u_hist, vec3(puv, pz), 0.0);
+                if (all(greaterThanEqual(hv, vec4(0.0))) && hv.a < 1.0)      // (NaN / garbage guard)
+                    cur = mix(cur, hv, w);
+            }
+        }
+    }
+    imageStore(o_inject, c, cur);
 }
 
 void integrate(ivec2 c) {

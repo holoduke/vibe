@@ -118,6 +118,7 @@ void VulkanEngine::draw(uint32_t img_index) {
     static const bool serial_frames = std::getenv("VIBE_SERIAL_FRAMES") != nullptr;
     if (serial_frames) wait_gpu_frames_idle();
     begin_frame_uploads();
+    post_fx_prepare();   // (post_fx.cpp: resize, enclosure rays - before anything binds its sets)
     hitch_draw_[0] = dz_mark();
 
     // The frame's camera and every soldier's pose: the TLAS build skins their ray-tracing copies.
@@ -443,6 +444,10 @@ void VulkanEngine::record_shadow_passes(FrameData& frame) {
     grass_trail_update(frame.command_buffer);   // where people and cars have just been, for the plants (grass_trail.cpp)
     wind_fluid_update(frame.command_buffer);    // the air people and cars stir up, for the plants (wind_fluid.cpp)
     prof_mark(frame.command_buffer, "trail_wind");
+    water_sim_update(frame.command_buffer);     // the wind sea's cascades, the ripple field (water_sim.cpp)
+    prof_mark(frame.command_buffer, "water_sim");
+    water_solver_update(frame.command_buffer);  // the local shallow-water solver round the camera (water_solver.cpp)
+    prof_mark(frame.command_buffer, "water_solver");
     render_clutter_shadow(frame.command_buffer);
     prof_mark(frame.command_buffer, "clutter_shadow");
 
@@ -777,6 +782,9 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
     // ---------- Pass 0.53: the baked ground texture - what is missing of it ----------
     update_terrain_bake(frame.command_buffer);
     prof_mark(frame.command_buffer, "terrain_bake");
+    // ---------- Pass 0.54: the ground's object effects (ground_fx.cpp): the capture of placed objects, the decals, their block ----------
+    ground_fx_frame(frame.command_buffer);
+    prof_mark(frame.command_buffer, "ground_fx");
 
     // ---------- Pass 0.55: the terrain's temporal upscaler ----------
     // (terrain_rm_resolve.frag: this frame's low-resolution terrain and the kept
@@ -1109,6 +1117,8 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
     // (FSR 3 too. Without it the sky was rebuilt after the upscaler from the jittered low-
     // resolution depth, which does not line up with FSR's anti-aliased edges: every object
     // against the sky kept a rim of the placeholder colour - bright bleeding, worst at night.)
+    // (first: the block the sky fill and compose read - the moon, rain on the lens, heat shimmer)
+    dispatch_lens_fx(frame.command_buffer);
     atmo_->dispatched_this_frame = false;
     sky_filled_this_frame_ = false;
     if (rt_.fsr2_enabled && ((rt_.fsr_backend == 2 && dlss_active()) || (rt_.fsr_backend == 1 && fsr3_->context_valid)) &&
@@ -1429,7 +1439,9 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
     if (rt_.sky_mode == 1 && !atmo_->dispatched_this_frame) dispatch_atmosphere(frame.command_buffer);
     if (rt_.fog_volumetric && fog_->pipeline) dispatch_fog(frame.command_buffer);
     prof_mark(frame.command_buffer, "sky_clouds");
+    post_fx_upload(frame.command_buffer);    // the post-effects parameter block exposure.comp writes into
     dispatch_exposure(frame.command_buffer);
+    post_fx_run(frame.command_buffer);       // local tone mapping, depth of field, motion blur, glare (post_fx.cpp)
     vkinit::transition_image_src_stage(
         frame.command_buffer, swapchain_images_[img_index],
         VK_IMAGE_LAYOUT_UNDEFINED,
@@ -1455,9 +1467,11 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         VkRect2D sc{ {0,0}, swapchain_extent_ };
         vkCmdSetScissor(frame.command_buffer, 0, 1, &sc);
         vkCmdBindPipeline(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, compose_->pipeline);
+        // (post_fx.cpp: its copy of the set that reads the post colour, when an effect wrote it)
+        const VkDescriptorSet compose_set = post_fx_compose_set(history_write_slot_);
         vkCmdBindDescriptorSets(frame.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 compose_->pipeline_layout, 0, 1,
-                                &compose_->desc_sets[history_write_slot_], 0, nullptr);
+                                &compose_set, 0, nullptr);
         ComposePC pc_data{};
         float w = static_cast<float>(swapchain_extent_.width);
         float h = static_cast<float>(swapchain_extent_.height);
@@ -1556,8 +1570,9 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
             // Underwater view: the slot carries the eye depth below the
             // surface, the animation clock and the turbidity (w = -1).
             const glm::vec3 ueye = current_frame_view_.eye_pos;
-            if (rt_.water_enabled && ueye.y < rt_.water_level && water_at(ueye.x, ueye.z))
-                pc_data.brush_indicator = glm::vec4(rt_.water_level - ueye.y, anim_time_,
+            const float usurf = water_surface_y(ueye.x, ueye.z);      // (the sea's swell: water_fx.cpp)
+            if (rt_.water_enabled && ueye.y < usurf && water_at(ueye.x, ueye.z))
+                pc_data.brush_indicator = glm::vec4(usurf - ueye.y, anim_time_,
                                                      rt_.underwater_turbidity, -1.0f);
         }
         // (see the sky fill above. The full matrix only where compose needs world POSITIONS: the
@@ -1674,7 +1689,8 @@ void VulkanEngine::write_pass_ubos() {
         } u{};
         u.inv_vp  = current_frame_view_.inv_vp;
         u.prev_vp = prev_view_proj_valid_ ? prev_view_proj_ : current_frame_view_.vp;
-        u.eye     = glm::vec4(current_frame_view_.eye_pos, 1.0f);
+        { static const bool no_wtaa = std::getenv("VIBE_NO_WATER_TAA") != nullptr;
+          u.eye   = glm::vec4(current_frame_view_.eye_pos, no_wtaa ? 0.0f : 1.0f); }      // (w: water keeps less history, taa.frag)
         // TAA reads + writes at render_extent_, so the viewport vec it uses
         // for `gl_FragCoord → uv` conversion must reflect that.
         float w = static_cast<float>(render_extent_.width);
@@ -1711,7 +1727,7 @@ void VulkanEngine::write_pass_ubos() {
                               1.0f / swapchain_extent_.height);
         u.params = glm::vec4(rt_.taa_history_blend,
                              taau_->history_valid ? 1.0f : 0.0f,
-                             0.0f, 0.0f);
+                             std::getenv("VIBE_NO_WATER_TAA") ? 0.0f : 1.0f, 0.0f);      // (z: water keeps less history, taau.frag)
         VmaAllocationInfo ai{};
         vmaGetAllocationInfo(allocator_, taau_->ubo_alloc, &ai);
         upload(taau_->ubo_buffer, 0, &u, sizeof(u), ai.pMappedData);

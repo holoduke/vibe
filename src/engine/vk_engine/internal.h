@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 
 namespace vibe {
 
@@ -416,8 +417,62 @@ struct SceneUBO {
     glm::vec4  car_press[4];     // cars pressing the grass down (scene_ubo.glsl car_press)
     glm::vec4  flower_field[4];  // the flowering meadow's fields (flower_fields_; scene_ubo.glsl flower_field)
     glm::vec4  hw_jn[4];         // where a side road leaves a highway (highway_field.cpp hw_junction_scene; scene_ubo.glsl hw_jn)
+    glm::ivec4 lp_flags;         // the lighting ports (light_port.cpp; scene_ubo.glsl lp_*)
+    glm::vec4  lp_params;
+    glm::mat4  lp_vp;
+    glm::vec4  water_wind;       // the wind on the water: dir xy, m/s, swell scale (environment.cpp; scene_ubo.glsl water_wind)
+    glm::vec4  water_swell;      // x = the water surface at the eye about the level (water_fx.cpp water_swell_height)
+    glm::vec4  river_piers[24];   // the piers standing in the river: x z, width (water_fx.cpp river_piers; scene_ubo.glsl river_piers)
+    glm::vec4  stream_info;      // the stream (engine/water_course.h; scene_ubo.glsl stream_*)
+    glm::vec4  stream_box[8];
+    glm::vec4  stream_pts[64];
+    glm::vec4  water_body;       // the player's body middle (scatter.vert: lilies part round it; scene_ubo.glsl water_body)
+    glm::vec4  water_fft;        // the wind sea's cascades (water_sim.cpp water_sim_fill; scene_ubo.glsl water_fft)
+    glm::vec4  water_fft_L;
+    glm::vec4  water_rip;
+    glm::vec4  water_flags;
+    glm::vec4  water_sun;        // x: the sun's disc seen through the cloud deck (glints, caustics; water_sim.cpp)
+    glm::vec4  water_sw;         // the shallow-water solver's window: corner x z, size (m), 1 = on (water_solver.cpp; scene_ubo.glsl water_sw)
+    glm::vec4  water_sw2;        // x 1 = foam particles on
 };
 const glm::vec4* hw_junction_scene();      // (highway_field.cpp: four vec4, in the chart's coordinates)
+// The wind sea's height (m about the level) from the FFT cascades read back from the GPU, and the
+// bound of it the shader's hit search uses (water_sim.cpp; the CPU twin of water_waves.glsl).
+float water_fft_height(float x, float z);
+float water_fft_bound();
+// The cascades' slope / fold / height picture and its sampler (deferred_lighting.cpp binding 29:
+// the reflected caustics); null before water_sim.cpp made them.
+void water_sim_grad_view(VkImageView& view, VkSampler& sampler);
+// The piers standing in the river, for the foam behind them (water_fx.cpp; scene_ubo.glsl river_piers).
+void river_piers_clear();
+void river_pier_add(glm::vec2 p, float half_width);
+// The boulders standing in the water (scatter.cpp adds them; their boxes near a place, for a walker: props.cpp).
+void water_boulder_add(glm::vec2 p, float ground, float r);
+void water_boulder_colliders(glm::vec3 c, float reach, std::vector<collision::AABB>& out);
+void river_piers_stone_bridge(glm::vec3 a, glm::vec3 b, const std::function<float(float, float)>& ground, float water_level);
+int  river_piers_fill(glm::vec4* out24, glm::vec3 eye);
+// The same piers, rocks and boulders as raised bed for the shallow-water solver (water_fx.cpp;
+// water_solver.cpp): x z, radius, w = the centre's height of a round stone, or >= 5e4 for a wall
+// (a pier, a rock standing out of the water). Those within `reach` of c; returns a signature that
+// changes when the list does.
+uint64_t water_bed_obstacles(glm::vec2 c, float reach, std::vector<glm::vec4>& out);
+// The open sea's weight at (x, z) (0 inland, 1 out at sea; water_fx.cpp - the shader's wt_sea_k).
+float water_sea_weight(float x, float z);
+// The lighting ports' per-frame numbers that passes other than the scene block need (light_port.cpp).
+struct LightPortFrame {
+    float cache_scale = 1.0f;    // this frame's scale of the bounce-light caches (< 1: the sky's light dropped suddenly)
+};
+const LightPortFrame& light_port_frame();
+// Lamps beyond the scene block's 24 slots, this frame (position, intensity): update_scene_ubo
+// hands them over, light_port_fill puts them in the lamp list.
+void light_port_extra_lamps(const glm::vec4* lamps, size_t n);
+// The lamp list's buffer (deferred pass binding 26; made on first use) and its release.
+VkBuffer light_port_lamp_buffer(VmaAllocator a);
+void light_port_destroy(VmaAllocator a);
+// Last frame's lit picture for the screen march (deferred pass binding 28; null until one was
+// kept) and the copy that keeps it (end of the deferred pass; src in TRANSFER_SRC layout).
+VkImageView light_port_prev_lit();
+void light_port_copy_lit(VkCommandBuffer cmd, VkDevice dev, VmaAllocator a, VkImage src, VkExtent2D ext, VkFormat fmt);
 
 // ---- KHR ray tracing entry points ----
 //
@@ -432,8 +487,16 @@ struct RtFuncs {
     PFN_vkGetAccelerationStructureBuildSizesKHR get_as_build_sizes = nullptr;
     PFN_vkCmdWriteAccelerationStructuresPropertiesKHR cmd_write_as_props = nullptr;
     PFN_vkCmdCopyAccelerationStructureKHR cmd_copy_as = nullptr;
+    // VK_KHR_ray_tracing_position_fetch is on (setup.cpp): every BLAS is built with
+    // ALLOW_DATA_ACCESS (blas_data_access_flag) and the deferred pass reads a hit triangle's
+    // corners for its true normal (light_port.cpp).
+    bool pos_fetch = false;
 };
 extern RtFuncs g_rt;
+// The extra BLAS build flag position fetch needs (0 when it is off).
+inline VkBuildAccelerationStructureFlagsKHR blas_data_access_flag() {
+    return g_rt.pos_fetch ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR : 0u;
+}
 void load_rt_functions(VkDevice device);
 
 // Validation messenger callback — increments g_validation_warning_count /

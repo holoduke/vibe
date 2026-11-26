@@ -26,9 +26,21 @@ struct VulkanEngine::EnvState {
     float amb_k = 1.0f;          // night fill-light factor (1 by day and on a clear full-moon night)
     float moon_vis = 1.0f;       // moon not hidden by terrain from the player (eased 0..1)
     float moon = 1.0f;           // moonlight in the sky right now, 0..1 (phase, height, setting)
+    // Where the moon and the real sun stand (unit vectors toward them; the moon is drawn as a
+    // sphere lit by the sun - compose.frag atmo_moon). light_is_sun: the scene's directional
+    // light is the sun itself (not the moon, not the glow under the horizon).
+    glm::vec3 moon_dir{0.0f, -1.0f, 0.0f}, sun_dir{0.0f, 1.0f, 0.0f};
+    bool  light_is_sun = true;
     float night = -1.0f;         // lantern factor 0..1 (< 0: clock off)
     float lightning = 0.0f;      // current flash brightness
     float wind_scale = 1.0f;
+    // The wind on the water (apply_environment; scene_ubo.glsl water_wind): xy = the way it
+    // blows (unit), z = speed m/s, w = the swell's height scale pow(saturate(z / 30), 2.2).
+    glm::vec4 water_wind{ 0.944f, 0.330f, 7.0f, 0.00718f };
+    // The way the wind direction has carried the water's drifting patterns: the sum of the
+    // direction over time (m per m/s of drift; scene_ubo.glsl water_swell.yz). Summed, not
+    // direction x clock - that swung the patterns round whenever the wind veered.
+    glm::vec2 water_drift{ 0.0f, 0.0f };
     float cloud_k = 1.0f, cloud_direct = 1.0f;   // cloud light: sky level, direct factor
     float cloud_shadow_k = 0.72f;                     // cloud-shadow contrast on the ground
 };

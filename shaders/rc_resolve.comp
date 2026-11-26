@@ -8,7 +8,7 @@ layout(std430, set = 0, binding = 0) buffer Keys { uint rc_keys[]; };
 layout(std430, set = 0, binding = 1) buffer Acc  { uvec4 rc_acc[]; };
 layout(std430, set = 0, binding = 2) buffer Res  { vec4 rc_res[]; };
 
-layout(push_constant) uniform PC { vec4 p; } pc;   // x = entries, y = EMA alpha
+layout(push_constant) uniform PC { vec4 p; } pc;   // x = entries, y = EMA alpha, z = scale of every value this frame (1 = none)
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
@@ -20,6 +20,9 @@ void main() {
     bool irr = (key & 2u) != 0u;
     uvec4 a = rc_acc[2u * i];
     vec4 r = rc_res[2u * i];
+    // A sudden drop of the sky's light (light_port.cpp, pc.p.z < 1): every value is scaled down at
+    // once, so that no bright ghost of the old light fades for seconds.
+    if (pc.p.z > 0.0 && pc.p.z < 1.0) r.rgb *= pc.p.z;
     if (a.w > 0u && irr) {
         float cnt = float(a.w);
         vec3 avg = vec3(a.xyz) / (256.0 * cnt);

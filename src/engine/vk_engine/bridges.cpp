@@ -136,6 +136,8 @@ void VulkanEngine::place_bridges() {
             const float gn = world_ground_height(P.p.x, P.p.z, rt_.water_level, 9);
             const float top = P.p.y - kDeep, bot = std::min(gn, rt_.water_level) - 3.0f;
             if (top - bot < 0.3f) continue;
+            // (standing in the river: its current foams behind it - water_fx.cpp river_piers)
+            if (gn < rt_.water_level - 0.2f && world_river_distance(P.p.x, P.p.z) < 12.0f) river_pier_add(glm::vec2(P.p.x, P.p.z), lane ? 0.45f : 0.6f);
             obox(concrete, P.p + up * (0.5f * (top + bot) - P.p.y), P.r * (lane ? 0.9f : 2.0f), up * (0.5f * (top - bot)), P.t * (lane ? 0.4f : 0.55f), 4.0f);
             obox(concrete, P.p + up * (top - 0.25f - P.p.y), P.r * (lane ? 1.2f : 2.6f), up * 0.25f, P.t * (lane ? 0.55f : 0.75f), 4.0f);             // its head
         }

@@ -61,6 +61,8 @@ layout(push_constant) uniform PC {
     vec4 wx_b;      // the same for the second octave (x 2.17 + 13)
     vec4 shape0;    // xyz = the shape texture's coordinate at the camera's ground point (0..1), w = shadow map extent (m)
     vec4 jmat;      // d(home) / d(engine xz) at the camera: rows (xy), (zw)
+    vec4 cirrus;    // the high ice-cloud sheet: x amount, yz its field's place at the camera (shape tiles, 0..1), w its slow change
+    vec4 sun_true;  // xyz toward the real sun (at dusk the light is the glow under the horizon), w its light on the cirrus (engine x pi)
 } pc;
 
 // ---------------- tileable noise (generation) ----------------
@@ -231,9 +233,8 @@ vec2 hit_shell(vec3 ro, vec3 rd, float a) {
     return vec2(-b - h, -b + h);
 }
 
-void render(ivec2 px) {
+vec4 cumulus(ivec2 px) {
     ivec2 sz = imageSize(o_clouds);
-    if (any(greaterThanEqual(px, sz))) return;
     vec2 uv = (vec2(px) + 0.5) / vec2(sz);
     // Only sky pixels: the layer sits above all terrain. Seen from above the layer it is
     // the other way round - the ground is behind the clouds - so then also over the
@@ -244,7 +245,7 @@ void render(ivec2 px) {
     bool from_above = altitude(ro) > pc.params3.x;
     vec4 dg = textureGather(u_depth, uv, 0);
     float dmax = max(max(dg.x, dg.y), max(dg.z, dg.w));
-    if (dmax < 0.9995) { imageStore(o_clouds, px, vec4(0.0)); return; }
+    if (dmax < 0.9995) { return vec4(0.0); }
     vec4 wf = pc.inv_vp * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
     vec3 rd = normalize(wf.xyz / wf.w - ro);
     // From below the layer, land is in front of the clouds - unless it stands up into them: a
@@ -255,7 +256,7 @@ void render(ivec2 px) {
     if (!from_above && dmax < 0.99999) {
         vec4 wl4 = pc.inv_vp * vec4(uv * 2.0 - 1.0, dmax, 1.0);
         vec3 wl = wl4.xyz / wl4.w;
-        if (altitude(wl) < pc.params3.x + 20.0) { imageStore(o_clouds, px, vec4(0.0)); return; }
+        if (altitude(wl) < pc.params3.x + 20.0) { return vec4(0.0); }
         t_land = distance(wl, ro);
     }
 
@@ -266,17 +267,17 @@ void render(ivec2 px) {
     vec2 h_base = hit_shell(ro, rd, base_alt);
     float t_near = 0.0, t_far = 0.0;
     if (cam_alt < base_alt) {                       // below the layer (the usual case)
-        if (rd.y < -0.02 || h_base.y <= 0.0) { imageStore(o_clouds, px, vec4(0.0)); return; }
+        if (rd.y < -0.02 || h_base.y <= 0.0) { return vec4(0.0); }
         t_near = h_base.y; t_far = h_top.y;
     } else if (cam_alt < top_alt) {                 // inside it
         t_near = 0.0; t_far = (h_base.x > 0.0) ? h_base.x : h_top.y;
     } else {                                        // above
-        if (h_top.x <= 0.0) { imageStore(o_clouds, px, vec4(0.0)); return; }
+        if (h_top.x <= 0.0) { return vec4(0.0); }
         t_near = h_top.x; t_far = (h_base.x > 0.0) ? h_base.x : h_top.y;
     }
     const float kMaxDistance = 90000.0;
     t_far = min(min(t_far, t_near + kMaxDistance), t_land);
-    if (t_far <= t_near) { imageStore(o_clouds, px, vec4(0.0)); return; }
+    if (t_far <= t_near) { return vec4(0.0); }
 
     // Per-pixel jitter (interleaved gradient noise, frame-varying).
     float jit = fract(52.9829189 * fract(dot(vec2(px) + pc.params2.x * 5.588, vec2(0.06711056, 0.00583715))));
@@ -372,7 +373,76 @@ void render(ivec2 px) {
         alpha *= 1.0 - haze * haze * 0.85;
         L *= 1.0 - haze * haze * 0.85;
     }
-    imageStore(o_clouds, px, vec4(L, alpha));
+    return vec4(L, alpha);
+}
+
+// Cirrus: a thin sheet of ice cloud on a shell well above the cumulus, drawn behind them.
+// Its pattern is the shape noise read as a 2D field on a lattice turned by a 3-4-5 triangle
+// and stretched across (whole factors only: the field stays a function of the place on the
+// planet whatever the chart - see shape0), so it lies in streaks; the detail noise frays
+// them. pc.cirrus: x amount (the weather), yz the field's place at the camera (it drifts with
+// the high wind, faster than the cumulus), w the slow change of its shape.
+vec4 cirrus(ivec2 px) {
+    if (pc.cirrus.x <= 0.001) return vec4(0.0);
+    ivec2 sz = imageSize(o_clouds);
+    vec2 uv = (vec2(px) + 0.5) / vec2(sz);
+    vec4 dg = textureGather(u_depth, uv, 0);
+    if (min(min(dg.x, dg.y), min(dg.z, dg.w)) < 0.99999) return vec4(0.0);     // (sky only)
+    vec3 ro = pc.eye.xyz;
+    vec4 wf = pc.inv_vp * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+    vec3 rd = normalize(wf.xyz / wf.w - ro);
+    float hc = max(8500.0, pc.params3.x + pc.params3.y + 1500.0);
+    float cam_alt = altitude(ro);
+    if (cam_alt > hc - 200.0 || rd.y < 0.0) return vec4(0.0);
+    vec2 hs = hit_shell(ro, rd, hc);
+    float t = hs.y;
+    if (t <= 0.0) return vec4(0.0);
+    vec3 p = ro + rd * t;
+    float per = kShapePeriod * max(pc.params2.w, 0.2);
+    vec2 f = pc.cirrus.yz + home_off(p) / (16.0 * per);        // one cirrus tile = 16 shape tiles
+    vec2 s = vec2(3.0 * f.x + 4.0 * f.y, -4.0 * f.x + 3.0 * f.y);
+    // (five taps along the streak: broad soft sheets drawn out down the wind, not puffs)
+    float base = 0.0;
+    for (int k = -2; k <= 2; ++k) base += textureLod(u_shape, vec3(s.x + 0.02 * float(k), pc.cirrus.w, s.y), 0.0).r;
+    base *= 0.2;
+    float fib  = textureLod(u_detail, vec3(s.x * 2.0, pc.cirrus.w * 3.0 + 0.5, s.y * 8.0), 0.0).r;
+    float n = base * 0.92 + fib * 0.08;
+    float amt = clamp(pc.cirrus.x, 0.0, 1.0);
+    float d = smoothstep(0.58 - 0.30 * amt, 0.98 - 0.30 * amt, n);      // (a wide band: soft edges, low contrast)
+    d *= 0.12 + 0.28 * amt;
+    d *= smoothstep(0.03, 0.16, rd.y);                         // (thins into the haze at the horizon)
+    if (d <= 0.001) return vec4(0.0);
+    // Light: the REAL sun (pc.sun_true - at dusk the scene's light is the glow under the
+    // horizon), which still reaches the sheet a little after sunset at the ground; ice
+    // crystals throw it forward. Its colour is mostly the one it has through the air down here
+    // (warm and dim at sunset) - through the thin air at the sheet's height it stays white.
+    vec3 sun = normalize(pc.sun_true.xyz);
+    float cth = dot(rd, sun);
+    float phase = mix(hg(cth, 0.7), hg(cth, -0.15), 0.6) * 1.4;
+    float mu = max(sun.y, 0.0);
+    vec3 t_hi = textureLod(u_trans, trans_uv(pc.params2.y + (hc - cam_alt) * 0.001, mu), 0.0).rgb;
+    vec3 t_lo = textureLod(u_trans, trans_uv(pc.params2.y, mu), 0.0).rgb;
+    float lit = smoothstep(-0.060, -0.015, sun.y);               // (the sun under the sheet's horizon: none)
+    vec3 sun_l = mix(t_hi, t_lo, 0.45) * (pc.sun_true.w * lit * (0.75 + 0.25 * smoothstep(0.05, 0.35, sun.y)));
+    vec3 amb = textureLod(u_skyview, skyview_uv(1.2, 0.0), 0.0).rgb * pc.params.w * 1.0;
+    vec3 L = d * (sun_l * phase + amb);
+    // Far off it takes on the sky's colour (as the cumulus do).
+    float elev = asin(clamp(rd.y, -1.0, 1.0));
+    float az = 0.0;
+    if (dot(rd.xz, rd.xz) > 1e-8 && dot(sun.xz, sun.xz) > 1e-8)
+        az = acos(clamp(dot(normalize(rd.xz), normalize(sun.xz)), -1.0, 1.0));
+    vec3 sky_dir = textureLod(u_skyview, skyview_uv(elev, az), 0.0).rgb * pc.params.w;
+    float haze = 1.0 - exp(-t / 90000.0);
+    L = mix(L, sky_dir * d, haze);
+    return vec4(L, d);
+}
+
+void render(ivec2 px) {
+    ivec2 sz = imageSize(o_clouds);
+    if (any(greaterThanEqual(px, sz))) return;
+    vec4 c = cumulus(px);
+    if (c.a < 0.995) c += (1.0 - c.a) * cirrus(px);           // (behind the cumulus, premultiplied)
+    imageStore(o_clouds, px, c);
 }
 
 // Texel -> the point on the y = 0 plane it stands for; marched from there

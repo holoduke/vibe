@@ -1,0 +1,41 @@
+#version 460
+// Depth of field, step 1 (post_fx.cpp): half-resolution colour and signed circle of confusion.
+// coc = A (z - focus) / z (the reference's, before its 0.5 + 0.5 remap): negative in front of
+// the focus (near field), positive behind (far field); radius in half-resolution pixels.
+// The colour is weighted by 1 / (1 + luma) so a lamp does not become a hard bokeh disc.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_src;      // HDR colour, linear
+layout(set = 0, binding = 1) uniform sampler2D u_depth;    // render resolution, point
+#include "post_fx.glsl"
+layout(std430, set = 0, binding = 2) readonly buffer PostFxB { PostFxData d; } pfx;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D o_half;
+layout(push_constant) uniform PC { vec4 p; } pc;   // xy: half size
+
+float dof_coc(float dz) {
+    float z = pfx_lin_depth(pfx.d, dz);
+    float f = max(pfx.d.focus, 0.5);
+    return clamp(pfx.d.dof.w * (z - f) / max(z, 1e-3), -1.0, 1.0) * pfx.d.dof.y * pfx.d.dof.x;
+}
+
+void main() {
+    ivec2 ip = ivec2(gl_GlobalInvocationID.xy);
+    if (ip.x >= int(pc.p.x) || ip.y >= int(pc.p.y)) return;
+    vec2 inv = 1.0 / pc.p.xy;
+    vec2 uv = (vec2(ip) + 0.5) * inv;
+    vec3 c = vec3(0.0);
+    float ws = 0.0;
+    float coc = 0.0, cmin = 1e9;
+    for (int k = 0; k < 4; ++k) {
+        vec2 o = vec2((k & 1) == 0 ? -0.25 : 0.25, (k & 2) == 0 ? -0.25 : 0.25) * inv;
+        vec3 s = textureLod(u_src, uv + o, 0.0).rgb;
+        float w = 1.0 / (1.0 + dot(s, vec3(0.2126, 0.7152, 0.0722)));
+        c += s * w; ws += w;
+        float ck = dof_coc(textureLod(u_depth, uv + o, 0.0).r);
+        coc += ck;
+        cmin = min(cmin, ck);
+    }
+    coc *= 0.25;
+    // (the nearest of the four where it is in front: the near field spreads over edges)
+    if (cmin < 0.0) coc = min(coc, cmin);
+    imageStore(o_half, ip, vec4(c / ws, coc));
+}

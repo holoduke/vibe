@@ -228,7 +228,31 @@ void foot_bounds_init() {
     g_foot_c = c;
     g_foot_r2 = (sqrt(r2) + 0.35) * (sqrt(r2) + 0.35);
 }
+// Tracks in snow and sand (post_fx.cpp post_fx_tracks; track_stamp.comp, track_rim.comp): the
+// depth pressed in by wheels and walkers and the raised rim beside it, in a 64 m window round
+// the player whose corner track_stamp.comp writes into the post-effects block. (depth, rim) m.
+#include "post_fx.glsl"
+layout(set = 0, binding = 55) uniform sampler2D u_tracks;
+layout(std430, set = 0, binding = 59) readonly buffer PfxTrkB { PostFxData d; } pfx_trk;
+vec2 track_dr(vec2 p) {
+#ifdef VIBE_BAKE
+    return vec2(0.0);                // (they change: never baked - rm_bake_fetch leaves them to the pixel)
+#else
+    if (pfx_trk.d.trk_on < 0.5) return vec2(0.0);
+    vec2 uv = (p - vec2(pfx_trk.d.trk_x, pfx_trk.d.trk_z)) * (1.0 / 64.0);
+    if (any(lessThan(uv, vec2(0.004))) || any(greaterThan(uv, vec2(0.996)))) return vec2(0.0);
+    return textureLod(u_tracks, uv, 0.0).xy;
+#endif
+}
+float foot_prints(vec2 p);
+// Depth (m) pressed into snow / sand at `p`: the deepest print or track, less half the rim
+// beside a track (negative there: the snow pushed out of a rut stands up - the reference's
+// displacement -depth + 0.5 rim).
 float foot_depth(vec2 p) {
+    vec2 tr = track_dr(p);
+    return max(foot_prints(p), tr.x) - 0.5 * tr.y;
+}
+float foot_prints(vec2 p) {
     float d = 0.0;
     if (g_foot_r2 < 0.0 || dot(p - g_foot_c, p - g_foot_c) > g_foot_r2) return 0.0;
     for (int i = 0; i < 32; ++i) {

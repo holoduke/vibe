@@ -14,12 +14,15 @@
 #include "engine/vk_engine/state/environment.h"
 #include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/globe.h"
+#include "engine/water_course.h"
 #include "engine/voxel/voxel_world.h"
 
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
+#include <vector>
 
 namespace vibe {
 
@@ -50,7 +53,7 @@ void VulkanEngine::init_descriptors() {
         { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 },
         // 2 originals (materials, prev_transforms) + 2 ReSTIR reservoirs
         // + 2 voxel SSBOs (brick atlas + shape directory, bindings 24/25).
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7 },      // + the bone palette (33)
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9 },      // + the bone palette (33), the post-effects block (59), the ground effects block (60)
         // SVGF GI denoiser storage images: 1 raw gi (binding 19) +
         // 2 history ping-pong (bindings 20, 21) +
         // 2 variance-moments ping-pong (bindings 22, 23 — 4a-deep).
@@ -74,7 +77,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 34 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
+            kTextureCount * 2 + 34 + 4 + 3 + 1 + 1 + kSpomMaterialCount },      // (+1: the shallow-water solver, 54)      // (+1: the ground effects' capture, 61)      // + the water's cascades and ripple field (51..53, water_sim.cpp), the tracks (55), the fog volumes for the FX (56..58), the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -391,10 +394,54 @@ void VulkanEngine::init_descriptors() {
     bindings[49].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[50] = bindings[39];
     bindings[50].binding = 50;
+    // Bindings 55..59 (post_fx.cpp): 55 the tracks in snow and sand round the player (depth,
+    // rim; terrain_rm_pebbles.glsl foot_depth); 56..58 smoke and dust lit and fogged from the
+    // froxel fog volume (shaders/fx_fog.glsl): the integrated volume, the two injected ones;
+    // 59 the post-effects block.
+    std::vector<VkDescriptorSetLayoutBinding> all_bindings(bindings, bindings + std::size(bindings));
+    for (uint32_t b = 55; b <= 59; ++b) {
+        VkDescriptorSetLayoutBinding x{};
+        x.binding = b;
+        x.descriptorType = (b == 59) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        x.descriptorCount = 1;
+        x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT;   // (vertex: terrain_patch.vert's height formula)
+        all_bindings.push_back(x);
+    }
+    // Bindings 51..53 (water_sim.cpp): the wind sea's four FFT cascades - 51 slope + fold + height
+    // with mips, 52 the displacement -, 53 the ripple field round the camera (water_waves.glsl).
+    for (uint32_t b = 51; b <= 53; ++b) {
+        VkDescriptorSetLayoutBinding x{};
+        x.binding = b;
+        x.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        x.descriptorCount = 1;
+        x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        all_bindings.push_back(x);
+    }
+    // Binding 54 (water_solver.cpp): the local shallow-water solver's render picture - the surface
+    // over the authored top, the current, the foam (shaders/water_solver.glsl). Written in
+    // init_water_solver.
+    {
+        VkDescriptorSetLayoutBinding x{};
+        x.binding = 54;
+        x.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        x.descriptorCount = 1;
+        x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        all_bindings.push_back(x);
+    }
+    // Bindings 60, 61 (ground_fx.cpp; shaders/ground_fx.glsl): the ground effects' block (the
+    // paste, the far ground's capture window, the decals) and the capture of placed objects.
+    for (uint32_t b = 60; b <= 61; ++b) {
+        VkDescriptorSetLayoutBinding x{};
+        x.binding = b;
+        x.descriptorType = (b == 60) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        x.descriptorCount = 1;
+        x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+        all_bindings.push_back(x);
+    }
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 51, .pBindings = bindings,
+        .bindingCount = uint32_t(all_bindings.size()), .pBindings = all_bindings.data(),
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -521,6 +568,11 @@ void VulkanEngine::update_scene_ubo() {
             } else {
                 for (size_t k = 0; k < order.size() && k < kLampSlots; ++k)
                     data.lamp_lights[k] = glm::vec4(all_lamps[order[k].second], (order[k].second >= lamp_lights_.size() ? 16.0f : 5.0f) * night);      // (a street lamp hangs at 8 m: three times a lantern's light)
+                // (the rest go into the lighting ports' lamp list: light_port.cpp)
+                std::vector<glm::vec4> extra;
+                for (size_t k = kLampSlots; k < order.size(); ++k)
+                    extra.push_back(glm::vec4(all_lamps[order[k].second], (order[k].second >= lamp_lights_.size() ? 16.0f : 5.0f) * night));
+                light_port_extra_lamps(extra.data(), extra.size());
             }
         } else {
             lamp_map_slot_ = -1;
@@ -1028,6 +1080,21 @@ void VulkanEngine::update_scene_ubo() {
     data.hw_info = hw_info_;
     data.hw_bbox = hw_bbox_;
     for (int i = 0; i < 4; ++i) data.hw_jn[i] = hw_info_.z > 0.5f ? hw_junction_scene()[i] : glm::vec4(0.0f);
+    light_port_fill(data);                                   // (light_port.cpp: scene_ubo.glsl lp_*)
+    // The wind on the water and the swell at the eye (environment.cpp, water_fx.cpp).
+    data.water_wind = env_->water_wind;
+    data.water_swell = glm::vec4(water_surface_y(current_frame_view_.eye_pos.x, current_frame_view_.eye_pos.z) - rt_.water_level, env_->water_drift.x, env_->water_drift.y, 0.0f);
+    data.water_swell.w = float(river_piers_fill(data.river_piers, current_frame_view_.eye_pos));
+    {   // the stream (engine/water_course.h): its points and boxes, home's chart only
+        const wc::Course& st = wc::stream(rt_.water_level);
+        const bool on = st.ok && globe::current().home && rt_.water_enabled;
+        data.stream_info = glm::vec4(on ? float(st.pts.size()) : 0.0f, st.depth0, st.depth1, 0.0f);
+        for (int i = 0; i < wc::kMaxPts; ++i) data.stream_pts[i] = (on && size_t(i) < st.pts.size()) ? st.pts[size_t(i)] : glm::vec4(0.0f);
+        for (int i = 0; i < 8; ++i) data.stream_box[i] = (on && size_t(i) < st.box.size()) ? st.box[size_t(i)] : glm::vec4(1e9f, 1e9f, -1e9f, -1e9f);
+    }
+    data.water_body = glm::vec4(player_.position, 0.0f);      // (the lilies part round the body, not the camera: scatter.vert)
+    water_sim_fill(data);                                    // (water_sim.cpp: the wind sea's cascades, the ripple field, the water's switches)
+    water_solver_fill(data);                                 // (water_solver.cpp: the shallow-water solver's window and this frame's steps)
     {   // home's flat formula from this chart, where it applies (engine/globe.h Ring)
         const globe::Ring& rg = globe::ring_now();
         data.ring_info = glm::vec4(rg.on ? 1.0f : 0.0f, float(rg.wp0.x), float(rg.wp0.y), float(globe::current().org.y));     // (.w: the chart origin's local z; its x is globe_info.y)

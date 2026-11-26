@@ -65,7 +65,7 @@ void VulkanEngine::init_taa() {
     // + motion_vec) + 1 UBO.
     {
         VkDescriptorPoolSize sizes[] = {
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 },
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 12 },
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 },
         };
         VkDescriptorPoolCreateInfo pci{
@@ -79,7 +79,8 @@ void VulkanEngine::init_taa() {
 
     // Set layout: 0 = current_color, 1 = history_color, 2 = current_depth,
     //             3 = UBO, 4 = motion vector image.
-    VkDescriptorSetLayoutBinding bindings[5]{};
+    // 5, 6 = the G-buffer (material and its marks: water pixels take less history, taa.frag).
+    VkDescriptorSetLayoutBinding bindings[7]{};
     for (int i = 0; i < 3; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -94,11 +95,12 @@ void VulkanEngine::init_taa() {
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (int i = 5; i < 7; ++i) { bindings[i] = bindings[4]; bindings[i].binding = uint32_t(i); }
 
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 5, .pBindings = bindings,
+        .bindingCount = 7, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &taa_->desc_set_layout),
              "taa set layout");
@@ -240,7 +242,7 @@ void VulkanEngine::recreate_taa_targets() {
     make_image(motion_vec_format_,
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                VK_IMAGE_USAGE_SAMPLED_BIT |
-               VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,     // (ssdm.cpp copies it out)
                motion_vec_image_, motion_vec_alloc_, motion_vec_view_);
     // G-buffer (Phase 1 of the deferred migration). Allocated alongside
     // motion_vec since they're per-frame, render-resolution, and freed
@@ -248,11 +250,11 @@ void VulkanEngine::recreate_taa_targets() {
     // pass to fill them.
     make_image(gbuffer0_format_,
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,     // (ssdm.cpp copies the G-buffer out before it displaces it)
+               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,     // (ssdm.cpp copies the G-buffer out before it displaces it, and the displaced one back)
                gbuffer0_image_, gbuffer0_alloc_, gbuffer0_view_);
     make_image(gbuffer1_format_,
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                gbuffer1_image_, gbuffer1_alloc_, gbuffer1_view_);
     // Staging colour for the deferred lighting pass (Phase 3).
     // TRANSFER_SRC_BIT is required because vk_engine.cpp blits this image
@@ -300,9 +302,11 @@ void VulkanEngine::recreate_taa_targets() {
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo i_motion{ linear_sampler_, motion_vec_view_,
                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo i_g0{ linear_sampler_, gbuffer0_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo i_g1{ linear_sampler_, gbuffer1_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorBufferInfo i_ubo{ taa_->ubo_buffer, 0, VK_WHOLE_SIZE };
 
-        VkWriteDescriptorSet w[5]{};
+        VkWriteDescriptorSet w[7]{};
         for (int i = 0; i < 3; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].dstSet = taa_->desc_sets[set];
@@ -325,7 +329,9 @@ void VulkanEngine::recreate_taa_targets() {
         w[4].descriptorCount = 1;
         w[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[4].pImageInfo = &i_motion;
-        vkUpdateDescriptorSets(device_, 5, w, 0, nullptr);
+        w[5] = w[4]; w[5].dstBinding = 5; w[5].pImageInfo = &i_g0;
+        w[6] = w[4]; w[6].dstBinding = 6; w[6].pImageInfo = &i_g1;
+        vkUpdateDescriptorSets(device_, 7, w, 0, nullptr);
     }
 
     prev_view_proj_valid_ = false;
@@ -462,7 +468,7 @@ void VulkanEngine::init_taau() {
 
     // Descriptor pool: 2 sets, 4 sampled images + 1 UBO each.
     VkDescriptorPoolSize sizes[] = {
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 12 },
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 },
     };
     VkDescriptorPoolCreateInfo pci{
@@ -473,9 +479,10 @@ void VulkanEngine::init_taau() {
     vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &taau_->desc_pool),
              "taau desc pool");
 
-    // Set layout: 0 cur_lr, 1 prev_full, 2 depth_lr, 3 ubo, 4 motion_lr.
-    VkDescriptorSetLayoutBinding bindings[5]{};
-    for (int i = 0; i < 5; ++i) {
+    // Set layout: 0 cur_lr, 1 prev_full, 2 depth_lr, 3 ubo, 4 motion_lr, 5 / 6 the G-buffer
+    // (water pixels keep less history: taau.frag).
+    VkDescriptorSetLayoutBinding bindings[7]{};
+    for (int i = 0; i < 7; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = (i == 3)
             ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -486,7 +493,7 @@ void VulkanEngine::init_taau() {
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 5, .pBindings = bindings,
+        .bindingCount = 7, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                           &taau_->desc_set_layout),
@@ -584,10 +591,12 @@ void VulkanEngine::recreate_taau_targets() {
                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo i_motion{ linear_sampler_, motion_vec_view_,
                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo i_g0{ linear_sampler_, gbuffer0_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo i_g1{ linear_sampler_, gbuffer1_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorBufferInfo i_ubo  { taau_->ubo_buffer, 0, VK_WHOLE_SIZE };
 
-        VkWriteDescriptorSet w[5]{};
-        for (int i = 0; i < 5; ++i) {
+        VkWriteDescriptorSet w[7]{};
+        for (int i = 0; i < 7; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].dstSet = taau_->desc_sets[s];
             w[i].dstBinding = i;
@@ -601,7 +610,9 @@ void VulkanEngine::recreate_taau_targets() {
         w[2].pImageInfo = &i_depth;
         w[3].pBufferInfo = &i_ubo;
         w[4].pImageInfo = &i_motion;
-        vkUpdateDescriptorSets(device_, 5, w, 0, nullptr);
+        w[5].pImageInfo = &i_g0;
+        w[6].pImageInfo = &i_g1;
+        vkUpdateDescriptorSets(device_, 7, w, 0, nullptr);
     }
 
     // Transition both ping-pong slots to SHADER_READ_ONLY so the prev-slot

@@ -1,0 +1,479 @@
+#version 460
+// The local shallow-water solver round the camera (vk_engine/water_solver.cpp says when each runs;
+// docs/ARCHITECTURE.md "The local shallow-water solver"). After the reference game's: a 512 x 512
+// height field of 0.2 m cells, fixed steps of 0.01 s, gravity 9.8; its numerics and constants.
+//   mode 0  the inputs of this frame's window: the bed (the home tile's ground with the boulders,
+//           rocks and piers stamped in as raised bed), the authored top (the lake's / river's level
+//           or the stream's sloped surface), the course's current (Vibe's level river has no slope:
+//           the velocity is pulled toward it), and whether the cell is the solver's at all
+//   mode 1  the height pass: the shift of the scrolled window, continuity in flux form, the shore
+//           rule, the slow pull toward the authored top, the drained lip of a drop, the edge blend
+//   mode 2  the pressure pass: semi-Lagrangian velocity, -g grad h, walls, the push over steep
+//           drops, damping, the pull toward the course's current; the foam (advected, its rule);
+//           moving bodies and splashes; the render picture; new foam particles
+//   mode 3  the foam particles: ride the surface on the solver's velocity, fall where it drops away
+//   mode 4  the CPU read-back: f32 height + 2 x f16 velocity per cell
+//   mode 5  the particles' draw arguments
+// Every picture stays in the GENERAL layout.
+#extension GL_GOOGLE_include_directive : require
+
+#include "scene_ubo.glsl"            // (set 0, binding 0: the scene block - the water level, the stream)
+#include "water_course.glsl"         // the stream's surface (wc_stream_surface)
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+const int kObs = 128;
+const int kBodies = 32;
+const int kFlowN = 32;
+layout(set = 0, binding = 1) uniform SwParams {
+    vec4 grid;          // xy this frame's window corner (world x z), z the cell (m), w cells a side
+    vec4 misc;          // x obstacles, y bodies, z the solver clock (s), w 1 = particles on
+    vec4 flow_org;      // xy the current grid's corner (world), z its cell (m), w cells a side
+    vec4 part;          // x particles at most, y the frame's random, z 1 = spawn this step, w -
+    vec4 obs[kObs];     // x z, radius, w: < 5e4 the centre's height of a round stone; else a wall (pier)
+    vec4 body_a[kBodies];   // x z, radius, w the bottom's height
+    vec4 body_b[kBodies];   // xyz velocity; w: >= 0 a body (its top's height), < 0 a splash of -w m
+    vec4 flow[kFlowN * kFlowN];   // xy the course's current (m/s), z 1 = sea (not the solver's)
+} P;
+
+layout(set = 0, binding = 2, rgba32f) uniform image2D u_s0;     // h, u, v, the height at the frame's start
+layout(set = 0, binding = 3, rgba32f) uniform image2D u_s1;
+layout(set = 0, binding = 4, rgba16f) uniform image2D u_f0;     // foam, body foam, -, 1 = the solver's cell
+layout(set = 0, binding = 5, rgba16f) uniform image2D u_f1;
+layout(set = 0, binding = 6, rgba32ui) uniform uimage2D u_in;   // bed, top (-1e9: not the solver's), packed current, unstamped ground
+layout(set = 0, binding = 7, rgba16f) uniform image2D u_r;      // the render picture: h - top, u, v, foam (-1: not the solver's)
+layout(set = 0, binding = 8) uniform sampler2D u_height_full;   // the home tile's ground (2048 m)
+struct Part { vec4 p; vec4 v; };                               // xyz, life; velocity, seed
+layout(std430, set = 0, binding = 9) buffer Parts { Part parts[]; };
+layout(std430, set = 0, binding = 10) buffer Counters { uint cnt[2]; uint args[4]; uint stat[8]; } C;   // stat: VIBE_LOG_SOLVER (max O x 1e4, max foam x 1e4, cells with O > 0.004, max approach speed x 100, max rough x rise x 1e4, max depth x 100)
+layout(std430, set = 0, binding = 11) buffer Pack { uvec2 pk[]; };
+
+// m: x mode, y the step within the frame (0 = first: the shift, the frame-start height), z the
+//    particles' source list, w 1 = reset everything; s: xy the window's shift in cells (first step)
+layout(push_constant) uniform PC { mat4 vp; ivec4 m; ivec4 s; vec4 f; } pc;
+
+const float G = 9.8;
+const float DT = 0.01;
+
+int   NN()   { return int(P.grid.w); }
+float DX()   { return P.grid.z; }
+float S1f(float x) { return smoothstep(0.0, 1.0, x); }
+
+// ---------------------------------------------------------------- inputs
+vec4 flow_at(vec2 wp) {
+    float n = P.flow_org.w;
+    vec2 g = (wp - P.flow_org.xy) / P.flow_org.z - 0.5;
+    vec2 f = clamp(g, vec2(0.0), vec2(n - 1.001));
+    ivec2 i = ivec2(floor(f));
+    vec2  t = f - vec2(i);
+    int   N = int(n);
+    vec4 a = P.flow[i.y * N + i.x], b = P.flow[i.y * N + min(i.x + 1, N - 1)];
+    vec4 c = P.flow[min(i.y + 1, N - 1) * N + i.x], d = P.flow[min(i.y + 1, N - 1) * N + min(i.x + 1, N - 1)];
+    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+shared int s_obs[kObs];
+shared int s_nobs;
+void mode_inputs(ivec2 c, uint li) {
+    int n = NN();
+    float dx = DX();
+    // (the obstacles that can touch this 16 x 16 tile, culled once for the group)
+    if (li == 0u) s_nobs = 0;
+    barrier();
+    vec2 t0 = P.grid.xy + vec2(gl_WorkGroupID.xy * 16u) * dx, t1 = t0 + 16.0 * dx;
+    int no = int(P.misc.x + 0.5);
+    if (int(li) < no) {
+        vec4 o = P.obs[li];
+        if (o.x + o.z > t0.x && o.x - o.z < t1.x && o.y + o.z > t0.y && o.y - o.z < t1.y) {
+            int k = atomicAdd(s_nobs, 1);
+            s_obs[k] = int(li);
+        }
+    }
+    barrier();
+    if (c.x >= n || c.y >= n) return;
+    vec2 wp = P.grid.xy + (vec2(c) + 0.5) * dx;
+    vec2 uvh = wp / 2048.0 + 0.5;
+    bool home = scene.globe_info.x < 0.5 && all(greaterThan(uvh, vec2(0.002))) && all(lessThan(uvh, vec2(0.998)));
+    vec4 fl = flow_at(wp);
+    float g = home ? textureLod(u_height_full, uvh, 0.0).r : -1e9;
+    float b = g;
+    for (int k = 0; k < s_nobs; ++k) {
+        vec4 o = P.obs[s_obs[k]];
+        float d2 = dot(wp - o.xy, wp - o.xy);
+        if (d2 >= o.z * o.z) continue;
+        b = max(b, o.w >= 5e4 ? g + 1e3 : o.w + sqrt(o.z * o.z - d2));
+    }
+    float top = max(scene.water_params.y, wc_stream_surface(wp));
+    bool is_on = home && fl.z < 0.5 && scene.water_params.x > 0.5;
+    imageStore(u_in, c, uvec4(floatBitsToUint(b), floatBitsToUint(is_on ? top : -1e9), packHalf2x16(fl.xy), floatBitsToUint(g)));
+}
+
+// ---------------------------------------------------------------- helpers
+struct In { float b; float top; vec2 tgt; float g; bool on; };
+In in_at(ivec2 c) {
+    ivec2 q = clamp(c, ivec2(0), ivec2(NN() - 1));
+    uvec4 u = imageLoad(u_in, q);
+    In r;
+    r.b = uintBitsToFloat(u.x); r.top = uintBitsToFloat(u.y); r.tgt = unpackHalf2x16(u.z); r.g = uintBitsToFloat(u.w);
+    r.on = r.top > -1e8;
+    return r;
+}
+// the state at a texel position (cell centre = i + 0.5), bilinear, from S0 (which == 0) or S1
+vec4 s_load(int which, ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(NN() - 1));
+    return which == 0 ? imageLoad(u_s0, q) : imageLoad(u_s1, q);
+}
+vec4 s_bil(int which, vec2 p) {
+    vec2 f = p - 0.5;
+    ivec2 i = ivec2(floor(f));
+    vec2 t = f - vec2(i);
+    vec4 a = s_load(which, i), b = s_load(which, i + ivec2(1, 0)), c = s_load(which, i + ivec2(0, 1)), d = s_load(which, i + ivec2(1, 1));
+    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+vec4 f_load(int which, ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(NN() - 1));
+    return which == 0 ? imageLoad(u_f0, q) : imageLoad(u_f1, q);
+}
+vec4 f_bil(int which, vec2 p) {
+    vec2 f = p - 0.5;
+    ivec2 i = ivec2(floor(f));
+    vec2 t = f - vec2(i);
+    vec4 a = f_load(which, i), b = f_load(which, i + ivec2(1, 0)), c = f_load(which, i + ivec2(0, 1)), d = f_load(which, i + ivec2(1, 1));
+    return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 437.545); }       // (the reference's, x 0.1 of the cell index outside)
+uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
+float u01(uint h) { return float(h >> 8) * (1.0 / 16777216.0); }
+// the edge weight (the outer 10 % each side): heights and velocities blend to the authored state
+float edge_e(ivec2 c) {
+    vec2 uv = (vec2(c) + 0.5) / float(NN());
+    float m = max(abs(uv.x - 0.5), abs(uv.y - 0.5));
+    return clamp(10.0 * m - 4.0, 0.0, 1.0);
+}
+
+// ---------------------------------------------------------------- mode 1: height
+void mode_height(ivec2 c) {
+    int n = NN();
+    if (c.x >= n || c.y >= n) return;
+    float dx = DX();
+    In I = in_at(c);
+    ivec2 s = c + pc.s.xy;                     // where this cell stood in the last step's window
+    bool inside = all(greaterThanEqual(s, ivec2(1))) && all(lessThan(s, ivec2(n - 1)));
+    bool border = any(lessThan(c, ivec2(1))) || any(greaterThanEqual(c, ivec2(n - 1)));
+    vec4 S = inside ? imageLoad(u_s0, s) : vec4(0.0);
+    vec4 F = inside ? imageLoad(u_f0, s) : vec4(0.0);
+    bool reset = !I.on || !inside || border || pc.m.w != 0 || F.w < 0.5;
+    if (reset) {
+        // (re-initialised: the authored top, the course's current, no foam)
+        float h0 = I.on ? max(I.top, I.b) : I.b;
+        vec2 v0 = (I.on && I.top > I.b + 0.005) ? I.tgt : vec2(0.0);
+        imageStore(u_s1, c, vec4(h0, v0, h0));
+        imageStore(u_f1, c, vec4(0.0, 0.0, 0.0, I.on ? 1.0 : 0.0));
+        return;
+    }
+    float h = S.x;
+    vec2  vel = S.yz;
+    float hprev = pc.m.y == 0 ? S.x : S.w;     // (the height at the frame's start: the foam's "rise since last frame")
+    float bp = max(I.b, h - 5.0);
+    float draw = h - bp;
+    float d = max(0.0, draw);
+    // neighbours: L R D U (their heights from the last step, their beds from this frame's inputs)
+    const ivec2 off[4] = ivec2[4](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+    float hN[4], bN[4], dN[4];
+    for (int k = 0; k < 4; ++k) {
+        In J = in_at(c + off[k]);
+        float hh = imageLoad(u_s0, s + off[k]).x;
+        if (!J.on) { hh = h; J.b = I.b; }      // (not the solver's: no flux that way)
+        hN[k] = hh;
+        bN[k] = max(J.b, hh - 5.0);
+        dN[k] = max(0.0, hh - bN[k]);
+    }
+    bool shore = false;
+    for (int k = 0; k < 4; ++k) shore = shore || (bN[k] > h && dN[k] < 0.001 * dx);
+    float hn;
+    bool done = false;
+    if (shore) {
+        // the shore: the surface is the mean of the four, no flux this step; at the authored
+        // water's edge it is the authored top
+        // (a dry higher neighbour - a bank, a stone - counts with our own surface: its "height"
+        //  is its bed, and with it in the mean the water beside every boulder rose by a quarter
+        //  of the stone's height)
+        float hs = 0.0;
+        for (int k = 0; k < 4; ++k) hs += (bN[k] > h && dN[k] < 0.001 * dx) ? h : hN[k];
+        d = max(0.0, 0.25 * hs - bp);
+        bool dry8 = false;
+        for (int j = -1; j <= 1; ++j)
+            for (int i = -1; i <= 1; ++i) {
+                if (i == 0 && j == 0) continue;
+                In J = in_at(c + ivec2(i, j));
+                if (J.on && J.g > J.top) dry8 = true;
+            }
+        if (dry8) { hn = I.top; done = true; }
+        else hn = bp + d;
+    } else {
+        // continuity, flux form: dd/dt = -div(u d), the velocities taken at the backtraced point
+        vec2 sp = vec2(s) + 0.5;
+        vec2 q = sp - DT * vel / dx;
+        float uL = s_bil(0, q - vec2(1.0, 0.0)).y, uR = s_bil(0, q + vec2(1.0, 0.0)).y;
+        float vD = s_bil(0, q - vec2(0.0, 1.0)).z, vU = s_bil(0, q + vec2(0.0, 1.0)).z;
+        float div = (uR * dN[1] - uL * dN[0]) / (2.0 * dx) + (vU * dN[3] - vD * dN[2]) / (2.0 * dx);
+        float spill = 0.0;
+        if (d > dN[1] && d - dN[0] > 2.0 * dx) spill += 0.45 * (max(0.0, 0.5 * (d + dN[1])) - d);
+        if (d > dN[3] && d - dN[2] > 2.0 * dx) spill += 0.45 * (max(0.0, 0.5 * (d + dN[3])) - d);
+        // the slow pull toward the authored top: a fixed rate per cell (0..1 /s, ~2 s on average)
+        vec2 wc = floor(P.grid.xy / dx + 0.5) + vec2(c);
+        float relax = DT * clamp(hash2(0.1 * wc) * clamp(I.top - h, -0.1, 1.0), -10.0, 10.0);
+        float dd = d - DT * clamp(div, -10.0, 10.0) + relax + spill;
+        // a drop-off: our bed is a cliff above a neighbour's surface - drained
+        bool drop = false;
+        for (int k = 0; k < 4; ++k) drop = drop || (bp > dN[k] + bN[k] && (bp - bN[k]) / dx > 1.5);
+        hn = drop ? bp + min(draw, 0.0) : bp + (dd > 0.0 ? dd : draw);
+    }
+    // the window's edge: pulled to the authored top over the outer 10 % each side
+    float e = edge_e(c);
+    hn += e * e * e * (I.top - hn);
+    imageStore(u_s1, c, vec4(hn, vel, hprev));
+    imageStore(u_f1, c, vec4(F.xy, 0.0, 1.0));
+}
+
+// ---------------------------------------------------------------- mode 2: pressure, foam, bodies
+void spawn(vec2 wp, float y, vec2 vel, float life, uint seed, int count) {
+    if (count <= 0) return;
+    uint dst = uint(1 - pc.m.z);
+    uint mx = uint(P.part.x);
+    uint i0 = atomicAdd(C.cnt[dst], uint(count));
+    for (int k = 0; k < count; ++k) {
+        uint i = i0 + uint(k);
+        if (i >= mx) return;
+        uint h1 = pcg(seed + uint(k) * 7919u), h2 = pcg(h1 ^ 0x5bd1e995u), h3 = pcg(h2);
+        vec2 jp = (vec2(u01(h1), u01(h2)) - 0.5) * DX();
+        parts[dst * mx + i] = Part(vec4(wp.x + jp.x, y + (u01(h3) - 0.5) * 0.1, wp.y + jp.y, life), vec4(vel.x, 0.0, vel.y, u01(pcg(h3))));
+    }
+}
+void mode_pressure(ivec2 c) {
+    int n = NN();
+    if (c.x >= n || c.y >= n) return;
+    float dx = DX();
+    In I = in_at(c);
+    vec4 S = imageLoad(u_s1, c);
+    vec4 F = imageLoad(u_f1, c);
+    if (!I.on) {
+        imageStore(u_s0, c, S);
+        imageStore(u_f0, c, vec4(0.0));
+        imageStore(u_r, c, vec4(0.0, 0.0, 0.0, -1.0));
+        return;
+    }
+    float h = S.x;
+    vec2  vel0 = S.yz;
+    float bp = max(I.b, h - 5.0);
+    float d = max(0.0, h - bp);
+    vec2  cp = vec2(c) + 0.5;
+    vec2  q = cp - DT * vel0 / dx;
+    vec2  ua = s_bil(1, q).yz;                                   // semi-Lagrangian
+    ua = sign(ua) * min(abs(ua), vec2(50.0 * dx));               // (CFL: half a cell a step)
+    // Vibe's level river: the velocity is pulled toward the course's current (the reference's
+    // rivers slope and need none; here the solver adds the bending round obstacles, wakes and banks)
+    bool tgt_on = dot(I.tgt, I.tgt) > 1e-6 && d > 0.005;
+    if (tgt_on) ua += (DT / 2.0) * (I.tgt - ua);
+    const ivec2 off[4] = ivec2[4](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+    float hN[4], bN[4];
+    vec2  vN[4];
+    for (int k = 0; k < 4; ++k) {
+        In J = in_at(c + off[k]);
+        vec4 Sn = s_load(1, c + off[k]);
+        float hh = Sn.x;
+        if (!J.on) { hh = h; J.b = I.b; }
+        hN[k] = hh; bN[k] = max(J.b, hh - 5.0); vN[k] = Sn.yz;
+    }
+    vec2 vel;
+    bool wall = false;
+    for (int ax = 0; ax < 2; ++ax) {
+        int kl = ax * 2, kr = ax * 2 + 1;
+        bool w = (bN[kl] > h && hN[kl] - bN[kl] < 0.001 * dx) || (bN[kr] > h && hN[kr] - bN[kr] < 0.001 * dx);
+        float gr = (hN[kr] - hN[kl]) / (2.0 * dx);
+        float u;
+        if (w) { u = 0.0; wall = true; }
+        else if (bp > hN[kr] && (bp - bN[kr]) / dx > 1.5) u = ua[ax] - DT * clamp(G * (-d / dx - 1.5), -50.0, 50.0);   // (pushed over the drop)
+        else if (bp > hN[kl] && (bp - bN[kl]) / dx > 1.5) u = ua[ax] - DT * clamp(G * ( d / dx + 1.5), -50.0, 50.0);
+        else u = ua[ax] - DT * clamp(G * gr, -50.0, 50.0);
+        vel[ax] = u;
+    }
+    float e = edge_e(c);
+    if (!wall) {
+        float div0 = (vN[1].x - vN[0].x) / (2.0 * dx) + (vN[3].y - vN[2].y) / (2.0 * dx);
+        float damp = (1.0 - 0.2 * S1f(clamp((abs(div0) - 2.0) / 8.0, 0.0, 1.0))) * (d < 0.005 ? 0.5 : 1.0);
+        vel *= damp;
+        vel *= 1.0 - e * e * e;
+        // (no sea surge: the open sea is not the solver's here; the deep-water friction is 1 at mask 1)
+    }
+    float vmax = max(2.0, 1.2 * max(abs(I.tgt.x), abs(I.tgt.y)));      // (the reference: 2 m/s; the stream's sheets run faster)
+    vel = clamp(vel, vec2(-vmax), vec2(vmax));
+
+    // ---- foam: advected, decaying 2 % a step, made where fast shallow water meets higher bed
+    //      downstream (in front of and round stones), on crests, and where the surface rises suddenly
+    vec4 Fq = f_bil(1, q);
+    float f = Fq.x;
+    float sp = length(vel);
+    f = max(0.0, f - 0.02 * max(0.2, f) * (1.0 + 0.2 * S1f(clamp((sp - 2.0) / 0.8, 0.0, 1.0))));
+    float O = 0.0, Cc = 0.0, Gm = 0.0, lap = 0.0, dhF = 0.0, rise = 0.0;
+    if (sp > 0.001 || dot(I.tgt, I.tgt) > 0.01) {
+        vec4 Sq = s_bil(1, q);
+        float dq = Sq.x - bp;
+        dhF = Sq.x - Sq.w;
+        float rough = clamp((max(max(abs(bp - bN[0]), abs(bp - bN[1])), max(abs(bp - bN[2]), abs(bp - bN[3]))) - 0.02) / 0.28, 0.0, 1.0);
+        // (fast and "downstream" by the water's approach - the advected velocity before a wall stops it:
+        //  after the wall rule the velocity never points into a stone standing out of the water, and
+        //  the white water in front of it never formed)
+        //  The approach is the course's current where there is one (the water a cell before a stone
+        //  has already been stopped by it: its own velocity is small, and the faster water a cell
+        //  further up has no higher bed in front of it - with the reference's test as written, no
+        //  white water formed in front of a stone standing out of the water); "downstream" looks
+        //  one and two cells ahead along it.
+        vec2 va = dot(I.tgt, I.tgt) > 0.01 ? I.tgt : (length(ua) > sp ? ua : vel);
+        float spa = max(sp, length(va));
+        float fast = clamp((spa - 0.65) / 0.35, 0.0, 1.0);
+        vec2 vd = va / max(length(va), 1e-4);
+        float bdown = max(in_at(c + ivec2(round(vd))).b, in_at(c + ivec2(round(2.0 * vd))).b);
+        rise = clamp((bdown - bp - 0.03) / 0.12, 0.0, 1.0);
+        float deep = clamp((dq - 0.15) / 0.65, 0.0, 1.0);
+        float rfr = rough * fast * rise;
+        if (P.part.w > 0.5) {       // (VIBE_LOG_SOLVER: what the foam rule sees)
+            atomicMax(C.stat[3], uint(spa * 100.0));
+            atomicMax(C.stat[4], uint(rough * rise * 1e4));
+            atomicMax(C.stat[5], uint(clamp(dq, 0.0, 50.0) * 100.0));
+        }
+        O = 0.8 * spa * S1f(rough) * S1f(fast) * S1f(rise) * (1.0 - S1f(deep)) * rfr * rfr;
+        vec2 gh = vec2(hN[1] - hN[0], hN[3] - hN[2]) / (2.0 * dx);
+        Gm = length(gh);
+        lap = (hN[0] + hN[1] + hN[2] + hN[3] - 4.0 * h) / (dx * dx);
+        float a = clamp(-lap / 3.5, 0.0, 1.0), cc = clamp((sp - 0.15) / 0.45, 0.0, 1.0);
+        vec2 gb = vec2(bN[1] - bN[0], bN[3] - bN[2]) / (2.0 * dx);
+        float follow = Gm > 1e-6 ? max(0.0, dot(gb, gh / Gm)) : 0.0;
+        float SG = S1f(clamp((Gm - 0.01) / 0.19, 0.0, 1.0));
+        Cc = (0.225 - 0.15 * a) * SG * S1f(cc) * (a * cc) * (a * cc) * (1.0 - S1f(clamp((dq - 0.15) / 1.85, 0.0, 1.0))) *
+             (1.0 - 0.98 * S1f(clamp((follow - 0.05) / 0.3, 0.0, 1.0)));
+        float add = min(0.01 * SG, Cc) + min(0.008, O / (O + 1.0));
+        if (Gm > 0.0637 / dx && 100.0 * dhF > 4.0 && lap > -4.0) add += 1.28 * max(0.0, dhF);     // (a sudden rise > 4 cm: a jump, an impact)
+        f += min(add, 0.02);
+    }
+    float fy = max(0.0, F.y - 0.03);
+
+    // ---- moving bodies (waders, swimmers, cars fording, people) and splashes
+    int nb = int(P.misc.y + 0.5);
+    vec2 wp = P.grid.xy + cp * dx;
+    for (int i = 0; i < nb; ++i) {
+        vec4 A = P.body_a[i], B = P.body_b[i];
+        vec2 e2 = wp - A.xy;
+        float r2 = dot(e2, e2), R = max(A.z, dx);
+        if (B.w < 0.0) {
+            // a splash (a bullet, a body dropped in, a blast): a crater pushed out, once
+            if (pc.m.y != 0 || r2 > 9.0 * R * R) continue;
+            float gk = exp(-r2 / (R * R));
+            float amp = -B.w;
+            h -= amp * gk;
+            vel += (r2 > 1e-6 ? e2 / sqrt(r2) : vec2(0.0)) * (3.0 * amp * gk / max(R, 0.2));
+            f += 2.0 * amp * gk;
+            continue;
+        }
+        if (r2 > R * R || d <= 0.001) continue;
+        float ybot = A.w;
+        if (ybot > h) continue;
+        vec3 V = B.xyz;
+        if (dot(V, V) < 0.01) continue;
+        // the body's top seen from above: a rounded shape, its normal leaning out at its edges
+        vec2 nh = e2 / R;
+        vec3 nrm = normalize(vec3(nh.x, sqrt(max(1.0 - dot(nh, nh), 0.0)) + 0.05, nh.y));
+        bool submerged = B.w < h;
+        if (V.y < 0.0) nrm.y = -nrm.y;                       // (faces the motion's vertical sense)
+        vec3 rel = vec3(V.x - vel.x, V.y, V.z - vel.y);
+        float imm = submerged ? h - B.w : h - ybot;          // the draft
+        float s2 = V.x * V.x + V.z * V.z + 0.001;
+        float lo = clamp(0.01 / s2, 0.001, 0.08), hi = clamp(0.2 / s2, 0.1, 2.5);
+        float w = S1f(clamp((imm - lo) / (hi - lo), 0.0, 1.0));
+        float sub = submerged ? 1.0 - S1f(clamp((imm - 0.1) / (2.0 * (V.y * V.y) / dot(V, V) + 0.001), 0.0, 1.0)) : 1.0;
+        float flux = w * 1.125 * dx * dx * sub * exp(-imm) * clamp(dot(nrm, rel), -62.5, 62.5);
+        float vh = sqrt(s2);
+        float dh = (1.0 + 0.75 * S1f(clamp((vh - 0.2) / (1.5 * (d + 1.0) - 0.2), 0.0, 1.0))) * clamp(flux / (dx * dx), -0.025, 0.025);
+        h += dh;
+        float k = min(1.0, 2.25 * DT * 2.0 * imm * exp(-imm) / max(d, 0.05));
+        vel += clamp(k * (V.xz - vel), vec2(-50.0), vec2(50.0));
+        f += dh;
+        fy += 1.5 * dh;
+    }
+    vel = clamp(vel, vec2(-vmax), vec2(vmax));
+    f = clamp(f, 0.0, 1.0);
+    fy = clamp(fy, 0.0, 1.0);
+    if (P.part.w > 0.5) {
+        atomicMax(C.stat[0], uint(clamp(O, 0.0, 100.0) * 1e4));
+        atomicMax(C.stat[1], uint(f * 1e4));
+        if (O > 0.004) atomicAdd(C.stat[2], 1u);
+    }
+    imageStore(u_s0, c, vec4(h, vel, S.w));
+    imageStore(u_f0, c, vec4(f, fy, 0.0, 1.0));
+    bool wet = h - bp > 0.001;
+    imageStore(u_r, c, vec4(wet ? h - I.top : 0.0, wet ? vel : vec2(0.0), max(f, fy)));
+
+    // ---- new foam particles (the reference's rule; in the inner half, on frames a global random lets through)
+    if (P.misc.w > 0.5 && P.part.z > 0.5 && pc.m.y == 0 && wet) {
+        vec2 uv = cp / float(n);
+        float m = max(abs(uv.x - 0.5), abs(uv.y - 0.5));
+        float ww = (1.0 - 2.0 * m) * (1.0 - 2.0 * m);
+        if (ww > 0.25 && ww > P.part.y) {
+            uint seed = pcg(uint(c.x) * 73856093u ^ uint(c.y) * 19349663u ^ floatBitsToUint(P.misc.z));
+            float r1 = u01(seed), r2 = u01(pcg(seed + 1u));
+            float SG = S1f(clamp((Gm - 0.01) / 0.19, 0.0, 1.0));
+            bool A = clamp(125.0 * min(0.008, O / (O + 1.0)), 0.0, 1.0) > 0.98 + 1.5 * r1 ||
+                     clamp(100.0 * min(0.01 * SG, Cc), 0.0, 1.0) > 0.98 + 1.5 * r2 ||
+                     (Gm > 0.0637 / dx && 100.0 * dhF > 4.0 && lap < -4.0);
+            if (A) spawn(wp, h, vel, 2.0 * clamp(0.5 + 0.5 * ww * u01(pcg(seed + 2u)), 0.0, 1.0), seed, int(5.0 * ww));
+        }
+    }
+}
+
+// ---------------------------------------------------------------- mode 3: the foam particles
+void mode_particles(uint i) {
+    uint src = uint(pc.m.z), dst = 1u - src;
+    uint mx = uint(P.part.x);
+    if (i >= min(C.cnt[src], mx)) return;
+    Part p = parts[src * mx + i];
+    p.p.w -= DT;
+    float dx = DX();
+    int n = NN();
+    vec2 cpos = (p.p.xz - P.grid.xy) / dx;           // (texel units)
+    if (p.p.w < 0.0 || any(lessThan(cpos, vec2(1.0))) || any(greaterThan(cpos, vec2(float(n) - 1.0)))) return;
+    In I = in_at(ivec2(floor(cpos)));
+    if (!I.on) return;
+    p.p.xz += 0.00995 * p.v.xz;
+    p.v.y += DT * min(0.0, -0.5 * p.v.y);
+    p.p.y += DT * p.v.y;
+    vec4 S = s_bil(0, (p.p.xz - P.grid.xy) / dx);
+    float surf = S.x;
+    if (abs(p.p.y - surf) < 0.107) p.v.xyz = vec3(S.y, 0.0, S.z);       // rides the surface
+    else { p.v.xz *= 0.995; p.v.y -= 0.098; }                             // ballistic: pours over a fall
+    if (p.p.y < surf + 0.057) p.p.y = surf + 0.057;
+    uint j = atomicAdd(C.cnt[dst], 1u);
+    if (j < mx) parts[dst * mx + j] = p;
+}
+
+// ---------------------------------------------------------------- mode 4: the read-back
+void mode_pack(ivec2 c) {
+    int n = NN();
+    if (c.x >= n || c.y >= n) return;
+    In I = in_at(c);
+    vec4 S = imageLoad(u_s0, c);
+    bool wet = I.on && S.x - max(I.b, S.x - 5.0) > 0.001;
+    pk[c.y * n + c.x] = wet ? uvec2(floatBitsToUint(S.x), packHalf2x16(S.yz)) : uvec2(0u);
+}
+
+void main() {
+    int mode = pc.m.x;
+    ivec2 c = ivec2(gl_GlobalInvocationID.xy);
+    if (mode == 0) { mode_inputs(c, gl_LocalInvocationIndex); return; }
+    if (mode == 1) { mode_height(c); return; }
+    if (mode == 2) { mode_pressure(c); return; }
+    if (mode == 3) { mode_particles(gl_GlobalInvocationID.y * (gl_NumWorkGroups.x * 16u) + gl_GlobalInvocationID.x); return; }
+    if (mode == 4) { mode_pack(c); return; }
+    if (mode == 5) {
+        if (c == ivec2(0)) { uint k = uint(pc.m.z); C.args[0] = 6u; C.args[1] = min(C.cnt[k], uint(P.part.x)); C.args[2] = 0u; C.args[3] = 0u; }
+        return;
+    }
+}

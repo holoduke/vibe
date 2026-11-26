@@ -8,6 +8,7 @@
 // layer, built on the same instancing pattern as the grass field.
 
 #include "engine/mesh.h"
+#include "engine/water_course.h"
 
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -49,7 +50,7 @@ struct ScatterSet {
     // fern, daisy, poppy, bluebell, cornflower, buttercup, lupin, reed,
     // clover, plantain, dandelion, nettle, foxglove, thistle, mushrooms,
     // grass tuft (a clump of long blades; uv.x = 8 +- 0.4 across the blade)
-    static constexpr int kPlantSpecies = 19;   // 16 = water lilies, 17 = turf (short grass, placed on the GPU only) 18 = flowering meadow (in fields, placed on the GPU only)
+    static constexpr int kPlantSpecies = 27;   // 16 = water lilies, 17 = turf (short grass, placed on the GPU only) 18 = flowering meadow (in fields, placed on the GPU only), 19..26 = small debris (placed on the GPU only: scatter_debris_meshes.inl)
     Mesh          plant_mesh[kPlantSpecies]{};
     // Levels of detail for distant cells, made automatically (meshoptimizer
     // simplification; the water lily's first one is hand-built): about a
@@ -115,6 +116,7 @@ struct ScatterParams {
     bool blocked(float x, float z) const {
         if (std::abs(x) < keep_out_xz.x && std::abs(z) < keep_out_xz.y) return true;
         for (const auto& r : keep_rects) if (x > r.x && x < r.z && z > r.y && z < r.w) return true;
+        if (wc::stream_distance(glm::vec2(x, z), water_level) < 0.8f) return true;      // (the stream's water: engine/water_course.h)
         return false;
     }
     // Optional extra keep-out (the castle road). Null = none.

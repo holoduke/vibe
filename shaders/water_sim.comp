@@ -1,0 +1,247 @@
+#version 460
+// The water's simulation passes (vk_engine/water_sim.cpp says when each runs):
+//   mode 0  the wind sea's spectrum at this moment, four cascades of 64 x 64 (the reference game's
+//           Phillips spectrum: wind length U^2 / g (the reference: ln(wind + 10)^2 / 9.8), waves against the wind damped,
+//           deep-water dispersion w = sqrt(9.8 k), choppy terms -i k/|k| h)
+//   mode 1  the inverse FFT along x (radix 2, Stockham, in shared memory; one row a workgroup)
+//   mode 2  ... along z, the checkerboard sign, and the displacement picture (x: choppy x,
+//           y: height, z: choppy z; metres)
+//   mode 3  the gradient picture: the slope (per metre, central difference) and the FOLD
+//           1 - Jacobian of the choppy displacement (whitecaps where > 0); w: height
+//   mode 4  one step of the ripple field round the camera: the wave equation on 512 x 512 cells
+//           of 12.5 cm, reflected where the ground stands above the water (banks, stones),
+//           carried by the river's and the stream's current, fed by impulses (people wading,
+//           cars fording, splashes, bullets); the window scrolls with the camera.
+// Every picture stays in the GENERAL layout.
+#extension GL_GOOGLE_include_directive : require
+
+#include "scene_ubo.glsl"            // (set 0, binding 0: the scene block - the water level, the stream)
+#include "water_course.glsl"         // the stream's surface (wc_stream_surface)
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+const int kMaxImpulses = 64;
+layout(set = 0, binding = 1) uniform WaterSimParams {
+    vec4 wind;          // xy the way it blows, z m/s, w the time (s)
+    vec4 L;             // the four cascades' sizes (m)
+    vec4 band;          // where each cascade's band of wave numbers starts (rad/m; the last one's end is its Nyquist)
+    vec4 gain;          // x the amplitude gain (Cox-Munk slope normalisation), y the choppiness, z against-wind damping, w the spectrum's on/off
+    vec4 rip;           // xy the window's corner (world x z), z the cell (m), w cells a side
+    vec4 rip_misc;      // x impulses, y damping per second, z the wave speed (m/s), w the flow grid's cell (m)
+    vec4 flow_org;      // xy the flow grid's corner (world), z cells a side, w 1 = flow on
+    vec4 cgain;         // each cascade's amplitude gain (water_sim.cpp: the sea's height and slope)
+    vec4 imp[kMaxImpulses];       // xyz: world x, z, radius (m); w: height added (m)
+    vec4 flow[128];     // the current on a 16 x 16 grid, two cells a vec4 (xy, zw)
+} P;
+
+layout(set = 0, binding = 2, rgba32f) uniform image2DArray u_spec;
+layout(set = 0, binding = 3, rgba32f) uniform image2DArray u_tmp;
+layout(set = 0, binding = 4, rgba16f) uniform image2DArray u_disp;
+layout(set = 0, binding = 5, rgba16f) uniform image2DArray u_grad;
+layout(set = 0, binding = 6, rgba16f) uniform image2D u_ripA;
+layout(set = 0, binding = 7, rgba16f) uniform image2D u_ripB;
+layout(set = 0, binding = 8) uniform sampler2D u_height_full;     // the home tile's ground (2048 m)
+layout(set = 0, binding = 9) uniform sampler2D u_ripA_s;
+layout(set = 0, binding = 10) uniform sampler2D u_ripB_s;
+
+// m: x mode, y ripple source (0 A, 1 B), z 1 = the frame's first ripple step (impulses);
+// s: xy the window's corner the source was written in, z the step's dt (s)
+layout(push_constant) uniform PC { ivec4 m; vec4 s; } pc;
+
+const int N = 64;
+const float PI = 3.14159265358979;
+
+// ---------------------------------------------------------------- the spectrum
+uint pcg(uint v) {
+    uint s = v * 747796405u + 2891336453u;
+    uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+float u01(uint h) { return (float(h >> 8) + 0.5) * (1.0 / 16777216.0); }
+// Two Gaussian randoms for a mode, fixed (the reference: a hash of cascade x 101 + index - not reseeded).
+vec2 gauss2(int cascade, int idx) {
+    uint h = pcg(uint(cascade * 101 + 7919) * 65599u + uint(idx));
+    float u1 = max(u01(h), 1e-7), u2 = u01(pcg(h ^ 0x68E31DA4u));
+    float r = sqrt(-2.0 * log(u1));
+    return vec2(r * cos(2.0 * PI * u2), r * sin(2.0 * PI * u2));
+}
+float phillips(vec2 k, int c) {
+    float kk = dot(k, k);
+    if (kk < 1e-10) return 0.0;
+    float kl = sqrt(kk);
+    // (each cascade holds its own band of wave numbers: the four together are one spectrum)
+    float lo = P.band[c], hi = (c < 3) ? P.band[c + 1] : 1e9;
+    if (kl < lo || kl >= hi) return 0.0;
+    float w = P.wind.z;
+    float Lw = max(w * w / 9.81, 0.05);       // (U^2 / g; water_sim.cpp phillips says why)
+    vec2  wd = P.wind.xy;
+    float kw = dot(k / kl, wd);
+    float p = max(0.25, clamp(w / 30.0, 0.0, 1.0)) * kw * kw * exp(-1.0 / (kk * Lw * Lw)) / (kk * kk) * exp(-kk * (0.001 * Lw) * (0.001 * Lw));
+    if (kw < 0.0) p *= P.gain.z;
+    return p;
+}
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+
+void mode_spectrum(uvec3 id) {
+    int n = int(id.x), m = int(id.y), c = int(id.z);
+    float L = P.L[c];
+    vec2  k = 2.0 * PI * vec2(n - N / 2, m - N / 2) / L;
+    float dk = 2.0 * PI / L;
+    // h0(k) and h0(-k): E|h0|^2 = P dk^2 / 2 each (the two terms sum to the mode's variance P dk^2)
+    int   nm = (N - n) & (N - 1), mm = (N - m) & (N - 1);
+    float a  = P.cgain[c] * dk * sqrt(0.5 * phillips(k, c));
+    float am = P.cgain[c] * dk * sqrt(0.5 * phillips(-k, c));
+    vec2  h0  = a * gauss2(c, m * N + n);
+    vec2  h0m = am * gauss2(c, mm * N + nm);
+    float kl = length(k);
+    float om = sqrt(9.8 * kl) * P.wind.w;          // (deep water; no loop period)
+    vec2  e  = vec2(cos(om), sin(om));
+    vec2  h  = cmul(h0, e) + cmul(vec2(h0m.x, -h0m.y), vec2(e.x, -e.y));
+    // choppy: D = -i k/|k| h
+    vec2  kn = kl > 1e-6 ? k / kl : vec2(0.0);
+    vec2  dx = vec2(h.y, -h.x) * kn.x;
+    vec2  dz = vec2(h.y, -h.x) * kn.y;
+    // two real fields in one complex FFT: A = H + i DX, B = DZ
+    vec2  A = h + vec2(-dx.y, dx.x);
+    if (P.gain.w < 0.5) { A = vec2(0.0); dz = vec2(0.0); }
+    imageStore(u_spec, ivec3(n, m, c), vec4(A, dz));
+}
+
+// ---------------------------------------------------------------- the FFT (inverse, N = 64)
+shared vec4 s_a[N];
+shared vec4 s_b[N];
+// Radix-2 Stockham (Govindaraju et al. 2008): stage Ns = 1, 2, .. 32, each of the 32 threads one
+// butterfly, natural order out. Both complex numbers of a vec4 at once.
+void fft64(uint j) {
+    bool from_a = true;
+    for (int Ns = 1; Ns < N; Ns <<= 1) {
+        barrier();
+        if (j < 32u) {
+            int   jj = int(j);
+            float ang = 2.0 * PI * float(jj % Ns) / float(Ns * 2);      // (+: inverse)
+            vec2  tw = vec2(cos(ang), sin(ang));
+            vec4  v0 = from_a ? s_a[jj] : s_b[jj];
+            vec4  v1 = from_a ? s_a[jj + 32] : s_b[jj + 32];
+            v1 = vec4(cmul(v1.xy, tw), cmul(v1.zw, tw));
+            int   o = (jj / Ns) * Ns * 2 + (jj % Ns);
+            if (from_a) { s_b[o] = v0 + v1; s_b[o + Ns] = v0 - v1; }
+            else        { s_a[o] = v0 + v1; s_a[o + Ns] = v0 - v1; }
+        }
+        from_a = !from_a;
+    }
+    barrier();
+    // 6 stages: the result is back in s_a
+}
+void mode_fft(bool rows, uvec3 wg, uint j) {
+    int line = int(wg.x), c = int(wg.y);
+    ivec3 q = rows ? ivec3(int(j), line, c) : ivec3(line, int(j), c);
+    s_a[j] = rows ? imageLoad(u_spec, q) : imageLoad(u_tmp, q);
+    fft64(j);
+    vec4 r = s_a[j];
+    if (rows) { imageStore(u_tmp, q, r); return; }
+    // the frequencies run from -32: (-1)^(x + z) puts the origin back
+    float sg = ((q.x + q.y) & 1) == 0 ? 1.0 : -1.0;
+    r *= sg;
+    // A = h + i Dx -> h = Re A, Dx = Im A; B = Dz -> Re B
+    float ch = P.gain.y;
+    imageStore(u_disp, q, vec4(r.y * ch, r.x, r.z * ch, 0.0));
+}
+
+// ---------------------------------------------------------------- slope and fold
+void mode_grad(uvec3 id) {
+    ivec3 q = ivec3(id);
+    int c = q.z;
+    float tx = P.L[c] / float(N);
+    vec4 xp = imageLoad(u_disp, ivec3((q.x + 1) & (N - 1), q.y, c));
+    vec4 xm = imageLoad(u_disp, ivec3((q.x - 1) & (N - 1), q.y, c));
+    vec4 zp = imageLoad(u_disp, ivec3(q.x, (q.y + 1) & (N - 1), c));
+    vec4 zm = imageLoad(u_disp, ivec3(q.x, (q.y - 1) & (N - 1), c));
+    vec4 o  = imageLoad(u_disp, q);
+    float inv = 1.0 / (2.0 * tx);
+    vec2  slope = vec2(xp.y - xm.y, zp.y - zm.y) * inv;
+    float jxx = (xp.x - xm.x) * inv, jzz = (zp.z - zm.z) * inv;
+    float jxz = (zp.x - zm.x) * inv, jzx = (xp.z - xm.z) * inv;
+    float J = (1.0 + jxx) * (1.0 + jzz) - jxz * jzx;
+    imageStore(u_grad, q, vec4(slope, 1.0 - J, o.y));
+}
+
+// ---------------------------------------------------------------- the ripple field
+float rip_ground(vec2 wp) {
+    vec2 uv = wp / 2048.0 + 0.5;
+    if (any(lessThan(uv, vec2(0.002))) || any(greaterThan(uv, vec2(0.998)))) return -1e9;      // (off the home tile: open water)
+    return textureLod(u_height_full, uv, 0.0).r;
+}
+vec2 rip_flow(vec2 wp) {
+    if (P.flow_org.w < 0.5) return vec2(0.0);
+    float n = P.flow_org.z;
+    vec2 g = (wp - P.flow_org.xy) / P.rip_misc.w - 0.5;
+    vec2 f = clamp(g, vec2(0.0), vec2(n - 1.001));
+    ivec2 i = ivec2(floor(f));
+    vec2  t = f - vec2(i);
+    vec2 v00, v10, v01, v11;
+    #define FL(ix, iy) ((((iy) * 16 + (ix)) & 1) == 0 ? P.flow[((iy) * 16 + (ix)) >> 1].xy : P.flow[((iy) * 16 + (ix)) >> 1].zw)
+    v00 = FL(i.x, i.y); v10 = FL(min(i.x + 1, 15), i.y); v01 = FL(i.x, min(i.y + 1, 15)); v11 = FL(min(i.x + 1, 15), min(i.y + 1, 15));
+    #undef FL
+    return mix(mix(v00, v10, t.x), mix(v01, v11, t.x), t.y);
+}
+void mode_ripple(uvec3 id) {
+    int n = int(P.rip.w);
+    ivec2 c = ivec2(id.xy);
+    if (c.x >= n || c.y >= n) return;
+    float cell = P.rip.z;
+    vec2  wp = P.rip.xy + (vec2(c) + 0.5) * cell;
+    bool  src_a = pc.m.y == 0;
+    // This cell stood at (c + shift) in last step's window: read it there (the window scrolls in
+    // whole cells; what comes in from outside is still water).
+    ivec2 sh = ivec2(round((P.rip.xy - pc.s.xy) / cell));
+    // The current carries the field (semi-Lagrangian: where did this water come from).
+    float dt = pc.s.z;
+    vec2  fl = rip_flow(wp);
+    vec2  src = vec2(c + sh) + 0.5 - fl * dt / cell;
+    vec2  suv = src / float(n);
+    vec4  s;
+    if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) s = vec4(0.0);
+    else s = src_a ? textureLod(u_ripA_s, suv, 0.0) : textureLod(u_ripB_s, suv, 0.0);
+    // neighbours (from the same moved place; the stencil of the reference: N S E W + half the diagonals)
+    vec2 tx = vec2(1.0 / float(n));
+    #define RS(o) (src_a ? textureLod(u_ripA_s, suv + (o) * tx, 0.0).x : textureLod(u_ripB_s, suv + (o) * tx, 0.0).x)
+    float h = s.x, hp = s.y;
+    float lap = RS(vec2(1, 0)) + RS(vec2(-1, 0)) + RS(vec2(0, 1)) + RS(vec2(0, -1)) - 4.0 * h;
+    float lapd = RS(vec2(1, 1)) + RS(vec2(-1, 1)) + RS(vec2(1, -1)) + RS(vec2(-1, -1)) - 4.0 * h;
+    #undef RS
+    // wave equation: h' = h + (h - hp) damp + k (lap + 0.5 lapd)/1.5 ; k = (c dt / dx)^2 (stable < 0.5)
+    float k = min(pow(P.rip_misc.z * dt / cell, 2.0), 0.45);
+    float damp = exp(-P.rip_misc.y * dt);
+    float hn = h + (h - hp) * damp + k * (lap + 0.5 * lapd) / 1.5;
+    // (the reference: a touch of smoothing toward the neighbours' mean keeps the grid's noise down)
+    hn += (1.0 - exp(-3.0 * dt)) * 0.25 * lap;      // (as a diffusion of the height, by time: as a pull toward a still state per step it damped all motion within 0.2 s at 240 steps a second)
+    // impulses (first step of a frame only)
+    if (pc.m.z == 1) {
+        int ni = int(P.rip_misc.x + 0.5);
+        for (int i = 0; i < ni; ++i) {
+            vec4 im = P.imp[i];
+            vec2 d = wp - im.xy;
+            float r = max(im.z, cell);
+            float d2 = dot(d, d) / (r * r);
+            if (d2 < 4.0) hn += clamp(im.w, -0.01, 0.01) * exp(-d2 * 2.0);      // (at most 1 cm a step: a source cannot dig a hole)
+        }
+    }
+    // the banks: no water - a wall the rings reflect from (depth 0 = wall)
+    float wl = max(scene.water_params.y, wc_stream_surface(wp));
+    if (rip_ground(wp) > wl - 0.02) { hn = 0.0; h = 0.0; }
+    // the window's edge: open water, the rings leave it
+    float edge = min(min(float(c.x), float(c.y)), min(float(n - 1 - c.x), float(n - 1 - c.y)));
+    float ek = smoothstep(0.0, 12.0, edge);
+    hn *= ek; h *= ek;
+    hn = clamp(hn, -0.04, 0.04);      // (4 cm: a deeper trough over 12.5 cm cells is a slope near 1)
+    vec4 outv = vec4(hn, h, 0.0, 0.0);
+    if (src_a) imageStore(u_ripB, c, outv); else imageStore(u_ripA, c, outv);
+}
+
+void main() {
+    int mode = pc.m.x;
+    if (mode == 0) { mode_spectrum(uvec3(gl_GlobalInvocationID.x, gl_WorkGroupID.y, gl_WorkGroupID.z)); return; }
+    if (mode == 1 || mode == 2) { mode_fft(mode == 1, gl_WorkGroupID, gl_LocalInvocationID.x); return; }
+    if (mode == 3) { mode_grad(uvec3(gl_GlobalInvocationID.x, gl_WorkGroupID.y, gl_WorkGroupID.z)); return; }
+    if (mode == 4) { mode_ripple(uvec3(gl_GlobalInvocationID.x, gl_WorkGroupID.y, 0u)); return; }
+}

@@ -283,6 +283,32 @@ void VulkanEngine::grass_trail_update(VkCommandBuffer cmd) {
         vkinit::transition_image(cmd, img[1], TD, RO);
         vkinit::transition_image(cmd, img[0], TS, RO);
     }
+
+    // ---- Tracks in snow and sand (post_fx.cpp post_fx_tracks): from the same bodies, a car's
+    // four wheels (from its heading, while it moves) and a person's trodden path; each a short
+    // capsule back along this frame's move, so a fast car leaves an unbroken rut. ----
+    {
+        std::vector<glm::vec4> trk;
+        for (int i = 0; i < n; ++i) {
+            const Pusher& B = all[size_t(i)];
+            const glm::vec2 pos(B.p.x, B.p.y), vel(B.p.z, B.p.w);
+            const float sp = glm::length(vel);
+            const glm::vec2 back = vel * dt;
+            if (B.r > 1.0f) {
+                if (sp < 0.3f) continue;
+                const glm::vec2 fw = vel / sp, rt(-fw.y, fw.x);
+                for (int k = 0; k < 4; ++k) {
+                    const glm::vec2 wpos = pos + fw * ((k < 2) ? 1.3f : -1.3f) + rt * ((k & 1) ? 0.78f : -0.78f);
+                    trk.push_back(glm::vec4(wpos, back));
+                    trk.push_back(glm::vec4(0.15f, 0.10f, 0.0f, 0.0f));     // (a tyre's width, 10 cm deep)
+                }
+            } else {
+                trk.push_back(glm::vec4(pos, back));
+                trk.push_back(glm::vec4(0.20f, 0.05f, 0.0f, 0.0f));         // (a path trodden 5 cm deep)
+            }
+        }
+        post_fx_tracks(cmd, trk, eye);
+    }
 }
 
 }  // namespace vibe

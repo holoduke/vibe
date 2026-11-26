@@ -92,6 +92,15 @@ void main() {
         // and passed straight through: the ground flickered ten times as much as at full
         // resolution (still sand, mean change between two frames 14.9 against 1.5 of 255).
         // With a flat guide the colour is the signal, and it is accumulated over the frames.
+        // Water (terrain_rm_main_water.glsl marks it 0.66): the refracted bed's guides, as the
+        // reference game hands its ray reconstruction - the bed's albedo and normal, rough; so the
+        // moving waves are the signal, not texture to keep sharp. VIBE_NO_WATER_TAA=1: the plain guides.
+        if (material_id == 8 && abs(g1.b - 0.66) < 0.015 && pc.cam_pos.w < 0.5) {
+            imageStore(o_albedo, px, vec4(clamp(g0.rgb, vec3(0.02), vec3(1.0)), 0.0));
+            imageStore(o_spec_albedo, px, vec4(vec3(0.04), 0.0));
+            imageStore(o_normal_rough, px, vec4(N, 1.0));
+            return;
+        }
         if (material_id == 8 && abs(g1.b - 0.6) < 0.02) {
             imageStore(o_albedo, px, vec4(vec3(0.5), 0.0));
             imageStore(o_spec_albedo, px, vec4(0.0));

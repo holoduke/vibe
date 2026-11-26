@@ -2,6 +2,7 @@
 #include "engine/highway.h"
 #include "engine/globe.h"
 #include "engine/region_tile.h"
+#include "engine/water_course.h"
 
 #include "engine/log.h"
 
@@ -371,7 +372,7 @@ float world_ground_height_impl(float x, float z, float water_level, int octaves)
             const glm::dvec3 G = globe::to_planet(C, x, z);
             a = glm::mix(a, globe::shape3(G * globe::kR, float(octaves)), wm::sstep(float(globe::kBlend0), float(globe::kBlend1), r));
         }
-        return wm::height(a, glm::vec2(x, z), water_level);
+        return wc::carve_stream(wm::height(a, glm::vec2(x, z), water_level), glm::vec2(x, z), water_level);     // (the stream: engine/water_course.h)
     }
     return 0.0f;        // (not reached: the other charts are handled at the top)
 }
@@ -390,7 +391,7 @@ float rm_terrain(glm::vec2 worldXZ, const HeightmapParams& p, int octaves = 9) {
         b *= 0.5f;
         q = rm_rotate(q) * 2.0f;
     }
-    float h = wm::river(a * kRmTerrainHeight, wp, p.water_level);     // (as the shader: the home formula, with the river cut into it)
+    float h = wm::river(a * kRmTerrainHeight, wp, p.water_level);     // (as the shader: the home formula, with the river cut into it; the stream is cut in after a sculpt is loaded - world.cpp)
 
     // Soft plateau blend (mirrors shader's plateauWeight + mix).
     glm::vec2 ext = p.plateau_extent;
@@ -451,6 +452,16 @@ glm::vec2 world_river_wander(glm::vec2 wp) {
     return 12.0f * glm::vec2(std::sin(wp.y * 0.043f + 1.3f), std::sin(wp.x * 0.037f + 0.4f)) + 5.0f * glm::vec2(std::sin(wp.y * 0.113f), std::sin(wp.x * 0.097f + 2.0f));
 }
 float world_continent_home(float x, float z) { return wm::continent(glm::vec2(x, z) * 0.001f); }
+float world_continent_at(float x, float z) {
+    const globe::Chart& C = globe::current();
+    if (C.home) return wm::continent(glm::vec2(x, z) * 0.001f);
+    const glm::dvec3 G = globe::to_planet(C, x, z);
+    return wm::continent_globe(glm::vec2(globe::home_az(G)) * 0.001f, G);       // (shaders: rm_world_vr_f .x)
+}
+float world_home_distance(float x, float z) {
+    glm::dvec2 hp;
+    return home_coords(x, z, hp) ? float(glm::length(hp)) : 1e9f;
+}
 
 float world_ground_height(float x, float z, float water_level, int octaves) {
     const float h = world_ground_height_impl(x, z, water_level, octaves);

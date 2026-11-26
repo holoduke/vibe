@@ -35,6 +35,7 @@ enum class ClipID : uint8_t {
     Siren,      // a police siren: wail and yelp, 16 s that loop (assets/sounds/siren_wail.wav, synthesised: engine/siren_synth.h)
     GlassCrack1, GlassCrack2,   // a bolt through a pane (assets/sounds/glass_crack_*.wav, synthesised: engine/glass_synth.h)
     GlassShatter,               // a pane coming down (assets/sounds/glass_shatter.wav, synthesised: engine/glass_synth.h)
+    River,                      // running water, 8 s that loop (assets/sounds/river_loop.wav, synthesised: engine/river_synth.h)
     Count
 };
 

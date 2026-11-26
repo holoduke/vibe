@@ -1,0 +1,33 @@
+#version 460
+// Local tone mapping, step 4 of 4 (post_fx.cpp): the guided fit at level 0. Over a 3x3
+// Gaussian window (exp2(-1.47 r^2), the reference's) fit the fused luma F as a * lum + b
+// against the as-is luma; compose.frag evaluates that line with each full-resolution pixel's
+// own luma (post_fx.glsl pfx_ltm_apply) - the edges come from the full-resolution picture,
+// only the slowly varying gain from this level.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_a;   // level 0: .y = the as-is luma
+layout(set = 0, binding = 1) uniform sampler2D u_f;   // level 0: the fused luma
+layout(set = 0, binding = 2, rg16f) uniform writeonly image2D o_c;
+
+layout(push_constant) uniform PC { vec4 p; } pc;   // xy: level-0 size, z: epsilon
+
+void main() {
+    ivec2 ip = ivec2(gl_GlobalInvocationID.xy);
+    if (ip.x >= int(pc.p.x) || ip.y >= int(pc.p.y)) return;
+    ivec2 mx = ivec2(pc.p.xy) - 1;
+    float sw = 0.0, sl = 0.0, sf = 0.0, sll = 0.0, slf = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 q = clamp(ip + ivec2(x, y), ivec2(0), mx);
+            float w = exp2(-1.47 * float(x * x + y * y));
+            float l = texelFetch(u_a, q, 0).y;
+            float f = texelFetch(u_f, q, 0).x;
+            sw += w; sl += w * l; sf += w * f; sll += w * l * l; slf += w * l * f;
+        }
+    float ml = sl / sw, mf = sf / sw;
+    float var = sll / sw - ml * ml, cov = slf / sw - ml * mf;
+    float a = cov / (var + pc.p.z);
+    float b = mf - a * ml;
+    imageStore(o_c, ip, vec4(a, b, 0.0, 0.0));
+}

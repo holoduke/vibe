@@ -13,6 +13,7 @@
 #include "engine/vk_pipelines.h"
 #include "engine/log.h"
 
+#include <cstdlib>
 #include <string>
 
 namespace vibe {
@@ -176,7 +177,7 @@ void VulkanEngine::dispatch_rr_guides(VkCommandBuffer cmd) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rr_->pipeline_layout, 0, 1, &rr_->set, 0, nullptr);
     RrGuidesPC pc{};
     pc.inv_vp = last_inv_view_proj_;
-    pc.cam_pos = glm::vec4(current_frame_view_.eye_pos, 0.0f);
+    { static const bool no_wtaa = std::getenv("VIBE_NO_WATER_TAA") != nullptr; pc.cam_pos = glm::vec4(current_frame_view_.eye_pos, no_wtaa ? 1.0f : 0.0f); }      // (w: 1 = water gets the plain guides)
     vkCmdPushConstants(cmd, rr_->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (rr_->extent.width + 7) / 8, (rr_->extent.height + 7) / 8, 1);
     for (int i = 0; i < 3; ++i)

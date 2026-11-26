@@ -7,7 +7,7 @@
 // rock, roadside gravel) - in the blue channel of the second G-buffer layer, which nothing
 // reads for an already-lit pixel except as the two marks 0.6 / 0.7 (rr_guides.comp):
 //     b = 0.7 + 0.3 * height / kGndSsdmMax        (0.7 = out of reach, not on the grid)
-// This pass turns that into what ssdm_solve.frag wants - normal + height in metres - for
+// This pass turns that into what ssdm_displace.glsl reads - normal + height in metres - for
 // every terrain pixel (material 8), over the whole screen, drawn into the same target after
 // the meshes. The reference game does the same: its terrain pixel shader writes a height
 // byte into the G-buffer and its screen-space tessellation pass moves the pixels by it.
@@ -24,9 +24,9 @@ layout(push_constant) uniform SsdmPC {      // (ssdm_common.glsl; not included: 
     mat4 vp;
     mat4 prev_vp;
     vec4 size;
-    vec4 rect;       // w: the height (m) a full value in the G-buffer stands for
-    vec4 par;
-    vec4 sun;
+    vec4 depth;
+    vec4 view;
+    vec4 misc;       // w: the height 0..1 a full value in the G-buffer stands for
 } pc;
 
 layout(set = 0, binding = 1) uniform sampler2D u_depth;
@@ -47,7 +47,6 @@ void main() {
     vec4  g0 = texelFetch(u_g0, p, 0);
     if (int(g0.a * 255.0 + 0.5) != 8) discard;                   // (not the raymarched ground)
     float e = (texelFetch(u_g1, p, 0).b - 0.7) / 0.3;
-    if (e < 0.002) discard;
     ivec2 lim = ivec2(pc.size.xy) - 1;
     float z0, zl, zr, zu, zd;
     vec3 P0 = rel(p, z0);
@@ -61,6 +60,8 @@ void main() {
     n = nl > 1e-12 ? n / nl : vec3(0.0, 1.0, 0.0);
     if (dot(n, P0) > 0.0) n = -n;                                // (the side that is seen)
     n = normalize(n + vec3(0.0, 2.5, 0.0) * smoothstep(0.45, 0.8, n.y));
-    // (the terrain shader's smallest value within reach is 0.006: "on the grid, not moved")
-    outHeight = vec4(n, max(e - 0.006, 0.0) * pc.rect.w + 1e-4);
+    // (the terrain shader's smallest value within reach is 0.006: "not raised"; 0.7 and below:
+    //  out of its reach - fed with height 0, so the ground still counts as a neighbour)
+    float h = max(e - 0.006, 0.0) * pc.misc.w;
+    outHeight = vec4(n, round(clamp(h, 0.0, 1.0) * 255.0) / 255.0);
 }

@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace vibe {
 
@@ -192,6 +193,8 @@ struct CloudPC {
     glm::vec4 wx_b;     // its second octave
     glm::vec4 shape0;   // the shape texture's coordinate at the camera's ground point; w = shadow map extent (m)
     glm::vec4 jmat;     // d(home) / d(engine xz) at the camera
+    glm::vec4 cirrus;   // the high ice-cloud sheet: amount, its field's place at the camera (xy, shape tiles), its slow change
+    glm::vec4 sun_true; // the real sun (xyz), its light on the cirrus (w)
 };
 // The cloud shadow map's reach round the camera (keep in step: scene_ubo.glsl kCloudShadowExtent).
 constexpr float kCloudShadowExtent = 16384.0f;
@@ -460,6 +463,24 @@ void VulkanEngine::dispatch_clouds(VkCommandBuffer cmd) {
         const glm::dvec3 sc(hw.x / per, -0.025 * cloud_->travel / per, hw.y / per);     // (the wind also carries the shapes slowly downward)
         pc.shape0 = glm::vec4(float(sc.x - std::floor(sc.x)), float(sc.y - std::floor(sc.y)), float(sc.z - std::floor(sc.z)), kCloudShadowExtent);
         pc.jmat = glm::vec4(float(hx.x), float(hz.x), float(hx.y), float(hz.y));
+        // Cirrus (clouds.comp cirrus): carried by the high wind, faster than the cumulus and a
+        // little across their way; its amount from the weather - wisps on a fair day, more as
+        // the sky fills (a front coming), hidden by a closed deck anyway.
+        // VIBE_CIRRUS=<0..1>: the amount, fixed (test hook).
+        const glm::dvec2 hc = h0 + glm::dvec2(1.9, 0.15) * cloud_->travel;
+        const glm::dvec2 cf = hc / (16.0 * per);      // (one tile of its field = 16 of the shape texture: clouds.comp)
+        const float cov = glm::clamp(rt_.cloud_coverage, 0.0f, 1.0f);
+        float amount = (0.40f + 0.50f * glm::smoothstep(0.10f, 0.55f, cov)) * (1.0f - 0.7f * glm::smoothstep(0.6f, 1.0f, wx_cur_.rain));
+        static const float kCirrus = std::getenv("VIBE_CIRRUS") ? float(std::atof(std::getenv("VIBE_CIRRUS"))) : -1.0f;
+        if (kCirrus >= 0.0f) amount = kCirrus;
+        pc.cirrus = glm::vec4(amount * cl_space, float(cf.x - std::floor(cf.x)), float(cf.y - std::floor(cf.y)),
+                              float(std::fmod(cloud_->travel / 240000.0, 1.0)));
+        {
+            glm::vec3 st = sun;
+            if (rt_.day_night_enabled && env_->sun_elev > -999.0f) st = env_->sun_dir;
+            const float ai = env_->applied ? env_->base.atmosphere_intensity : rt_.atmosphere_intensity;
+            pc.sun_true = glm::vec4(glm::normalize(st), std::max(0.0f, ai) * 3.14159265f * 0.8f);   // (as the cumulus' sun light, without the night dimming)
+        }
     }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_->pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cloud_->pipeline_layout, 0, 1, &cloud_->set, 0, nullptr);
@@ -620,12 +641,20 @@ struct FogPC {
     glm::vec4 sun_col;  // rgb (engine E * pi), w ground reference height (m)
     glm::vec4 amb;      // rgb ambient, w frame
     glm::vec4 params;   // density, height falloff, anisotropy, max distance
-    glm::vec4 flash_pos, flash_dir, flash_col;   // hand flashlight (as in the scene UBO)
+    glm::mat4 prev_vp;  // last frame's view-projection (its volume's)
+    glm::vec4 hist;     // xyz last frame's eye, w 1 = use the history
+    glm::vec4 misc;     // x lake mist, y rain's extra scattering for local lights (1/m), z local-light strength, w frame (+256: no cloud shadow)
 };
+static_assert(sizeof(FogPC) <= 256, "fog push constants");
+// Fog bindings: 0 scene UBO, 1 this frame's inject (sampled), 2 integrated (storage), 3 noise,
+// 4 TLAS, 5 leaf atlas, 6 far-mountain sun shadow, 7 cloud shadow map, 8 last frame's inject
+// (sampled), 9 this frame's inject (storage).
+constexpr int kFogBindings = 10;
 }  // namespace
 
 void VulkanEngine::init_fog() {
-    for (AtmoImage* im : { &fog_->inject, &fog_->integ }) {
+    init_cloud_shadow_map();      // (binding 7; made here if the cloud pass has not yet)
+    for (AtmoImage* im : { &fog_->inject, &fog_->inject_b, &fog_->integ }) {
         VkImageCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         ici.imageType = VK_IMAGE_TYPE_3D;
@@ -653,24 +682,33 @@ void VulkanEngine::init_fog() {
                              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT };
         VkDependencyInfo di{}; di.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
         di.memoryBarrierCount = 1; di.pMemoryBarriers = &mb;
-        for (AtmoImage* im : { &fog_->inject, &fog_->integ })
+        for (AtmoImage* im : { &fog_->inject, &fog_->inject_b, &fog_->integ })
             vkinit::transition_image(cb, im->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
         vkCmdPipelineBarrier2(cb, &di);
-        // Integrated volume = (L 0, T 1) until the first dispatch: no fog.
+        // Integrated volume = (L 0, T 1) until the first dispatch: no fog. Inject volumes = no
+        // medium (the first frame does not use the history anyway).
         VkClearColorValue clr{ { 0.0f, 0.0f, 0.0f, 1.0f } };
+        VkClearColorValue zero{ { 0.0f, 0.0f, 0.0f, 0.0f } };
         VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
         vkCmdClearColorImage(cb, fog_->integ.image, VK_IMAGE_LAYOUT_GENERAL, &clr, 1, &r);
+        vkCmdClearColorImage(cb, fog_->inject.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &r);
+        vkCmdClearColorImage(cb, fog_->inject_b.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &r);
         vkCmdPipelineBarrier2(cb, &di);
     });
-    const VkDescriptorType types[7] = {
-        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+    VkDescriptorType types[kFogBindings] = {
+        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             // 0: scene UBO
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     // 1: this frame's inject (integrate reads it)
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              // 2: integrated
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     // 3: noise
+        VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, // 4
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     // 5: leaf atlas (card cut-outs)
-        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };   // 6: whole-map terrain sun shadow
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     // 6: whole-map terrain sun shadow
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     // 7: cloud shadow map
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     // 8: last frame's inject (history)
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE };            // 9: this frame's inject (written)
     {
-        VkDescriptorSetLayoutBinding b[7]{};
-        for (int i = 0; i < 7; ++i) {
+        VkDescriptorSetLayoutBinding b[kFogBindings]{};
+        for (int i = 0; i < kFogBindings; ++i) {
             b[i].binding = uint32_t(i);
             b[i].descriptorType = types[i];
             b[i].descriptorCount = 1;
@@ -678,45 +716,59 @@ void VulkanEngine::init_fog() {
         }
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        lci.bindingCount = 7; lci.pBindings = b;
+        lci.bindingCount = kFogBindings; lci.pBindings = b;
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &fog_->set_layout), "fog set layout");
         VkDescriptorPoolSize sizes[] = {
-            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 },
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 },
-            { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4 },
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 12 },
+            { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 2 },
+            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 },
         };
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pci.maxSets = 1; pci.poolSizeCount = 3; pci.pPoolSizes = sizes;
+        pci.maxSets = 2; pci.poolSizeCount = 4; pci.pPoolSizes = sizes;
         vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &fog_->pool), "fog pool");
+        const VkDescriptorSetLayout lays[2] = { fog_->set_layout, fog_->set_layout };
         VkDescriptorSetAllocateInfo dai{};
         dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dai.descriptorPool = fog_->pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &fog_->set_layout;
-        vk_check(vkAllocateDescriptorSets(device_, &dai, &fog_->set), "fog set");
-        VkDescriptorImageInfo ii[4] = {
-            { VK_NULL_HANDLE, fog_->inject.view, VK_IMAGE_LAYOUT_GENERAL },
-            { atmo_->sampler, fog_->inject.view,  VK_IMAGE_LAYOUT_GENERAL },
-            { VK_NULL_HANDLE, fog_->integ.view,  VK_IMAGE_LAYOUT_GENERAL },
-            { cloud_->sampler, cloud_->detail.view, VK_IMAGE_LAYOUT_GENERAL },
-        };
-        VkWriteDescriptorSet w[4]{};
-        for (int i = 0; i < 4; ++i) {
-            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet = fog_->set;
-            w[i].dstBinding = uint32_t(i);
-            w[i].descriptorCount = 1;
-            w[i].descriptorType = types[i];
-            w[i].pImageInfo = &ii[i];
-        }
-        vkUpdateDescriptorSets(device_, 4, w, 0, nullptr);
-        if (sun_->horizon_view) {
-            VkDescriptorImageInfo hz{ sun_->horizon_sampler, sun_->horizon_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            VkWriteDescriptorSet wh{};
-            wh.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            wh.dstSet = fog_->set; wh.dstBinding = 6; wh.descriptorCount = 1;
-            wh.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            wh.pImageInfo = &hz;
-            vkUpdateDescriptorSets(device_, 1, &wh, 0, nullptr);
+        dai.descriptorPool = fog_->pool; dai.descriptorSetCount = 2; dai.pSetLayouts = lays;
+        vk_check(vkAllocateDescriptorSets(device_, &dai, fog_->sets), "fog sets");
+        fog_->set = fog_->sets[0];
+        for (int k = 0; k < 2; ++k) {
+            const AtmoImage& mine  = k == 0 ? fog_->inject : fog_->inject_b;
+            const AtmoImage& other = k == 0 ? fog_->inject_b : fog_->inject;
+            VkDescriptorBufferInfo ubo{ scene_ubo_buffer_, 0, sizeof(SceneUBO) };
+            VkDescriptorImageInfo ii[kFogBindings] = {
+                {},
+                { atmo_->sampler, mine.view,  VK_IMAGE_LAYOUT_GENERAL },
+                { VK_NULL_HANDLE, fog_->integ.view,  VK_IMAGE_LAYOUT_GENERAL },
+                { cloud_->sampler, cloud_->detail.view, VK_IMAGE_LAYOUT_GENERAL },
+                {}, {}, {},
+                { cloud_->shadow_sampler, cloud_->shadow_map.view, VK_IMAGE_LAYOUT_GENERAL },
+                { atmo_->sampler, other.view, VK_IMAGE_LAYOUT_GENERAL },
+                { VK_NULL_HANDLE, mine.view, VK_IMAGE_LAYOUT_GENERAL },
+            };
+            VkWriteDescriptorSet w[kFogBindings]{};
+            uint32_t n = 0;
+            for (int i : { 0, 1, 2, 3, 7, 8, 9 }) {
+                w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[n].dstSet = fog_->sets[k];
+                w[n].dstBinding = uint32_t(i);
+                w[n].descriptorCount = 1;
+                w[n].descriptorType = types[i];
+                if (i == 0) w[n].pBufferInfo = &ubo; else w[n].pImageInfo = &ii[i];
+                ++n;
+            }
+            vkUpdateDescriptorSets(device_, n, w, 0, nullptr);
+            if (sun_->horizon_view) {
+                VkDescriptorImageInfo hz{ sun_->horizon_sampler, sun_->horizon_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+                VkWriteDescriptorSet wh{};
+                wh.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wh.dstSet = fog_->sets[k]; wh.dstBinding = 6; wh.descriptorCount = 1;
+                wh.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                wh.pImageInfo = &hz;
+                vkUpdateDescriptorSets(device_, 1, &wh, 0, nullptr);
+            }
         }
     }
     {
@@ -739,7 +791,8 @@ void VulkanEngine::init_fog() {
         vkDestroyShaderModule(device_, m, nullptr);
     }
     fog_->tlas_bound = VK_NULL_HANDLE;
-    log::info("[fog] froxel volumetric fog ready (160x90x64, RT sun visibility)");
+    fog_->have_hist = false;
+    log::info("[fog] froxel volumetric fog ready (160x90x64, RT sun visibility, cloud shadow, local lights, history)");
 }
 
 void VulkanEngine::destroy_fog() {
@@ -747,45 +800,49 @@ void VulkanEngine::destroy_fog() {
     if (fog_->pipeline_layout) vkDestroyPipelineLayout(device_, fog_->pipeline_layout, nullptr);
     if (fog_->pool) vkDestroyDescriptorPool(device_, fog_->pool, nullptr);
     if (fog_->set_layout) vkDestroyDescriptorSetLayout(device_, fog_->set_layout, nullptr);
-    for (AtmoImage* im : { &fog_->inject, &fog_->integ }) {
+    for (AtmoImage* im : { &fog_->inject, &fog_->inject_b, &fog_->integ }) {
         if (im->view) vkDestroyImageView(device_, im->view, nullptr);
         if (im->image) vmaDestroyImage(allocator_, im->image, im->alloc);
         *im = {};
     }
     fog_->pipeline = VK_NULL_HANDLE; fog_->pipeline_layout = VK_NULL_HANDLE;
     fog_->pool = VK_NULL_HANDLE; fog_->set_layout = VK_NULL_HANDLE; fog_->set = VK_NULL_HANDLE;
+    fog_->sets[0] = fog_->sets[1] = VK_NULL_HANDLE;
+    fog_->have_hist = false;
 }
 
 void VulkanEngine::dispatch_fog(VkCommandBuffer cmd) {
     if (!fog_->pipeline || tlas_ == VK_NULL_HANDLE) return;
     if (fog_->tlas_bound != tlas_) {   // the TLAS handle changes when it is reallocated
         wait_gpu_frames_idle();
-        VkWriteDescriptorSetAccelerationStructureKHR as{};
-        as.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-        as.accelerationStructureCount = 1;
-        as.pAccelerationStructures = &tlas_;
-        VkWriteDescriptorSet w{};
-        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w.pNext = &as;
-        w.dstSet = fog_->set; w.dstBinding = 4; w.descriptorCount = 1;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        // Leaf atlas (binding 5) rides along: it is loaded long before the
-        // first TLAS, and the shader alpha-tests leaf cards with it.
-        VkDescriptorImageInfo leaf_ii{ texture_sampler_, albedo_textures_[kTexLeaf].view,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        VkWriteDescriptorSet wl{};
-        wl.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        wl.dstSet = fog_->set; wl.dstBinding = 5; wl.descriptorCount = 1;
-        wl.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        wl.pImageInfo = &leaf_ii;
-        // Far-mountain sun shadow (binding 6): created after the fog set, so it
-        // is bound here too.
-        VkDescriptorImageInfo hz_ii{ sun_->horizon_sampler, sun_->horizon_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        VkWriteDescriptorSet wh = wl;
-        wh.dstBinding = 6;
-        wh.pImageInfo = &hz_ii;
-        const VkWriteDescriptorSet ws[3] = { w, wl, wh };
-        vkUpdateDescriptorSets(device_, 3, ws, 0, nullptr);
+        for (int k = 0; k < 2; ++k) {
+            VkWriteDescriptorSetAccelerationStructureKHR as{};
+            as.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+            as.accelerationStructureCount = 1;
+            as.pAccelerationStructures = &tlas_;
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.pNext = &as;
+            w.dstSet = fog_->sets[k]; w.dstBinding = 4; w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+            // Leaf atlas (binding 5) rides along: it is loaded long before the
+            // first TLAS, and the shader alpha-tests leaf cards with it.
+            VkDescriptorImageInfo leaf_ii{ texture_sampler_, albedo_textures_[kTexLeaf].view,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            VkWriteDescriptorSet wl{};
+            wl.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wl.dstSet = fog_->sets[k]; wl.dstBinding = 5; wl.descriptorCount = 1;
+            wl.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wl.pImageInfo = &leaf_ii;
+            // Far-mountain sun shadow (binding 6): created after the fog set, so it
+            // is bound here too.
+            VkDescriptorImageInfo hz_ii{ sun_->horizon_sampler, sun_->horizon_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            VkWriteDescriptorSet wh = wl;
+            wh.dstBinding = 6;
+            wh.pImageInfo = &hz_ii;
+            const VkWriteDescriptorSet ws[3] = { w, wl, wh };
+            vkUpdateDescriptorSets(device_, 3, ws, 0, nullptr);
+        }
         fog_->tlas_bound = tlas_;
     }
     const FrameView& fv = current_frame_view_;
@@ -799,18 +856,40 @@ void VulkanEngine::dispatch_fog(VkCommandBuffer cmd) {
     pc.params = glm::vec4(std::max(0.0f, rt_.fog_density), std::max(0.0f, rt_.fog_height_falloff),
                           glm::clamp(rt_.fog_anisotropy, -0.9f, 0.95f), std::max(20.0f, rt_.fog_max_dist));
     // Mist on the lake: thickest in the cool hours (dawn, dusk, night),
-    // nearly gone at midday. Carried in the unused flash_dir.x slot.
+    // nearly gone at midday.
     {
         const float h = std::fmod(rt_.time_of_day + 24.0f, 24.0f);
         auto bump = [](float x, float c, float w) { float t = std::clamp(1.0f - std::abs(x - c) / w, 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
         const float cool = std::max({ bump(h, 6.5f, 3.5f), bump(h, 20.5f, 3.0f), (h < 5.0f || h > 22.0f) ? 0.7f : 0.0f });
-        pc.flash_dir.x = std::clamp(rt_.lake_mist, 0.0f, 3.0f) * (0.15f + 0.85f * cool);
+        pc.misc.x = std::clamp(rt_.lake_mist, 0.0f, 3.0f) * (0.15f + 0.85f * cool);
     }
-    // (The flashlight beam is NOT injected here: at froxel resolution it was
-    // a foggy ball in front of the lens. It is integrated per pixel instead,
-    // see flashlight_beam in scene_ubo.glsl. flash_* stay zero = off.)
+    // Local lights in the air (lamps, a car's beam): the rain's drops scatter them too (the fog
+    // density is the rest). VIBE_FOG_LIGHTS=<k>: their strength (0 = off; default 4 - more than the medium alone gives, so a halo reads in a light mist).
+    // VIBE_FOG_NO_CLOUD_SHADOW=1: the cloud layer's shade left out of the fog.
+    {
+        static const float kLights = std::getenv("VIBE_FOG_LIGHTS") ? float(std::atof(std::getenv("VIBE_FOG_LIGHTS"))) : 4.0f;
+        static const bool kNoCs = std::getenv("VIBE_FOG_NO_CLOUD_SHADOW") != nullptr;
+        pc.misc.y = 0.006f * glm::clamp(env_->rain, 0.0f, 1.0f);
+        pc.misc.z = std::max(0.0f, kLights);
+        pc.misc.w = float(frame_number_ % 256) + (kNoCs ? 256.0f : 0.0f);
+    }
+    // The history: last frame's volume, reprojected. Not after start-up, nor when the eye
+    // jumped (a teleport, a chart change re-centring the coordinates: the old volume stands for
+    // other air). VIBE_FOG_NO_HISTORY=1: off.
+    {
+        static const bool kNoHist = std::getenv("VIBE_FOG_NO_HISTORY") != nullptr;
+        const bool ok = fog_->have_hist && !kNoHist && glm::distance(fog_->last_eye, fv.eye_pos) < 30.0f;
+        pc.prev_vp = ok ? fog_->last_vp : fv.vp;
+        pc.hist = glm::vec4(ok ? fog_->last_eye : fv.eye_pos, ok ? 1.0f : 0.0f);
+        fog_->last_vp = fv.vp; fog_->last_eye = fv.eye_pos; fog_->have_hist = true;
+    }
+    // (The hand torch's beam is NOT injected here: at froxel resolution it was a foggy ball in
+    // front of the lens. It is integrated per pixel instead, see flashlight_beam in
+    // scene_ubo.glsl. A car's beam is - faded out over its first metres.)
+    fog_->cur ^= 1;
+    VkDescriptorSet set = fog_->sets[fog_->cur];
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, fog_->pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, fog_->pipeline_layout, 0, 1, &fog_->set, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, fog_->pipeline_layout, 0, 1, &set, 0, nullptr);
     auto barrier = [&]() {
         VkMemoryBarrier2 mb{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, nullptr,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -821,6 +900,7 @@ void VulkanEngine::dispatch_fog(VkCommandBuffer cmd) {
         di.memoryBarrierCount = 1; di.pMemoryBarriers = &mb;
         vkCmdPipelineBarrier2(cmd, &di);
     };
+    barrier();                   // (the volume written now was read as the history a frame ago)
     pc.sun = glm::vec4(sun, 0.0f);
     vkCmdPushConstants(cmd, fog_->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, (kFogX + 7) / 8, (kFogY + 7) / 8, kFogZ);

@@ -236,9 +236,10 @@ vec3 lakeWaterNormal(vec2 worldXZ, float uv_scale, float strength,
 
 vec3 waterNormal(vec2 worldXZ, float t, float strength, float scale) {
     // Wind axis biased on +X — most lakes have a dominant direction.
-    vec2 wind  = normalize(vec2(1.0, 0.35));
-    vec2 cross1 = normalize(vec2(0.7, -0.7));
-    vec2 cross2 = normalize(vec2(-0.5, 0.85));
+    // (the weather's wind: scene.water_wind; the cross trains keep their angles to it)
+    vec2 wind  = scene.water_wind.xy;
+    vec2 cross1 = vec2(0.7071 * (wind.x + wind.y), 0.7071 * (wind.y - wind.x));
+    vec2 cross2 = vec2(-0.5 * wind.x - 0.85 * wind.y, 0.85 * wind.x - 0.5 * wind.y) / 0.9862;
 
     // Octaves: low (long swell) → high (ripple) wave numbers.
     // amp[i] decays so high frequencies don't dominate the normal.
@@ -281,6 +282,10 @@ vec3 water_ripples(vec2 p) {
     int n = int(scene.ripple_info.x + 0.5);
     vec2 g = vec2(0.0);
     float foam = 0.0;
+    // (inside the ripple field's window the field carries the rings - water_sim.cpp feeds every
+    //  new ring into it; here only their churned foam then)
+    vec2 rip_uv = scene.water_rip.w > 0.5 ? (p - scene.water_rip.xy) / scene.water_rip.z : vec2(-1.0);
+    bool in_field = all(greaterThan(rip_uv, vec2(0.12))) && all(lessThan(rip_uv, vec2(0.88)));
     for (int i = 0; i < n; ++i) {
         vec4 r = scene.ripples[i];
         float s = clamp(r.w * 28.5, 1.0, 6.0);          // size class: bullet 1 .. bomb 6
@@ -299,7 +304,7 @@ vec3 water_ripples(vec2 p) {
         float wid = s * (0.55 + 0.45 * age);            // packet lengthens as it travels
         float packet = smoothstep(front + 0.35 * s, front - 0.10 * s, dist) * exp(-back * back / (wid * wid));
         float att = r.w * fade * sqrt(fade) / (1.0 + 0.30 * dist / s);
-        g += d / max(dist, 1e-3) * (att * packet * k * cos(k * (dist - c * age)));
+        if (!in_field) g += d / max(dist, 1e-3) * (att * packet * k * cos(k * (dist - c * age)));
         foam += smoothstep(0.015, 0.035, r.w) *                // droplet rings carry no foam
                 (1.0 - smoothstep(0.06 * s, 0.26 * s + 0.10 * s * age, dist)) *
                 clamp(1.0 - age / (0.6 + 0.35 * s), 0.0, 1.0);
@@ -326,11 +331,253 @@ vec3 water_ripples(vec2 p) {
             vec2 d = fq - c;
             float r = length(d);
             float rr = tt * 0.42;
-            float band = smoothstep(0.07, 0.0, abs(r - rr));
+            // (a ring 2 - 3 crests wide, its slope up to 0.8: at 0.3 and one crest the rings did not
+            //  read against the mirror in heavy rain at two metres - the rain fell on a still lake)
+            float band = 1.0 - smoothstep(0.0, 0.10, abs(r - rr));
             float wv = sin((r - rr) * 55.0) * band * (1.0 - tt) * (1.0 - tt);
-            g += d / max(r, 1e-3) * (wv * 0.30);
+            g += d / max(r, 1e-3) * (wv * 0.80);
         }
     }
     return vec3(g, clamp(foam, 0.0, 1.0));
+}
+
+
+// ==== The wind on the water, the swell, the surf, the caustics, the river's current ==========
+// After the reference game's sea (its formulas and constants; the code is ours).
+// scene.water_wind: xy = the way the wind blows, z = speed m/s, w = the swell's height scale
+// pow(saturate(speed / 30), 2.2) (environment.cpp water_wind_now).
+
+// How much of the sea's wind waves the wind raises (1 at 8 m/s; a glassy sea in still air).
+float wt_chop() { return clamp(0.12 + scene.water_wind.z / 9.0, 0.12, 1.8); }
+// ... and of a lake's or the river's: little fetch, so they stay calm longer and rise less.
+float wt_lake() { return clamp(0.10 + scene.water_wind.z * 0.11, 0.10, 1.5); }
+
+// The open sea: beyond home's lakes and not land-locked water (CPU twin: water_fx.cpp).
+float wt_sea_k(vec2 xz) {
+    float k = smoothstep(1350.0, 1750.0, rm_home_dist(xz));
+    if (k > 0.0) k *= 1.0 - smoothstep(0.0, 0.02, rm_continent(xz));
+    return k;
+}
+// The swell fades out toward the coast by the depth under the water level, always faster than
+// the water gets shallow: a trough never drops below the bed and a crest never floods the beach
+// (with the swell's whole height Hn = 32.5 S, a trough reaches 0.43 Hn below the level).
+float wt_swell_shore(float depth, float S) { return smoothstep(0.0, 1.0, depth / (2.0 + 39.0 * S)); }
+
+// The five swell waves (lengths 400 / 180 / 150 / 130 / 120 m; CPU twin water_fx.cpp
+// water_swell_height - keep the constants and the clock in step). Returns the height about
+// the mean level for S = 1 and its slope (xz).
+const float kSwK[5]    = float[5](0.015708, 0.034907, 0.041888, 0.048332, 0.052360);
+const float kSwF[5]    = float[5](0.0937143, 0.2142082, 0.3162719, 0.3835667, 0.4790747);
+const float kSwA[5]    = float[5](13.0, 8.0, 7.0, 2.5, 2.0);
+const float kSwWarp[5] = float[5](50.0, 10.0, 100.0, 200.0, 180.0);
+const vec2  kSwRot[5]  = vec2[5](vec2(1.0, 0.0), vec2(0.7660444, 0.6427876), vec2(0.8910065, -0.4539905),
+                                 vec2(0.9612617, 0.2756374), vec2(0.9781476, -0.2079117));
+const float kSwMean    = 0.30547;      // the mean of 1.3 exp(sin p - 1) - 0.3: taken off, the sea's mean level stays put
+float wt_swell_noise(vec2 x) {
+    vec2 q = x * 0.005 - scene.water_swell.yz * 0.125;       // (drifting down the wind: water_swell.yz, the wind summed over time)
+    float s = 0.5 * sin(1.5 * q.x) * sin(1.5 * q.y);
+    vec2 r = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y);
+    s += 0.25 * sin(3.03 * r.x) * sin(3.03 * r.y);
+    r = 2.02 * vec2(0.8 * r.x - 0.6 * r.y, 0.6 * r.x + 0.8 * r.y); s += 0.125 * sin(3.045 * r.x) * sin(3.045 * r.y);
+    r = 2.03 * vec2(0.8 * r.x - 0.6 * r.y, 0.6 * r.x + 0.8 * r.y); s += 0.0625 * sin(3.015 * r.x) * sin(3.015 * r.y);
+    return abs(s * 1.032258);
+}
+vec3 wt_swell(vec2 x, float t) {
+    vec2 wd = scene.water_wind.xy;
+    float n = wt_swell_noise(x);
+    float h = 0.0;
+    vec2 g = vec2(0.0);
+    for (int i = 0; i < 5; ++i) {
+        vec2 c = kSwRot[i];
+        vec2 d = -vec2(wd.x * c.x - wd.y * c.y, wd.x * c.y + wd.y * c.x);       // (minus the wind, turned: the crests run with the wind)
+        float ph = 6.2831853 * fract(kSwF[i] * t) + kSwK[i] * (dot(d, x) + kSwWarp[i] * n);
+        float e = 1.3 * exp(sin(ph) - 1.0);
+        h += kSwA[i] * (e - 0.3 - kSwMean);
+        g += d * (kSwA[i] * kSwK[i] * e * cos(ph));
+    }
+    return vec3(h, g);
+}
+
+// Caustics on the bed (the same pattern as compose.frag uw_caustic, the view from below;
+// after Dave Hoskins' "Tileable Water Caustic"): thin bright lines, ~0..1.5.
+float wt_caustic(vec2 uv, float t) {
+    const float TAU = 6.28318530718;
+    vec2 p = mod(uv * TAU, TAU) - 250.0;
+    vec2 i = p;
+    float c = 1.0;
+    const float inten = 0.005;
+    for (int n = 0; n < 4; ++n) {
+        float tt = t * (1.0 - (3.5 / float(n + 1)));
+        i = p + vec2(cos(tt - i.x) + sin(tt + i.y), sin(tt - i.y) + cos(tt + i.x));
+        c += 1.0 / length(vec2(p.x / (sin(i.x + tt) / inten), p.y / (cos(i.y + tt) / inten)));
+    }
+    c /= 4.0;
+    c = 1.17 - pow(c, 1.4);
+    return clamp(pow(abs(c), 8.0), 0.0, 1.5);
+}
+
+// The river's course at xz (world_map.glsl wm_river's polyline and its bend): xy = the way it
+// flows (unit, toward the sea), z = the distance from the centre line (m), w = the channel's
+// half width there. z < 0: not by the river (home chart only).
+const float kRivCum[26] = float[26](0.0, 41.6, 85.9, 144.0, 206.1, 270.6, 339.6, 401.3, 503.5, 617.4, 733.9, 847.1, 941.3, 1056.7, 1158.5, 1272.8, 1370.5, 1466.5, 1572.9, 1668.9, 1791.4, 1907.9, 2009.1, 2146.5, 2299.0, 2497.0);   // (metres down the course to each point of wm_riv)
+// `along`: metres down the course from the spring by the castle (the nearest reach's).
+// `frame`: metres down the course and across it, in the bent coordinate the channel is cut along. Both are blended from the
+// nearest reaches with the same weights as the direction, so they are smooth across a bend
+// (the nearest reach's own values jump on the bisector). They are the frame the river's patterns
+// are laid in: a pattern laid by projecting the absolute position on the flow's direction
+// (dot(wp, dir)) has a lever of a kilometre - the direction turning by a hundredth of a radian
+// over a metre moved it by ten metres: the streaks broke into thin lines a few pixels apart
+// (the white lines across the river by the confluence).
+vec4 wt_river(vec2 wp, out float along, out vec2 frame) {
+    along = 0.0; frame = vec2(0.0);
+    if (rm_far_chart() || wp.x < -85.0 || wp.x > 2095.0 || wp.y < -110.0 || wp.y > 780.0) return vec4(0.0, 0.0, -1.0, 0.0);
+    vec2 q = wp + 12.0 * vec2(sin(wp.y * 0.043 + 1.3), sin(wp.x * 0.037 + 0.4)) + 5.0 * vec2(sin(wp.y * 0.113), sin(wp.x * 0.097 + 2.0));
+    float pool = 1.0 - smoothstep(22.0, 55.0, distance(wp, vec2(43.4, 297.4)));
+    q -= pool * 6.0 * vec2(0.719, 0.695);
+    float d2 = 1e12;
+    vec2 tan_ = vec2(1e-4, 0.0);
+    float fw = 1e-9, fal = 0.0, flat_ = 0.0;
+    for (int c = 0; c < 5; ++c) {
+        vec4 b = wm_riv_box[c];
+        if (q.x < b.x || q.y < b.y || q.x > b.z || q.y > b.w) continue;
+        for (int i = c * 5; i < c * 5 + 5; ++i) {
+            vec2 a = wm_riv[i], ab = wm_riv[i + 1] - a;
+            vec2 dv = q - (a + ab * clamp(dot(q - a, ab) / dot(ab, ab), 0.0, 1.0));
+            float e2 = dot(dv, dv);
+            if (e2 < d2) along = kRivCum[i] + clamp(dot(q - a, ab) / dot(ab, ab), 0.0, 1.0) * length(ab);
+            d2 = min(d2, e2);
+            float wq = 1.0 / (1.0 + e2 * (1.0 / 400.0));          // (the nearest reaches, weighted: no seam where two meet at a bend)
+            tan_ += normalize(ab) * (wq * wq);
+            float w4 = wq * wq * wq * wq;      // (the frame: sharper, so far reaches do not pull it)
+            fw += w4;
+            fal += w4 * (kRivCum[i] + clamp(dot(q - a, ab) / dot(ab, ab), 0.0, 1.0) * length(ab));
+            vec2 abn = normalize(ab);
+            flat_ += w4 * (abn.x * (q - a).y - abn.y * (q - a).x);
+        }
+    }
+    frame = vec2(fal, flat_) / fw;
+    if (d2 > 60.0 * 60.0) return vec4(0.0, 0.0, -1.0, 0.0);
+    // The channel is cut along the BENT coordinate q: its way in the world is the polyline's
+    // way taken back through the bend (q = wp + wander: the inverse of its Jacobian - the
+    // wander turns the channel by up to 45 degrees from its polyline).
+    float ja = 0.516 * cos(wp.y * 0.043 + 1.3) + 0.565 * cos(wp.y * 0.113);      // d q.x / d z
+    float jb = 0.444 * cos(wp.x * 0.037 + 0.4) + 0.485 * cos(wp.x * 0.097 + 2.0); // d q.y / d x
+    vec2 tq = normalize(tan_);
+    tan_ = vec2(tq.x - ja * tq.y, tq.y - jb * tq.x) * sign(1.0 - ja * jb);
+    tan_ = dot(tan_, tan_) > 1e-12 ? normalize(tan_) : tq;       // (a singular bend: no NaN - water_fx.cpp river_at, the same)
+    return vec4(tan_, sqrt(d2), 7.0 + 9.0 * smoothstep(1450.0, 1900.0, wp.x) + 4.0 * pool);
+}
+
+// The river's water along its course (the reference game paints it per vertex; here a table by
+// the metres down the course, wt_river's `along`): rgb = the colour it scatters back, w = how
+// fast light dies in it (/m). Clear at the spring by the castle, green in the pool under the
+// stone bridge, a greenish brown down the valley, silty toward the mouth.
+vec4 wt_river_murk(float s) {
+    const vec4 kSpring = vec4(0.06, 0.11, 0.10, 0.22);
+    const vec4 kPool   = vec4(0.05, 0.12, 0.06, 0.85);
+    const vec4 kValley = vec4(0.08, 0.11, 0.06, 0.60);
+    const vec4 kMouth  = vec4(0.15, 0.13, 0.08, 1.60);
+    vec4 m = mix(kSpring, kPool, smoothstep(150.0, 250.0, s));
+    m = mix(m, kValley, smoothstep(330.0, 480.0, s));
+    return mix(m, kMouth, smoothstep(1700.0, 2150.0, s));
+}
+
+// One octave of value noise with its slope (pm_noise_dxy), as a surface normal's tilt: the
+// river's near layers (the reference game: 1.4 and 1.05 /m, each drifting at its own speed).
+vec2 wt_near_slope(vec2 p) {
+    vec3 n = pm_noise_dxy(p);
+    return n.xy;
+}
+
+// The water round the piers and rocks standing in it (scene.river_piers: xy = the middle,
+// z = its radius in the current; scene.water_swell.w = how many - water_fx.cpp river_piers,
+// the rocks from rock_formations.cpp). In the current's own frame (fdir, speed m/s):
+//   * the current parts round it: potential flow round a cylinder (dflow; the CPU twin bends
+//     the same way: water_fx.cpp obstacle_bend);
+//   * a pillow of water heaped against the upstream face, white;
+//   * a V-shaped wake from its sides and a trail of foam in its lee;
+//   * EDDIES: vortices shed left and right in turn (a vortex street: one every D / (0.21 U)
+//     seconds), carried downstream at 0.8 U, growing and fading over a few seconds - they turn
+//     the surface's normal round their centres (slope) and draw foam spirals.
+// Everything is stronger where the current is faster.
+struct WtObs { vec2 dflow; vec2 slope; float foam; float hole; };
+WtObs wt_obstacles(vec2 p, vec2 fdir, float speed, float t) {
+    WtObs o;
+    o.dflow = vec2(0.0); o.slope = vec2(0.0); o.foam = 0.0; o.hole = 0.0;
+    int n = int(scene.water_swell.w + 0.5);
+    vec2 ac = vec2(-fdir.y, fdir.x);
+    float U = max(speed, 0.15);
+    float vis = smoothstep(0.2, 0.9, speed);
+    for (int i = 0; i < n; ++i) {
+        vec4 P = scene.river_piers[i];
+        vec2 d = p - P.xy;
+        float a = max(P.z, 0.2);
+        float reach = a * (5.0 + 4.0 * U) + 5.0;
+        float r2 = dot(d, d);
+        if (r2 > reach * reach) continue;
+        float r = sqrt(r2);
+        float down = dot(d, fdir), lat = dot(d, ac);
+        // (potential flow round a cylinder)
+        if (r > a) {
+            float k = a * a / r2;
+            float c2 = (down * down - lat * lat) / r2, s2 = 2.0 * down * lat / r2;
+            o.dflow += (fdir * (-k * c2) + ac * (-k * s2)) * speed;
+        }
+        float ring = r - a;
+        // the pillow on the upstream face
+        float upf = 1.0 - smoothstep(-0.2 * a, 0.5 * a, down);
+        float pillow = upf * exp(-max(ring, 0.0) / (0.25 + 0.12 * a + 0.15 * U)) * step(-0.25 * a, ring);
+        o.foam = max(o.foam, pillow * vis);
+        o.slope += (d / max(r, 1e-3)) * (pillow * 0.30 * U);
+        if (down > 0.0) {
+            // The wake's white water dies within a few of the stone's own widths (it was 6 - 30 m
+            // whatever the stone: in the stream, with a boulder every few metres, the trails and V
+            // arms of the 24 nearest covered the whole water in opaque froth - the stream read as
+            // a pale sheet; on the river they were long thin white arcs).
+            // the V of the wake (its arms open at about 20 degrees): mostly a standing wave, a little foam
+            float arm = abs(abs(lat) - (a * 0.9 + down * 0.36));
+            float vw = exp(-arm * arm / (0.06 + 0.012 * down)) * exp(-down / (1.0 + 1.5 * a + 1.5 * U));
+            // (white on its arms only in fast water - in the river's slow reaches a thin white V
+            //  drawn tens of metres long read as ruled lines on the water)
+            o.foam = max(o.foam, vw * 0.35 * vis * smoothstep(1.2, 2.5, U));
+            o.slope += ac * (sign(lat) * vw * 0.12 * U);
+            // the trail in the lee
+            float wl = a * (0.9 + 0.06 * down);
+            float tail = exp(-lat * lat / (wl * wl)) * exp(-down / (a * (2.0 + 1.2 * U) + 0.8)) * smoothstep(1.2 * a, 3.0 * a, down);
+            o.foam = max(o.foam, tail * 0.6 * vis);
+            // the HOLE right behind it: the water drops into the lee and turns back - dark, no
+            // white (it breaks a white sheet into a dark gap), before the trail begins
+            float hl = a * 0.85;
+            o.hole = max(o.hole, exp(-lat * lat / (hl * hl)) * exp(-down / (1.2 * a + 0.6 * U)) * smoothstep(0.0, 0.35 * a, down) * vis);
+            o.slope -= fdir * (exp(-lat * lat / (hl * hl)) * exp(-down / (1.2 * a + 0.6 * U)) * 0.25 * U);      // (the surface dips into it)
+        }
+        // the eddies: a vortex street behind it
+        float D = 2.0 * a;
+        float Tsh = D / (0.21 * U);
+        float ph = t / Tsh;
+        float base = floor(ph);
+        for (int j = 0; j < 6; ++j) {
+            float nj = base - float(j);
+            float age = (ph - nj) * Tsh;
+            float side = (mod(nj, 2.0) < 0.5) ? 1.0 : -1.0;
+            vec2  c = P.xy + fdir * (a + 0.8 * U * age) + ac * (side * 0.33 * D);
+            vec2  e = p - c;
+            float R = 0.55 * a + 0.12 * U * age + 0.2;
+            float er2 = dot(e, e);
+            if (er2 > 9.0 * R * R) continue;
+            float er = sqrt(er2);
+            float str = side * exp(-age / (2.5 + 1.5 * a)) * smoothstep(0.0, 0.5, age);
+            float sw = exp(-er2 / (R * R));
+            vec2  tang = vec2(-e.y, e.x) / max(R, 0.1);
+            o.slope += tang * (sw * str * 0.35 * U);
+            // (the eddy's spin is NOT added to the flow that carries the ripple pattern: the
+            //  pattern is carried for up to 4 s, and a spin that fast wound it into rings of fine
+            //  stripes round every stone. The eddy shows through the slope and its foam spiral.)
+            float ang = atan(e.y, e.x);
+            float spiral = 0.5 + 0.5 * sin(2.0 * ang + side * (er / R) * 5.0 - side * t * 2.5 * U);
+            o.foam = max(o.foam, sw * abs(str) * smoothstep(0.45, 0.9, spiral) * 0.55 * vis);
+        }
+    }
+    return o;
 }
 

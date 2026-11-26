@@ -1131,7 +1131,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
                 if (scatter_.plant_count[sp] == 0 && sp != 15 && sp < 17) continue;      // (the grass placed on the GPU is in no list here)
                 ppc.grass_params.x = plant_max_d(sp);   // per-group draw distance (settings)
                 // (the two grass meshes: height, blades, root radius, root depth - tuft_cd.glsl)
-                if (sp == 15 || sp >= 17) { const float* s = sp == 15 ? ScatterSet::kTuftShape : sp == 17 ? ScatterSet::kTurfShape : ScatterSet::kMeadowShape; ppc.tex_params = glm::vec4(s[0], s[1], s[2], s[3]); }
+                if (sp == 15 || sp == 17 || sp == 18) { const float* s = sp == 15 ? ScatterSet::kTuftShape : sp == 17 ? ScatterSet::kTurfShape : ScatterSet::kMeadowShape; ppc.tex_params = glm::vec4(s[0], s[1], s[2], s[3]); }
                 vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &ppc);
                 // GPU path: only the plants that can be seen, each with the mesh its distance needs.
                 if (draw_plants_gpu(cmd, sp)) continue;

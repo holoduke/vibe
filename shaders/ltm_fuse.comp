@@ -1,0 +1,30 @@
+#version 460
+// Local tone mapping, step 3 of 4 (post_fx.cpp): collapse the fused Laplacian pyramid, coarse
+// to fine. Coarsest level: sum w_i lum_i. Finer: the coarser fused level, upsampled, plus
+// sum w_i (lum_i - lum_i of the coarser level, upsampled) - the reference's blend.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_a;   // all levels
+layout(set = 0, binding = 1) uniform sampler2D u_w;
+layout(set = 0, binding = 2) uniform sampler2D u_f;   // all levels (reads level l + 1)
+layout(set = 0, binding = 3, r16f) uniform writeonly image2D o_f;      // level l
+
+layout(push_constant) uniform PC { vec4 p; } pc;   // x: level l, y: 1 = coarsest, zw: size of level l
+
+void main() {
+    ivec2 ip = ivec2(gl_GlobalInvocationID.xy);
+    if (ip.x >= int(pc.p.z) || ip.y >= int(pc.p.w)) return;
+    vec2 uv = (vec2(ip) + 0.5) / pc.p.zw;
+    float l = pc.p.x;
+    vec3 a = textureLod(u_a, uv, l).xyz;
+    vec3 w = textureLod(u_w, uv, l).xyz;
+    w /= max(w.x + w.y + w.z, 1e-5);
+    float f;
+    if (pc.p.y > 0.5) {
+        f = dot(w, a);
+    } else {
+        vec3 ac = textureLod(u_a, uv, l + 1.0).xyz;
+        f = textureLod(u_f, uv, l + 1.0).x + dot(w, a - ac);
+    }
+    imageStore(o_f, ip, vec4(f));
+}

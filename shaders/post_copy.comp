@@ -1,0 +1,12 @@
+#version 460
+// The post colour P (post_fx.cpp) starts as the history the compose pass would read, when no
+// motion blur / depth of field wrote it this frame but the glare sprites are drawn into it.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_src;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D o_dst;
+layout(push_constant) uniform PC { vec4 p; } pc;   // xy: output size
+void main() {
+    ivec2 ip = ivec2(gl_GlobalInvocationID.xy);
+    if (ip.x >= int(pc.p.x) || ip.y >= int(pc.p.y)) return;
+    imageStore(o_dst, ip, textureLod(u_src, (vec2(ip) + 0.5) / pc.p.xy, 0.0));
+}

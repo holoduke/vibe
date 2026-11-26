@@ -86,6 +86,10 @@ void VulkanEngine::rockf_poll() {
         };
         rockf::place(env);
         R.level.assign(rockf::instances().size(), int8_t(-1));
+        // The rocks in the water part the current (water_fx.cpp river_piers: the water shader's
+        // pillow, wake and eddies round each, and the CPU's flow).
+        for (const rockf::Inst& in : rockf::instances())
+            if (in.why == 8) river_pier_add(glm::vec2(in.pos.x, in.pos.z), 0.75f * 0.5f * std::max(in.hi.x - in.lo.x, in.hi.z - in.lo.z));
     }
     const std::vector<rockf::Inst>& I = rockf::instances();
     if (I.empty()) return;

@@ -36,6 +36,12 @@ layout(set = 0, binding = 3) uniform TaaUBO {
 // "history at the same pixel" — fine because the sky is procedural and
 // view-direction-driven by compose anyway.
 layout(set = 0, binding = 4) uniform sampler2D motion_color;
+// The G-buffer: a water pixel (material 8, gbuffer1.b = 0.66: terrain_rm_main_water.glsl) keeps
+// less history - its motion vector is the surface's, but what it shows (the mirror, the moving
+// waves) does not move with the surface. The reference game's fresh-sample term for water,
+// 1 / (1 + 0.001 d^2): near water nearly all fresh, far water the usual history.
+layout(set = 0, binding = 5) uniform sampler2D gbuf0;
+layout(set = 0, binding = 6) uniform sampler2D gbuf1;
 
 const float kAtrousKernel[5] = float[](0.0625, 0.25, 0.375, 0.25, 0.0625);
 
@@ -234,6 +240,16 @@ void main() {
     float reject_t = max(taa.params.y, 0.55);   // depth_reject_threshold
     float disoccl  = smoothstep(reject_t, 0.92, dgap);
     alpha *= (1.0 - disoccl);
+    // Water: the fresh-sample term (above, at the G-buffer bindings). taa.eye.w < 0.5: off (VIBE_NO_WATER_TAA).
+    if (taa.eye.w > 0.5) {
+        vec4 wg0 = texelFetch(gbuf0, ip, 0), wg1 = texelFetch(gbuf1, ip, 0);
+        if (int(wg0.a * 255.0 + 0.5) == 8 && abs(wg1.b - 0.66) < 0.015) {
+            vec4  wf = taa.inv_vp * vec4(uv * 2.0 - 1.0, curr_d, 1.0);
+            float d  = length(wf.xyz / wf.w - taa.eye.xyz);
+            float fresh = 1.0 / (1.0 + 0.001 * d * d);
+            alpha *= 1.0 - 0.85 * fresh;
+        }
+    }
 
     float a_mn = 1.0, a_mx = 0.0;
     bool any_sky = false;

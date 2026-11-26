@@ -696,74 +696,27 @@
             } else {
                 albedo = rf_colour(vWorldPos, rf_ng, rf.nrm, rf, vUv.x, vUv.y) * vColor;
             }
-            // WHERE IT MEETS THE GROUND: no line. The reference game pastes a mesh into its terrain by
-            // HEIGHT: within a zone above the ground (a hand's width close by, 3 m from a kilometre)
-            // the ground's weight falls from 1 at the ground to 0 at the zone's top, and of the two
-            // materials the one whose weight x height stands higher shows (over a band of 0.15) - so
-            // earth lies in the rock's low places and the rock's ribs stand clear of it. The ground's
-            // height here: the home tile's height map (the surface the terrain is drawn from, less
-            // its close relief - which is why the zone is 22 cm and not 10); beyond that tile the
-            // piece's own ground line. The ground's material: on steep ground the same rock (only
-            // the normal and the tone meet), elsewhere the soil scan the terrain lays there (slot 9,
-            // the same 0.45 repeats a metre), green-brown where the grass mask has grass. Above the
-            // zone a stain of the same earth thrown up the foot, and the contact's own shade.
-            {
-                float above;
-                vec3  g_n = vec3(0.0, 1.0, 0.0);
-                float grassy = 0.0;
-                if (max(abs(vWorldPos.x), abs(vWorldPos.z)) < 1020.0) {
-                    vec2 guv = vWorldPos.xz / 2048.0 + 0.5;
-                    above = vWorldPos.y - textureLod(u_heightmap_full, guv, 0.0).r;
-                    if (above < 2.5) {
-                        const float e = 1.5;
-                        float hx = textureLod(u_heightmap_full, guv + vec2(e / 2048.0, 0.0), 0.0).r - textureLod(u_heightmap_full, guv - vec2(e / 2048.0, 0.0), 0.0).r;
-                        float hz = textureLod(u_heightmap_full, guv + vec2(0.0, e / 2048.0), 0.0).r - textureLod(u_heightmap_full, guv - vec2(0.0, e / 2048.0), 0.0).r;
-                        g_n = normalize(vec3(-hx, 2.0 * e, -hz));
-                        grassy = textureLod(u_grass_mask, guv, 0.0).r;
-                    }
-                } else {
-                    // Beyond the home tile: the ground baked round the camera for the world's grass
-                    // (veg_stream.cpp wv_nf_poll; 512 m at 1 m, heights in RGB, row 0 = its origin and
-                    // a mark - grass_raymarch.frag nf_*: keep in step); where that does not reach,
-                    // the piece's own ground line.
-                    above = rf_hgt;
-                    vec3 nm = texelFetch(u_normal[22], ivec2(2, 0), 0).rgb * 255.0;
-                    if (scene.globe_info.z > 0.5 && abs(nm.r - 77.0) < 0.5 && abs(nm.g - 123.0) < 0.5 && abs(nm.b - 201.0) < 0.5) {
-                        vec3 na = texelFetch(u_normal[22], ivec2(0, 0), 0).rgb * 255.0, nb = texelFetch(u_normal[22], ivec2(1, 0), 0).rgb * 255.0;
-                        vec2 org = (vec2(na.r * 65536.0 + na.g * 256.0 + na.b, nb.r * 65536.0 + nb.g * 256.0 + nb.b) - 8388608.0) * 64.0;
-                        vec2 l = vWorldPos.xz - org;
-                        if (all(greaterThan(l, vec2(4.0))) && all(lessThan(l, vec2(507.0)))) {
-                            #define RF_NF(q) (dot(textureLod(u_normal[22], ((q) + 0.5) / 512.0, 0.0).rgb, vec3(255.0, 255.0 / 256.0, 255.0 / 65536.0)) - 64.0)
-                            float h0 = RF_NF(l);
-                            above = vWorldPos.y - h0;
-                            if (above < 2.5) {
-                                float hx = RF_NF(l + vec2(1.5, 0.0)) - RF_NF(l - vec2(1.5, 0.0)), hz = RF_NF(l + vec2(0.0, 1.5)) - RF_NF(l - vec2(0.0, 1.5));
-                                g_n = normalize(vec3(-hx, 3.0, -hz));
-                            }
-                            #undef RF_NF
-                        }
-                    }
-                }
-                if (above < 2.5) {
-                    float zone = 0.22 + 2.9 * clamp((cam_dist - 500.0) * 0.002, 0.0, 1.0);
-                    float gn1 = tnoise(vWorldPos.xz * 3.1 + vWorldPos.y * 2.3), gn2 = tnoise(vWorldPos.xz * 0.7 + 9.0);
-                    float wg = clamp(1.0 - (above + 0.05 * (gn1 - 0.5)) / zone, 0.0, 1.0);
-                    vec2  suv = vWorldPos.xz * 0.45;
-                    vec4  sn = texture(u_normal[9], suv);
-                    vec3  sa = texture(u_albedo[9], suv).rgb / max(textureLod(u_albedo[9], suv, 12.0).rgb, vec3(0.02));
-                    float share = rf_height_blend(rf.h, sn.a, wg);
-                    float g_rock = smoothstep(0.56, 0.78, 1.0 - g_n.y);           // (steep ground is the cliff's rock: terrain_rm_main_ground.glsl)
-                    vec3  earth = mix(vec3(0.105, 0.086, 0.060), vec3(0.060, 0.082, 0.036), max(smoothstep(0.3, 0.7, grassy), 0.5 * smoothstep(0.35, 0.70, gn2)));
-                    vec3  g_col = mix(earth * clamp(sa, vec3(0.5), vec3(1.7)) * mix(0.70, 1.08, smoothstep(0.15, 0.85, sn.a)), albedo, g_rock);
-                    vec3  g_nrm = normalize(g_n + vec3(sn.x - 0.5, 0.0, sn.y - 0.5) * 2.0 * (1.0 - g_rock));
-                    // the stain above the zone: thinner with height, ragged, not on the cliff's own rock
-                    float stain = (1.0 - smoothstep(0.0, 0.75, above - 0.20 * gn1 + 0.05)) * (1.0 - g_rock) * 0.45;
-                    albedo = mix(albedo, earth * 1.05, stain * (1.0 - share));
-                    albedo = mix(albedo, g_col, share);
-                    N = normalize(mix(N, g_nrm, share));
-                    albedo *= mix(0.62, 1.0, smoothstep(0.0, 0.30, above + 0.06));   // the contact's shade
+            // Standing in water (the rocks in the river and the stream: rock_formations.cpp place_water_rocks):
+            // dark and wet under the waterline and a hand above it (splashed), moss on the tops just
+            // above it. The water there: the sea's level, or the stream's own surface.
+            if (scene.water_params.x > 0.5) {
+                float wl = max(scene.water_params.y, wc_stream_surface(vWorldPos.xz));
+                float dh = vWorldPos.y - wl;
+                if (dh < 1.2) {
+                    float wet = 1.0 - smoothstep(0.0, 0.22, dh);
+                    albedo *= mix(1.0, 0.50, wet);
+                    float mn = fract(sin(dot(floor(vWorldPos.xz * 3.0), vec2(12.9898, 78.233))) * 43758.5453);
+                    float moss = smoothstep(0.05, 0.25, dh) * (1.0 - smoothstep(0.5, 1.1, dh)) * smoothstep(0.35, 0.8, N.y) * smoothstep(0.3, 0.7, mn * 0.5 + 0.5 * sin(vWorldPos.x * 1.7 + vWorldPos.z * 2.3));
+                    albedo = mix(albedo, vec3(0.10, 0.14, 0.05), 0.75 * moss);
                 }
             }
+            // WHERE IT MEETS THE GROUND: no line - the paste into the ground (ground_paste.glsl, called
+            // after this file for every surface that may touch the ground): the scan's height is the
+            // rock's, its ground line the fallback beyond the ground's known height, and on steep
+            // ground the ground's material is the rock itself.
+            g_gp_h = rf.h;
+            g_gp_self_rock = true;
+            g_gp_rock_above = rf_hgt;
         } else if (use_albedo && is_mesh_draw && pc.grass_params.z < 0.5) {
             // Static mesh: real UVs + derivative (cotangent) tangent frame
             // (Schueler 2013). NormalGL green = image-up = -dP/dv.

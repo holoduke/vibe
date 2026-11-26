@@ -1,36 +1,44 @@
 // Screen-space displacement mapping (SSDM), the way the reference game does it.
 //
-// The stonework is drawn flat; then, on the G-buffer and before the lighting, its pixels are
-// moved to where the stones really stand out. The method is described in
-// shaders/ssdm_grid.vert, the rule that keeps corners and borders closed in
-// shaders/ssdm_solve.frag. (Our own code for the method of the game's screen-space tessellation
-// shaders, which were read in compiled form. An earlier version of this file was a port of
-// TechArtAlex's Unreal plugin, which finds each pixel's source by a screen-space march
-// instead; see the git history.)
+// The stonework and the ground are drawn flat; then, on the G-buffer and before the lighting,
+// their pixels are moved to where the stones really stand out. This is our code for the
+// reference game's "rasterizer / reconstruct" route, read from its compiled shaders
+// (screen-space tessellation): every formula and constant of the shaders is the game's.
 //
-// WHERE it runs: in the middle of the main pass - after the static stonework is drawn, before
-// trees, moving things, effects, grass and the weapon. So the lighting and the shadows fall on
-// the displaced surface, and everything drawn afterwards is depth-tested against it.
-//
-// WHAT is displaced: mesh parts with CastleMeshGpu::ssdm > 0 (the amplitude in metres; set in
-// make_mesh_part from LevelMesh::ssdm, or from LevelMesh::relief for masonry that has a height
-// texture), and the static box brushes of home whose material has one (brush_ssdm_amplitude:
-// castle and keep walls, floor tiles on their top face). While this pass is on, all of these
-// are drawn flat - mesh parts without parallax relief (draw_castle_meshes), brushes with wall
-// mode 0 (descriptors.cpp) - because the stones must not be shifted twice.
+// WHERE it runs: in the middle of the main pass - after the static stonework and the ground
+// are drawn, before trees, moving things, effects, grass and the weapon. So the lighting and
+// the shadows fall on the displaced surface, and everything drawn afterwards is depth-tested
+// against it.
 //
 // render_ssdm(), called by render_world() right after the castle meshes:
 //   (the main pass is ended)
-//   0. colour, both G-buffer layers and depth are copied (the grid reads the copies)
-//   1. height pass   ssdm_height: the displaced parts again, against the scene's depth
-//   2. solve pass    ssdm_solve: per pixel the displacement vector
+//   0. colour, motion, both G-buffer layers and depth are copied (the passes read the copies)
+//   1. height feed   ssdm_height / ssdm_ground: per pixel the vertex normal and the height
+//                    byte (the game has both in its G-buffer)
+//   2. ssdm_raster   compute: one vertex per pixel, displaced (ssdm_displace.glsl), each cell
+//                    rasterized into a 64-bit word per pixel (atomic max: nearest wins);
+//                    cells too big for it go to a list
+//   3. ssdm_hwraster those cells drawn by the hardware, the same word (ssdm_hwargs makes the
+//                    indirect draw)
+//   4. ssdm_resolve  full screen: covered pixels rebuilt from their source pixel, the rest
+//                    pulled toward the camera; the behind-material mask
+//   5. ssdm_dilate + ssdm_behind  the mask spread, and the displaced copy blended back
+//                    toward the original where the relief exposed what lay behind
+//   6. the displaced copy copied into the live attachments (depth was written in 4)
 //   (the main pass is taken up again, loading what is there)
-//   3. grid pass     ssdm_grid: one vertex per pixel over the screen rectangle that holds
-//                    displaced stonework, into the main pass's own attachments and depth
+//
+// WHAT feeds it: mesh parts with CastleMeshGpu::ssdm > 0 (amplitude in metres), the static
+// box brushes of home with a height texture (brush_ssdm_amplitude), the raymarched ground
+// (terrain_raymarch.frag writes its material's height into the G-buffer). While this pass is
+// on, all of these are drawn flat - mesh parts without parallax relief (draw_castle_meshes),
+// brushes with wall mode 0 (descriptors.cpp) - because the stones must not be shifted twice.
+//
+// The game's runtime constants are not in its shaders; ours (kSsdmReach, kSsdmAmpScale) are
+// chosen here. Everything else - the fade over the last quarter of the reach, the amplitude
+// growing to 5 x by 100 m, the blur, the cuts at depth jumps, the edge fade - is the game's.
 //
 // Switches: VIBE_NO_SSDM=1 off (the stonework is back on its parallax / box relief);
-// VIBE_SSDM_NO_BRUSHES=1 mesh parts only; VIBE_SSDM_DEBUG=1 paints what the grid moved red and
-// what it left in place green.
+// VIBE_SSDM_NO_BRUSHES=1 mesh parts only; VIBE_SSDM_DEBUG=1 paints the covered pixels red.
 #include "engine/vk_engine/internal.h"
 #include "engine/vk_engine/state/taa.h"
 #include "engine/vk_engine/state/ssdm.h"
@@ -51,29 +59,21 @@ struct SsdmPC {
     glm::mat4 inv_vp;
     glm::mat4 vp;
     glm::mat4 prev_vp;
-    glm::vec4 size, rect, par, sun;
+    glm::vec4 size, depth, view, misc;
 };
 static_assert(sizeof(SsdmPC) == 256, "SsdmPC must match ssdm_common.glsl");
-constexpr uint32_t kSsdmBindings = 6;
-constexpr VkShaderStageFlags kSsdmStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-constexpr VkFormat kSsdmVecFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr uint32_t kSsdmBindings = 16;
+constexpr VkShaderStageFlags kSsdmStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+constexpr VkFormat kSsdmFeedFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
-// The displacement fades out between these distances (m): further off a stone's height is
-// under a pixel and the pass would only cost.
-constexpr float kSsdmFadeStart = 40.0f;
-constexpr float kSsdmFadeEnd   = 55.0f;
-// The radius (m) over which a pixel's height is evened out with its surroundings - the width
-// of the band along corners and borders in which the stones come down to the flat surface.
-constexpr float kSsdmSmooth    = 0.015f;
-// The height (m) that counts as "a whole stone" when two heights are compared.
-constexpr float kSsdmRefHeight = 0.10f;
-// How much the stones darken each other: the sun shadow a stone casts on its neighbours, and
-// the shade in the joints (both go into the albedo - see ssdm_solve.frag). Mild on purpose:
-// the lighting pass adds its own shadows and ambient occlusion on top.
-constexpr float kSsdmSunShade   = 0.70f;
-constexpr float kSsdmJointShade = 0.40f;
+// The reach (m): the game's _terrainNormalParams.x. Full displacement to 0.75 of it, none
+// beyond it. (Not in the game's shaders; ours.)
+constexpr float kSsdmReach = 48.0f;
+// The amplitude scale: the game's _deformBlurParam.y - height 1 stands 0.2 * this metres out
+// close by (growing to 5 x by 100 m). (Not in the game's shaders; ours.)
+constexpr float kSsdmAmpScale = 1.0f;
 // The ground (ssdm_ground.frag): the height in metres that the terrain shader's largest value
-// stands for (terrain_rm_heightfield.glsl kGndSsdmMax: keep the two the same).
+// stands for (terrain_raymarch.frag / terrain_rm_heightfield.glsl kGndSsdmMax: keep the same).
 constexpr float kGndSsdmMax = 0.12f;
 
 // How far the stones of a box brush stand out (m), 0 = not displaced. The depth the box relief
@@ -86,6 +86,16 @@ float brush_ssdm_amplitude(const game::Brush& b) {
         return 0.8f * std::min(std::clamp(0.05f / std::max(b.uv_scale, 0.01f), 0.06f, 0.3f), 0.3f * thin);
     if (b.tex_albedo == 5 || b.tex_albedo == 6) return std::min(0.03f, 0.3f * thin);
     return 0.0f;
+}
+// A material's amplitude (m) as the height factor the feed multiplies its height by (the
+// game's saturate(_alphaHeightIntensity * vertex alpha)).
+float height_factor(float amp_m) { return std::clamp(amp_m / (0.2f * kSsdmAmpScale), 0.0f, 1.0f); }
+
+void mem_barrier(VkCommandBuffer cmd, VkPipelineStageFlags src, VkAccessFlags sa, VkPipelineStageFlags dst, VkAccessFlags da) {
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = sa; mb.dstAccessMask = da;
+    vkCmdPipelineBarrier(cmd, src, dst, 0, 1, &mb, 0, nullptr, 0, nullptr);
 }
 }  // namespace
 
@@ -105,22 +115,29 @@ bool VulkanEngine::ground_ssdm_active() const {
 }
 
 void VulkanEngine::destroy_ssdm_targets() {
-    for (SsdmImage* t : { &ssdm_->hn, &ssdm_->off, &ssdm_->color, &ssdm_->g0, &ssdm_->g1, &ssdm_->scene_z }) {
+    for (SsdmImage* t : { &ssdm_->hn, &ssdm_->color, &ssdm_->g0, &ssdm_->g1, &ssdm_->motion, &ssdm_->scene_z,
+                          &ssdm_->o_color, &ssdm_->o_g0, &ssdm_->o_g1, &ssdm_->b_mask, &ssdm_->b_tiles, &ssdm_->b_weight }) {
         if (t->view) vkDestroyImageView(device_, t->view, nullptr);
         if (t->image) vmaDestroyImage(allocator_, t->image, t->alloc);
         *t = SsdmImage{};
     }
+    auto drop = [&](VkBuffer& b, VmaAllocation& a) { if (b) vmaDestroyBuffer(allocator_, b, a); b = VK_NULL_HANDLE; a = nullptr; };
+    drop(ssdm_->raster, ssdm_->raster_alloc);
+    drop(ssdm_->hw_list, ssdm_->hw_list_alloc);
+    drop(ssdm_->hw_ctl, ssdm_->hw_ctl_alloc);
     ssdm_->extent = { 0, 0 };
 }
 
 void VulkanEngine::destroy_ssdm() {
     if (device_) vkDeviceWaitIdle(device_);
     destroy_ssdm_targets();
-    for (VkPipeline* p : { &ssdm_->height_pipeline, &ssdm_->solve_pipeline, &ssdm_->grid_pipeline, &ssdm_->ground_pipeline }) {
+    for (VkPipeline* p : { &ssdm_->height_pipeline, &ssdm_->ground_pipeline, &ssdm_->raster_pipeline, &ssdm_->hwargs_pipeline,
+                           &ssdm_->hwraster_pipeline, &ssdm_->resolve_pipeline, &ssdm_->dilate_pipeline, &ssdm_->behind_pipeline }) {
         if (*p) vkDestroyPipeline(device_, *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
-    for (VkShaderModule* m : { &ssdm_->height_vert, &ssdm_->height_frag, &ssdm_->solve_frag, &ssdm_->grid_vert, &ssdm_->grid_frag, &ssdm_->ground_frag }) {
+    for (VkShaderModule* m : { &ssdm_->height_vert, &ssdm_->height_frag, &ssdm_->ground_frag, &ssdm_->raster_comp, &ssdm_->hwargs_comp,
+                               &ssdm_->hwraster_vert, &ssdm_->hwraster_frag, &ssdm_->resolve_frag, &ssdm_->dilate_comp, &ssdm_->behind_comp }) {
         if (*m) vkDestroyShaderModule(device_, *m, nullptr);
         *m = VK_NULL_HANDLE;
     }
@@ -128,26 +145,42 @@ void VulkanEngine::destroy_ssdm() {
     if (ssdm_->set_layout) vkDestroyDescriptorSetLayout(device_, ssdm_->set_layout, nullptr);
     if (ssdm_->pool) vkDestroyDescriptorPool(device_, ssdm_->pool, nullptr);
     if (ssdm_->nearest) vkDestroySampler(device_, ssdm_->nearest, nullptr);
+    if (ssdm_->linear) vkDestroySampler(device_, ssdm_->linear, nullptr);
     ssdm_->layout = VK_NULL_HANDLE; ssdm_->set_layout = VK_NULL_HANDLE; ssdm_->pool = VK_NULL_HANDLE;
-    ssdm_->nearest = VK_NULL_HANDLE; ssdm_->set = VK_NULL_HANDLE;
+    ssdm_->nearest = VK_NULL_HANDLE; ssdm_->linear = VK_NULL_HANDLE; ssdm_->set = VK_NULL_HANDLE;
     ssdm_ready_ = false;
 }
+
+namespace {
+VkDescriptorType ssdm_binding_type(uint32_t i) {
+    if (i <= 5 || i == 15) return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    if (i <= 8) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+}
+}  // namespace
 
 bool VulkanEngine::init_ssdm() {
     if (ssdm_ready_) return true;
     if (ssdm_failed_ || !taa_->vert_module || !pipeline_layout_) return false;
     const std::string sd = VIBE_SHADER_DIR;
-    ssdm_->height_vert = vkpipe::load_shader_module(device_, sd + "/ssdm_height.vert.spv");
-    ssdm_->height_frag = vkpipe::load_shader_module(device_, sd + "/ssdm_height.frag.spv");
-    ssdm_->solve_frag  = vkpipe::load_shader_module(device_, sd + "/ssdm_solve.frag.spv");
-    ssdm_->grid_vert   = vkpipe::load_shader_module(device_, sd + "/ssdm_grid.vert.spv");
-    ssdm_->grid_frag   = vkpipe::load_shader_module(device_, sd + "/ssdm_grid.frag.spv");
-    if (!ssdm_->height_vert || !ssdm_->height_frag || !ssdm_->solve_frag || !ssdm_->grid_vert || !ssdm_->grid_frag) {
+    auto load = [&](const char* n) { return vkpipe::load_shader_module(device_, sd + "/" + n + ".spv"); };
+    ssdm_->height_vert   = load("ssdm_height.vert");
+    ssdm_->height_frag   = load("ssdm_height.frag");
+    ssdm_->raster_comp   = load("ssdm_raster.comp");
+    ssdm_->hwargs_comp   = load("ssdm_hwargs.comp");
+    ssdm_->hwraster_vert = load("ssdm_hwraster.vert");
+    ssdm_->hwraster_frag = load("ssdm_hwraster.frag");
+    ssdm_->resolve_frag  = load("ssdm_resolve.frag");
+    ssdm_->dilate_comp   = load("ssdm_dilate.comp");
+    ssdm_->behind_comp   = load("ssdm_behind.comp");
+    if (!ssdm_->height_vert || !ssdm_->height_frag || !ssdm_->raster_comp || !ssdm_->hwargs_comp || !ssdm_->hwraster_vert ||
+        !ssdm_->hwraster_frag || !ssdm_->resolve_frag || !ssdm_->dilate_comp || !ssdm_->behind_comp) {
         log::warnf("[ssdm] shaders missing - screen-space displacement off");
         ssdm_failed_ = true;
         return false;
     }
-    // Sampler: nearest + clamp (exact texels; G-buffer data must not be blended).
+    // Samplers: nearest + clamp (exact texels; G-buffer data must not be blended), and bilinear
+    // + clamp for the behind-material weight.
     {
         VkSamplerCreateInfo sci{};
         sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -156,24 +189,32 @@ bool VulkanEngine::init_ssdm() {
         sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         sci.maxLod = 0.0f;
         vk_check(vkCreateSampler(device_, &sci, nullptr, &ssdm_->nearest), "ssdm sampler");
+        sci.magFilter = VK_FILTER_LINEAR; sci.minFilter = VK_FILTER_LINEAR;
+        vk_check(vkCreateSampler(device_, &sci, nullptr, &ssdm_->linear), "ssdm linear sampler");
     }
-    // The solve and grid passes' set: six sampled images (ssdm_common.glsl).
+    // The passes' set (ssdm_common.glsl).
     {
         std::array<VkDescriptorSetLayoutBinding, kSsdmBindings> b{};
+        uint32_t n_img = 0, n_buf = 0, n_sto = 0;
         for (uint32_t i = 0; i < kSsdmBindings; ++i) {
             b[i].binding = i;
-            b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[i].descriptorType = ssdm_binding_type(i);
             b[i].descriptorCount = 1;
             b[i].stageFlags = kSsdmStages;
+            if (b[i].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) ++n_img;
+            else if (b[i].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) ++n_buf;
+            else ++n_sto;
         }
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         lci.bindingCount = kSsdmBindings; lci.pBindings = b.data();
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &ssdm_->set_layout), "ssdm set layout");
-        VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSsdmBindings };
+        const VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n_img },
+                                             { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, n_buf },
+                                             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, n_sto } };
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pci.maxSets = 1; pci.poolSizeCount = 1; pci.pPoolSizes = &ps;
+        pci.maxSets = 1; pci.poolSizeCount = 3; pci.pPoolSizes = ps;
         vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &ssdm_->pool), "ssdm pool");
         VkDescriptorSetAllocateInfo dai{};
         dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -186,13 +227,13 @@ bool VulkanEngine::init_ssdm() {
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
         vk_check(vkCreatePipelineLayout(device_, &plci, nullptr, &ssdm_->layout), "ssdm layout");
     }
-    // Height pass: the world's vertex layout, push constants and scene set; tested against the
+    // Height feed: the world's vertex layout, push constants and scene set; tested against the
     // scene's depth, which it does not write.
     {
         vkpipe::GraphicsPipelineConfig cfg{};
         cfg.vert = ssdm_->height_vert; cfg.frag = ssdm_->height_frag;
         cfg.layout = pipeline_layout_;
-        cfg.color_formats = { kSsdmVecFormat };
+        cfg.color_formats = { kSsdmFeedFormat };
         cfg.depth_format = depth_format_;
         VkVertexInputBindingDescription vb{};
         vb.binding = 0; vb.stride = sizeof(Vertex); vb.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
@@ -207,59 +248,80 @@ bool VulkanEngine::init_ssdm() {
         cfg.depth_compare = VK_COMPARE_OP_LESS_OR_EQUAL;
         ssdm_->height_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     }
-    // Solve pass: full-screen triangle, cut to the rectangle by the scissor.
-    {
-        vkpipe::GraphicsPipelineConfig cfg{};
-        cfg.vert = taa_->vert_module; cfg.frag = ssdm_->solve_frag;
-        cfg.layout = ssdm_->layout;
-        cfg.color_formats = { kSsdmVecFormat };
-        cfg.cull = VK_CULL_MODE_NONE;
-        cfg.depth_test = false; cfg.depth_write = false;
-        ssdm_->solve_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
-    }
-    // Grid pass: no vertex buffers; the main pass's attachments and depth.
-    {
-        vkpipe::GraphicsPipelineConfig cfg{};
-        cfg.vert = ssdm_->grid_vert; cfg.frag = ssdm_->grid_frag;
-        cfg.layout = ssdm_->layout;
-        cfg.color_formats = { scene_color_format_, motion_vec_format_, gbuffer0_format_, gbuffer1_format_ };
-        cfg.depth_format = depth_format_;
-        cfg.cull = VK_CULL_MODE_NONE;           // (a displaced triangle may turn either way)
-        cfg.depth_test = true; cfg.depth_write = true;
-        cfg.depth_compare = VK_COMPARE_OP_LESS; // (where nothing moved the flat wall stays as it is)
-        ssdm_->grid_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
-    }
-    // Ground heights (ssdm_ground.frag): full-screen triangle into the height target, after the
+    // Ground feed (ssdm_ground.frag): full-screen triangle into the same target, after the
     // meshes, inside the same pass (which has the depth attachment; not tested, not written).
-    // The shader is optional: without it only the stonework is displaced.
-    ssdm_->ground_frag = vkpipe::load_shader_module(device_, sd + "/ssdm_ground.frag.spv");
+    // Optional: without it only the stonework is displaced.
+    ssdm_->ground_frag = load("ssdm_ground.frag");
     if (ssdm_->ground_frag) {
         vkpipe::GraphicsPipelineConfig cfg{};
         cfg.vert = taa_->vert_module; cfg.frag = ssdm_->ground_frag;
         cfg.layout = ssdm_->layout;
-        cfg.color_formats = { kSsdmVecFormat };
+        cfg.color_formats = { kSsdmFeedFormat };
         cfg.depth_format = depth_format_;
         cfg.cull = VK_CULL_MODE_NONE;
         cfg.depth_test = false; cfg.depth_write = false;
         ssdm_->ground_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
     }
-    if (!ssdm_->height_pipeline || !ssdm_->solve_pipeline || !ssdm_->grid_pipeline) {
+    // Hardware path: no attachments - the fragments only do the atomic max.
+    {
+        vkpipe::GraphicsPipelineConfig cfg{};
+        cfg.vert = ssdm_->hwraster_vert; cfg.frag = ssdm_->hwraster_frag;
+        cfg.layout = ssdm_->layout;
+        cfg.color_attachment_count = 0;
+        cfg.cull = VK_CULL_MODE_NONE;
+        cfg.depth_test = false; cfg.depth_write = false;
+        ssdm_->hwraster_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
+    }
+    // Resolve: the displaced copy + the live motion, and the live depth (written as it is).
+    {
+        vkpipe::GraphicsPipelineConfig cfg{};
+        cfg.vert = taa_->vert_module; cfg.frag = ssdm_->resolve_frag;
+        cfg.layout = ssdm_->layout;
+        cfg.color_formats = { VK_FORMAT_R16G16B16A16_SFLOAT, motion_vec_format_, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R32_UINT };
+        cfg.depth_format = depth_format_;
+        cfg.cull = VK_CULL_MODE_NONE;
+        cfg.depth_test = true; cfg.depth_write = true;
+        cfg.depth_compare = VK_COMPARE_OP_ALWAYS;
+        ssdm_->resolve_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
+    }
+    auto compute = [&](VkShaderModule m, VkPipeline& out, const char* what) {
+        VkComputePipelineCreateInfo cci{};
+        cci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        cci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        cci.stage.module = m;
+        cci.stage.pName = "main";
+        cci.layout = ssdm_->layout;
+        if (vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &cci, nullptr, &out) != VK_SUCCESS) {
+            log::warnf("[ssdm] %s pipeline failed", what);
+            out = VK_NULL_HANDLE;
+        }
+    };
+    compute(ssdm_->raster_comp, ssdm_->raster_pipeline, "raster");
+    compute(ssdm_->hwargs_comp, ssdm_->hwargs_pipeline, "hwargs");
+    compute(ssdm_->dilate_comp, ssdm_->dilate_pipeline, "dilate");
+    compute(ssdm_->behind_comp, ssdm_->behind_pipeline, "behind");
+    if (!ssdm_->height_pipeline || !ssdm_->hwraster_pipeline || !ssdm_->resolve_pipeline || !ssdm_->raster_pipeline ||
+        !ssdm_->hwargs_pipeline || !ssdm_->dilate_pipeline || !ssdm_->behind_pipeline) {
         log::warnf("[ssdm] pipeline creation failed - screen-space displacement off");
         ssdm_failed_ = true;
         return false;
     }
     ssdm_ready_ = true;
-    log::infof("[ssdm] screen-space displacement mapping ready (pixel grid on the G-buffer)");
+    log::infof("[ssdm] screen-space displacement mapping ready (compute rasterizer + resolve, reach %.0f m)", kSsdmReach);
     return true;
 }
 
 void VulkanEngine::create_ssdm_targets() {
     destroy_ssdm_targets();
-    auto make = [&](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect, SsdmImage& t) {
+    const uint32_t W = render_extent_.width, H = render_extent_.height;
+    ssdm_->half  = { (W + 1) / 2, (H + 1) / 2 };
+    ssdm_->tiles = { (ssdm_->half.width + 7) / 8 + 1, (ssdm_->half.height + 7) / 8 + 1 };
+    auto make = [&](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect, VkExtent2D ex, SsdmImage& t) {
         VkImageCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         ici.imageType = VK_IMAGE_TYPE_2D; ici.format = fmt;
-        ici.extent = { render_extent_.width, render_extent_.height, 1 };
+        ici.extent = { ex.width, ex.height, 1 };
         ici.mipLevels = 1; ici.arrayLayers = 1;
         ici.samples = VK_SAMPLE_COUNT_1_BIT; ici.tiling = VK_IMAGE_TILING_OPTIMAL;
         ici.usage = usage; ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -273,66 +335,77 @@ void VulkanEngine::create_ssdm_targets() {
         vci.subresourceRange = { aspect, 0, 1, 0, 1 };
         vk_check(vkCreateImageView(device_, &vci, nullptr, &t.view), "ssdm view");
     };
-    const VkImageUsageFlags rt = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    const VkImageUsageFlags cp = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    auto make_buf = [&](VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& b, VmaAllocation& a) {
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size = size; bci.usage = usage; bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        vk_check(vmaCreateBuffer(allocator_, &bci, &aci, &b, &a, nullptr), "ssdm buffer");
+    };
+    const VkImageUsageFlags S = VK_IMAGE_USAGE_SAMPLED_BIT, CA = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                            TD = VK_IMAGE_USAGE_TRANSFER_DST_BIT, TS = VK_IMAGE_USAGE_TRANSFER_SRC_BIT, ST = VK_IMAGE_USAGE_STORAGE_BIT;
     const VkImageAspectFlags C = VK_IMAGE_ASPECT_COLOR_BIT, D = VK_IMAGE_ASPECT_DEPTH_BIT;
-    make(kSsdmVecFormat, rt, C, ssdm_->hn);
-    make(kSsdmVecFormat, rt, C, ssdm_->off);
-    make(scene_color_format_, cp, C, ssdm_->color);
-    make(gbuffer0_format_, cp, C, ssdm_->g0);
-    make(gbuffer1_format_, cp, C, ssdm_->g1);
-    make(depth_format_, cp, D, ssdm_->scene_z);
+    const VkExtent2D full = render_extent_;
+    make(kSsdmFeedFormat, CA | S, C, full, ssdm_->hn);
+    make(scene_color_format_, TD | S, C, full, ssdm_->color);
+    make(gbuffer0_format_, TD | S, C, full, ssdm_->g0);
+    make(gbuffer1_format_, TD | S, C, full, ssdm_->g1);
+    make(motion_vec_format_, TD | S, C, full, ssdm_->motion);
+    make(depth_format_, TD | S, D, full, ssdm_->scene_z);
+    make(VK_FORMAT_R16G16B16A16_SFLOAT, CA | ST | TS, C, full, ssdm_->o_color);
+    make(VK_FORMAT_R8G8B8A8_UNORM, CA | ST | TS, C, full, ssdm_->o_g0);
+    make(VK_FORMAT_R32_UINT, CA | ST | TS, C, full, ssdm_->o_g1);
+    make(VK_FORMAT_R32_SFLOAT, ST | TD, C, ssdm_->half, ssdm_->b_mask);
+    make(VK_FORMAT_R32_UINT, ST | TD, C, ssdm_->tiles, ssdm_->b_tiles);
+    make(VK_FORMAT_R32_SFLOAT, ST | S | TD, C, ssdm_->half, ssdm_->b_weight);
+    make_buf(VkDeviceSize(W) * H * 8, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, ssdm_->raster, ssdm_->raster_alloc);
+    make_buf(VkDeviceSize(W) * H * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, ssdm_->hw_list, ssdm_->hw_list_alloc);
+    make_buf(64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+             ssdm_->hw_ctl, ssdm_->hw_ctl_alloc);
     ssdm_->extent = render_extent_;
     ssdm_first_use_ = true;
 
-    const VkImageLayout RO = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    const VkDescriptorImageInfo ii[kSsdmBindings] = {
-        { ssdm_->nearest, ssdm_->hn.view, RO },    { ssdm_->nearest, ssdm_->scene_z.view, RO },
-        { ssdm_->nearest, ssdm_->off.view, RO },   { ssdm_->nearest, ssdm_->color.view, RO },
-        { ssdm_->nearest, ssdm_->g0.view, RO },    { ssdm_->nearest, ssdm_->g1.view, RO } };
+    const VkImageLayout RO = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, GE = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorImageInfo ii[kSsdmBindings]{};
+    ii[0]  = { ssdm_->nearest, ssdm_->hn.view, RO };      ii[1] = { ssdm_->nearest, ssdm_->scene_z.view, RO };
+    ii[2]  = { ssdm_->nearest, ssdm_->color.view, RO };   ii[3] = { ssdm_->nearest, ssdm_->g0.view, RO };
+    ii[4]  = { ssdm_->nearest, ssdm_->g1.view, RO };      ii[5] = { ssdm_->nearest, ssdm_->motion.view, RO };
+    ii[9]  = { VK_NULL_HANDLE, ssdm_->o_color.view, GE }; ii[10] = { VK_NULL_HANDLE, ssdm_->o_g0.view, GE };
+    ii[11] = { VK_NULL_HANDLE, ssdm_->o_g1.view, GE };    ii[12] = { VK_NULL_HANDLE, ssdm_->b_mask.view, GE };
+    ii[13] = { VK_NULL_HANDLE, ssdm_->b_tiles.view, GE }; ii[14] = { VK_NULL_HANDLE, ssdm_->b_weight.view, GE };
+    ii[15] = { ssdm_->linear, ssdm_->b_weight.view, GE };
+    const VkDescriptorBufferInfo bi[3] = { { ssdm_->raster, 0, VK_WHOLE_SIZE }, { ssdm_->hw_list, 0, VK_WHOLE_SIZE },
+                                           { ssdm_->hw_ctl, 0, VK_WHOLE_SIZE } };
     VkWriteDescriptorSet w[kSsdmBindings]{};
     for (uint32_t i = 0; i < kSsdmBindings; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstSet = ssdm_->set; w[i].dstBinding = i; w[i].descriptorCount = 1;
-        w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[i].pImageInfo = &ii[i];
+        w[i].descriptorType = ssdm_binding_type(i);
+        if (i >= 6 && i <= 8) w[i].pBufferInfo = &bi[i - 6];
+        else w[i].pImageInfo = &ii[i];
     }
     vkUpdateDescriptorSets(device_, kSsdmBindings, w, 0, nullptr);
 }
 
 // Called INSIDE the main pass (render_world, after the static stonework). Returns false and
 // touches nothing when there is nothing to displace in view; otherwise it ends the pass, does
-// its work, begins the pass again (loading its attachments), draws the grid into it and
-// returns true - the caller then binds its own pipeline / set / buffers again.
+// its work, begins the pass again (loading its attachments) and returns true - the caller then
+// binds its own pipeline / set / buffers again.
 bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
     if (!ssdm_active()) return false;
     const FrameView& fv = current_frame_view_;
     const float rw = float(render_extent_.width), rh = float(render_extent_.height);
 
-    // ---- What is in view, and the screen rectangle that holds it ----
-    // (the rectangle of the boxes of the parts within reach, each grown by its amplitude;
-    // a box that reaches behind the camera makes it the whole screen)
+    // ---- What is in view within the reach ----
     std::vector<const CastleMeshGpu*> parts;
-    float x0 = rw, y0 = rh, x1 = 0.0f, y1 = 0.0f;
-    auto grow = [&](const glm::vec3& lo, const glm::vec3& hi) {
-        for (int c = 0; c < 8; ++c) {
-            const glm::vec3 p((c & 1) ? hi.x : lo.x, (c & 2) ? hi.y : lo.y, (c & 4) ? hi.z : lo.z);
-            const glm::vec4 q = fv.vp * glm::vec4(p, 1.0f);
-            if (q.w < 0.05f) { x0 = 0.0f; y0 = 0.0f; x1 = rw; y1 = rh; continue; }
-            const float px = (q.x / q.w * 0.5f + 0.5f) * rw, py = (q.y / q.w * 0.5f + 0.5f) * rh;
-            x0 = std::min(x0, px); x1 = std::max(x1, px);
-            y0 = std::min(y0, py); y1 = std::max(y1, py);
-        }
-    };
     for (const CastleMeshGpu* gp : mesh_parts_now()) {
         const CastleMeshGpu& g = *gp;
         if (g.ssdm <= 0.0f || g.tex_albedo == -3) continue;
         const glm::vec3 lo = g.bmin - glm::vec3(g.ssdm), hi = g.bmax + glm::vec3(g.ssdm);
         if (!aabb_visible(fv.frustum, lo, hi)) continue;
-        const glm::vec3 near_pt = glm::clamp(fv.eye_pos, lo, hi);
-        if (glm::distance(near_pt, fv.eye_pos) > kSsdmFadeEnd) continue;
+        if (glm::distance(glm::clamp(fv.eye_pos, lo, hi), fv.eye_pos) > kSsdmReach) continue;
         parts.push_back(gp);
-        grow(lo, hi);
     }
     std::vector<uint32_t> brushes;
     static const bool no_brushes = std::getenv("VIBE_SSDM_NO_BRUSHES") != nullptr;
@@ -343,21 +416,12 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
             const auto& a = world_.render_aabbs[i];
             const glm::vec3 lo = a.min - glm::vec3(amp), hi = a.max + glm::vec3(amp);
             if (!aabb_visible(fv.frustum, lo, hi)) continue;
-            if (glm::distance(glm::clamp(fv.eye_pos, lo, hi), fv.eye_pos) > kSsdmFadeEnd) continue;
+            if (glm::distance(glm::clamp(fv.eye_pos, lo, hi), fv.eye_pos) > kSsdmReach) continue;
             brushes.push_back(uint32_t(i));
-            grow(lo, hi);
         }
-    // The ground: every terrain pixel near the camera may be displaced, so the whole screen is
-    // the rectangle. Not from high up (nothing of it is within the terrain shader's reach).
+    // The ground: not from high up (nothing of it is within the terrain shader's reach).
     const bool ground = ground_ssdm_active() && rm_air_lod_k_ < 40.0f;
-    if (ground) { x0 = 0.0f; y0 = 0.0f; x1 = rw; y1 = rh; }
     if (parts.empty() && brushes.empty() && !ground) return false;
-    // (two pixels of margin; the grid's last column / row of vertices is the pixel at x1 / y1)
-    const int rx0 = std::clamp(int(std::floor(x0)) - 2, 0, int(render_extent_.width) - 1);
-    const int ry0 = std::clamp(int(std::floor(y0)) - 2, 0, int(render_extent_.height) - 1);
-    const int rx1 = std::clamp(int(std::ceil(x1)) + 2, 0, int(render_extent_.width) - 1);
-    const int ry1 = std::clamp(int(std::ceil(y1)) + 2, 0, int(render_extent_.height) - 1);
-    if (rx1 - rx0 < 1 || ry1 - ry0 < 1) return false;
     if (!init_ssdm()) return false;
     // (destroy_taa() drops these targets with the ones they are sized like, so a missing image
     // here means: first use, or the render size changed and nothing in flight refers to them)
@@ -365,21 +429,21 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
         create_ssdm_targets();
 
     const VkImageLayout RO = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, CA = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    const VkImageLayout UD = VK_IMAGE_LAYOUT_UNDEFINED, DA = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    const VkImageLayout UD = VK_IMAGE_LAYOUT_UNDEFINED, DA = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, GE = VK_IMAGE_LAYOUT_GENERAL;
     const VkImageLayout TS = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, TD = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     const VkImageAspectFlags DEPTH = VK_IMAGE_ASPECT_DEPTH_BIT;
     const VkImageLayout from_c = ssdm_first_use_ ? UD : RO;
+    const uint32_t W = render_extent_.width, H = render_extent_.height;
     VkViewport vp{ 0.0f, 0.0f, rw, rh, 0.0f, 1.0f };
     VkRect2D full{ {0, 0}, render_extent_ };
-    VkRect2D rect{ { rx0, ry0 }, { uint32_t(rx1 - rx0 + 1), uint32_t(ry1 - ry0 + 1) } };
-    auto begin = [&](const VkRenderingAttachmentInfo* cols, uint32_t n, const VkRenderingAttachmentInfo* depth, const VkRect2D& sc) {
+    auto begin = [&](const VkRenderingAttachmentInfo* cols, uint32_t n, const VkRenderingAttachmentInfo* depth) {
         VkRenderingInfo ri{};
         ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         ri.renderArea = full; ri.layerCount = 1;
         ri.colorAttachmentCount = n; ri.pColorAttachments = cols; ri.pDepthAttachment = depth;
         vkCmdBeginRendering(cmd, &ri);
         vkCmdSetViewport(cmd, 0, 1, &vp);
-        vkCmdSetScissor(cmd, 0, 1, &sc);
+        vkCmdSetScissor(cmd, 0, 1, &full);
     };
     auto att = [](VkImageView v, VkImageLayout l, bool clear) {
         VkRenderingAttachmentInfo a{};
@@ -389,32 +453,36 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
         a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         return a;
     };
+    auto dont_care = [](VkImageView v, VkImageLayout l) {
+        VkRenderingAttachmentInfo a{};
+        a.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        a.imageView = v; a.imageLayout = l;
+        a.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        return a;
+    };
 
     // ---- The main pass stops here ----
     vkCmdEndRendering(cmd);
 
-    // ---- 0. Copies of what the grid reads while it writes the live attachments ----
+    // ---- 0. Copies of what the passes read while the live attachments are written ----
     {
         VkImageCopy r{};
         r.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
         r.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        r.srcOffset = { rect.offset.x, rect.offset.y, 0 };
-        r.dstOffset = r.srcOffset;
-        r.extent = { rect.extent.width, rect.extent.height, 1 };
-        const VkImage src[3] = { scene_color_image_, gbuffer0_image_, gbuffer1_image_ };
-        SsdmImage* dst[3] = { &ssdm_->color, &ssdm_->g0, &ssdm_->g1 };
-        for (int i = 0; i < 3; ++i) {
+        r.extent = { W, H, 1 };
+        const VkImage src[4] = { scene_color_image_, gbuffer0_image_, gbuffer1_image_, motion_vec_image_ };
+        SsdmImage* dst[4] = { &ssdm_->color, &ssdm_->g0, &ssdm_->g1, &ssdm_->motion };
+        for (int i = 0; i < 4; ++i) {
             vkinit::transition_image(cmd, src[i], CA, TS);
             vkinit::transition_image(cmd, dst[i]->image, from_c, TD);
             vkCmdCopyImage(cmd, src[i], TS, dst[i]->image, TD, 1, &r);
             vkinit::transition_image(cmd, dst[i]->image, TD, RO);
             vkinit::transition_image(cmd, src[i], TS, CA);
         }
-        // (depth: whole image - a depth copy may not be of a part)
-        VkImageCopy rd{};
+        VkImageCopy rd = r;
         rd.srcSubresource = { DEPTH, 0, 0, 1 };
         rd.dstSubresource = { DEPTH, 0, 0, 1 };
-        rd.extent = { render_extent_.width, render_extent_.height, 1 };
         vkinit::transition_image_aspect(cmd, depth_image_, DA, TS, DEPTH);
         vkinit::transition_image_aspect(cmd, ssdm_->scene_z.image, from_c, TD, DEPTH);
         vkCmdCopyImage(cmd, depth_image_, TS, ssdm_->scene_z.image, TD, 1, &rd);
@@ -439,36 +507,34 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
             prev = T * glm::dmat4(prev_view_proj_) * to_world;
         }
         pc.prev_vp = glm::mat4(prev);
-        pc.size = glm::vec4(rw, rh, 1.0f / rw, 1.0f / rh);
-        pc.rect = glm::vec4(float(rx0), float(ry0), kSsdmJointShade, kGndSsdmMax);
-        const float tan_half = 1.0f / std::max(std::abs(fv.proj[1][1]), 1e-6f);
+        pc.size  = glm::vec4(rw, rh, 1.0f / rw, 1.0f / rh);
+        // linear depth = x / (y - z): from the projection's z row (finite or infinite far plane)
+        pc.depth = glm::vec4(-fv.proj[3][2], -fv.proj[2][2], kSsdmReach, kSsdmAmpScale);
+        const glm::vec3 fwd = -glm::normalize(glm::vec3(fv.inv_view[2]));
+        pc.view  = glm::vec4(fwd, 1.0f / std::max(std::abs(fv.proj[0][0]), 1e-6f));
         static const bool debug = std::getenv("VIBE_SSDM_DEBUG") != nullptr;
-        pc.par = glm::vec4(kSsdmSmooth, kSsdmRefHeight, debug ? 1.0f : 0.0f, 2.0f * tan_half / rh);
-        {   // the sun, as the scene constants have it (descriptors.cpp); its shadow fades out as it sets
-            const float pitch = glm::radians(rt_.sun_pitch_deg), yaw = glm::radians(rt_.sun_yaw_deg);
-            const glm::vec3 sun = glm::normalize(glm::vec3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw)));
-            pc.sun = glm::vec4(sun, kSsdmSunShade * glm::smoothstep(0.0f, 0.12f, sun.y));
-        }
+        pc.misc  = glm::vec4(float(frame_number_ & 1023u), debug ? 1.0f : 0.0f, 0.0f, kGndSsdmMax / (0.2f * kSsdmAmpScale));
     }
 
-    // ---- 1. The height pass ----
+    // ---- 1. The height feed ----
     vkinit::transition_image(cmd, ssdm_->hn.image, from_c, CA);
     {
-        const VkRenderingAttachmentInfo col = att(ssdm_->hn.view, CA, true);
+        VkRenderingAttachmentInfo col = att(ssdm_->hn.view, CA, true);
+        col.clearValue.color = { { 0.0f, 0.0f, 0.0f, -1.0f } };       // (w < 0: nothing fed)
         const VkRenderingAttachmentInfo dep = att(depth_view_, DA, false);
-        begin(&col, 1, &dep, full);
+        begin(&col, 1, &dep);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->height_pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0, 1, &scene_desc_set_, 0, nullptr);
         VkDeviceSize off0 = 0;
         for (const CastleMeshGpu* gp : parts) {
             const CastleMeshGpu& g = *gp;
-            PushConstants pc{};
-            pc.mvp = fv.vp * g.xf;
-            pc.model = g.xf;
-            pc.prev_mvp = pc.mvp;
-            pc.tex_params = glm::vec4(float(g.tex_albedo), float(g.tex_normal), g.uv_scale, 0.0f);
-            pc.grass_params = glm::vec4(g.ssdm, kSsdmFadeStart, kSsdmFadeEnd, 0.0f);
-            vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
+            PushConstants pcm{};
+            pcm.mvp = fv.vp * g.xf;
+            pcm.model = g.xf;
+            pcm.prev_mvp = pcm.mvp;
+            pcm.tex_params = glm::vec4(float(g.tex_albedo), float(g.tex_normal), g.uv_scale, 0.0f);
+            pcm.grass_params = glm::vec4(height_factor(g.ssdm), 0.0f, 0.0f, 0.0f);
+            vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pcm);
             // (the same triangles the colour pass drew: its cluster selection - draw_castle_meshes)
             VkBuffer ib = g.mesh.index_buffer;
             const bool clustered = scl_->ready && g.cl_part >= 0 && size_t(g.cl_part) < scl_->parts.size();
@@ -485,13 +551,13 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
             vkCmdBindIndexBuffer(cmd, cube_mesh_.index_buffer, 0, VK_INDEX_TYPE_UINT32);
             for (uint32_t i : brushes) {
                 const game::Brush& b = world_.brushes[i];
-                PushConstants pc{};
-                pc.mvp = fv.vp * static_brush_models_[i];
-                pc.model = static_brush_models_[i];
-                pc.prev_mvp = pc.mvp;
-                pc.tex_params = glm::vec4(float(b.tex_albedo), float(b.tex_normal), b.uv_scale, 0.0f);
-                pc.grass_params = glm::vec4(brush_ssdm_amplitude(b), kSsdmFadeStart, kSsdmFadeEnd, 1.0f);
-                vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
+                PushConstants pcm{};
+                pcm.mvp = fv.vp * static_brush_models_[i];
+                pcm.model = static_brush_models_[i];
+                pcm.prev_mvp = pcm.mvp;
+                pcm.tex_params = glm::vec4(float(b.tex_albedo), float(b.tex_normal), b.uv_scale, 0.0f);
+                pcm.grass_params = glm::vec4(height_factor(brush_ssdm_amplitude(b)), 0.0f, 0.0f, 1.0f);
+                vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pcm);
                 vkCmdDrawIndexed(cmd, cube_mesh_.index_count, 1, 0, 0, 0);
             }
         }
@@ -505,30 +571,103 @@ bool VulkanEngine::render_ssdm(VkCommandBuffer cmd) {
     }
     vkinit::transition_image(cmd, ssdm_->hn.image, CA, RO);
 
-    // ---- 2. The solve pass ----
-    vkinit::transition_image(cmd, ssdm_->off.image, from_c, CA);
+    // ---- Clears: the rasterizer's words, the hardware list's count, the behind images ----
+    if (ssdm_first_use_)
+        for (SsdmImage* t : { &ssdm_->o_color, &ssdm_->o_g0, &ssdm_->o_g1, &ssdm_->b_mask, &ssdm_->b_tiles, &ssdm_->b_weight })
+            vkinit::transition_image(cmd, t->image, UD, GE);
+    mem_barrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    vkCmdFillBuffer(cmd, ssdm_->raster, 0, VK_WHOLE_SIZE, 0u);
+    vkCmdFillBuffer(cmd, ssdm_->hw_ctl, 0, VK_WHOLE_SIZE, 0u);
     {
-        const VkRenderingAttachmentInfo col = att(ssdm_->off.view, CA, true);
-        begin(&col, 1, nullptr, rect);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->solve_pipeline);
+        const VkClearColorValue z{ { 0.0f, 0.0f, 0.0f, 0.0f } };
+        const VkImageSubresourceRange rr{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        for (SsdmImage* t : { &ssdm_->b_mask, &ssdm_->b_tiles, &ssdm_->b_weight })
+            vkCmdClearColorImage(cmd, t->image, GE, &z, 1, &rr);
+    }
+    mem_barrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+
+    // ---- 2. The compute rasterizer ----
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ssdm_->layout, 0, 1, &ssdm_->set, 0, nullptr);
+    vkCmdPushConstants(cmd, ssdm_->layout, kSsdmStages, 0, sizeof(pc), &pc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ssdm_->raster_pipeline);
+    vkCmdDispatch(cmd, (W + 15) / 16, (H + 15) / 16, 1);
+    mem_barrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ssdm_->hwargs_pipeline);
+    vkCmdDispatch(cmd, 1, 1, 1);
+    mem_barrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+
+    // ---- 3. The hardware path ----
+    {
+        begin(nullptr, 0, nullptr);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->hwraster_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->layout, 0, 1, &ssdm_->set, 0, nullptr);
+        vkCmdPushConstants(cmd, ssdm_->layout, kSsdmStages, 0, sizeof(pc), &pc);
+        vkCmdDrawIndirect(cmd, ssdm_->hw_ctl, 4, 1, sizeof(VkDrawIndirectCommand));
+        vkCmdEndRendering(cmd);
+    }
+    mem_barrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+
+    // ---- 4. The resolve: the displaced copy, the live motion and depth ----
+    {
+        const VkRenderingAttachmentInfo cols[4] = { dont_care(ssdm_->o_color.view, GE), att(motion_vec_view_, CA, false),
+                                                    dont_care(ssdm_->o_g0.view, GE), dont_care(ssdm_->o_g1.view, GE) };
+        const VkRenderingAttachmentInfo dep = att(depth_view_, DA, false);
+        begin(cols, 4, &dep);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->resolve_pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->layout, 0, 1, &ssdm_->set, 0, nullptr);
         vkCmdPushConstants(cmd, ssdm_->layout, kSsdmStages, 0, sizeof(pc), &pc);
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRendering(cmd);
     }
-    vkinit::transition_image(cmd, ssdm_->off.image, CA, RO);
+    mem_barrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+
+    // ---- 5. The behind-material chain ----
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ssdm_->layout, 0, 1, &ssdm_->set, 0, nullptr);
+    vkCmdPushConstants(cmd, ssdm_->layout, kSsdmStages, 0, sizeof(pc), &pc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ssdm_->dilate_pipeline);
+    vkCmdDispatch(cmd, (ssdm_->half.width + 7) / 8, (ssdm_->half.height + 7) / 8, 1);
+    mem_barrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ssdm_->behind_pipeline);
+    vkCmdDispatch(cmd, (W + 7) / 8, (H + 7) / 8, 1);
+    mem_barrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
     ssdm_first_use_ = false;
 
-    // ---- The main pass again, loading what is there; 3. the grid, drawn into it ----
+    // ---- 6. The displaced copy into the live attachments (raw bits: sRGB bytes, 10:10:10:2) ----
+    {
+        VkImageCopy r{};
+        r.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        r.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        r.extent = { W, H, 1 };
+        const VkImage dst[3] = { scene_color_image_, gbuffer0_image_, gbuffer1_image_ };
+        const SsdmImage* src[3] = { &ssdm_->o_color, &ssdm_->o_g0, &ssdm_->o_g1 };
+        for (int i = 0; i < 3; ++i) {
+            vkinit::transition_image(cmd, dst[i], CA, TD);
+            vkCmdCopyImage(cmd, src[i]->image, GE, dst[i], TD, 1, &r);
+            vkinit::transition_image(cmd, dst[i], TD, CA);
+        }
+        mem_barrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    }
+
+    // ---- The main pass again, loading what is there ----
     {
         const VkRenderingAttachmentInfo cols[4] = { att(scene_color_view_, CA, false), att(motion_vec_view_, CA, false),
                                                     att(gbuffer0_view_, CA, false), att(gbuffer1_view_, CA, false) };
         const VkRenderingAttachmentInfo dep = att(depth_view_, DA, false);
-        begin(cols, 4, &dep, full);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->grid_pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ssdm_->layout, 0, 1, &ssdm_->set, 0, nullptr);
-        vkCmdPushConstants(cmd, ssdm_->layout, kSsdmStages, 0, sizeof(pc), &pc);
-        vkCmdDraw(cmd, 6u * uint32_t(rx1 - rx0), uint32_t(ry1 - ry0), 0, 0);
+        begin(cols, 4, &dep);
     }
     return true;
 }

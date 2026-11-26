@@ -37,6 +37,8 @@ layout(push_constant) uniform PC {
 layout(set = 0, binding = 27) uniform sampler2D u_prepass_depth;
 // Full scene depth (gun, props, dynamic objects included) - see descriptors.cpp.
 layout(set = 0, binding = 29) uniform sampler2D u_scene_depth;
+// Light and fog from the froxel fog volume (post_fx.cpp; the setting particle_fog_light).
+#include "fx_fog.glsl"
 
 float h3(vec3 p) {
     p = fract(p * 0.3183099 + 0.1);
@@ -147,6 +149,11 @@ void main() {
     vec3  L    = normalize(scene.sun_direction.xyz);
     vec3  Lu   = normalize(L / S) ;           // sun dir in unit space (approx)
     vec3  sun  = scene.sun_color.rgb * scene.sun_color.a;
+    // The fog volume's light at the middle of the volume: the sun's visibility there (in the
+    // shade of a building or a wood the smoke goes dark) and the lamps' light (fx_fog.glsl).
+    float fvis; vec3 flocal;
+    fxf_light(ro + rd * (0.5 * (t0 + t1)), rd, fvis, flocal);
+    sun *= fvis;
     vec3  sky  = scene.sky_color.rgb;
     vec3  albedo = (g_kind == 2) ? vec3(0.55, 0.47, 0.36)       // dust
                  : (g_kind == 1) ? vec3(0.24, 0.225, 0.21)       // soot smoke
@@ -184,7 +191,7 @@ void main() {
             float powder = 1.0 - exp(-rho * 5.0);
             float skyw = 0.28 + 0.4 * clamp(u.y * 0.5 + 0.5, 0.0, 1.0);
             vec3 lit = albedo * (sun * (sh * mix(0.55, 1.0, powder) * (0.7 + hg * 2.0)) +
-                                 sky * skyw + 0.015);
+                                 sky * skyw + 0.015 + flocal);
             vec3 emit = vec3(0.0);
             if (heat > 0.001) {
                 // Hotter toward the core; billow tops cool first.
@@ -200,5 +207,6 @@ void main() {
         t += dt;
     }
     float alpha = (1.0 - T) * fade;
-    outColor = vec4(acc * fade, alpha);
+    // (its own fog, not that of the surface behind it: fx_fog.glsl)
+    outColor = vec4(fxf_fog(acc * fade, alpha, 0.5 * (t0 + t1)), alpha);
 }

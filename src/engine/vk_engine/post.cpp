@@ -30,30 +30,34 @@ void VulkanEngine::init_compose() {
     init_atmosphere();  // LUTs + aerial volume; compose bindings 5-7 sample them
     {
         VkDescriptorPoolSize sizes[] = {
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kHistorySlots * 9 },
-            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kHistorySlots },
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kHistorySlots * 10 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kHistorySlots * 2 },   // + binding 10: post_fx.cpp's parameter block
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kHistorySlots * 2 },   // + 12, 13: lens_fx.cpp (lens water, shimmer)
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kHistorySlots },       // + 14: lens_fx.cpp's block (moon, lens, shimmer)
         };
         VkDescriptorPoolCreateInfo pci{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
-            .maxSets = kHistorySlots, .poolSizeCount = 2, .pPoolSizes = sizes,
+            .maxSets = kHistorySlots, .poolSizeCount = 4, .pPoolSizes = sizes,
         };
         vk_check(vkCreateDescriptorPool(device_, &pci, nullptr, &compose_->desc_pool),
                  "compose desc pool");
     }
     {
-        VkDescriptorSetLayoutBinding b[10]{};
-        for (int i = 0; i < 10; ++i) {
+        VkDescriptorSetLayoutBinding b[15]{};   // (10: post_fx parameters, 11: local tone mapping fit - post_fx.cpp; 12 - 14: lens_fx.cpp)
+        for (int i = 0; i < 15; ++i) {
             b[i].binding = i;
             b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b[i].descriptorCount = 1;
             b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         }
         b[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;   // exposure SSBO
+        b[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;  // post_fx parameters
+        b[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;  // lens_fx block (moon, lens rain, shimmer)
         VkDescriptorSetLayoutCreateInfo lci{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
-            .bindingCount = 10, .pBindings = b,
+            .bindingCount = 15, .pBindings = b,
         };
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                              &compose_->desc_set_layout),
@@ -222,11 +226,18 @@ void VulkanEngine::rewrite_compose_image_bindings() {
             we[2] = wb;   we[2].dstSet = exposure_sets_[s]; we[2].dstBinding = 2;
             vkUpdateDescriptorSets(device_, 3, we, 0, nullptr);
         }
+        // Post effects: the parameter block (compose 10, exposure 3), the local tone mapping
+        // fit (compose 11), and post_fx's own copies of this set (post_fx.cpp).
+        post_fx_bind_compose(s, hist_src);
     }
+    // Rain on the lens, heat shimmer, the moon (compose 12 - 14; lens_fx.cpp).
+    write_lens_fx_compose_bindings();
 }
 
 void VulkanEngine::destroy_compose() {
     destroy_exposure();
+    destroy_post_fx();
+    destroy_lens_fx();
     destroy_atmosphere();
     if (sky_fill_pipeline_)        vkDestroyPipeline(device_, sky_fill_pipeline_, nullptr);
     if (sun_->shafts_pipeline)      vkDestroyPipeline(device_, sun_->shafts_pipeline, nullptr);
@@ -254,6 +265,7 @@ void VulkanEngine::destroy_compose() {
 // Auto-exposure (shaders/exposure.comp)
 // ---------------------------------------------------------------------
 void VulkanEngine::init_exposure() {
+    init_post_fx();   // the parameter block the exposure pass writes into (post_fx.cpp)
     {
         VkBufferCreateInfo bci{};
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -268,22 +280,22 @@ void VulkanEngine::init_exposure() {
         });
     }
     {
-        VkDescriptorSetLayoutBinding b[3]{};
-        for (int i = 0; i < 3; ++i) {
+        VkDescriptorSetLayoutBinding b[4]{};   // (3: post_fx parameters)
+        for (int i = 0; i < 4; ++i) {
             b[i].binding = uint32_t(i);
-            b[i].descriptorType = (i == 2) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+            b[i].descriptorType = (i >= 2) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
                                            : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b[i].descriptorCount = 1;
             b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        lci.bindingCount = 3; lci.pBindings = b;
+        lci.bindingCount = 4; lci.pBindings = b;
         vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &exposure_set_layout_),
                  "exposure set layout");
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kHistorySlots * 2 },
-            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kHistorySlots },
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kHistorySlots * 2 },
         };
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -332,7 +344,9 @@ void VulkanEngine::destroy_exposure() {
 }
 
 void VulkanEngine::dispatch_exposure(VkCommandBuffer cmd) {
-    if (!exposure_pipeline_ || rt_.auto_exposure_strength <= 0.0f) return;
+    // (always metered: the AgX look and the glare threshold use the average even with auto
+    // exposure off. One workgroup.)
+    if (!exposure_pipeline_) return;
     const double now = glfwGetTime();
     float dt = exposure_last_t_ > 0.0 ? float(now - exposure_last_t_) : 0.0f;
     exposure_last_t_ = now;

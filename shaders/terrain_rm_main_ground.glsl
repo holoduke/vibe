@@ -566,6 +566,18 @@
                 // Fine grain of the snow surface (it is never a mirror-smooth sheet).
                 vec2 gq = pos.xz * 38.0;
                 n_s = normalize(n_s + vec3(tile_noise2(pos.xz, 38.0, vec2(0.0)) - 0.5, 0.0, tile_noise2(pos.xz, 38.0, vec2(17.0)) - 0.5) * 0.10 * (1.0 - smoothstep(4.0, 22.0, t)));
+                // Tracks (post_fx.cpp): the snow's normal follows the ruts and their rims - the
+                // displacement alone barely showed on a white sheet (its normal came from the
+                // landscape's height, which knows nothing of them).
+                if (t < 40.0 && pfx_trk.d.trk_on > 0.5) {
+                    vec2 tr0 = track_dr(pos.xz);
+                    if (tr0.x + tr0.y > 1e-4) {
+                        const float te = 0.05;
+                        float fx0 = foot_depth(pos.xz - vec2(te, 0.0)), fx1 = foot_depth(pos.xz + vec2(te, 0.0));
+                        float fz0 = foot_depth(pos.xz - vec2(0.0, te)), fz1 = foot_depth(pos.xz + vec2(0.0, te));
+                        n_s = normalize(n_s + vec3(fx1 - fx0, 0.0, fz1 - fz0) * (0.5 / te));
+                    }
+                }
                 nor = normalize(mix(nor, n_s, snow_cov));
             }
         }

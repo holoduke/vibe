@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <VkBootstrap.h>
 #include "engine/highway.h"
+#include "engine/water_course.h"
 #include "engine/vk_engine/river_stream.h"
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -236,8 +237,10 @@ void VulkanEngine::loop_test_input(InputFrame& in, float frame_dt, bool autodemo
             // With --frames the time step is fixed, so a given frame is the same in every run.
             static const char* test_flight = std::getenv("VIBE_TEST_FLIGHT");
             if (test_flight) {
-                static float fy0 = 0.0f, fy1 = 0.0f, fn = 1.0f, fyaw = 0.0f, fyaw0 = 0.0f; static bool fi = false;
-                if (!fi) { fi = true; std::sscanf(test_flight, "%f,%f,%f,%f", &fy0, &fy1, &fn, &fyaw); fyaw0 = player_.yaw; }
+                static float fy0 = 0.0f, fy1 = 0.0f, fn = 1.0f, fyaw = 0.0f, fyaw0 = 0.0f, fmove = 0.0f; static bool fi = false;
+                if (!fi) { fi = true; std::sscanf(test_flight, "%f,%f,%f,%f,%f", &fy0, &fy1, &fn, &fyaw, &fmove); fyaw0 = player_.yaw; }
+                // (a fifth number: metres a frame forward, the way the camera first looked - ground_fx's capture strips)
+                { const float mv = fmove * std::max(float(frame_number_) - 60.0f, 0.0f); player_.position.x += std::sin(fyaw0) * mv; player_.position.z -= std::cos(fyaw0) * mv; }
                 const float k = glm::clamp((float(frame_number_) - 60.0f) / std::max(fn, 1.0f), 0.0f, 1.0f);
                 player_.position.y = std::exp(glm::mix(std::log(std::max(fy0, 1.0f)), std::log(std::max(fy1, 1.0f)), k));
                 player_.yaw = fyaw0 + fyaw * std::max(float(frame_number_) - 60.0f, 0.0f);
@@ -582,10 +585,11 @@ void VulkanEngine::loop_simulate(InputFrame& in, float frame_dt) {
             // feet no longer carry the body) and ends when it drops
             // back to the waist; in between the player wades.
             {
-                const float wl = rt_.water_level;
+                const float wl = water_surface_y(player_.position.x, player_.position.z);     // (the sea's swell lifts and drops it)
                 const float feet0 = player_.position.y - 0.9f;
                 // Winter: the lake is frozen - no wading or swimming, the ice carries (below).
-                const bool frozen = season_w_[3] > 0.6f;
+                // (the stream runs on through the winter: the water shader draws no ice on it)
+                const bool frozen = season_w_[3] > 0.6f && !(wc::stream_surface(glm::vec2(player_.position.x, player_.position.z), rt_.water_level) > rt_.water_level + 0.005f);
                 const bool open_w = !frozen && !fly_mode_ && water_at(player_.position.x, player_.position.z);
                 const float sub = open_w ? glm::clamp((wl - feet0) / 1.8f, 0.0f, 1.0f) : 0.0f;
                 const bool was_swim = player_swimming_;
@@ -663,6 +667,17 @@ void VulkanEngine::loop_simulate(InputFrame& in, float frame_dt) {
             game::Player ref_player = player_;
             { CPU_SCOPE("+player");
             game::update_player(player_, pin, tick_aabbs_, kFixedDt, tick_static_count_); }
+            // The current carries a swimmer downstream (the river's and the stream's: water_fx.cpp
+            // water_river_flow, the CPU twin of what the water shader draws); a wader is pushed by
+            // the part of the body that is in it.
+            if (rt_.water_enabled && !fly_mode_ && (player_swimming_ || pin.wade > 0.0f)) {
+                const glm::vec2 fl = water_flow_at(player_.position.x, player_.position.z, 1.2f);     // (the shallow-water solver's current round the body where it runs: water_solver.cpp)
+                const float k = player_swimming_ ? 0.9f : 0.35f * pin.wade;
+                // (through the colliders: the current must not carry a body into a boulder or a pier)
+                if (fl.x != 0.0f || fl.y != 0.0f)
+                    player_.position = collision::slide_move(player_.shape(), player_.position, glm::vec3(fl.x, 0.0f, fl.y) * k,
+                                                             tick_aabbs_, kFixedDt, 2, tick_static_count_).position;
+            }
             // Frozen lake: the ice is a floor at the water level.
             if (season_w_[3] > 0.6f && !fly_mode_ && rt_.water_enabled &&
                 player_.position.y - 0.9f < rt_.water_level + 0.02f &&

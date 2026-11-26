@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 namespace vibe {
@@ -85,6 +86,31 @@ float VulkanEngine::cloud_shadow_at(glm::vec3 wp) const {
     return 1.0f - k * glm::clamp(opac, 0.0f, 1.0f);
 }
 
+// The wind on the water (scene_ubo.glsl water_wind; terrain_rm_water.glsl, water_fx.cpp):
+// xy = the way it blows, z = speed (m/s), w = the swell's height scale. The speed follows the
+// weather's wind amount (clear 0.1 -> 2.8 m/s, cloudy 0.25 -> 6, rain 0.45 -> 11, a storm 1.0
+// -> 28); without the weather a moderate 7 m/s. The direction is the clouds' drift
+// (1, 0.35), veering slowly by up to about 25 degrees.
+// VIBE_TEST_WATER_WIND=<m/s>[,<deg>]: that speed (and direction, degrees from +x toward +z).
+// (Not VIBE_TEST_WIND: that one stirs a vortex into the wind field, wind_fluid.cpp.)
+static glm::vec4 water_wind_now(bool weather_on, float wind_k, float t) {
+    float speed = weather_on ? 1.5f + 26.5f * std::pow(glm::clamp(wind_k, 0.0f, 1.0f), 1.3f) : 7.0f;
+    float ang = 0.337f + 0.32f * std::sin(t * 0.013f) + 0.12f * std::sin(t * 0.051f + 1.1f);
+    static const char* test = std::getenv("VIBE_TEST_WATER_WIND");
+    if (test) {
+        float s = -1.0f, deg = -1000.0f;
+        if (std::sscanf(test, "%f,%f", &s, &deg) >= 1 && s >= 0.0f) speed = s;
+        if (deg > -999.0f) ang = glm::radians(deg);
+    }
+    // The swell's scale: its five waves (A 13 / 8 / 7 / 2.5 / 2 m, crest 1.3 exp(sin p - 1) - 0.3) have a
+    // standard deviation of 6.72 S m, i.e. Hs = 26.9 S. A fully developed sea has Hs = 0.21 U^2 / g
+    // (Pierson-Moskowitz: 0.8 m at 6 m/s, 7 m at 18); the swell carries 90 % of it, the FFT
+    // cascades the rest (water_sim.cpp). (The reference's pow(U / 30, 2.2) gave 8.7 m at 18 m/s
+    // and 27 m at 30.)
+    const float S = std::min(0.9f * 0.21f * speed * speed / 9.81f / 26.9f, 1.0f);
+    return glm::vec4(std::cos(ang), std::sin(ang), speed, S);
+}
+
 // Weather types: cover, overcast, rain, thunder, wind, fog, snow on the
 // ground, snowfall, darkness; and the hour the type implies (-1 = any).
 const VulkanEngine::WxPreset VulkanEngine::kWxPresets[VulkanEngine::kWxPresetCount] = {
@@ -118,6 +144,11 @@ void VulkanEngine::apply_environment(float dt) {
     const bool want = rt_.day_night_enabled || rt_.weather_enabled;
     // Back to the user's own values first; everything below derives from them.
     if (env_->applied) { env_swap_base(); env_->applied = false; }
+    env_->water_wind = water_wind_now(rt_.weather_enabled, wx_cur_.wind, anim_time_);
+    // (held with the animation clock by VIBE_TEST_ANIM_TIME: with the clock held and the drift running
+    //  on, the water's patterns still moved and two test frames could not be compared)
+    static const bool held_clock = std::getenv("VIBE_TEST_ANIM_TIME") != nullptr;
+    if (!held_clock) env_->water_drift += glm::vec2(env_->water_wind) * glm::clamp(dt, 0.0f, 0.1f);
     if (!want) {
         env_->night = -1.0f; env_->rain = 0.0f; env_->snow = 0.0f; env_->snowfall = 0.0f; env_->wet = std::max(0.0f, env_->wet - dt / 60.0f);
         env_->golden = 1.0f; env_->sun_elev = -1000.0f; env_->sky_real = false;
@@ -323,6 +354,15 @@ void VulkanEngine::apply_environment(float dt) {
                                glm::smoothstep(-1.0f, 10.0f, em);
         env_->moon = moon_sky;
         env_->sun_elev = e;
+        {   // (the same yaw convention as the light's below: base yaw + azimuth)
+            auto dir_of = [](float pitch_deg, float yaw_deg) {
+                const float p_ = glm::radians(pitch_deg), y_ = glm::radians(yaw_deg);
+                return glm::vec3(std::sin(y_) * std::cos(p_), std::sin(p_), std::cos(y_) * std::cos(p_));
+            };
+            env_->sun_dir = dir_of(e, base.sun_yaw_deg + az);
+            env_->moon_dir = dir_of(em, base.sun_yaw_deg + azm);
+        }
+        env_->light_is_sun = e > 0.6f;
         if (e > 0.6f) {
             // Day and twilight: the real sun, also below the horizon - the
             // atmosphere LUT then renders dusk on its own. Direct light dies
@@ -574,7 +614,7 @@ void VulkanEngine::update_footprints(float dt) {
 // seam and without a loop API.
 void VulkanEngine::tick_rain_audio(float rain) {
     if (!audio_) return;
-    const bool under = rt_.water_enabled && current_frame_view_.eye_pos.y < rt_.water_level;
+    const bool under = rt_.water_enabled && current_frame_view_.eye_pos.y < water_surface_y(current_frame_view_.eye_pos.x, current_frame_view_.eye_pos.z);
     const float vol = under ? 0.0f : glm::clamp(rain, 0.0f, 1.0f) * 0.9f;
     const glm::vec3 pos = player_.eye_position() + glm::vec3(0.0f, 1.0f, 0.0f);
     if (vol < 0.01f) {

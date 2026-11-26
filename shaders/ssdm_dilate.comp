@@ -1,0 +1,42 @@
+#version 460
+// Screen-space displacement - spreading the behind-material mask: our code for the reference
+// game's SSDM_DilateBehindMaterialsCS. Half resolution, one group per marked 8 x 8 tile: per
+// texel the mean of the mask over 5 x 5 taps 3 texels apart, counting a tap only where its
+// depth lies within a narrow band in front of this one (a rotating sub-pixel of the full-res
+// depth, four frames round), times 1.75 -> the blend weight ssdm_behind.comp uses.
+#extension GL_GOOGLE_include_directive : require
+#define SSDM_BEHIND_IMAGES
+#include "ssdm_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+float mask_at(ivec2 h) {
+    if (any(lessThan(h, ivec2(0))) || any(greaterThanEqual(h, imageSize(o_behind_mask)))) return 0.0;
+    return imageLoad(o_behind_mask, h).r;
+}
+
+void main() {
+    ivec2 x = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(x, imageSize(o_behind_weight)))) return;
+    if (imageLoad(o_behind_tiles, x >> 3).r == 0u) return;
+    uint  fr = uint(pc.misc.x);
+    ivec2 j  = ivec2(int(fr & 1u), int((fr >> 1) & 1u));
+    float d0 = ssdm_depth_at((x << 1) | j);
+    if (d0 >= 1.0 || d0 == 0.0) return;
+    float z0 = ssdm_lin(d0);
+    float sum = 0.0, cnt = 0.0;
+    for (int b = -2; b <= 2; ++b)
+        for (int a = -2; a <= 2; ++a) {
+            ivec2 o  = ivec2(a * 3, b * 3);
+            ivec2 h  = x + o;
+            float m  = mask_at(h);
+            float zt = ssdm_lin(ssdm_depth_at((h << 1) | j));
+            float dz = zt - z0;
+            float rr = sqrt(float(o.x * o.x + o.y * o.y)) * z0;
+            float ok = (rr * -0.01 < dz && dz < rr * 0.0002) ? 1.0 : 0.0;
+            sum += ok * m;
+            cnt += ok;
+        }
+    float w = clamp(sum * 1.75 * (1.0 / max(1e-06, cnt)), 0.0, 1.0);
+    if (w > 0.0) imageStore(o_behind_weight, x, vec4(w));
+}

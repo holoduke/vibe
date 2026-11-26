@@ -18,7 +18,10 @@
 #include <vector>
 
 namespace vibe {
+void river_pier_add(glm::vec2 p, float half_width);      // (vk_engine/water_fx.cpp: the obstacles the current parts round)
+void water_boulder_add(glm::vec2 p, float ground, float r);     // (vk_engine/water_fx.cpp: their colliders)
 #include "engine/scatter_plant_meshes.inl"   // mesh builders for the small plants: ferns, flowers, reeds, clover, mushrooms, grass tufts, water lilies, the rock
+#include "engine/scatter_debris_meshes.inl"  // ... and the small debris placed on the GPU (twigs, leaves, pebbles, needles, cones, litter, gravel, stones)
 
 ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                          uint32_t queue_family, const Heightmap& hm,
@@ -105,6 +108,88 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
         inst.push_back(si);
     }
 
+    // ---- Boulders in the water: rounded stones 0.4 - 2.5 m (the lumpy rock above, larger), part
+    // under water, in clusters: across the lip of each of the stream's steps (the water pours
+    // in tongues between them), round the foot of each step, scattered down its runs; and along
+    // the shallows by the river's banks in lines. By rule, the same on every PC. Each is an
+    // obstacle the current parts round (water_fx.cpp river_pier_add: the water shader's pillow,
+    // wake and eddies), and the larger ones (r >= 0.4) are solid (water_boulder_add).
+    {
+        int nb = 0;
+        uint32_t bs = 0xB0D1Du;
+        auto bu = [&bs]() { bs ^= bs << 13; bs ^= bs >> 17; bs ^= bs << 5; return float(bs >> 8) / 16777216.0f; };
+        auto boulder = [&](glm::vec2 p, float r, float water_y) {
+            if (std::abs(p.x) > 1000.0f || std::abs(p.y) > 1000.0f) return;      // (the home tile: not only the scattered stones' square)
+            const float g = h_at(p.x, p.y);
+            if (water_y - g > 1.9f * r) r = (std::min)((water_y - g) / 1.6f, 1.25f);     // (big enough to show: or under water, as some are)
+            ScatterInstance si{};
+            si.pos_scale = glm::vec4(p.x, g - r * 0.35f, p.y, r);
+            const float tint = 0.55f + 0.3f * bu();
+            si.rot_tint = glm::vec4(bu() * glm::two_pi<float>(), tint * 0.95f, tint * 0.97f, tint);
+            inst.push_back(si);
+            river_pier_add(p, r * 0.9f);
+            water_boulder_add(p, g, r);
+            ++nb;
+        };
+        const wc::Course& st = wc::stream(params.water_level);
+        for (size_t k = 0; st.ok && k + 1 < st.pts.size(); ++k) {
+            const glm::vec4 A = st.pts[k], B = st.pts[k + 1];
+            const glm::vec2 a(A), b(B), d = glm::normalize(b - a), nrm(-d.y, d.x);
+            const float L = glm::distance(a, b), hw = std::abs(B.w);
+            if (B.w < 0.0f) {
+                // the lip: 3 - 5 stones across, with gaps between them
+                const int n = 3 + int(bu() * 2.99f);
+                for (int i = 0; i < n; ++i) {
+                    const float lat = hw * (-1.1f + 2.2f * (float(i) + 0.3f + 0.4f * bu()) / float(n));
+                    boulder(a + d * (L - 1.6f + 1.2f * bu()) + nrm * lat, 0.25f + 0.45f * bu(), A.z);
+                }
+                // the foot: 2 - 3 larger ones at the sides of the pool
+                const int m = 2 + int(bu() * 1.99f);
+                for (int i = 0; i < m; ++i)
+                    boulder(b + d * (1.0f + 4.0f * bu()) + nrm * (hw * (bu() < 0.5f ? -1.0f : 1.0f) * (0.4f + 0.6f * bu())), 0.4f + 0.8f * bu(), B.z);
+            } else if (A.z - B.z > 0.2f) {
+                // (more on a steep sheet: they break it into white water)
+                const bool steep = (A.z - B.z) / (std::max)(L, 1.0f) > 0.08f;
+                const int n = steep ? 3 + int(bu() * 3.99f) : 1 + int(bu() * 2.99f);
+                for (int i = 0; i < n; ++i) {
+                    const float t = bu();
+                    boulder(a + d * (L * t) + nrm * (hw * (bu() * 2.0f - 1.0f) * 0.9f), 0.25f + 0.5f * bu(), glm::mix(A.z, B.z, t));
+                }
+            }
+        }
+        // the river: every ~45 m, by one bank, a line of 3 - 6 where the water is 0.4 - 1.3 m deep
+        {
+            const glm::vec2* rp = nullptr;
+            const int rn = world_river_course(rp);
+            auto world_of = [](glm::vec2 q) { glm::vec2 w = q; for (int k = 0; k < 6; ++k) w = q - world_river_wander(w); return w; };
+            float s = 0.0f;
+            for (int i = 0; i + 1 < rn; ++i) {
+                const glm::vec2 a = rp[i], b = rp[i + 1];
+                const float len = glm::distance(a, b);
+                const glm::vec2 qd = (b - a) / len, nrm(-qd.y, qd.x);
+                for (float u = 20.0f; u < len; u += 45.0f) {
+                    if (s + u < 150.0f || bu() > 0.6f) continue;
+                    const glm::vec2 q = a + qd * u;
+                    if (glm::distance(world_of(q), glm::vec2(43.4f, 297.4f)) < 40.0f) continue;     // (the stone bridge's pool)
+                    const float sd = bu() < 0.5f ? -1.0f : 1.0f;
+                    // out from the channel's edge until the water is shallow enough
+                    float off = 6.0f;
+                    for (; off < 16.0f; off += 0.7f) { const glm::vec2 w = world_of(q + nrm * (sd * off)); const float dpt = params.water_level - h_at(w.x, w.y); if (dpt < 1.3f) break; }
+                    if (off >= 16.0f) continue;
+                    const int n = 3 + int(bu() * 3.99f);
+                    for (int j = 0; j < n; ++j) {
+                        const glm::vec2 w = world_of(q + qd * (float(j) * 2.6f + bu()) + nrm * (sd * (off + bu() * 1.2f)));
+                        const float dpt = params.water_level - h_at(w.x, w.y);
+                        if (dpt < 0.2f || dpt > 1.6f) continue;
+                        boulder(w, 0.35f + 0.6f * bu(), params.water_level);
+                    }
+                }
+                s += len;
+            }
+        }
+        log::infof("[scatter] %d boulders in the water (the stream's steps and runs, the river's shallows)", nb);
+    }
+
     // ---- Small plants: ferns + three flower species ----
     {
         std::vector<Vertex> pv; std::vector<uint32_t> pi;
@@ -132,6 +217,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
             case 17: build_grass_turf(pv, pi); break;
             case 18: build_meadow(pv, pi); break;
             case 16: build_water_lily(pv, pi); break;
+            case 19: case 20: case 21: case 22: case 23: case 24: case 25: case 26: build_debris(pv, pi, sp - 19); break;
             case 6: build_herb(pv, pi, { 0.66f, 4, 4, 0.20f, 0.040f, true, 0, 0.10f, 5, 0.030f, 0.45f, 0.95f, 12, 0.48f, 137.5f, 58.0f, 0.0f, 13u }); break;  // lupin: palmate leaves, dense spike
             }
             s.plant_mesh[sp] = create_mesh_from_data(device, alloc, queue, queue_family,

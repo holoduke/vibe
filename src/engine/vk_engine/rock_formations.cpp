@@ -28,6 +28,7 @@
 // caller says no (buildings, the car park, the castle), or through another formation.
 #include "engine/vk_engine/rock_formations.h"
 #include "engine/highway.h"
+#include "engine/water_course.h"
 #include "engine/log.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -38,6 +39,10 @@
 #include <cstdlib>
 #include <cstring>
 
+// (engine/terrain.h: the river's course - declared here, that header brings in the Windows
+//  macros min and max that the code below does not expect)
+namespace vibe { int world_river_course(const glm::vec2*& pts); glm::vec2 world_river_wander(glm::vec2 wp); }
+
 namespace vibe::rockf {
 
 namespace {
@@ -45,7 +50,7 @@ namespace {
 std::vector<Piece> g_kit;
 std::vector<Inst>  g_inst;
 bool g_placed = false;
-int  g_why[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+int  g_why[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 uint32_t hash_u(uint32_t a, uint32_t b, uint32_t c) {
     uint32_t h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u) * 0x85EBCA6Bu ^ (c + 0x165667B1u) * 0xC2B2AE35u;
@@ -537,6 +542,108 @@ glm::mat4 transform(const Inst& in) {
     return glm::scale(M, glm::vec3(in.scale));
 }
 
+// ROCKS IN THE WATER: boulders and small piles standing in the stream's rapids and below its
+// steps, and some in the river near its banks (never in the middle: a swimmer always has a
+// way). By rule along the courses (engine/water_course.h; the river's polyline and its bend),
+// the same on every PC. The water shader parts the current round each (water_fx.cpp
+// river_piers: pillow, wake, eddies). Sized so that they stand 0.3 - 1.2 m out of the water.
+void place_water_rocks(const Env& env) {
+    const int pile = find("pile"), outcrop = find("outcrop");
+    if (pile < 0 && outcrop < 0) return;
+    auto add = [&](int piece, glm::vec2 c, float water_y, float out_of_water, float max_r, float yaw) {
+        if (piece < 0) return false;
+        const Piece& P = g_kit[size_t(piece)];
+        const float bed = env.ground(c.x, c.y);
+        const float depth = water_y - bed;
+        if (depth < 0.15f) return false;
+        const float sink = 0.25f;
+        float sc = (depth + out_of_water + sink) / std::max(P.bmax.y, 0.1f);
+        sc = std::min(sc, max_r / std::max(radius_of(P, 1.0f), 0.1f));
+        if (sc < 0.08f) return false;
+        if (sc * P.bmax.y - sink - 0.1f - depth < 0.12f) return false;         // (it must stand out of the water: too deep here for its size)
+        // (stood on the lowest ground under it, it may end under water: then a size larger, as
+        //  far as it may be, and then not here)
+        const float sc_max = max_r / std::max(radius_of(P, 1.0f), 0.1f);
+        for (int tries = 0; tries < 3; ++tries) {
+            if (!try_add(env, piece, c, yaw, sc, 8, sink / sc, true, 1000.0f)) return false;
+            const float top = g_inst.back().pos.y + sc * P.bmax.y;
+            if (top >= water_y + 0.15f) return true;
+            g_inst.pop_back(); --g_why[8];
+            const float sc2 = sc + (water_y + 0.15f + out_of_water - top) / std::max(P.bmax.y, 0.1f);
+            if (sc2 > sc_max) return false;
+            sc = sc2;
+        }
+        return false;
+    };
+    // The same, tried from `c` outward along `side` (toward a bank) until the water is shallow
+    // enough for a rock of that size to stand out of it.
+    auto add_toward_bank = [&](int piece, glm::vec2 c, glm::vec2 side, float span, float water_y, float out_of_water, float max_r, float yaw) {
+        for (int k = 0; k <= 8; ++k)
+            if (add(piece, c + side * (span * float(k) / 8.0f), water_y, out_of_water, max_r, yaw)) return true;
+        return false;
+    };
+    // The stream: below every step a boulder or two, and now and then one in a run.
+    const wc::Course& st = wc::stream(env.water);
+    if (st.ok) {
+        for (size_t i = 1; i + 1 < st.pts.size(); ++i) {
+            const glm::vec4 A = st.pts[i - 1], B = st.pts[i], C = st.pts[i + 1];
+            const glm::vec2 d = glm::normalize(glm::vec2(C) - glm::vec2(B)), nrm(-d.y, d.x);
+            Rng r(hash_u(uint32_t(i), 0x57AE11u, 9u));
+            const float drop_in = A.z - B.z, run = (B.z - C.z) / std::max(glm::distance(glm::vec2(B), glm::vec2(C)), 1.0f);
+            const float hw = std::abs(B.w);
+            if (B.w < 0.0f && drop_in > 0.05f) {      // (a step ends at B: water_course.h)
+                const int n = 1 + (r() < 0.5f ? 1 : 0);
+                for (int k = 0; k < n; ++k) {
+                    const float sd = r() < 0.5f ? -1.0f : 1.0f;
+                    const glm::vec2 c = glm::vec2(B) + d * r.in(1.2f, 3.5f) + nrm * (sd * hw * r.in(0.0f, 0.5f));
+                    add_toward_bank(r() < 0.6f ? outcrop : pile, c, nrm * sd, hw * 1.3f, B.z, r.in(0.2f, 0.7f), std::min(0.6f * hw + 0.8f, 2.6f), r.in(-3.14f, 3.14f));
+                }
+            } else if (run > 0.01f && r() < 0.5f) {
+                const float sd = r() < 0.5f ? -1.0f : 1.0f;
+                const glm::vec2 c = glm::vec2(B) + d * r.in(0.0f, 4.0f) + nrm * (sd * hw * r.in(0.3f, 0.6f));
+                add_toward_bank(outcrop, c, nrm * sd, hw * 1.0f, B.z, r.in(0.15f, 0.5f), std::min(0.55f * hw + 0.6f, 2.2f), r.in(-3.14f, 3.14f));
+            }
+        }
+    }
+    // The river: every ~50 m a chance of one near a bank (the outer third of its channel), more
+    // where it is narrow; none within 35 m of a bridge or the castle's lake.
+    {
+        const glm::vec2* rp = nullptr;
+        const int rn = world_river_course(rp);
+        auto world_of = [](glm::vec2 q) { glm::vec2 w = q; for (int k = 0; k < 6; ++k) w = q - world_river_wander(w); return w; };
+        float s = 0.0f;
+        int idx = 0;
+        for (int i = 0; i + 1 < rn; ++i) {
+            const glm::vec2 a = rp[i], b = rp[i + 1];
+            const float len = glm::distance(a, b);
+            for (float u = std::fmod(50.0f - std::fmod(s, 50.0f), 50.0f); u < len; u += 50.0f, ++idx) {
+                const float along = s + u;
+                if (along < 140.0f || along > 2050.0f) continue;              // (not on home's lake; not in the tidal mouth)
+                Rng r(hash_u(uint32_t(idx), 0x41BE2u, 17u));
+                if (r() > 0.55f) continue;
+                const glm::vec2 qd = (b - a) / len;
+                const glm::vec2 q = a + qd * u;
+                const glm::vec2 w = world_of(q);
+                if (glm::distance(w, glm::vec2(43.4f, 297.4f)) < 45.0f) continue;      // (the stone bridge and its pool)
+                bool near_bridge = false;
+                for (float ox = -35.0f; ox <= 35.0f && !near_bridge; ox += 7.0f)
+                    for (float oz = -35.0f; oz <= 35.0f && !near_bridge; oz += 7.0f) { float dk; if (highway::deck(w.x + ox, w.y + oz, dk)) near_bridge = true; }
+                if (near_bridge) continue;
+                const float hw = 7.0f + 9.0f * glm::smoothstep(1450.0f, 1900.0f, w.x);
+                const glm::vec2 nrm(-qd.y, qd.x);
+                // (in the bent coordinate: across the channel, then back to the world)
+                const float sd = r() < 0.5f ? -1.0f : 1.0f;
+                const glm::vec2 c = world_of(q + nrm * (sd * hw * r.in(0.85f, 1.0f)));
+                const glm::vec2 out = glm::normalize(world_of(q + nrm * (sd * (hw + 4.0f))) - world_of(q + nrm * (sd * hw)));
+                const int n = r() < 0.35f ? 2 : 1;
+                for (int k = 0; k < n; ++k)
+                    add_toward_bank(r() < 0.5f ? outcrop : pile, c + glm::vec2(r.in(-2.5f, 2.5f), r.in(-2.5f, 2.5f)) * float(k), out, 9.0f, env.water, r.in(0.3f, 1.0f), r.in(1.8f, 3.0f), r.in(-3.14f, 3.14f));
+            }
+            s += len;
+        }
+    }
+}
+
 void place(const Env& env) {
     g_placed = true;
     g_inst.clear();
@@ -561,10 +668,12 @@ void place(const Env& env) {
     if (!std::getenv("VIBE_NO_LANE_FORMATIONS")) place_lanes(env);
     if (!std::getenv("VIBE_NO_CLIFF_FORMATIONS")) place_cliffs(env);
     if (!std::getenv("VIBE_NO_SEA_CLIFF")) place_coast(env);
+    if (!std::getenv("VIBE_NO_WATER_ROCKS")) place_water_rocks(env);
     log::infof("[rocks] %zu formations: %d at cuts beside a road, %d at the foot of a bank, %d beside a road, %d gates, %d on cliffs, %d in crag bands, %d of the sea cliff, %d in the test row",
                g_inst.size(), g_why[0], g_why[1], g_why[2], g_why[3], g_why[4], g_why[7], g_why[6], g_why[5]);
+    log::infof("[rocks] %d in the water (the stream's steps and rapids, the river's banks)", g_why[8]);
     if (std::getenv("VIBE_LOG_ROCKS")) {
-        static const char* why[8] = { "cut", "foot", "roadside", "gate", "cliff", "test", "seacliff", "band" };
+        static const char* why[9] = { "cut", "foot", "roadside", "gate", "cliff", "test", "seacliff", "band", "water" };
         for (const Inst& in : g_inst)
             log::infof("[rocks] %-8s %-8s at (%.1f, %.1f, %.1f) yaw %.2f size %.2f: %.1f x %.1f m, %.1f m high", why[in.why], g_kit[size_t(in.piece)].name.c_str(),
                        double(in.pos.x), double(in.pos.y), double(in.pos.z), double(in.yaw), double(in.scale),

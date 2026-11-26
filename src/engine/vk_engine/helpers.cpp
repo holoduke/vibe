@@ -52,7 +52,16 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 9696 (lamp_lights[8] -> [24]: a row of street lamps lights the road far ahead).
 //     → 9760 (flower_field[4]: the flowering meadow's fields, for the ground's far colour).
 //     → 9824 (hw_jn[4]: the junction of a side road with a highway).
-static_assert(sizeof(SceneUBO) == 9824, "scene ubo layout");
+//     → 9920 (lp_flags, lp_params, lp_vp: the lighting ports, light_port.cpp).
+//     → 9952 (water_wind, water_swell: the wind on the water, the swell at the eye).
+//     → 10080 (river_piers[8]: foam behind the piers in the river).
+//     → 11248 (stream_info, stream_box[8], stream_pts[64]: the stream, engine/water_course.h).
+//     → 11504 (river_piers[8] -> [24]: the rocks in the water join the piers).
+//     → 11520 (water_body: the player's body, which the lilies part round).
+//     → 11584 (water_fft, water_fft_L, water_rip, water_flags: the wind sea's cascades, the ripple field, water_sim.cpp).
+//     → 11600 (water_sun: the sun's disc through the clouds, for the water's glints).
+//     → 11632 (water_sw, water_sw2: the shallow-water solver's window, water_solver.cpp).
+static_assert(sizeof(SceneUBO) == 11632, "scene ubo layout");
 
 RtFuncs g_rt;
 

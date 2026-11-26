@@ -44,6 +44,7 @@ layout(set = 0, binding = 32) uniform sampler2D u_cloud_shadow;   // sunlight th
 #include "scene_ubo.glsl"
 
 #include "rock_sdf.glsl"
+#include "ground_fx.glsl"      // (VIBE_TEST_DEBRIS: gfx.lsd_fade.z)
 
 vec2 _octa_encode(vec3 n) {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
@@ -150,6 +151,13 @@ void main() {
             top *= mix(0.80, 1.0, smoothstep(0.0, 0.25, pr));          // deeper green at the centre
             bool from_below = scene.camera_pos.y < wpos.y;
             albedo = from_below ? under : top;
+        }
+        if (part >= 20) {
+            // Small debris (scatter_debris_meshes.inl): the colour the placement gave it, a little
+            // variation along the piece; the litter's scrap of paper (uv.x .25 over the can) white-grey.
+            albedo = vColor * (0.85 + 0.3 * fract(vUv.y * 3.7 + vRotSeed.y));
+            if (part == 25 && fract(vUv.x) > 0.1) albedo = vec3(0.62, 0.61, 0.57);
+            if (gfx.lsd_fade.z > 0.5) albedo = vec3(1.0, 0.0, 1.0);       // (VIBE_TEST_DEBRIS=1: where it lies)
         }
         if ((part == 1 || part == 2) && vColor.r < 0.05 && vColor.g < 0.05 && vColor.b < 0.05) discard;   // lily raft without a flower
         if (part == 1 && vColor.r > 0.85 && vColor.b > 0.5) {
@@ -284,6 +292,7 @@ void main() {
         float side = rl > 1e-4 ? dot(rel / rl, Lh) : 0.0;  // +1 sun side .. -1 shade side
         float k    = smoothstep(0.0, 0.05 * sc, rl);
         if (part == 6 || part == 7) k *= 0.25;                         // mushrooms: solid caps keep their own shape
+        if (part >= 20) k = 0.0;                                       // (debris: lying flat, no plant-scale shade)
         float lit_side = mix(0.38, 1.10, smoothstep(-0.8, 0.7, side));
         float h01  = clamp((wpos.y - vInst.y) / (0.45 * sc), 0.0, 1.0);
         // Plant-level normal (the crown trick of the trees): bend the
@@ -317,8 +326,8 @@ void main() {
     // Mushrooms (parts 6 / 7) are solid vegetation: no leaf transmission.
     // Grass blades: glossier close by, matt with distance (the game's rule - a field of small
     // highlights far off turns to noise).
-    float rough = part == 8 ? min(vDistToCam * 0.005 + 0.45, 0.99) : 0.6;
-    outGBuffer1 = vec4(_octa_encode(N), rough, plant ? ((part == 6 || part == 7) ? 1.0 / 3.0 : 1.0) : 0.0);
+    float rough = part == 8 ? min(vDistToCam * 0.005 + 0.45, 0.99) : (part >= 20 ? 0.8 : 0.6);
+    outGBuffer1 = vec4(_octa_encode(N), rough, plant ? ((part == 6 || part == 7 || part >= 20) ? 1.0 / 3.0 : 1.0) : 0.0);
     {
         vec2 current_uv = gl_FragCoord.xy * scene.viewport.zw;
         if (vPrevClip.w > 0.0) {

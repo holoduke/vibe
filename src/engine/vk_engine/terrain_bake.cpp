@@ -178,6 +178,7 @@ void VulkanEngine::terrain_bake_signature(const SceneUBO& d) {
     addv(d.road_info); addv(d.spom_params); addv(d.site_ground); addv(d.site_shape); addv(d.terrain_extra);
     for (const glm::vec4& f : d.flower_field) addv(f);       // (the ground in a flower field takes the field's colour with distance)
     for (const glm::vec4& f : d.hw_jn) addv(f);              // (a junction's paving and markings: highway.h Junction)
+    addv(d.stream_info); for (const glm::vec4& f : d.stream_pts) addv(f);      // (the stream's channel is cut into the ground: engine/water_course.h)
     const float q[] = { d.water_params.x, d.water_params.y, std::floor(d.ripple_info.z), d.globe_info.x, d.globe_info.w,
                         std::round(d.season.x * 64.0f), std::round(d.season.y * 64.0f), std::round(d.season.z * 64.0f), std::round(d.season.w * 64.0f),
                         d.viewport.w, float(int(d.rm_perf.x) & (2 | 64)), d.rm_perf.w,

@@ -156,6 +156,58 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     // side road leaves (unit). [1]: x = 1 when there is one, y = the side road's width class,
     // z = its metres at J as the field counts them. [2], [3]: its centre line heights at 0, 8 .. 56 m.
     vec4   hw_jn[4];
+    // The lighting ports (light_port.cpp; deferred_lighting.frag, contact_shadow.glsl).
+    // lp_flags.x = bits: 1 contact shadows, 2 far AO + bent cone, 4 leaf-tinted sun shadows,
+    // 8 true colour at bounce hits, 16 one picked lamp per pixel, 32 screen march before the
+    // reflection / bounce ray; .y = lamps in the lamp list (deferred pass binding 26); .z = the
+    // terrain's slot in the materials table (-1: none); .w = this frame's first entry of the list.
+    // lp_params: x, y = the projection's [3][2] and [2][2] (view depth from a depth value z:
+    // x / (z + y)); z = how much the bounce-light history and caches are scaled this frame
+    // (1 = not; a sudden drop of the sky's light); w = lamps looped over before the picked one.
+    // lp_vp: this frame's view-projection (the one the deferred pass inverts).
+    ivec4  lp_flags;
+    vec4   lp_params;
+    mat4   lp_vp;
+    // The wind on the water (environment.cpp water_wind; terrain_rm_water.glsl wt_*):
+    // xy = the way it blows (unit, world x z), z = speed (m/s), w = the swell's height scale
+    // pow(saturate(speed / 30), 2.2). water_swell.x = the water surface at the eye about the
+    // water level (m; water_fx.cpp water_swell_height, the CPU twin of wt_swell); yz = the
+    // wind's direction summed over time (s): what the water's drifting patterns move by;
+    // w = how many of river_piers are in use.
+    vec4   water_wind;
+    vec4   water_swell;
+    // The piers standing in the river (water_fx.cpp river_piers): xy = the middle (world x z),
+    // z = how wide it stands in the current (m). terrain_rm_water.glsl wt_obstacles. The rocks in the water too.
+    vec4   river_piers[24];
+    // The stream (engine/water_course.h; shaders/water_course.glsl): stream_info.x = points in use,
+    // .y = the channel's depth at the spring, .z = at the mouth; stream_box = per 8 segments min x z,
+    // max x z (padded by the carve's reach); stream_pts = x, z, water surface, half width.
+    vec4   stream_info;
+    vec4   stream_box[8];
+    vec4   stream_pts[64];
+    // The player's body (not the camera: third person, a car): xyz = its middle (feet 0.9 m lower) -
+    // what the water lilies part round (scatter.vert). w unused.
+    vec4   water_body;
+    // The water's simulation (vk_engine/water_sim.cpp; shaders/water_waves.glsl):
+    // water_fft: x 1 = the wind sea's four FFT cascades are on (VIBE_NO_FFT), y 1 = they also move
+    //   the open sea's surface, z the height bound of that motion (m, for the hit), w the wind
+    //   sea's slope variance it was normalised to (Cox-Munk, resolved part);
+    // water_fft_L: the four cascades' sizes (m);
+    // water_rip: xy the ripple field's corner (world x z), z its size (m), w 1 = on (VIBE_NO_RIPPLE_FIELD);
+    // water_flags: x the refraction rule (VIBE_NO_WATER_REFRACT), y reflected caustics
+    //   (VIBE_NO_REFL_CAUSTICS), z the shore distance (VIBE_NO_SHORE_SDF), w the sky ambient (VIBE_NO_WATER_SKY_AMB).
+    vec4   water_fft;
+    vec4   water_fft_L;
+    vec4   water_rip;
+    vec4   water_flags;
+    // water_sun: x how much of the sun's DISC shows through the cloud deck (1 clear, ~0 under a closed
+    //   overcast): the glint and the caustics are images of the disc, not diffuse light.
+    vec4   water_sun;
+    // The local shallow-water solver (vk_engine/water_solver.cpp; shaders/water_solver.glsl):
+    // water_sw: xy its window's corner (world x z), z its size (m), w 1 = on (VIBE_NO_SOLVER);
+    // water_sw2: x 1 = its foam particles are on.
+    vec4   water_sw;
+    vec4   water_sw2;
 } scene;
 
 // The "shading test" (Graphics tab; gfx_quality.cpp apply_shade_test): measuring switches.

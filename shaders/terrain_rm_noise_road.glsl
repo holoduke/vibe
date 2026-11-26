@@ -88,6 +88,7 @@ const float TERRAIN_HEIGHT = 120.0;
 #define WM_CELL(i) scene.globe_cell[i].xyz
 #define WM_FRAC(i) scene.globe_frac[i].xyz
 #include "world_map.glsl"
+#include "water_course.glsl"     // the stream: water above the sea, its channel (wc_stream_carve in rm_world_h)
 #ifndef RM_WATER_LEVEL
 #define RM_WATER_LEVEL scene.water_params.y
 #endif
@@ -120,6 +121,9 @@ bool rm_flat_on() { return !rm_far_chart() || rm_ring(); }
 // 524288 the normal's relief from the main rills alone   1048576 one tap of the relief in the normal, not three
 // 2097152 view: the cloud shadow map on the ground (white = open sky)
 // 4194304 no ground material (one colour, no road or highway surface; with 1 + 2 + 512: what the light alone costs)
+// 8388608 view: the running water's white (r: round rocks and piers, g: all white water, b: the fast-water term B)
+// 16777216 view: the running water's carried ripple pattern (its normal's x red, z green), to measure how fast it moves
+// 33554432 view: what the water mirrors (before the Fresnel); 92274688 (= 67108864 + 25165824): the running water's pattern frame (r: fract of metres down the course / 12.5, g: across / 2.2) and streak noise (b)
 #ifdef VIBE_LITE
 // The "first start" build of this shader (see VIBE_LITE in terrain_raymarch.frag): the sections
 // in VIBE_LITE_MASK are compiled out for good.
@@ -367,7 +371,7 @@ float rm_world_h(float a, vec2 wp) {
         float h = a * 120.0;
         float w = smoothstep(1450.0, 1900.0, length(wp));     // (as wm_height_land: home's own formula within)
         if (w > 0.0) { vec2 vr = rm_world_vr(wp); h = wm_height_core(h, a, w, vr.y, vr.x, RM_WATER_LEVEL); }
-        return rm_highway(wm_river(wm_pad(h, wp), wp, RM_WATER_LEVEL), wp);
+        return rm_highway(wc_stream_carve(wm_river(wm_pad(h, wp), wp, RM_WATER_LEVEL), wp), wp);      // (CPU: terrain.cpp world_ground_height_impl, rm_terrain)
     }
     vec2 vr = rm_world_vr(wp);
     return rm_site_ground(rm_highway(wm_height_core(a * 120.0, a, 1.0, vr.y, vr.x, RM_WATER_LEVEL), wp), wp);

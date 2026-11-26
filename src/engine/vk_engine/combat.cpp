@@ -554,11 +554,14 @@ void VulkanEngine::update_projectiles(float dt) {
                 // Water surface: the bullet's path this tick crosses the
                 // water plane over open water -> splash, and the bullet is
                 // spent (a rifle round tumbles to a stop within a metre).
+                // (The surface as it is drawn - the sea's swell, the stream above the sea:
+                //  water_surface_y at both ends of the step; it was the flat sea level, so the
+                //  stream and the swell took no shots.)
                 if (!drop && rt_.water_enabled) {
-                    const float wl = rt_.water_level;
                     const glm::vec3 a0 = std::isnan(it->prev_pos.x) ? it->spawn_origin : it->prev_pos;
-                    if (a0.y > wl && bp.y <= wl) {
-                        const float k = (a0.y - wl) / std::max(a0.y - bp.y, 1e-5f);
+                    const float f0 = a0.y - water_surface_y(a0.x, a0.z), f1 = bp.y - water_surface_y(bp.x, bp.z);
+                    if (f0 > 0.0f && f1 <= 0.0f) {
+                        const float k = f0 / std::max(f0 - f1, 1e-5f);
                         const glm::vec3 wp = a0 + (bp - a0) * k;
                         if (water_at(wp.x, wp.z)) {
                             drop = true; was_impact = true; was_water_hit = true;
@@ -646,11 +649,13 @@ void VulkanEngine::update_projectiles(float dt) {
                         // Hit the bed of a shallow: the bullet went through
                         // the surface first (Jolt resolved the ground contact
                         // within the same tick) - splash where it entered.
-                        if (rt_.water_enabled && hit_pos.y < rt_.water_level &&
-                            it->spawn_origin.y > rt_.water_level && it->initial_dir.y < -1e-4f) {
-                            const float tw = (rt_.water_level - it->spawn_origin.y) / it->initial_dir.y;
+                        // (the surface over the hit: the stream's, or the sea with its swell)
+                        const float ws = water_surface_y(hit_pos.x, hit_pos.z);
+                        if (rt_.water_enabled && hit_pos.y < ws &&
+                            it->spawn_origin.y > ws && it->initial_dir.y < -1e-4f) {
+                            const float tw = (ws - it->spawn_origin.y) / it->initial_dir.y;
                             const glm::vec3 wp = it->spawn_origin + it->initial_dir * tw;
-                            if (water_at(wp.x, wp.z)) { hit_pos = wp; was_water_hit = true; }
+                            if (water_at(wp.x, wp.z) && std::abs(water_surface_y(wp.x, wp.z) - ws) < 0.5f) { hit_pos = wp; was_water_hit = true; }
                         }
                     }
                 }
@@ -844,6 +849,9 @@ void VulkanEngine::draw_decals(VkCommandBuffer cmd, const glm::mat4& vp, const g
     for (const auto& d : decals_) {
         const float life = 1.0f - (d.age / d.ttl);
         if (life <= 0.0f) continue;
+        // (a mark on the still world is a deferred decal once its glow has gone - ground_fx.cpp
+        //  gfx_decals_frame, kind "scorch"; here only its first second, and marks on moving bodies)
+        if (rt_.ground_decals && d.parent_body_id == 0 && d.age > 1.0f) continue;
 
         glm::vec3 world_pos    = d.pos;
         glm::vec3 world_normal = d.normal;

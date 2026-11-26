@@ -37,6 +37,10 @@ layout(set = 0, binding = 3) uniform TaauUBO {
 } taau;
 
 layout(set = 0, binding = 4) uniform sampler2D motion_lr;
+// The G-buffer (LR): a water pixel (material 8, gbuffer1.b = 0.66) keeps less history - what the
+// water shows does not move with its surface (taa.frag has the distance term; params.z = 1: on).
+layout(set = 0, binding = 5) uniform sampler2D gbuf0_lr;
+layout(set = 0, binding = 6) uniform sampler2D gbuf1_lr;
 
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
@@ -120,6 +124,10 @@ void main() {
     float motion_pix = length(motion * taau.lr_viewport.xy);
     float base_alpha = clamp(taau.params.x, 0.0, 0.98);
     float alpha = mix(base_alpha, 0.0, smoothstep(0.5, 8.0, motion_pix));
+    if (taau.params.z > 0.5) {
+        vec4 wg0 = texelFetch(gbuf0_lr, lr_ip, 0), wg1 = texelFetch(gbuf1_lr, lr_ip, 0);
+        if (int(wg0.a * 255.0 + 0.5) == 8 && abs(wg1.b - 0.66) < 0.015) alpha *= 0.45;
+    }
 
     outColor = vec4(mix(cur, prev_clamped, alpha), 1.0);
 }

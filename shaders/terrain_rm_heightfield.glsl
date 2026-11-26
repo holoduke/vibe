@@ -25,6 +25,7 @@ float rm_snow_on(float d, vec2 wp, float h, float road_keep) {
     float sh = mix(road_h, open_h, road_keep);
     float fd = foot_depth(wp);
     if (fd > 0.0) sh -= min(fd, max(sh - d, 0.0) * 0.9);     // never deeper than the snow is
+    else if (fd < 0.0 && sh > d + 0.01) sh -= fd;              // (the rim beside a track: post_fx.cpp)
     return sh;
 }
 

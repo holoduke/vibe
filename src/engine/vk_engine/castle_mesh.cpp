@@ -98,7 +98,7 @@ void VulkanEngine::build_mesh_part_blas(std::vector<CastleMeshGpu>& parts) {
         VkAccelerationStructureBuildGeometryInfoKHR bgi{};
         bgi.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
         bgi.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        bgi.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        bgi.flags = blas_data_access_flag() | VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
         bgi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
         bgi.geometryCount = 1;
         bgi.pGeometries = &geom;
@@ -239,10 +239,12 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
                     pc.emissive = glm::vec4(glm::vec3(g.emissive) * glm::mix(0.12f, 1.0f, night), g.emissive.a);
                     pc.color = glm::vec4(glm::vec3(pc.color) * glm::mix(0.45f, 1.0f, night), 1.0f);
                 }
+                // (w -1: the cars are kept clean of the ground paste - cube.frag, ground_paste.glsl)
+                const bool car = !jeep_draw_.empty() && gp >= jeep_draw_.data() && gp < jeep_draw_.data() + jeep_draw_.size();
                 pc.tex_params = tex_on
                     ? glm::vec4(static_cast<float>(g.tex_albedo),
-                                static_cast<float>(g.tex_normal), g.uv_scale, 0.0f)
-                    : glm::vec4(-1.0f, -1.0f, 1.0f, 0.0f);
+                                static_cast<float>(g.tex_normal), g.uv_scale, car ? -1.0f : 0.0f)
+                    : glm::vec4(-1.0f, -1.0f, 1.0f, car ? -1.0f : 0.0f);
             }
             vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages,
                                0, sizeof(PushConstants), &pc);

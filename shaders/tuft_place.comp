@@ -44,6 +44,7 @@ layout(set = 0, binding = 5) uniform sampler2D u_rules;                         
 layout(set = 0, binding = 6) uniform sampler2D u_height;                           // the home tile's heights (m), 2048 m square
 layout(set = 0, binding = 7) uniform sampler2D u_lawn;                             // the lawn's mask: r = grass, g = slope
 layout(set = 0, binding = 8) uniform sampler2D u_near;                             // beyond the home tile: the ground round the camera (veg_stream.cpp wv_nf_poll)
+layout(set = 0, binding = 9) uniform sampler2D u_shade;                            // the home tile: how much vegetation stands over the ground (r; albedo slot 22) - the debris
 
 layout(push_constant) uniform PC {
     vec4  planes[6];
@@ -233,11 +234,82 @@ void main() {
 
     // ---- 3. The ground ----
     float fieldw = 1.0;
-    if (P_CAP.w > 1.5) { fieldw = field_w(PB, xz); if (fieldw <= 0.02) return; }
+    if (P_CAP.w > 1.5 && P_CAP.w < 2.5) { fieldw = field_w(PB, xz); if (fieldw <= 0.02) return; }      // (the debris' P_FIELDs are its litter rectangles, not fields)
     const bool home = on_tile(xz);
     nf_setup();
     if (!home && !nf_inside(xz)) return;                                           // no ground known there
     float grows = 0.0, dryness = 0.0;
+    int   dkind = -1;                  // the debris' kind (P_CAP.w 3): 0 twig .. 7 stones (scatter_debris_meshes.inl)
+    float surf_y = -1e9;               // litter on a raised slab: the slab's top (P_FIELD(2))
+    if (P_CAP.w > 2.5) {
+        // SMALL DEBRIS, by rule (the reference game's placement groups do this with authored
+        // masks; ours from what the ground already knows). One die per candidate picks among
+        // what may lie here:
+        //   litter       inside the litter zones (P_FIELD 0, 1: the service station, the castle
+        //                car park), even on the paving;
+        //   gravel       at the edge of what the rules picture clears (roads, paving, buildings):
+        //                grit spilt over the verge;
+        //   stones       at the foot of steep ground (a cliff or a steep bank a few metres uphill);
+        //   under trees  (the vegetation cover of the home tile) - conifers (high ground, or by a
+        //                slow noise) drop needles, cones and twigs; broadleaf trees twigs and, the
+        //                more so in autumn (P_FADE2.w), leaves;
+        //   open ground  a few pebbles, and in autumn a few blown leaves.
+        // Nothing on the cleared ground itself (asphalt, paving, floors) but litter.
+        float r = h_sqrt(seed + f + 21.0);
+        float autumn = clamp(P_FADE2.w, 0.0, 1.0);
+        float litter = 0.0;
+        for (int i = 0; i < 2; ++i) {
+            // (rectangles x0 z0 x1 z1 on the paving, ragged inside by a metre; P_FIELD(2)[i] = the surface, 0 = the ground)
+            vec4 F = P_FIELD(i);
+            if (F.z <= F.x) continue;
+            vec2 m = min(xz - F.xy, F.zw - xz);
+            float w = smoothstep(0.0, 1.0, min(m.x, m.y) + 0.6 * crowd_noise(xz * 0.4));
+            if (w > litter) { litter = w; float sy = P_FIELD(2)[i]; surf_y = sy > 0.0 ? sy : -1e9; }
+        }
+        float clear = 1.0, near_clear = 1.0;            // 1 = may lie here; the nearest cleared ground within 1.5 m
+        float open3 = 0.0;                              // cleared ground here, open ground within 3 m: a verge (gravel on it)
+        if (home && abs(xz.x) < P_CAP.x - 2.0 && abs(xz.y) < P_CAP.x - 2.0) {
+            ivec2 rn = textureSize(u_rules, 0);
+            vec2  ru = (xz / P_CAP.x * 0.5 + 0.5) * vec2(rn);
+            clear = texelFetch(u_rules, clamp(ivec2(ru), ivec2(0), rn - 1), 0).r > 0.02 ? 1.0 : 0.0;
+            float px = 1.5 / (2.0 * P_CAP.x) * float(rn.x);
+            for (int k = 0; k < 4; ++k) {
+                vec2 o = vec2(k == 0 ? px : (k == 1 ? -px : 0.0), k == 2 ? px : (k == 3 ? -px : 0.0));
+                near_clear = min(near_clear, texelFetch(u_rules, clamp(ivec2(ru + o), ivec2(0), rn - 1), 0).r > 0.02 ? 1.0 : 0.0);
+                open3 = max(open3, texelFetch(u_rules, clamp(ivec2(ru + 2.0 * o), ivec2(0), rn - 1), 0).r > 0.02 ? 1.0 : 0.0);
+            }
+        } else if (!home) {
+            clear = smoothstep(0.25, 0.75, textureLod(u_near, (xz - g_nf_org + 0.5) / 512.0, 0.0).a);
+            near_clear = clear;
+            // (the edge of what the near-field bake cuts out - a road, a forecourt -: within 1.5 m)
+            for (int k = 0; k < 4; ++k) {
+                vec2 o = vec2(k == 0 ? 1.5 : (k == 1 ? -1.5 : 0.0), k == 2 ? 1.5 : (k == 3 ? -1.5 : 0.0));
+                near_clear = min(near_clear, smoothstep(0.25, 0.75, textureLod(u_near, (xz + o - g_nf_org + 0.5) / 512.0, 0.0).a));
+                open3 = max(open3, smoothstep(0.25, 0.75, textureLod(u_near, (xz + 2.0 * o - g_nf_org + 0.5) / 512.0, 0.0).a));
+            }
+        }
+        vec2  shade = home ? textureLod(u_shade, xz / kSide + 0.5, 0.0).rg : vec2(0.0);      // (r: all crowns, blurred; g: the conifers' own)
+        float trees = shade.x;
+        // steep ground a few metres uphill: the foot of a cliff
+        float h0 = ground_h(xz);
+        vec2  gr = vec2(ground_h(xz + vec2(2.0, 0.0)) - ground_h(xz - vec2(2.0, 0.0)), ground_h(xz + vec2(0.0, 2.0)) - ground_h(xz - vec2(0.0, 2.0))) / 4.0;
+        vec2  up = length(gr) > 1e-4 ? normalize(gr) : vec2(1.0, 0.0);
+        float above = (ground_h(xz + up * 6.0) - ground_h(xz + up * 3.0)) / 3.0;           // slope 3 - 6 m uphill
+        float foot = smoothstep(0.7, 1.2, above) * (1.0 - smoothstep(0.35, 0.6, length(gr)));
+        bool conifer = shade.y > 0.35 * max(trees, 0.05);
+        if (litter > 0.0 && r < 0.09 * litter)                 dkind = 5;
+        else if (clear < 0.5) { if (open3 > 0.5 && r < 0.45) dkind = 6; else return; }       // (a cut verge: grit spilt from the road)
+        else if (near_clear < 0.5 && r < 0.55)                  dkind = 6;
+        else if (foot > 0.0 && r < 0.5 * foot)                  dkind = 7;
+        else if (trees > 0.2) {
+            float t = smoothstep(0.2, 0.6, trees);
+            // (a conifer stand: a carpet of needles, cones and twigs that reads from standing height)
+            if (conifer) dkind = r < 0.58 * t ? 3 : (r < 0.72 * t ? 4 : (r < 0.84 * t ? 0 : -1));
+            else         dkind = r < (0.10 + 0.45 * autumn) * t ? 1 : (r < (0.25 + 0.45 * autumn) * t ? 0 : -1);
+        } else dkind = r < 0.035 ? 2 : (r < 0.035 + 0.05 * autumn ? 1 : -1);
+        if (dkind < 0) return;
+        grows = 1.0;
+    } else
     if (P_CAP.w > 0.5 && home) {
         vec2 mg = textureLod(u_lawn, xz / kSide + 0.5, 0.0).rg;                // (as grass_raymarch.frag reads it)
         grows = mg.r * fieldw;
@@ -264,6 +336,7 @@ void main() {
     vec3  Nn = normalize(vec3(ground_h(xz - vec2(e, 0.0)) - ground_h(xz + vec2(e, 0.0)), 2.0 * e,
                               ground_h(xz - vec2(0.0, e)) - ground_h(xz + vec2(0.0, e))));
     vec3  pos = vec3(xz.x, h - 0.02, xz.y);
+    if (dkind == 5 && surf_y > -1e8) pos.y = surf_y + 0.005;      // (litter on the car park's slab, not under it)
     float d3 = distance(pos, pc.cam.xyz);
     if (d3 >= range || d3 >= 300.0) return;
 
@@ -281,7 +354,7 @@ void main() {
         float nz = tile_noise2(xz, 0.04, vec2(0.0)) * tile_noise2(xz, 0.005, vec2(0.0));
         float line = 80.0 - 20.0 * nz + clamp(Nn.z * 30.0, -16.0, 16.0);
         keep = 1.0 - smoothstep(line - 9.0, line + 0.5, h);
-        if (P_CAP.w > 0.5 && home) keep *= 1.0 - smoothstep(55.0, 75.0, h);
+        if (P_CAP.w > 0.5 && P_CAP.w < 2.5 && home) keep *= 1.0 - smoothstep(55.0, 75.0, h);      // (not the debris: needles lie where no grass grows)
     }
     // Winter (P_FADE2.z = the snow cover, 0..1): the sheet of snow lies 6 - 44 cm deep
     // (terrain_rm_heightfield.glsl snow_layer_h), so short grass is under it and long grass
@@ -298,6 +371,8 @@ void main() {
 
     // ---- 5. Transform ----
     float size = mix(P_OBJ2.x, P_OBJ2.y, h_sqrt(f)) * fade * mix(0.45, 1.0, keep);      // (shorter toward the snow)
+    if (dkind == 3) size *= 1.9;                                   // (the needle mats: larger, they carpet the floor)
+    else if (dkind == 4) size *= 1.3;
     if (P_FADE.z > 0.0) {
         // A kind that thins out with distance (a share keeps its size, the rest shrinks away):
         // what stands is grown so that the ground it covers stays the same - no ring round the
@@ -319,7 +394,7 @@ void main() {
 
     // ---- 7. The record ----
     uint lod = d3 < kLod1 ? 0u : (d3 < kLod2 ? 1u : 2u);
-    uint b = (uint(P_CAP.y) * 3u + lod) * 5u;
+    uint b = (uint(P_CAP.y + float(max(dkind, 0))) * 3u + lod) * 5u;      // (the debris: one species per kind)
     uint slot = atomicAdd(cmd[b + 1u], 1u);
     if (slot >= uint(P_CAP.z)) { atomicAdd(cmd[b + 1u], 0xFFFFFFFFu); return; }        // the list is full
     float c0 = h_sin(f + 5.0), c1 = h_sin(f + 6.0);
@@ -331,6 +406,18 @@ void main() {
     float band  = P_SHAPE.w * range;
     float fbyte = band > 0.0 ? floor(255.0 * (1.0 - clamp((d3 - (range - band)) / band, 0.0, 1.0)) + 0.5) : 255.0;
     float lift  = pc.misc.y > 0.5 ? clamp(floor(ground_relief(xz, h) / 0.004 + 0.5), 0.0, 120.0) : 0.0;
+    if (dkind >= 0) {
+        // the debris' colours (scatter.frag shades them by kind): bark, the season's leaves,
+        // stone greys, dry needles, a cone, a can's paint, grit
+        float autumn = clamp(P_FADE2.w, 0.0, 1.0);
+        if (dkind == 0)      col = vec3(0.20, 0.14, 0.09) * (0.8 + 0.4 * c0);
+        else if (dkind == 1) col = mix(mix(vec3(0.20, 0.27, 0.06), vec3(0.24, 0.20, 0.07), 0.5 * c1), mix(vec3(0.55, 0.38, 0.07), vec3(0.42, 0.14, 0.04), c0), autumn * (0.5 + 0.5 * c1));
+        else if (dkind == 3) col = vec3(0.30, 0.20, 0.11) * (0.8 + 0.3 * c0);
+        else if (dkind == 4) col = vec3(0.27, 0.17, 0.09) * (0.85 + 0.3 * c0);
+        else if (dkind == 5) col = c0 < 0.33 ? vec3(0.55, 0.06, 0.05) : (c0 < 0.66 ? vec3(0.08, 0.20, 0.50) : vec3(0.62, 0.62, 0.60));
+        else                 col = vec3(0.36, 0.34, 0.31) * (0.75 + 0.45 * c0) * (dkind == 6 ? 1.08 : 1.0);
+        fbyte = 255.0;
+    }
     Inst I;
     I.pos_scale = vec4(pos, -size);
     I.rot_tint  = vec4(yaw + 6.2831853 * lift, min(col.r, 0.98) * 0.99 + (255.0 - fbyte), col.g, col.b);

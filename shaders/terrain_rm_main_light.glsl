@@ -149,6 +149,18 @@
         }
     }
     float shadow = max(dyn_shadow, self_shadow);
+#ifndef VIBE_WATER
+    // Screen-space contact shadow (contact_shadow.glsl; scene.lp_flags bit 1) against the depth
+    // pre-pass - objects, trees and their cards, rocks; the ground itself is not in it, so the
+    // march cannot shadow the ground with its own relief. Leaves weigh in at 60 %.
+    if ((scene.lp_flags.x & 1) != 0 && dif > 0.0 && shadow < 0.995 && t < 400.0 && !RMDBG(32)) {
+        float cs_len = max(mix(0.2, 1.2, abs(nor.y)), min(t * 0.03, 8.0));
+        vec2  cs_uv;
+        float cs_occ = contact_shadow(u_prepass_depth, pos + nor * clamp(t * 0.002, 0.005, 0.5), sunDir, cs_len,
+                                      rmRand(uvec3(gl_FragCoord.xy, uint(scene.rt_flags.w) & 63u) + uvec3(0u, 211u, 7u)), cs_uv);
+        shadow = 1.0 - (1.0 - shadow) * (1.0 - cs_occ * 0.85 * clamp(scene.rt_params.w, 0.0, 1.0));
+    }
+#endif
 
     if (g_snow >= 0.01) rm_road_vis = mix(rm_road_vis, 1.0, snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, g_snow));
     rm_road_vis = mix(rm_road_vis, 1.0, sand_cov);
@@ -283,6 +295,18 @@
             mate = mix(mate, sandc, sand);
         }
     }
+    // The soft water edge, the land's side: just above the waterline the ground is wet and
+    // darker (a few centimetres at a lake or the river, a little more where the sea's surf runs
+    // up), so the water does not end on dry ground in a line. (terrain_rm_main_water.glsl wt_edge)
+    if (scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 0.4) {
+        float wl = scene.water_params.y;
+        // (the waterline is the higher of the authored top and the shallow-water solver's surface:
+        //  water piled against a bank or pushed up by a wader wets it - the reference's rule)
+        wl += max(ws_dh(pos.xz), 0.0);
+        float sk = smoothstep(1350.0, 1750.0, rm_home_dist(pos.xz));
+        float up = mix(0.07, 0.30, sk);
+        mate *= mix(1.0, mix(0.70, 0.88, sk), 1.0 - smoothstep(wl, wl + up, pos.y));      // (the beach's sand is wet-darkened already)
+    }
     // Turf where the home tile's grass thins out and beyond (grass_raymarch.frag fades its blades
     // over the last 170 m of the tile): the two cross over, so there is no line where the lawn
     // stops and no bare band between it and the turf of the wider world.
@@ -330,6 +354,14 @@
             mate = mix(mate, fieldc, fw * grow * 0.94 * smoothstep(20.0, 185.0, t) * (1.0 - smoothstep(0.1, 0.5, g_snow)));
         }
     }
+#ifndef VIBE_BAKE
+    // The far ground carries the colour of the objects placed on it (ground_lsd.glsl: a capture
+    // from above round the camera; nothing close by, where the meshes themselves are drawn).
+    {
+        vec4 lsd = gfx_lsd(pos, t);
+        if (lsd.a > 0.0) mate = mix(mate, lsd.rgb, lsd.a);
+    }
+#endif
     // The lake bed seen directly (camera under water): the same stones as
     // the bed seen through the surface from above (water branch, bed_h).
     float bed_sub = 0.0;
@@ -516,4 +548,20 @@
     }
 
     }   // (!rm_baked: opened in terrain_rm_main_ground.glsl)
+#if !defined(VIBE_BAKE)
+    // Tracks (post_fx.cpp): snow pressed into a rut is packed - greyer and a little blue - and
+    // its floor lies in its own shade; on a sunlit sheet that clips to white the relief alone
+    // did not read.
+    if (pfx_trk.d.trk_on > 0.5 && g_snow > 0.05 && t < 60.0) {
+        vec2 trd = track_dr(pos.xz);
+        float pk = clamp(trd.x * 14.0, 0.0, 1.0) * smoothstep(0.05, 0.4, g_snow);
+        mate *= mix(vec3(1.0), vec3(0.62, 0.68, 0.80), pk);
+    }
+    // (VIBE_TEST_TRACKS=2: the tracks' depth red, their rim blue - post_fx.cpp)
+    if (pfx_trk.d.trk_on > 1.5) {
+        vec2 trd = track_dr(pos.xz);
+        mate = mix(mate, vec3(0.8, 0.0, 0.0), clamp(trd.x * 20.0, 0.0, 1.0));
+        mate = mix(mate, vec3(0.0, 0.0, 0.8), clamp(trd.y * 60.0, 0.0, 1.0));
+    }
+#endif
 #endif /* RM_PART == 2 */

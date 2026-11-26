@@ -14,6 +14,7 @@
 #include "engine/skybox.h"
 #include "engine/terrain.h"
 #include "engine/texture.h"
+#include "engine/water_course.h"
 
 #include <GLFW/glfw3.h>
 
@@ -714,6 +715,22 @@ void VulkanEngine::init_grass_mask_texture() {
         for (int mz = std::max(0, int((kCastlePark[1] - 2.0f + 0.5f * kWorldSide) / cell)); mz <= std::min(dim - 1, int((kCastlePark[3] + 2.0f + 0.5f * kWorldSide) / cell)); ++mz)
             for (int mx = std::max(0, int((kCastlePark[0] - 2.0f + 0.5f * kWorldSide) / cell)); mx <= std::min(dim - 1, int((kCastlePark[2] + 4.5f + 0.5f * kWorldSide) / cell)); ++mx)
                 grass_mask_data_[(size_t(mz) * dim + mx) * 2] = 0;
+    }
+    // ... nor in the stream's water (engine/water_course.h).
+    if (!grass_mask_data_.empty()) {
+        const wc::Course& st = wc::stream(rt_.water_level);
+        const float cell = kWorldSide / float(dim);
+        for (const glm::vec4& B : st.box) {
+            const int x0 = std::clamp(int((B.x + 0.5f * kWorldSide) / cell), 0, dim - 1), x1 = std::clamp(int((B.z + 0.5f * kWorldSide) / cell), 0, dim - 1);
+            const int z0 = std::clamp(int((B.y + 0.5f * kWorldSide) / cell), 0, dim - 1), z1 = std::clamp(int((B.w + 0.5f * kWorldSide) / cell), 0, dim - 1);
+            for (int mz = z0; mz <= z1; ++mz)
+                for (int mx = x0; mx <= x1; ++mx) {
+                    const float d = wc::stream_distance(glm::vec2((float(mx) + 0.5f) * cell - 0.5f * kWorldSide, (float(mz) + 0.5f) * cell - 0.5f * kWorldSide), rt_.water_level);
+                    if (d > 1.5f) continue;
+                    uint8_t& r = grass_mask_data_[(size_t(mz) * dim + mx) * 2];
+                    r = uint8_t(float(r) * glm::smoothstep(0.0f, 1.5f, d));
+                }
+        }
     }
     // VIBE_DUMP_GRASS=<x>,<z>: the grass mask's presence round that place, 3 m apart (0..255), to the log.
     if (const char* dg = std::getenv("VIBE_DUMP_GRASS"); dg && !grass_mask_data_.empty()) {

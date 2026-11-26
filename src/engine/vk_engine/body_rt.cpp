@@ -90,7 +90,7 @@ void VulkanEngine::init_body_rt() {
     VkAccelerationStructureBuildGeometryInfoKHR bgi{};
     bgi.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     bgi.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    bgi.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+    bgi.flags = blas_data_access_flag() | VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
     bgi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     bgi.geometryCount = 1;
     bgi.pGeometries = &geom;
@@ -288,7 +288,7 @@ void VulkanEngine::record_body_rt(VkCommandBuffer cmd) {
         tri.indexData.deviceAddress = body_rt_index_addr_;
         bgi[k].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
         bgi[k].type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        bgi[k].flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+        bgi[k].flags = blas_data_access_flag() | VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
         bgi[k].mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
         bgi[k].dstAccelerationStructure = body_rt_[slot][k].as;
         bgi[k].geometryCount = 1;

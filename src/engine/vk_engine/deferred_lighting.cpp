@@ -52,7 +52,7 @@ void VulkanEngine::init_deferred_lighting() {
         // SAD gap on indoor / shadow-side surfaces. Image is in GENERAL
         // layout when cube.frag writes via imageStore — sampler2D reads
         // are allowed from GENERAL.
-        VkDescriptorSetLayoutBinding b[25]{};
+        VkDescriptorSetLayoutBinding b[31]{};
         b[0].binding = 0;
         b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         b[0].descriptorCount = 1;
@@ -121,10 +121,18 @@ void VulkanEngine::init_deferred_lighting() {
         b[23].binding = 23;
         b[24] = b[15];            // the sky-view LUT: what the haze of distance fades into (ground_haze.glsl)
         b[24].binding = 24;
+        // 25: the TLAS instances' materials table, 26: the lamp list, 27: the albedo textures
+        // (the lighting ports: light_port.cpp)
+        b[25] = b[16]; b[25].binding = 25;
+        b[26] = b[16]; b[26].binding = 26;
+        b[27] = b[15]; b[27].binding = 27; b[27].descriptorCount = uint32_t(kTextureCount);
+        b[28] = b[15]; b[28].binding = 28;     // last frame's lit picture (the screen march)
+        b[29] = b[15]; b[29].binding = 29;     // the wind sea's FFT cascades (water_sim.cpp): the reflected caustics
+        b[30] = b[16]; b[30].binding = 30;     // the ground effects' block: the decals (ground_fx.cpp, shaders/ground_decals.glsl)
         VkDescriptorSetLayoutCreateInfo dlci{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = nullptr, .flags = 0,
-            .bindingCount = 25, .pBindings = b,
+            .bindingCount = 31, .pBindings = b,
         };
         vk_check(vkCreateDescriptorSetLayout(device_, &dlci, nullptr,
                                               &deferred_lighting_desc_layout_),
@@ -157,9 +165,9 @@ void VulkanEngine::init_deferred_lighting() {
         VkDescriptorPoolSize sizes[] = {
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1 },
             { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 },
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     21 },
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     23 + uint32_t(kTextureCount) },
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              4 },
-            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             3 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             6 },
         };
         VkDescriptorPoolCreateInfo pci{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -180,6 +188,7 @@ void VulkanEngine::init_deferred_lighting() {
         vk_check(vkAllocateDescriptorSets(device_, &dsai,
                                            &deferred_lighting_desc_set_),
                  "deferred lighting alloc desc set");
+        ground_fx_bind_deferred();      // (binding 30: the ground effects' block - ground_fx.cpp; init_ground_fx ran before)
     }
 
     // Pipeline.
@@ -188,7 +197,7 @@ void VulkanEngine::init_deferred_lighting() {
         deferred_lighting_vert_ = vkpipe::load_shader_module(
             device_, sd + "/deferred_lighting.vert.spv");
         deferred_lighting_frag_ = vkpipe::load_shader_module(
-            device_, sd + "/deferred_lighting.frag.spv");
+            device_, sd + (g_rt.pos_fetch ? "/deferred_lighting_pf.frag.spv" : "/deferred_lighting.frag.spv"));   // (_pf: reads hit triangles' corners - light_port.cpp)
 
         vkpipe::GraphicsPipelineConfig cfg{};
         cfg.vert = deferred_lighting_vert_;
@@ -210,6 +219,7 @@ void VulkanEngine::init_deferred_lighting() {
 
 void VulkanEngine::destroy_deferred_lighting() {
     destroy_radiance_cache();
+    light_port_destroy(allocator_);
     if (deferred_lighting_pipeline_) {
         vkDestroyPipeline(device_, deferred_lighting_pipeline_, nullptr);
         deferred_lighting_pipeline_ = VK_NULL_HANDLE;
@@ -295,7 +305,7 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         VkDescriptorImageInfo gif1_ii{ VK_NULL_HANDLE,
                                        deferred_gi_fast_view_[1],
                                        VK_IMAGE_LAYOUT_GENERAL };
-        VkWriteDescriptorSet w[25]{};
+        VkWriteDescriptorSet w[30]{};
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].dstSet = deferred_lighting_desc_set_; w[0].dstBinding = 0;
         w[0].descriptorCount = 1;
@@ -381,6 +391,27 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         VkDescriptorImageInfo sky_ii{ sky_ok ? atmo_->sampler : linear_sampler_, sky_ok ? atmo_->sky.view : aux_ii.imageView,
                                       sky_ok ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         w[24] = w[14]; w[24].dstBinding = 24; w[24].pImageInfo = &sky_ii;
+        // The lighting ports (light_port.cpp): 25 the materials table, 26 the lamp list, 27 the albedo textures.
+        VkDescriptorBufferInfo mat_bi{ materials_buffer_ ? materials_buffer_ : rc_buf_[0], 0, VK_WHOLE_SIZE };
+        VkBuffer lamp_b = light_port_lamp_buffer(allocator_);
+        VkDescriptorBufferInfo lamp_bi{ lamp_b ? lamp_b : rc_buf_[0], 0, VK_WHOLE_SIZE };
+        VkDescriptorImageInfo alb_ii[kTextureCount];
+        for (int t = 0; t < kTextureCount; ++t)
+            alb_ii[t] = { texture_sampler_, albedo_textures_[t].view ? albedo_textures_[t].view : leaf_ii.imageView,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        w[25].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[25].dstSet = deferred_lighting_desc_set_; w[25].dstBinding = 25;
+        w[25].descriptorCount = 1; w[25].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[25].pBufferInfo = &mat_bi;
+        w[26] = w[25]; w[26].dstBinding = 26; w[26].pBufferInfo = &lamp_bi;
+        w[27] = w[14]; w[27].dstBinding = 27; w[27].descriptorCount = uint32_t(kTextureCount); w[27].pImageInfo = alb_ii;
+        VkDescriptorImageInfo prev_ii{ linear_sampler_, light_port_prev_lit() ? light_port_prev_lit() : gbuffer0_view_,
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        w[28] = w[14]; w[28].dstBinding = 28; w[28].pImageInfo = &prev_ii;
+        VkImageView wv = VK_NULL_HANDLE; VkSampler ws = VK_NULL_HANDLE;
+        water_sim_grad_view(wv, ws);      // (the reflected caustics: water_sim.cpp)
+        VkDescriptorImageInfo wgrad_ii{ ws ? ws : linear_sampler_, wv ? wv : cs_ii.imageView, wv ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        w[29] = w[14]; w[29].dstBinding = 29; w[29].pImageInfo = &wgrad_ii;
         VkDescriptorBufferInfo rc_bi[3];
         for (int i = 0; i < 3; ++i) {
             rc_bi[i] = { rc_buf_[i], 0, VK_WHOLE_SIZE };
@@ -394,16 +425,18 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
         // Only when a bound handle changed (resize, TLAS rebuild, aux re-bake):
         // 19 descriptor writes every frame were pure CPU overhead.
         uint64_t sig = 1469598103934665603ull;
-        for (int i = 0; i < 25; ++i) {
+        for (int i = 0; i < 30; ++i) {
             uint64_t h = w[i].pImageInfo ? uint64_t(reinterpret_cast<uintptr_t>(w[i].pImageInfo->imageView)) ^
                                            (uint64_t(reinterpret_cast<uintptr_t>(w[i].pImageInfo->sampler)) << 1)
                        : w[i].pBufferInfo ? uint64_t(reinterpret_cast<uintptr_t>(w[i].pBufferInfo->buffer))
                        : uint64_t(reinterpret_cast<uintptr_t>(tlas_));
             sig = (sig ^ h) * 1099511628211ull;
         }
+        for (int t = 0; t < kTextureCount; ++t)       // (the albedo textures are swapped at run time: seasons, the vegetation shade)
+            sig = (sig ^ uint64_t(reinterpret_cast<uintptr_t>(alb_ii[t].imageView))) * 1099511628211ull;
         if (sig != deferred_desc_sig_) {
             wait_gpu_frames_idle();   // the in-flight frame may still use the set
-            vkUpdateDescriptorSets(device_, 25, w, 0, nullptr);
+            vkUpdateDescriptorSets(device_, 30, w, 0, nullptr);
             deferred_desc_sig_ = sig;
         }
     }
@@ -507,6 +540,8 @@ void VulkanEngine::render_deferred_lighting(VkCommandBuffer cmd) {
     vkinit::transition_image(cmd, staging_color_image_,
                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    // (the screen march's copy of this frame's lit picture, for the next frame: light_port.cpp)
+    light_port_copy_lit(cmd, device_, allocator_, staging_color_image_, render_extent_, scene_color_format_);
 }
 
 } // namespace vibe

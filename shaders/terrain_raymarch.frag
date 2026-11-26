@@ -185,6 +185,11 @@ bool leaf_card_hit(rayQueryEXT rq);   // defined after the texture arrays
 // deferred_lighting.frag, settings 'foliage rays'): the search for a shadow's blocker and
 // the single far shadow ray do not need the leaf texture asked at every card they cross.
 bool g_rq_leaf_solid = false;
+// Leaf-coloured sun shadows (scene.lp_flags bit 4; as deferred_lighting.frag g_rq_leaf_tint):
+// while set, a leaf lets 25 % of the light by in its own hue and g_rq_T keeps the product.
+bool g_rq_leaf_tint = false;
+vec3 g_rq_T = vec3(1.0);
+bool leaf_tint_candidate(rayQueryEXT rq);   // defined after the texture arrays
 // Mask 0x02 = "anything except the terrain BLAS instance".
 bool any_hit_no_terrain(vec3 origin, vec3 dir, float t_max) {
     rayQueryEXT rq;
@@ -193,7 +198,7 @@ bool any_hit_no_terrain(vec3 origin, vec3 dir, float t_max) {
                           0x02, origin, 0.001, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
-            leaf_card_hit(rq)) rayQueryConfirmIntersectionEXT(rq);
+            (g_rq_leaf_tint ? leaf_tint_candidate(rq) : leaf_card_hit(rq))) rayQueryConfirmIntersectionEXT(rq);
     }
     return rayQueryGetIntersectionTypeEXT(rq, true) ==
            gl_RayQueryCommittedIntersectionTriangleEXT;
@@ -317,6 +322,7 @@ float rmRand(uvec3 seed) {
 layout(set = 0, binding = 32) uniform sampler2D u_cloud_shadow;   // sunlight through the cloud layer (clouds.comp)
 #define CLOUD_SHADOW_MAP u_cloud_shadow
 #include "scene_ubo.glsl"
+#include "contact_shadow.glsl"   // (the ground's contact shadow against the pre-pass depth: terrain_rm_main_light.glsl)
 
 #include "atmosphere.glsl"
 #include "sun_horizon.glsl"
@@ -401,6 +407,25 @@ bool leaf_card_hit(rayQueryEXT rq) {
                     (cell >= 2.0 ? 0.5 : 0.0) + (1.0 - clamp(uv.y, 0.006, 0.994)) * 0.5);
     return textureLod(LEAF_ATLAS, auv, 1.5).a > 0.33;
 }
+bool leaf_tint_candidate(rayQueryEXT rq) {      // true: confirm (the ray is blocked)
+    uint cell1 = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);
+    if (cell1 == 0u || cell1 >= 100u) return leaf_card_hit(rq);
+    vec2 b = rayQueryGetIntersectionBarycentricsEXT(rq, false);
+    vec2 uv = ((rayQueryGetIntersectionPrimitiveIndexEXT(rq, false) & 1) == 0) ? vec2(b.x + b.y, b.y)
+                                                                              : vec2(b.x, b.x + b.y);
+    float cell = float(cell1 - 1u);
+    vec2 auv = vec2(mod(cell, 2.0) * 0.5 + clamp(uv.x, 0.006, 0.994) * 0.5,
+                    (cell >= 2.0 ? 0.5 : 0.0) + (1.0 - clamp(uv.y, 0.006, 0.994)) * 0.5);
+    vec4 s = textureLod(LEAF_ATLAS, auv, 1.5);
+    if (s.a <= 0.33) return false;
+    float m = max(max(s.r, s.g), s.b);
+    if (m < 1e-3) return true;
+    g_rq_T *= s.rgb * (0.25 / m);
+    return max(max(g_rq_T.r, g_rq_T.g), g_rq_T.b) < 0.03;
+}
+// The hue of the sun the leaves let by, at this pixel (rm_rt_sun_shadow; luminance 1, white
+// where no leaf was crossed).
+vec3 g_rm_sun_tint = vec3(1.0);
 
 #ifndef VIBE_WATER
 // Slab-test ray vs AABB. Used to check sun occlusion through the voxel
@@ -619,7 +644,21 @@ vec3 sample_sky(vec3 dir) {
 #include "terrain_rm_heightfield.glsl"   // Terrain height (FBM + ground relief) and the ray march against it
 #include "terrain_rm_shading_helpers.glsl"   // Normal, terrain / grass shadows, road weights, ground material, reflection marches
 #include "terrain_rm_water.glsl"   // Water: flow, normals, foam pattern, ripples
+// The water's simulation (vk_engine/water_sim.cpp): the wind sea's FFT cascades, the ripple field.
+layout(set = 0, binding = 51) uniform sampler2DArray u_ww_grad;
+layout(set = 0, binding = 52) uniform sampler2DArray u_ww_disp;
+layout(set = 0, binding = 53) uniform sampler2D u_ww_rip;
+#define WW_GRAD u_ww_grad
+#define WW_DISP u_ww_disp
+#define WW_RIP u_ww_rip
+#include "water_waves.glsl"   // the one set of wave functions every water body uses
+// The local shallow-water solver round the camera (vk_engine/water_solver.cpp): its gradient, current and foam.
+layout(set = 0, binding = 54) uniform sampler2D u_ws_r;
+#define WS_TEX u_ws_r
+#include "water_solver.glsl"
 #include "terrain_rm_bake.glsl"   // The baked ground texture: its pictures and the read of them
+#include "ground_fx.glsl"         // the ground effects' block (ground_fx.cpp)
+#include "ground_lsd.glsl"        // the far ground's colour of placed objects (terrain_rm_main_light.glsl)
 // ---- The sun's shadow on the ground, as two functions ----
 // They are called for every pixel by the full pass, or - settings: 'sun shadows at low
 // resolution' - once per block of pixels by the low-resolution build, whose results the full
@@ -766,6 +805,8 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
             float inv = 1.0 / float(strata);
             int taken = 0;
             float blocked = 0.0;
+            vec3 vis3 = vec3(0.0);
+            bool tint_on = (scene.lp_flags.x & 4) != 0 && scene.season.w <= 0.02;
             for (int sy = 0; sy < strata && taken < N_s; ++sy) {
                 for (int sx = 0; sx < strata && taken < N_s; ++sx) {
                     float r1 = rmRand(seed_base + uvec3(taken, 11u, 47u));
@@ -776,11 +817,16 @@ float rm_rt_sun_shadow(vec3 pos, vec3 nor, vec3 sunDir, float self_shadow) {
                     float ph = 6.28318530718 * u2;
                     vec3 j   = (cos(ph) * tan_u + sin(ph) * tan_v) * r;
                     vec3 d   = normalize(sunDir + j);
+                    g_rq_leaf_tint = tint_on; g_rq_T = vec3(1.0);
                     if (any_hit_no_terrain(origin, d, 100.0)) blocked += 1.0;
+                    else { blocked += 1.0 - dot(g_rq_T, vec3(0.2126, 0.7152, 0.0722)); vis3 += g_rq_T; }
+                    g_rq_leaf_tint = false;
                     ++taken;
                 }
             }
-            dyn_shadow = (blocked / float(taken)) * scene.rt_params.w;
+            float sh_raw = blocked / float(taken);
+            if (sh_raw < 0.999) g_rm_sun_tint = mix(vec3(1.0), (vis3 / float(taken)) / (1.0 - sh_raw), clamp(scene.rt_params.w, 0.0, 1.0));
+            dyn_shadow = sh_raw * scene.rt_params.w;
         }
     }
     // 4. Max-combine: the FBM self-shadow is the analogue of
@@ -1111,6 +1157,27 @@ void main() {
     if (t_water_plane > 0.0 && (t < 0.0 || t_water_plane < t)) {
         t_water = t_water_plane;
     }
+    // The eye UNDER the stream's surface (diving in one of its pools): the ray leaves the water
+    // where it crosses the surface from below - found back from where it ends (the ground, or
+    // 60 m: rays to the sky too) if it is out of the water there. The water's shading then draws
+    // the surface from underneath (Snell's window: cam_under, water_swell.x being the stream's
+    // surface at the eye - water_fx.cpp water_surface_y).
+    float wt_under_t = -1.0, wt_under_y = -1e9;
+    if (scene.stream_info.x > 1.5 && wc_stream_surface(ro.xz) > ro.y) {
+        float te = t > 0.0 ? t : 60.0;
+        vec3  Pe = ro + rd * te;
+        if (Pe.y > wc_stream_surface(Pe.xz)) {
+            float ta = 0.0, tb = te;
+            for (int i = 0; i < 14; ++i) {
+                float tm = 0.5 * (ta + tb);
+                vec3  Pm = ro + rd * tm;
+                if (Pm.y > wc_stream_surface(Pm.xz)) tb = tm; else ta = tm;
+            }
+            vec3  Pc = ro + rd * tb;
+            float Sc = wc_stream_surface(Pc.xz);
+            if (abs(Pc.y - Sc) < 0.08) { wt_under_t = tb; wt_under_y = Sc; t_water = tb; }
+        }
+    }
 
     if (t < 0.0 && t_water < 0.0) {
         // Sky — let the existing compose-pass sky handle this pixel.
@@ -1134,6 +1201,109 @@ void main() {
 #endif /* VIBE_WATER */
         discard;
     }
+
+    // The sea's swell (terrain_rm_water.glsl wt_swell): the surface has real height. The ray is
+    // followed from where it passes the crests' tops to where it is under the troughs: six
+    // steps (closer together near the eye) find the first crossing - a near crest hides what is
+    // behind it - and four of regula falsi the point. wt_sw_k: the swell's scale here (0 on
+    // lakes, the river and at the shore: wt_sea_k, wt_swell_shore). The mesh terrain's water
+    // plane (VIBE_WATER) is drawn flat: there the swell is in the normal only.
+    float wt_sw_k = 0.0;
+    vec2  wt_sw_g = vec2(0.0);
+    // The stream (water_course.glsl): water ABOVE the sea, with its own surface height along its
+    // course. Its channel is carved into the ground formula, so the march finds the bed; if that
+    // bed lies under the stream's surface, the ray passed the water on the way: back along it to
+    // where it crossed the surface (bisection), and the water is drawn there.
+    float wt_stream_y = -1e9;
+#ifndef VIBE_WATER
+    // (Also where the ray met the river's plane first: the stream's last metres run down into the
+    //  river above its level, over a bed that is already under it - there the stream's surface is
+    //  the one met first; without this it ended in a cut over the river's flat water.)
+    float t_wend = t_water > 0.0 ? t_water : t;
+    if (wt_under_y > -1e8) { t_water = wt_under_t; wt_stream_y = wt_under_y; }      // (the eye under the stream's surface: found above, before the sky's pixels were let go)
+    else if (t_wend > 0.0 && scene.stream_info.x > 1.5) {
+        vec3 Pb = ro + rd * t_wend;
+        float Sb = wc_stream_surface(Pb.xz);
+        // (the eye need not be above THIS point's surface - looking up at a fall from its foot,
+        //  the face stands above the eye; the walk back below starts above the water, or no water)
+        if (Sb > Pb.y + 0.002) {
+            float ta = max(0.0, t_wend - (Sb - Pb.y + 2.0) / max(-rd.y, 0.04)), tb = t_wend;
+            vec3  Pa = ro + rd * ta;
+            if (Pa.y > wc_stream_surface(Pa.xz)) {
+                for (int i = 0; i < 10; ++i) {
+                    float tm = 0.5 * (ta + tb);
+                    vec3  Pm = ro + rd * tm;
+                    if (Pm.y > wc_stream_surface(Pm.xz)) ta = tm; else tb = tm;
+                }
+                // (a crossing at the edge of the stream's water - where its surface stops - is no
+                //  surface: the ray came in from the side under a bank. No water drawn there.)
+                vec3  Pc = ro + rd * tb;
+                float Sc = wc_stream_surface(Pc.xz);
+                if (abs(Pc.y - Sc) < 0.08) { t_water = tb; wt_stream_y = Sc; }
+            }
+        }
+    }
+#endif
+    // The open sea's surface also moves with the wind sea's FFT cascades (water_waves.glsl
+    // ww_fft_height; CPU twin water_sim.cpp), and both fade toward the coast by the distance to it
+    // (ww_shore_dist: from the depth and the bed's slope - two more taps of the ground, near a
+    // coast only) as well as by the depth (a trough never reaches the bed).
+    float wt_shore_d = 1e4;     // the distance to the coast (m), the open sea near a coast only
+    float wt_fft_k = 0.0;
+#ifndef VIBE_LITE
+    if ((scene.water_wind.w > 1e-4 || scene.water_fft.y > 0.5) && t_water > 0.0 && wt_stream_y < -1e8) {      // (water pixels only; not the stream)
+        float tw_t = scene.water_params.w;
+        vec3  pw = ro + rd * t_water;
+        float sk = wt_sea_k(pw.xz);
+        if (sk > 0.0) {
+            float bed0 = water_only ? meshHeight(pw.xz) : terrainM_lod(pw.xz, t_water);
+            float dep = water_y - bed0;
+            float dk = 1.0;
+            if (scene.water_flags.z > 0.5 && dep < 60.0) {
+                const float e = 2.0;
+                float bx = water_only ? meshHeight(pw.xz + vec2(e, 0.0)) : terrainM_lod(pw.xz + vec2(e, 0.0), t_water);
+                float bz = water_only ? meshHeight(pw.xz + vec2(0.0, e)) : terrainM_lod(pw.xz + vec2(0.0, e), t_water);
+                wt_shore_d = ww_shore_dist(max(dep, 0.0), vec2(bx - bed0, bz - bed0) / e);
+                dk = smoothstep(0.0, 1.0, wt_shore_d / 150.0);      // (the swell and the wind sea die out over the last 150 m)
+            }
+            wt_sw_k = scene.water_wind.w * sk * min(dk, wt_swell_shore(dep, scene.water_wind.w));
+            if (scene.water_fft.y > 0.5) wt_fft_k = sk * min(dk, smoothstep(0.0, 1.0, dep / (0.5 + 3.0 * scene.water_fft.z)));
+        }
+#ifndef VIBE_WATER
+        // (the sea's height along the ray: the swell and the cascades - each cascade faded where a
+        //  pixel is wider than its waves)
+        #define WT_SEA_H(tt) (wt_sw_k * wt_swell(ro.xz + rd.xz * (tt), tw_t).x + (wt_fft_k > 1e-4 ? wt_fft_k * ww_fft_height(ro.xz + rd.xz * (tt), max(tt, 1.0) * 0.0025 / max(abs(rd.y), 0.12), vec4(1.0)) : 0.0))
+        if ((wt_sw_k > 1e-4 || wt_fft_k > 1e-4) && ro.y > water_y + scene.water_swell.x && rd.y < -1e-4) {
+            float hi = 0.70 * 32.5 * wt_sw_k + wt_fft_k * scene.water_fft.z, lo = 0.44 * 32.5 * wt_sw_k + wt_fft_k * scene.water_fft.z;
+            float ta = max((water_y + hi - ro.y) / rd.y, 0.0);
+            float tb = min((water_y - lo - ro.y) / rd.y, t_water * 3.0 + 300.0);
+            float t0 = ta;
+            float f0 = ro.y + rd.y * ta - water_y - WT_SEA_H(ta);
+            float t1 = -1.0, f1 = 0.0;
+            if (f0 >= 0.0) {
+                for (int i = 1; i <= 6; ++i) {
+                    float u = float(i) / 6.0;
+                    float ti = mix(ta, tb, u * u);
+                    float fi = ro.y + rd.y * ti - water_y - WT_SEA_H(ti);
+                    if (fi < 0.0) { t1 = ti; f1 = fi; break; }
+                    t0 = ti; f0 = fi;
+                }
+            }
+            if (t1 > 0.0) {
+                for (int i = 0; i < 4; ++i) {
+                    float tm = t0 - f0 * (t1 - t0) / min(f1 - f0, -1e-6);
+                    float fm = ro.y + rd.y * tm - water_y - WT_SEA_H(tm);
+                    if (fm < 0.0) { t1 = tm; f1 = fm; } else { t0 = tm; f0 = fm; }
+                }
+                float th = t0 - f0 * (t1 - t0) / min(f1 - f0, -1e-6);
+                // (a trough behind ground that stands in front: the ground shows)
+                t_water = (t > 0.0 && th > t) ? -1.0 : th;
+            }
+        }
+#endif /* ! VIBE_WATER */
+        if (wt_sw_k > 1e-4 && t_water > 0.0) wt_sw_g = wt_sw_k * wt_swell((ro + rd * t_water).xz, tw_t).yz;
+    }
+#endif /* ! VIBE_LITE */
 
 #include "terrain_rm_main_water.glsl"   // main(), continued: the water surface: waves, refraction, reflection, foam, the bed seen through it
 #endif /* ! VIBE_BAKE */

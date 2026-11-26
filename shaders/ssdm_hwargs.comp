@@ -1,0 +1,15 @@
+#version 460
+// Screen-space displacement - the hardware path's draw from the count the compute rasterizer
+// left (the reference game's GenerateIndirectCommandHardwareRasterizerCS: there
+// ((count + 15) >> 4) mesh-shader groups of 16 cells; here six vertices per cell).
+#extension GL_GOOGLE_include_directive : require
+#include "ssdm_common.glsl"
+
+layout(local_size_x = 1) in;
+
+void main() {
+    ssdm_hw_vertices = ssdm_hw_count * 6u;
+    ssdm_hw_instances = 1u;
+    ssdm_hw_first_vertex = 0u;
+    ssdm_hw_first_instance = 0u;
+}

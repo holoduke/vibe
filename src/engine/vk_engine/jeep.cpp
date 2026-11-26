@@ -1199,6 +1199,28 @@ bool VulkanEngine::jeep_headlights(glm::vec4& pos, glm::vec4& dir, glm::vec4& co
     return true;
 }
 
+// Hot air behind running cars (lens_fx.cpp: the heat shimmer): one source a car, at the tail
+// low down, stronger the harder the engine works. Returns whether the camera is in a car's
+// cabin (the driver's nearest view: no rain on the lens there).
+bool VulkanEngine::jeep_heat_sources(std::vector<glm::vec4>& out, glm::vec3 eye) const {
+    if (!globe::current().home) return false;
+    auto add = [&](const JeepState* c) {
+        if (!c || !c->posed || !c->snd_running) return;
+        const glm::mat4& B = c->st.body;
+        const glm::vec3 tail = 0.5f * (c->tail[0] + c->tail[1]);
+        const glm::vec3 p = glm::vec3(B * glm::vec4(c->tail[1].x * 0.55f, 0.42f, tail.z + 0.35f, 1.0f));
+        if (glm::distance(p, eye) > 70.0f) return;
+        const float rpm = glm::clamp(c->snd_rpm / std::max(c->tune.engine_max_rpm, 1000.0f), 0.0f, 1.0f);
+        const float k = 0.55f + 0.9f * rpm + 0.5f * glm::clamp(c->snd_load, 0.0f, 1.0f);
+        out.push_back(glm::vec4(p + glm::vec3(0.0f, 0.25f, 0.0f), 0.55f));
+        out.push_back(glm::vec4(k, 1.6f, 2.0f, 9.0f));
+    };
+    for (const JeepState* c : jeep_all_) add(c);
+    for (const NpcCar& nc : npc_cars_)
+        if (nc.agent >= 0 && std::find(jeep_all_.begin(), jeep_all_.end(), nc.car) == jeep_all_.end()) add(nc.car);
+    return jeep_ && jeep_->driving && jeep_->cam_mode == 0;
+}
+
 // ---------------------------------------------------------------------------------------
 // CAR SOUND. Every car that runs has an engine (audio.h "ENGINES"; the loops come out of
 // an engine simulation - docs/ARCHITECTURE.md "Car sound"): the jeep a flat four, the sports

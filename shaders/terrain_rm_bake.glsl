@@ -38,6 +38,7 @@ bool rm_bake_fetch(vec3 pos, float t, out vec3 nor, out vec3 mate, out float hw_
     float lf = log2(max(t / g_bake_t0, 1.0));
     if (lf > float(kBakeLevels - 1)) return false;
     if (g_foot_r2 > 0.0 && dot(pos.xz - g_foot_c, pos.xz - g_foot_c) < g_foot_r2 + 1.0) return false;
+    { vec2 tr = track_dr(pos.xz); if (tr.x + tr.y > 0.002) return false; }   // (tracks: per pixel, post_fx.cpp)
     lf = max(lf, g_bake_lmin);
     float l0 = floor(lf), f = lf - l0;
     float span0 = float(kBakeSize) * kBakeTexel0 * exp2(l0);

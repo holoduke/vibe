@@ -62,6 +62,10 @@ void main() {
     // are already faded by the placement - and with their dissolve packed into the red.
     bool  tuft = pc.grass_params.y > 0.5 && (int(inUv.x + 0.5) == 8 || int(inUv.x + 0.5) == 10);        // (8 = a blade, 10 = a flowering stalk; 9 is the water lily's pad)
     bool  placed = tuft && scale < 0.0;
+    // Small debris (species 19..26, parts 20..27: scatter_debris_meshes.inl, placed by tuft_place.comp):
+    // always GPU-placed (no fade of its own), its colour plain, laid flat on the ground below.
+    bool  debris = pc.grass_params.y > 0.5 && int(inUv.x + 0.5) >= 20;
+    if (debris) { placed = true; scale = abs(scale); tint.r = tint.r / 0.99; }
     float dissolve = 1.0;
     if (tuft) {
         scale = abs(scale);
@@ -69,6 +73,22 @@ void main() {
         if (fb > 0.0 || placed) { dissolve = (255.0 - fb) / 255.0; tint.r = fract(tint.r) / 0.99; }
     }
 
+    // Water lilies (the only plants that float: their base is AT the water level - scatter.cpp,
+    // river_plants.h) part round a player wading or swimming through them: the reference game's
+    // swamp rule - within a radius that grows with how deep the body is in the water, pushed away
+    // by (1 - d / R)^3 x that depth.
+    if (abs(base.y - scene.water_params.y) < 0.01) {
+        // (the player's BODY - scene.water_body, its middle 0.9 m over the feet -, not the camera:
+        //  in third person or from a car the camera is elsewhere)
+        float body = clamp(base.y - (scene.water_body.y - 0.9), 0.0, 1.5);      // (how deep the player stands in the water)
+        vec2 dv = base.xz - scene.water_body.xz;
+        float dd = length(dv);
+        float R = 0.9 + 1.3 * body;
+        if (body > 0.03 && dd < R) {
+            float k = pow(1.0 - dd / R, 3.0) * min(body, 1.5);
+            base.xz += (dd > 1e-3 ? dv / dd : vec2(1.0, 0.0)) * (k * R * 0.8);
+        }
+    }
     float dist = distance(base, scene.camera_pos.xyz);
     // Plants on raymarched terrain: rise with its close-range ground
     // relief (whole turns of `rot` = lift in 4 mm steps, scatter.cpp),
@@ -136,6 +156,22 @@ void main() {
     vec3 world = R * (lpos * squash * scale * fade) + base;
     // Grass tufts: their own model (tuft_cd.glsl).
     vec3 wnormal = R * inNormal;
+    if (debris) {
+        // turned onto the ground's normal (the home tile's height map; upright beyond it)
+        vec3 gn = vec3(0.0, 1.0, 0.0);
+        if (max(abs(base.x), abs(base.z)) < 1020.0) {
+            vec2 gu = base.xz / 2048.0 + 0.5;
+            const float ge = 1.0 / 2048.0;
+            float hx = textureLod(u_heightmap_full, gu + vec2(ge, 0.0), 0.0).r - textureLod(u_heightmap_full, gu - vec2(ge, 0.0), 0.0).r;
+            float hz = textureLod(u_heightmap_full, gu + vec2(0.0, ge), 0.0).r - textureLod(u_heightmap_full, gu - vec2(0.0, ge), 0.0).r;
+            gn = normalize(vec3(-hx, 2.0, -hz));
+        }
+        vec3 gt = normalize(cross(gn, vec3(0.0, 0.0, 1.0)));
+        vec3 gb = cross(gt, gn);
+        mat3 G = mat3(gt, gn, gb);               // (local x, y = up, z)
+        world = G * (R * (lpos * scale)) + base + gn * 0.012;          // (a little over the ground's close relief)
+        wnormal = G * (R * inNormal);
+    }
     if (tuft) {
         wnormal = inNormal;
         bool gone;
@@ -152,7 +188,7 @@ void main() {
         }
     }
     // Other plants: wind sway weighted by uv.y (0 at the root, 1 at the tips).
-    if (!tuft && pc.grass_params.y > 0.5 && plant_sway > 0.0) {
+    if (!tuft && !debris && pc.grass_params.y > 0.5 && plant_sway > 0.0) {
         float t = pc.grass_params.z;
         float ph = dot(base.xz, vec2(0.37, 0.23));
         vec2 wd = normalize(vec2(0.8, 0.45));

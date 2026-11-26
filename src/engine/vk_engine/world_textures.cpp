@@ -598,6 +598,7 @@ void VulkanEngine::init_textures() {
 std::vector<unsigned char> VulkanEngine::bake_veg_shade_pixels() const {
     const int N = 2048;
     std::vector<float> cov(size_t(N) * N, 0.0f);
+    std::vector<float> con(size_t(N) * N, 0.0f);     // (the conifers' crowns alone, unblurred: G - the debris under them, tuft_place.comp)
     for (const VegInstance& vi : veg_inst_cpu_) {
         const size_t a = size_t(vi.rot_arch_phase.y + 0.5f);
         if (a >= veg_arch_.size() || vi.pos_scale.w <= 0.0f) continue;
@@ -616,6 +617,7 @@ std::vector<unsigned char> VulkanEngine::bake_veg_shade_pixels() const {
                 const float w = (1.0f - d2) * (1.0f - d2) * k;
                 float& c = cov[size_t(z) * N + size_t(x)];
                 c = 1.0f - (1.0f - c) * (1.0f - w);             // overlapping crowns add up, never past 1
+                if (sp == 0) { float& q = con[size_t(z) * N + size_t(x)]; q = 1.0f - (1.0f - q) * (1.0f - w); }
             }
     }
     // Two box blurs of 2 m: soft outer borders.
@@ -637,7 +639,8 @@ std::vector<unsigned char> VulkanEngine::bake_veg_shade_pixels() const {
     std::vector<unsigned char> px(size_t(N) * N * 4);
     for (size_t i = 0; i < cov.size(); ++i) {
         const unsigned char v = static_cast<unsigned char>(std::clamp(cov[i], 0.0f, 1.0f) * 255.0f + 0.5f);
-        px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v; px[i * 4 + 3] = 255;
+        px[i * 4] = px[i * 4 + 2] = v; px[i * 4 + 3] = 255;
+        px[i * 4 + 1] = static_cast<unsigned char>(std::clamp(con[i], 0.0f, 1.0f) * 255.0f + 0.5f);    // (G: conifers; the readers of the cover read R)
     }
     return px;
 }

@@ -1,0 +1,32 @@
+#version 460
+// Tracks in snow and sand, step 2 of 2 (post_fx.cpp): the raised rim, after the reference
+// game: rim = max(0.125 x (8 taps on a ring) - 0.26 x (5 taps close by), 0) of the depth - the
+// snow pushed out of a rut stands up along its edges. Written with the depth as (depth, rim);
+// the ground shader displaces by -depth + 0.5 rim (terrain_rm_pebbles.glsl foot_depth).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_depth;       // step 1's depth (point)
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D o_tracks;
+layout(push_constant) uniform PC { vec4 p; } pc;               // x: texels a side, y: ring radius (texels)
+
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    int N = int(pc.p.x);
+    if (t.x >= N || t.y >= N) return;
+    ivec2 mx = ivec2(N - 1);
+    float D = texelFetch(u_depth, t, 0).x;
+    float near = D;
+    near += texelFetch(u_depth, clamp(t + ivec2(1, 0), ivec2(0), mx), 0).x;
+    near += texelFetch(u_depth, clamp(t - ivec2(1, 0), ivec2(0), mx), 0).x;
+    near += texelFetch(u_depth, clamp(t + ivec2(0, 1), ivec2(0), mx), 0).x;
+    near += texelFetch(u_depth, clamp(t - ivec2(0, 1), ivec2(0), mx), 0).x;
+    float ring = 0.0;
+    float R = pc.p.y;
+    for (int k = 0; k < 8; ++k) {
+        float a = float(k) * 0.7853982 + 0.3926991;
+        ivec2 q = clamp(t + ivec2(round(vec2(cos(a), sin(a)) * R)), ivec2(0), mx);
+        ring += texelFetch(u_depth, q, 0).x;
+    }
+    float rim = max(0.125 * ring - 0.26 * near, 0.0);
+    imageStore(o_tracks, t, vec4(D, rim, 0.0, 0.0));
+}

@@ -1,0 +1,39 @@
+#version 460
+// Depth of field, step 2 (post_fx.cpp): the 43-tap disc gather at half resolution (the
+// reference's rings at 0.3636 / 0.6818 / 1.0 of the largest radius: 1 + 8 + 14 + 20 taps), far
+// and near fields summed apart. Far: a sample counts where its own circle and the centre's both
+// reach this far (sharp things in front do not bleed back). Near: a sample counts where its own
+// circle reaches the centre; its coverage becomes the near field's alpha.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_half;     // rgb, a: signed radius (half px)
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D o_far;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D o_near;
+layout(push_constant) uniform PC { vec4 p; } pc;   // xy: half size, z: largest radius (half px)
+
+void main() {
+    ivec2 ip = ivec2(gl_GlobalInvocationID.xy);
+    if (ip.x >= int(pc.p.x) || ip.y >= int(pc.p.y)) return;
+    vec2 inv = 1.0 / pc.p.xy;
+    vec2 uv = (vec2(ip) + 0.5) * inv;
+    vec4 c0 = textureLod(u_half, uv, 0.0);
+    float R = pc.p.z;
+    vec3 far = c0.rgb; float fw = 1.0;
+    vec3 near = vec3(0.0); float nw = 0.0;
+    if (c0.a < 0.0) { near = c0.rgb; nw = 1.0; }
+    const int ring_n[3] = int[](8, 14, 20);
+    const float ring_r[3] = float[](0.3636, 0.6818, 1.0);
+    for (int r = 0; r < 3; ++r) {
+        float rad = ring_r[r] * R;
+        for (int k = 0; k < ring_n[r]; ++k) {
+            float ang = 6.2831853 * (float(k) + 0.5 * float(r)) / float(ring_n[r]);
+            vec2 o = vec2(cos(ang), sin(ang)) * rad;
+            vec4 s = textureLod(u_half, uv + o * inv, 0.0);
+            float wf = clamp(min(max(c0.a, 0.0), max(s.a, 0.0)) - rad + 1.0, 0.0, 1.0);
+            far += s.rgb * wf; fw += wf;
+            float wn = clamp(-s.a - rad + 1.0, 0.0, 1.0);
+            near += s.rgb * wn; nw += wn;
+        }
+    }
+    imageStore(o_far, ip, vec4(far / fw, c0.a));
+    imageStore(o_near, ip, vec4(near / max(nw, 1e-4), clamp(nw * 0.073, 0.0, 1.0)));
+}

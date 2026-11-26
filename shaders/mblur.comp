@@ -1,0 +1,52 @@
+#version 460
+// Motion blur, step 3 (post_fx.cpp): the gather. 8 taps along the tile's (neighbourhood-max)
+// velocity, 4 each way, jittered per pixel (interleaved-gradient noise), weighted by depth
+// order and by each sample's own velocity (McGuire et al. 2012): a sample in front blurs over
+// the centre only as far as it moves itself; one behind is seen only where the centre moves.
+// Blur starts past the dead zone (the reference's 4 px). Pixels whose tile is still copy.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_src;      // HDR colour (output size, linear)
+layout(set = 0, binding = 1) uniform sampler2D u_motion;   // render resolution, point
+layout(set = 0, binding = 2) uniform sampler2D u_depth;    // render resolution, point
+layout(set = 0, binding = 3) uniform sampler2D u_neigh;    // tiles, point
+#include "post_fx.glsl"
+layout(std430, set = 0, binding = 4) readonly buffer PostFxB { PostFxData d; } pfx;
+layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D o_dst;
+layout(push_constant) uniform PC { vec4 p; } pc;   // xy: output size
+
+float cone(float dist, float v) { return clamp(1.0 - dist / max(v, 1e-3), 0.0, 1.0); }
+float cylinder(float dist, float v) { return 1.0 - smoothstep(0.95 * v, 1.05 * v + 1e-3, dist); }
+float softz(float za, float zb) { return clamp(1.0 - (za - zb) / max(0.05 * za, 0.1), 0.0, 1.0); }
+
+void main() {
+    ivec2 ip = ivec2(gl_GlobalInvocationID.xy);
+    if (ip.x >= int(pc.p.x) || ip.y >= int(pc.p.y)) return;
+    vec2 inv = 1.0 / pc.p.xy;
+    vec2 uv = (vec2(ip) + 0.5) * inv;
+    vec4 c0 = textureLod(u_src, uv, 0.0);
+    vec2 V = pfx_blur_vec(pfx.d, texelFetch(u_neigh, ip / 16, 0).rg);
+    float lv = length(V);
+    if (lv < 0.5) { imageStore(o_dst, ip, c0); return; }
+    vec2 dir = V / lv;
+    float z0 = pfx_lin_depth(pfx.d, textureLod(u_depth, uv, 0.0).r);
+    float v0 = length(pfx_blur_vec(pfx.d, pfx_velocity(pfx.d, uv, textureLod(u_motion, uv, 0.0).rg, textureLod(u_depth, uv, 0.0).r, pc.p.xy)));
+    float noise = fract(52.9829189 * fract(dot(vec2(ip), vec2(0.06711056, 0.00583715))));
+    float w0 = 1.0 / max(v0, 1.0);
+    vec3 acc = c0.rgb * w0;
+    float ws = w0;
+    for (int i = 0; i < 4; ++i) {
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+            float t = (float(i) + noise) * 0.25 * 0.5 * lv;          // 0 .. half the length, each way
+            vec2 suv = uv + dir * (t * float(sgn)) * inv;
+            float dzs = textureLod(u_depth, suv, 0.0).r;
+            float zs = pfx_lin_depth(pfx.d, dzs);
+            float vs = length(pfx_blur_vec(pfx.d, pfx_velocity(pfx.d, suv, textureLod(u_motion, suv, 0.0).rg, dzs, pc.p.xy)));
+            float f = softz(zs, z0);     // the sample is in front of the centre (1) or behind (0)
+            float b = softz(z0, zs);     // the sample is behind the centre
+            float w = f * cone(t, vs) + b * cone(t, v0) + cylinder(t, vs) * cylinder(t, v0) * 2.0;
+            acc += textureLod(u_src, suv, 0.0).rgb * w;
+            ws += w;
+        }
+    }
+    imageStore(o_dst, ip, vec4(acc / max(ws, 1e-4), c0.a));
+}

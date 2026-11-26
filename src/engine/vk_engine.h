@@ -213,6 +213,7 @@ private:
     void init_rt();
     void destroy_rt();
     void update_scene_ubo();
+    void light_port_fill(struct SceneUBO& d);   // the lighting ports' part of the scene block (light_port.cpp)
     void rebuild_tlas(VkCommandBuffer cmd);
     // Rebuild static_brush_instances_ / static_brush_materials_ from
     // world_.brushes for the current rt_.textures_enabled. Cheap; called only
@@ -821,6 +822,18 @@ private:
     // (the state of this is private to its own files: vk_engine/state/fog.h)
     struct FogState;
     FogState* fog_ = nullptr;
+    // Camera weather and heat (vk_engine/lens_fx.cpp; state: vk_engine/state/lens_fx.h): rain
+    // on the lens, heat shimmer, and the block compose.frag reads them (and the moon) from.
+    struct LensFxState;
+    LensFxState* lens_fx_ = nullptr;
+    void init_lens_fx();
+    void destroy_lens_fx();
+    void write_lens_fx_compose_bindings();     // compose bindings 12 - 14 (both sets)
+    void dispatch_lens_fx(VkCommandBuffer cmd);   // per frame, before the sky fill / compose
+    // Hot air for the shimmer: [2i] xyz centre, w radius (m); [2i+1] strength, rise (m/s),
+    // height / width, pattern scale (1/m). Running cars' exhausts (jeep.cpp). Returns whether
+    // the camera is in a car's cabin.
+    bool jeep_heat_sources(std::vector<glm::vec4>& out, glm::vec3 eye) const;
     static constexpr int kFogWispDim = 256;
     VkSampler   texture_sampler_ = VK_NULL_HANDLE;
     // Texture index assigned to the four spawnable box variants (so dynamic
@@ -1510,6 +1523,28 @@ private:
     std::vector<WaterDrop>   water_drops_;
     std::vector<WaterSplash> water_splashes_;
     bool  water_at(float x, float z) const;
+    // The sea's swell at (x, z) now: the surface about water_level (m), the CPU twin of the
+    // water shader's wt_swell (terrain_rm_water.glsl). 0 on lakes, the river, at the shore.
+    float water_swell_height(float x, float z) const;
+    // The water surface at (x, z): the sea's level with its swell, or the stream's own surface
+    // where that stands higher (water_fx.cpp; engine/water_course.h).
+    float water_surface_y(float x, float z) const;
+    // The river's current at (x, z) (m/s, world x z): the CPU twin of the water shader's
+    // (terrain_rm_water.glsl wt_river + the current block). 0 away from the river.
+    glm::vec2 water_river_flow(float x, float z) const;
+    // ... before the piers and rocks bend it (water_fx.cpp): what the shallow-water solver pulls toward.
+    glm::vec2 water_course_flow(float x, float z) const;
+    // The current that carries things: the shallow-water solver's (read back from the GPU, a few
+    // frames late) inside its window round the camera, else water_river_flow (water_solver.cpp).
+    // `ring` > 0: the mean round a ring of that radius - the free stream round a body, without the
+    // water the body itself drags along (a wader was carried by his own wake).
+    glm::vec2 water_flow_at(float x, float z, float ring = 0.0f) const;
+    // Spray and mist at the stream's falls, at rocks the water hits hard, off the sea's whitecaps
+    // in a strong wind (water_spray.cpp; drawn by render_fx: droplets kind 4, mist kind 8).
+    void tick_water_spray(float dt);
+    void water_spray_fx(std::vector<Vertex>& drops, std::vector<Vertex>& mist, glm::vec3 eye, glm::vec3 cam_right, glm::vec3 cam_up);
+    // The river's sound: one source on the course nearest the listener (water_fx.cpp).
+    void  tick_river_sound(float dt);
     void  add_water_ripple(float x, float z, float amp);
     void  spawn_water_splash(glm::vec3 pos, float scale);
     void  tick_water_fx(float dt);
@@ -2455,6 +2490,20 @@ private:
     void init_wind_fluid();
     void destroy_wind_fluid();
     void wind_fluid_update(VkCommandBuffer cmd);
+    // The water's simulation (vk_engine/water_sim.cpp): the wind sea's FFT cascades, the ripple
+    // field round the camera; scene bindings 51..53. State private to that file.
+    void init_water_sim();
+    void destroy_water_sim();
+    void water_sim_update(VkCommandBuffer cmd);
+    void water_sim_fill(struct SceneUBO& d);
+    // The local shallow-water solver round the camera (vk_engine/water_solver.cpp): scene binding
+    // 54, its foam particles drawn at the end of render_fx. State private to that file.
+    void init_water_solver();
+    void destroy_water_solver();
+    void water_solver_update(VkCommandBuffer cmd);
+    void water_solver_fill(struct SceneUBO& d);
+    void water_solver_draw(VkCommandBuffer cmd);
+    bool water_solver_drawing() const;
     glm::vec4 grass_trail_window() const;
 
     // Heightmap raw heights as an R32_SFLOAT texture. Used by the
@@ -2910,6 +2959,37 @@ private:
     // (the state of this is private to its own files: vk_engine/state/compose.h)
     struct ComposeState;
     ComposeState* compose_ = nullptr;
+    // Post effects after the reference game (vk_engine/post_fx.cpp; state: vk_engine/state/post_fx.h):
+    // histogram exposure, AgX look, local tone mapping, glare sprites, motion blur, depth of
+    // field, colour-blind view. docs/ARCHITECTURE.md "Post effects".
+    struct PostFxState;
+    PostFxState* pfx_ = nullptr;
+    // The ground and the objects on it (vk_engine/ground_fx.cpp; state vk_engine/state/ground_fx.h;
+    // shaders/ground_fx.glsl): the paste into the ground, the far ground's capture of placed
+    // objects, the deferred decals. Scene set bindings 60 (block) and 61 (capture); deferred set 30.
+    struct GroundFxState;
+    GroundFxState* gfx_ = nullptr;
+    void init_ground_fx();
+    void destroy_ground_fx();
+    void ground_fx_frame(VkCommandBuffer cmd);         // after the baked ground texture, before the world pass
+    void ground_fx_bind_deferred();                    // the block into the deferred lighting set (binding 30)
+    void gfx_lsd_capture(VkCommandBuffer cmd);         // the top-down capture: what came into the window / changed
+    void gfx_decals_frame();                           // the decals near the camera, culled and binned into tiles
+    void init_post_fx();
+    void destroy_post_fx();
+    void post_fx_settings_env();                       // VIBE_PFX_<KEY> overrides + clamps (load_settings)
+    void post_fx_prepare();                            // CPU side, before any recording (resize, enclosure rays)
+    void post_fx_upload(VkCommandBuffer cmd);          // the parameter block (before exposure.comp)
+    void post_fx_run(VkCommandBuffer cmd);             // LTM, DoF, motion blur, glare (after exposure.comp)
+    void post_fx_bind_compose(int slot, VkImageView hist_src);   // from rewrite_compose_image_bindings
+    VkDescriptorSet post_fx_compose_set(int slot) const;         // compose's set for this frame
+    // Tracks in snow and sand: stamps = (x, z, the way back this frame x, z), (radius, depth, -, -)
+    // pairs; from grass_trail_update, before the world is drawn.
+    void post_fx_tracks(VkCommandBuffer cmd, const std::vector<glm::vec4>& stamps, glm::vec3 eye);
+    void pfx_create_passes();
+    void pfx_create_targets();
+    void pfx_destroy_targets();
+    void pfx_write_sets();
     void init_taau();
     void destroy_taau();
     void recreate_taau_targets();

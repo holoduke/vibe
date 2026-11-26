@@ -1,0 +1,48 @@
+#version 460
+// Screen-space displacement - the material behind the relief: our code for the reference
+// game's SSDM_ReconstructBehindMaterialsCS. Where ssdm_dilate.comp left a weight (bilinear,
+// from half resolution), the displaced G-buffer copy is blended toward the G-buffer as it was
+// before displacement: albedo, roughness and colour by the weight, the shading normal as a
+// mix of the two directions.
+//
+// (The game also blends its surface byte; ours is the material id, which does not blend:
+//  the nearer of the two is kept.)
+#extension GL_GOOGLE_include_directive : require
+#define SSDM_OUT_IMAGES
+#include "ssdm_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(pc.size.xy)))) return;
+    vec2  uv  = vec2(p) * pc.size.zw;
+    float wgt = textureLod(u_behind_weight, uv, 0.0).r;
+    if (wgt < 0.005882353 && pc.misc.z == 0.0) return;
+    float w = wgt;
+    if (pc.misc.z > 0.0) {
+        float rate = 1.0;
+        if ((ssdm_class(p) - 1u) <= 1u) {
+            vec4  an = ssdm_unpack1010102(imageLoad(o_g1, p).r);
+            vec3  NA = ssdm_oct_decode(an.xy);
+            float s  = pc.depth.w * (texelFetch(u_hn, p, 0).w * 255.0 * 0.0005882353 + 0.15);
+            vec3  P  = ssdm_pos_corner(p, texelFetch(u_depth, p, 0).r);
+            rate = ssdm_screen_exit(P, NA, s) * ssdm_puddle5(uv);
+        }
+        w = max(wgt, clamp(1.0 - rate * rate, 0.0, 1.0));
+        if (w == 0.0) return;
+    }
+    vec4 A  = imageLoad(o_g0, p);                     // displaced (sRGB bytes)
+    vec4 An = ssdm_unpack1010102(imageLoad(o_g1, p).r);
+    vec4 Ac = imageLoad(o_color, p);
+    vec4 B  = texelFetch(u_g0, p, 0);                 // as it was
+    vec4 Bn = texelFetch(u_g1, p, 0);
+    vec4 Bc = texelFetch(u_color, p, 0);
+    vec3 alb = round(mix(A.rgb * 255.0, ssdm_to_srgb(B.rgb) * 255.0, w)) / 255.0;
+    vec3 D   = mix(ssdm_oct_decode(An.xy), ssdm_oct_decode(Bn.xy), w);
+    if (dot(D, D) <= 1e-12) D = ssdm_oct_decode(An.xy);
+    float rough = round(mix(An.b * 1023.0, Bn.b * 1023.0, w)) / 1023.0;
+    imageStore(o_g0, p, vec4(alb, w < 0.5 ? A.a : B.a));
+    imageStore(o_g1, p, uvec4(ssdm_pack1010102(vec4(ssdm_oct_encode(normalize(D)), rough, An.a))));
+    imageStore(o_color, p, mix(Ac, Bc, w));
+}

@@ -1,0 +1,184 @@
+#version 460
+// Camera weather and heat (vk_engine/lens_fx.cpp). pc.mode:
+//   0 open sky   - one workgroup: rays up from the eye in a cone against the scene (roofs,
+//                  bridges, the castle, a tree's crown) -> how much of the sky the lens sees,
+//                  eased over a second into the state buffer (drops stop landing under a roof)
+//   1 lens flow  - lens A -> B: water heavier than a drop can hold runs down the glass and
+//                  leaves a wet trail; neighbouring water evens out a little (drops merge)
+//   2 lens drops - lens B -> A: this frame's new drops are stamped (random places and sizes),
+//                  the water dries (slowly in the rain, within seconds under shelter)
+//   3 shimmer    - the heat-shimmer offsets (half resolution): ray x each hot source (a car's
+//                  exhaust, the rocket's plume, a fire) -> a wavering screen offset through the
+//                  hot air in front of the scene; plus a faint mirage low over a hot road far off
+// The lens buffer: r = water thickness (0 dry .. ~1 a full drop), g = wet trail.
+// compose.frag refracts the picture through it and adds the drops' highlight.
+#extension GL_EXT_ray_query : require
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform LensFx {
+    vec4 moon_dir;     // (compose's: the moon)
+    vec4 sun_true;
+    vec4 moon_misc;
+    vec4 lens;         // x lens rain shown (compose), y shimmer on, z time (s), w frame
+    vec4 rain;         // x rain 0..1, y 1 = the lens can be rained on at all (not in a cabin / under water / known roof), z dt (s), w drops this frame
+    vec4 cam;          // xyz eye (m), w aspect (w / h)
+    mat4 inv_vp;       // render view: ndc -> world
+    vec4 sh_info;      // x hot sources, y hot-road mirage 0..1, z, w
+    vec4 src[32];      // per source two: [2i] xyz centre, w radius (m); [2i+1] x strength, y rise (m/s), z height / width, w pattern scale (1/m)
+} fx;
+layout(set = 0, binding = 1) uniform sampler2D u_lens_a;
+layout(set = 0, binding = 2) uniform sampler2D u_lens_b;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D o_lens_a;
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D o_lens_b;
+layout(set = 0, binding = 5, rg16f) uniform writeonly image2D o_shimmer;
+layout(set = 0, binding = 6) uniform sampler2D u_depth;
+layout(set = 0, binding = 7) uniform accelerationStructureEXT topLevelAS;
+layout(std430, set = 0, binding = 8) buffer LensState { vec4 st; uint sh_max; } state;   // st.x: sky seen (eased 0..1), y: last result; sh_max: the largest shimmer offset written (uv x 1e6; the CPU logs and clears it - VIBE_LOG_LENS)
+
+layout(push_constant) uniform PC { vec4 mode; } pc;
+
+float h12(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+
+// ---- 0: how much open sky is over the lens ----
+shared float s_open[64];
+void open_sky() {
+    uint i = gl_LocalInvocationIndex;
+    // 64 directions in a cone of ~35 degrees round straight up (rain falls a little slanted).
+    float a = float(i) * 2.39996323, r = sqrt((float(i) + 0.5) / 64.0) * 0.62;
+    vec3 d = normalize(vec3(cos(a) * r, 1.0, sin(a) * r));
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0x01u,
+                          fx.cam.xyz + vec3(0.0, 0.35, 0.0), 0.05, d, 120.0);      // (from above the head: not the own body)
+    while (rayQueryProceedEXT(rq)) {}
+    s_open[i] = (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
+    barrier();
+    if (i == 0u) {
+        float o = 0.0;
+        for (int k = 0; k < 64; ++k) o += s_open[k];
+        o = clamp((o / 64.0 - 0.15) / 0.6, 0.0, 1.0) * fx.rain.y;
+        float k = 1.0 - exp(-fx.rain.z * 2.5);              // (eased over about 0.4 s)
+        state.st.x = mix(state.st.x, o, k);
+        state.st.y = o;
+    }
+}
+
+// ---- 1: water runs down, drops merge ----
+void lens_flow(ivec2 p) {
+    ivec2 sz = textureSize(u_lens_a, 0);
+    if (any(greaterThanEqual(p, sz))) return;
+    vec4 c = texelFetch(u_lens_a, p, 0);
+    vec4 up = texelFetch(u_lens_a, clamp(p - ivec2(0, 1), ivec2(0), sz - 1), 0);
+    vec4 l = texelFetch(u_lens_a, clamp(p - ivec2(1, 0), ivec2(0), sz - 1), 0);
+    vec4 rr = texelFetch(u_lens_a, clamp(p + ivec2(1, 0), ivec2(0), sz - 1), 0);
+    vec4 dn = texelFetch(u_lens_a, clamp(p + ivec2(0, 1), ivec2(0), sz - 1), 0);
+    float dt = fx.rain.z;
+    // What runs: the water above what a drop of this size holds, one texel down a step (the
+    // screen's v grows downward). Each column runs at its own pace (drops do not slide alike).
+    float pace = 0.55 + 0.9 * h12(vec2(float(p.x), floor(fx.lens.z * 0.5)));
+    float rate = clamp(dt * 38.0 * pace, 0.0, 0.9);
+    float out_c  = c.r  * clamp((c.r  - 0.62) * 2.2, 0.0, 1.0) * rate;
+    float in_up  = up.r * clamp((up.r - 0.62) * 2.2, 0.0, 1.0) * rate;
+    float h = c.r - out_c + in_up;
+    // A little evening out between neighbours where there is water (two drops that touch merge).
+    float avg = 0.25 * (up.r + l.r + rr.r + dn.r);
+    h += (avg - h) * (h > 0.05 || avg > 0.05 ? clamp(dt * 3.0, 0.0, 0.25) : 0.0);
+    // A running drop leaves a wet trail behind it.
+    float trail = max(c.g, in_up * 6.0);
+    imageStore(o_lens_b, p, vec4(max(h, 0.0), min(trail, 0.6), 0.0, 0.0));
+}
+
+// ---- 2: new drops land, the water dries ----
+void lens_drops(ivec2 p) {
+    ivec2 sz = textureSize(u_lens_b, 0);
+    if (any(greaterThanEqual(p, sz))) return;
+    vec4 c = texelFetch(u_lens_b, p, 0);
+    vec2 uv = (vec2(p) + 0.5) / vec2(sz);
+    float asp = fx.cam.w;
+    int n = int(fx.rain.w + 0.5);
+    float h = c.r;
+    for (int i = 0; i < n; ++i) {
+        vec2 sd = vec2(float(i) * 7.13 + 1.7, mod(fx.lens.w, 4096.0) * 0.731 + 3.1);
+        vec2 ctr = vec2(h12(sd), h12(sd + 19.19));
+        float rs = h12(sd + 41.7);
+        float rad = mix(0.0035, 0.016, rs * rs);                 // (screen heights)
+        vec2 dd = (uv - ctr) * vec2(asp, 1.0);
+        // (a drop is not a perfect circle: a slight squash, its own way)
+        float sq = 1.0 + 0.25 * (h12(sd + 7.7) - 0.5);
+        dd.x *= sq; dd.y /= sq;
+        float q = dot(dd, dd) / (rad * rad);
+        if (q < 1.0) {
+            float bump = sqrt(1.0 - q) * mix(0.45, 0.95, rs);
+            h = max(h, bump) + 0.35 * min(h, bump);               // (lands on water: they merge)
+        }
+    }
+    // Drying: slowly while it rains, within a few seconds under a roof or once it stops.
+    float wet_air = state.st.x * fx.rain.x;
+    float dt = fx.rain.z;
+    float dry = mix(1.1, 0.035, smoothstep(0.03, 0.25, wet_air));
+    h *= exp(-dt * dry);
+    h = max(h - dt * 0.004, 0.0);                                  // (a thin film goes all at once)
+    float trail = c.g * exp(-dt * mix(1.4, 0.25, smoothstep(0.03, 0.25, wet_air)));
+    imageStore(o_lens_a, p, vec4(min(h, 2.0), trail, 0.0, 0.0));
+}
+
+// ---- 3: heat shimmer ----
+vec2 waver(vec3 q, float t) {
+    return vec2(sin(q.y * 2.1 + q.x * 1.3 - t * 6.0) + 0.55 * sin(q.y * 4.7 + q.z * 2.9 - t * 9.5) + 0.3 * sin(q.x * 7.9 - q.y * 6.1 - t * 13.0),
+                cos(q.y * 1.7 + q.z * 1.1 - t * 7.0) + 0.55 * cos(q.x * 3.9 + q.y * 5.3 - t * 11.0) + 0.3 * cos(q.z * 8.3 + q.y * 7.7 - t * 15.0));
+}
+void shimmer(ivec2 p) {
+    ivec2 sz = imageSize(o_shimmer);
+    if (any(greaterThanEqual(p, sz))) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(sz);
+    float dz = textureLod(u_depth, uv, 0.0).r;
+    vec4 a = fx.inv_vp * vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    vec4 b = fx.inv_vp * vec4(uv * 2.0 - 1.0, (dz < 0.99999) ? dz : 1.0, 1.0);
+    vec3 ro = fx.cam.xyz;
+    vec3 hit = b.xyz / b.w;
+    vec3 rd = normalize(hit - a.xyz / a.w);
+    float dist = (dz < 0.99999) ? distance(hit, ro) : 1e7;
+    float t = fx.lens.z;
+    vec2 off = vec2(0.0);
+    int ns = int(fx.sh_info.x + 0.5);
+    for (int i = 0; i < ns; ++i) {
+        vec4 s0 = fx.src[2 * i], s1 = fx.src[2 * i + 1];
+        // An upright ellipsoid of hot air (z: height / width), the ray's chord through it.
+        vec3 sc = vec3(1.0, 1.0 / max(s1.z, 0.2), 1.0);
+        vec3 o = (ro - s0.xyz) * sc, d = rd * sc;
+        float A = dot(d, d), B = dot(o, d), C = dot(o, o) - s0.w * s0.w;
+        float disc = B * B - A * C;
+        if (disc <= 0.0) continue;
+        float sq = sqrt(disc);
+        float t0 = max((-B - sq) / A, 0.0), t1 = min((-B + sq) / A, dist);
+        if (t1 <= t0) continue;
+        float chord = (t1 - t0) * sqrt(A) / (2.0 * s0.w);          // 0..1 (through the middle: 1)
+        vec3 m = ro + rd * (0.5 * (t0 + t1));
+        // The pattern rises with the hot air; finer near the source's bottom.
+        float hy = clamp((m.y - s0.y) / (s0.w * s1.z) * 0.5 + 0.5, 0.0, 1.0);
+        vec3 q = (m - vec3(0.0, t * s1.y, 0.0)) * s1.w;
+        off += waver(q, t) * (s1.x * chord * chord * (1.0 - 0.5 * hy));
+    }
+    off *= 0.0024;
+    // A hot road far off on a clear summer afternoon: the air just above it wavers. Only low
+    // grazing views of ground well away, faint.
+    if (fx.sh_info.y > 0.0 && dz < 0.99999 && rd.y < 0.0 && rd.y > -0.09 && hit.y < ro.y - 0.5) {
+        float g = (1.0 - smoothstep(0.015, 0.09, -rd.y)) * smoothstep(45.0, 140.0, dist) * (1.0 - smoothstep(600.0, 1200.0, dist));
+        vec3 q = vec3(hit.x * 0.35, hit.y * 9.0 - t * 2.2, hit.z * 0.35);
+        vec2 w = waver(q, t * 0.7);
+        off += vec2(0.25 * w.x, w.y) * (0.0006 * g * fx.sh_info.y);
+    }
+    uint om = uint(length(off) * 1e6);
+    if (om > state.sh_max) atomicMax(state.sh_max, om);
+    imageStore(o_shimmer, p, vec4(off, 0.0, 0.0));
+}
+
+void main() {
+    int mode = int(pc.mode.x + 0.5);
+    if (mode == 0) { open_sky(); return; }
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (mode == 1) lens_flow(p);
+    else if (mode == 2) lens_drops(p);
+    else shimmer(p);
+}

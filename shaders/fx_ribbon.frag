@@ -23,6 +23,8 @@ layout(push_constant) uniform PC {
 
 #include "scene_ubo.glsl"
 layout(set = 0, binding = 29) uniform sampler2D u_scene_depth;
+// Light and fog from the froxel fog volume (post_fx.cpp; the setting particle_fog_light).
+#include "fx_fog.glsl"
 
 float h3(vec3 p) {
     p = fract(p * 0.3183099 + 0.1);
@@ -76,9 +78,13 @@ void main() {
             a *= smoothstep(0.0, 3.0 + 0.03 * d_here, d_scene - d_here);
         }
         vec3 sun = scene.sun_color.rgb * scene.sun_color.a;
-        vec3 lit = vTint * (sun * 0.75 + scene.sky_color.rgb * 0.55 + 0.05);
+        // (the sun's visibility and the lamps' light from the fog volume; its own fog: fx_fog.glsl)
+        float fvis; vec3 flocal;
+        vec3 rdv = normalize(vWorld - scene.camera_pos.xyz);
+        fxf_light(vWorld, rdv, fvis, flocal);
+        vec3 lit = vTint * (sun * 0.75 * fvis + scene.sky_color.rgb * 0.55 + 0.05 + flocal * 0.75);
         a = clamp(a * inten, 0.0, 1.0);
-        outColor = vec4(lit * a, a);
+        outColor = vec4(fxf_fog(lit * a, a, distance(vWorld, scene.camera_pos.xyz)), a);
     } else if (kind == 1) {
         // Glow beam: white-hot core + coloured halo, additive.
         float v = vUv.y;
@@ -114,9 +120,32 @@ void main() {
         float a = vTint.x * exp(-r2 * 2.4) * smoothstep(0.15, 0.7, n + 0.55 * (1.0 - r2));
         a *= 1.0 - smoothstep(0.7, 1.0, r2);
         vec3 sun = scene.sun_color.rgb * scene.sun_color.a;
-        vec3 lit = vec3(0.95, 0.97, 1.0) * (sun * 0.20 + scene.sky_color.rgb * 0.42 + 0.02) * vTint.y;
+        float fvis; vec3 flocal;
+        fxf_light(vWorld, normalize(vWorld - scene.camera_pos.xyz), fvis, flocal);
+        vec3 lit = vec3(0.95, 0.97, 1.0) * (sun * 0.20 * fvis + scene.sky_color.rgb * 0.42 + 0.02 + flocal * 0.2) * vTint.y;
         a = clamp(a * inten, 0.0, 1.0);
-        outColor = vec4(lit * a, a);
+        outColor = vec4(fxf_fog(lit * a, a, distance(vWorld, scene.camera_pos.xyz)), a);
+    } else if (kind == 8) {
+        // Spray mist over a fall, a rock, a breaking crest (water_spray.cpp; uv in [-1,1]^2, tint =
+        // alpha, brightness, seed): a soft thin sheet of droplets. It scatters the sun forward -
+        // looking toward the sun through it, it glows (a Henyey-Greenstein lobe, g 0.6, with a
+        // little back-scatter) - and the sky's light all round.
+        float r2 = dot(vUv, vUv);
+        if (r2 > 1.0) discard;
+        vec3  q = vWorld * 1.7 + vec3(vTint.z, -time * 0.9, vTint.z * 0.61);
+        float n = vnoise(q) * 0.55 + vnoise(q * 2.7) * 0.30 + vnoise(q * 6.3) * 0.15;
+        float a = vTint.x * exp(-r2 * 2.0) * smoothstep(0.25, 0.75, n + 0.45 * (1.0 - r2));
+        a *= 1.0 - smoothstep(0.75, 1.0, r2);
+        vec3  rdv = normalize(vWorld - scene.camera_pos.xyz);
+        float mu = dot(rdv, normalize(scene.sun_direction.xyz));
+        float g = 0.6;
+        float hg = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * mu, 1.5) * 0.25 + 0.12;
+        float fvis; vec3 flocal;
+        fxf_light(vWorld, rdv, fvis, flocal);
+        vec3 sun = scene.sun_color.rgb * scene.sun_color.a;
+        vec3 lit = vec3(0.96, 0.98, 1.0) * (sun * hg * fvis + scene.sky_color.rgb * 0.40 + flocal * 0.2) * vTint.y;
+        a = clamp(a * inten, 0.0, 1.0);
+        outColor = vec4(fxf_fog(lit * a, a, distance(vWorld, scene.camera_pos.xyz)), a);
     } else if (kind == 7) {
         // Blood (npc_world.cpp; uv in [-1,1]^2): a drop, a stain on the ground or a thin red
         // mist - a soft disc with a ragged edge. vTint = (alpha, brightness, seed).

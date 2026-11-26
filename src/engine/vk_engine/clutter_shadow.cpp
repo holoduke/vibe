@@ -321,6 +321,9 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
                 vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &gpc);
                 draw_plants_gpu(cmd, sp);
             }
+            // The small debris (species 19..26, ground_fx): small contact shadows, in the near map only.
+            if (layer == 1 && rt_.ground_debris)
+                for (int sp = 19; sp <= 26; ++sp) draw_plants_gpu(cmd, sp);
         }
         // The soldiers: in the sun's two maps, and in the flashlight's (not the one holding it).
         if (layer <= 2) draw_skinned_shadows(cmd, cvp, layer != 2);

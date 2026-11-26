@@ -1,0 +1,24 @@
+#version 460
+// Motion blur, step 1 (post_fx.cpp): the largest blur velocity in each 16x16-pixel tile of the
+// output (8x8 taps of the motion vectors), in output pixels.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_motion;   // render resolution, point
+layout(set = 0, binding = 1) uniform sampler2D u_depth;    // render resolution, point
+#include "post_fx.glsl"
+layout(std430, set = 0, binding = 2) readonly buffer PostFxB { PostFxData d; } pfx;
+layout(set = 0, binding = 3, rg16f) uniform writeonly image2D o_tile;
+layout(push_constant) uniform PC { vec4 p; } pc;   // xy: tiles, zw: output size
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    if (t.x >= int(pc.p.x) || t.y >= int(pc.p.y)) return;
+    vec2 best = vec2(0.0);
+    float bl = 0.0;
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x) {
+            vec2 uv = (vec2(t * 16) + vec2(x, y) * 2.0 + 1.0) / pc.p.zw;
+            vec2 v = pfx_velocity(pfx.d, uv, textureLod(u_motion, uv, 0.0).rg, textureLod(u_depth, uv, 0.0).r, pc.p.zw);
+            float l = dot(v, v);
+            if (l > bl) { bl = l; best = v; }
+        }
+    imageStore(o_tile, t, vec4(best, 0.0, 0.0));
+}

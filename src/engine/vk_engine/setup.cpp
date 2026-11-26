@@ -142,6 +142,7 @@ void VulkanEngine::init_vulkan() {
     f12.descriptorIndexing = VK_TRUE;
     f12.shaderFloat16 = VK_TRUE;   // some shaders declare Float16
     f12.timelineSemaphore = VK_TRUE;   // frames in flight: gfx -> next TLAS build
+    f12.shaderBufferInt64Atomics = VK_TRUE;   // screen-space displacement: 64-bit atomic max (ssdm_raster.comp)
 
     VkPhysicalDeviceAccelerationStructureFeaturesKHR as_features{};
     as_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
@@ -175,6 +176,7 @@ void VulkanEngine::init_vulkan() {
     // some shaders use 16-bit ints; both were used without the features.
     base_feats.fragmentStoresAndAtomics = VK_TRUE;
     base_feats.shaderInt16 = VK_TRUE;
+    base_feats.shaderInt64 = VK_TRUE;   // screen-space displacement: 64-bit words (ssdm_raster.comp)
 
     vkb::PhysicalDeviceSelector selector{ vkb_inst };
     auto phys_ret = selector.set_minimum_version(1, 3)
@@ -280,6 +282,21 @@ void VulkanEngine::init_vulkan() {
             anti_lag_supported_ = true;
     }
     log::infof("[gpu] AMD Anti-Lag 2 %s", anti_lag_supported_ ? "available" : "not available");
+    // VK_KHR_ray_tracing_position_fetch (optional): a ray query reads the corners of the triangle
+    // it hit - the true normal at a bounce-light / reflection hit (light_port.cpp; the deferred
+    // pass's _pf build). VIBE_NO_POS_FETCH=1: off, as on a GPU without it.
+    VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR pf_feat{};
+    pf_feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_POSITION_FETCH_FEATURES_KHR;
+    if (vkb_phys.is_extension_present(VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME) &&
+        std::getenv("VIBE_NO_POS_FETCH") == nullptr) {
+        VkPhysicalDeviceFeatures2 f2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+        f2.pNext = &pf_feat;
+        vkGetPhysicalDeviceFeatures2(physical_device_, &f2);
+        if (pf_feat.rayTracingPositionFetch == VK_TRUE &&
+            vkb_phys.enable_extension_if_present(VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME))
+            g_rt.pos_fetch = true;
+    }
+    log::infof("[gpu] ray-traced position fetch %s", g_rt.pos_fetch ? "available (true normals at bounce hits)" : "not available");
     if (!device_fault_supported_) {
         log::info("VK_EXT_device_fault not present — device-lost dumps CPU stack only");
     }
@@ -288,6 +305,7 @@ void VulkanEngine::init_vulkan() {
     if (vrs_supported_) dev_builder.add_pNext(&vrs_feat);
     if (device_fault_supported_) dev_builder.add_pNext(&fault_feat);
     if (anti_lag_supported_) dev_builder.add_pNext(&anti_lag_feat);
+    if (g_rt.pos_fetch) dev_builder.add_pNext(&pf_feat);
     // FSR3 SwapChain proxy needs FOUR distinct VkQueue handles
     // (game/asyncCompute/present/imageAcquire). Request 4 queues from
     // the graphics family so we can hand 3 distinct handles plus the

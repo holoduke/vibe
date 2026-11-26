@@ -1175,7 +1175,7 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
         pc.emissive = glm::vec4(emissive, full_emissive ? 1.0f : 0.0f);
         // No texture: albedo/normal index -1 (was left at 0, so the gun
         // was triplanar-tinted with the ground texture), uv scale 1.
-        pc.tex_params = glm::vec4(-1.0f, -1.0f, 1.0f, 0.0f);
+        pc.tex_params = glm::vec4(-1.0f, -1.0f, 1.0f, -1.0f);      // (w -1: kept clean of the ground paste, cube.frag)
         vkCmdPushConstants(cmd, pipeline_layout_,
                            kPushConstantStages,
                            0, sizeof(PushConstants), &pc);
@@ -1457,6 +1457,7 @@ void VulkanEngine::rebuild_tick_aabbs() {
             if (std::abs(0.5f * (a.min.x + a.max.x) - player_.position.x) < 12.0f && std::abs(0.5f * (a.min.z + a.max.z) - player_.position.z) < 12.0f) tick_aabbs_.push_back(a);
     for (const collision::AABB& a : rockf_colliders())      // the rock formations near the player (rock_formations_gpu.cpp)
         if (a.max.x > player_.position.x - 6.0f && a.min.x < player_.position.x + 6.0f && a.max.z > player_.position.z - 6.0f && a.min.z < player_.position.z + 6.0f) tick_aabbs_.push_back(a);
+    water_boulder_colliders(player_.position, 6.0f, tick_aabbs_);      // the boulders in the stream and the river's shallows (water_fx.cpp)
 }
 
 void VulkanEngine::init_doors() {

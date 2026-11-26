@@ -540,6 +540,7 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("taa_jitter_enabled", s.rt_.taa_jitter_enabled);
     f("textures_enabled", s.rt_.textures_enabled);
     f("lens_flare_enabled", s.rt_.lens_flare_enabled);
+    f("lens_rain", s.rt_.lens_rain);
     f("lens_flare_strength", s.rt_.lens_flare_strength);
     f("lens_flare_threshold", s.rt_.lens_flare_threshold);
     f("lens_flare_dispersal", s.rt_.lens_flare_dispersal);
@@ -562,6 +563,19 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("grade_split_tone", s.rt_.grade_split_tone);
     f("film_grain", s.rt_.film_grain);
     f("vignette_strength", s.rt_.vignette_strength);
+    f("agx_look", s.rt_.agx_look);
+    f("exposure_comp_ev", s.rt_.exposure_comp_ev);
+    f("exposure_indoor", s.rt_.exposure_indoor);
+    f("exposure_speed_up", s.rt_.exposure_speed_up);
+    f("exposure_speed_down", s.rt_.exposure_speed_down);
+    f("ltm_strength", s.rt_.ltm_strength);
+    f("glare_strength", s.rt_.glare_strength);
+    f("motion_blur", s.rt_.motion_blur);
+    f("motion_blur_camera", s.rt_.motion_blur_camera);
+    f("dof_strength", s.rt_.dof_strength);
+    f("colorblind_mode", s.rt_.colorblind_mode);
+    f("particle_fog_light", s.rt_.particle_fog_light);
+    f("snow_tracks", s.rt_.snow_tracks);
     f("terrain_rt_lod_distance", s.rt_.terrain_rt_lod_distance);
     f("terrain_ao_punch", s.rt_.terrain_ao_punch);
     f("terrain_pcss_samples_cap", s.rt_.terrain_pcss_samples_cap);
@@ -571,6 +585,10 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_rm_contrast", s.rt_.terrain_rm_contrast);
     f("terrain_patches", s.rt_.terrain_patches);
     f("terrain_bake", s.rt_.terrain_bake);
+    f("ground_paste", s.rt_.ground_paste);
+    f("ground_lsd", s.rt_.ground_lsd);
+    f("ground_decals", s.rt_.ground_decals);
+    f("ground_debris", s.rt_.ground_debris);
     f("terrain_rm_prepass", s.rt_.terrain_rm_prepass);
     f("terrain_rm_prepass_div", s.rt_.terrain_rm_prepass_div);
     f("terrain_rm_converge", s.rt_.terrain_rm_converge);
@@ -583,6 +601,13 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("terrain_vrs", s.rt_.terrain_vrs);
     f("foliage_ray_mode", s.rt_.foliage_ray_mode);
     f("gi_leaf_lite", s.rt_.gi_leaf_lite);
+    f("lp_contact_shadows", s.rt_.lp_contact_shadows);
+    f("lp_far_ao", s.rt_.lp_far_ao);
+    f("lp_leaf_tint", s.rt_.lp_leaf_tint);
+    f("lp_sky_rescale", s.rt_.lp_sky_rescale);
+    f("lp_bounce_albedo", s.rt_.lp_bounce_albedo);
+    f("lp_lamp_pick", s.rt_.lp_lamp_pick);
+    f("lp_screen_march", s.rt_.lp_screen_march);
     f("tree_impostor_px", s.rt_.tree_impostor_px);
     f("tree_draw_distance", s.rt_.tree_draw_distance);
     f("site_labels", s.rt_.site_labels);
@@ -827,10 +852,16 @@ void VulkanEngine::load_settings() {
     // (VIBE_TERRAIN_PATCHES=0|1: the patch terrain or the march, whatever the file says)
     if (const char* e = std::getenv("VIBE_TERRAIN_PATCHES")) rt_.terrain_patches = std::atoi(e) != 0;
     if (const char* e = std::getenv("VIBE_TERRAIN_BAKE")) rt_.terrain_bake = std::atoi(e) != 0;
+    // (the ground's object effects: ground_fx.cpp)
+    if (const char* e = std::getenv("VIBE_NO_GROUND_PASTE"))  if (std::atoi(e) != 0) rt_.ground_paste = false;
+    if (const char* e = std::getenv("VIBE_NO_GROUND_LSD"))    if (std::atoi(e) != 0) rt_.ground_lsd = false;
+    if (const char* e = std::getenv("VIBE_NO_GROUND_DECALS")) if (std::atoi(e) != 0) rt_.ground_decals = false;
+    if (const char* e = std::getenv("VIBE_NO_GROUND_DEBRIS")) if (std::atoi(e) != 0) rt_.ground_debris = false;
     // (VIBE_TEST_FOLIAGE=<0..4>, VIBE_TEST_SHADOWS=<0..2>: a level, whatever the file says - measurements)
     if (const char* e = std::getenv("VIBE_TEST_FOLIAGE")) apply_foliage_quality(std::atoi(e));
     if (const char* e = std::getenv("VIBE_TEST_SHADOWS")) apply_shadow_quality(std::atoi(e));
     gfx_test_hook();                    // (VIBE_TEST_GFX: gfx_quality.cpp)
+    post_fx_settings_env();             // (VIBE_PFX_<KEY>: post_fx.cpp; also clamps those settings)
     clampf(rt_.tree_impostor_px, 7.0f, 64.0f);
     clampf(rt_.veg_lod_bias, 0.4f, 1.5f);          // (was up to 4: above ~1 the picture no longer changed, the cost did)
     clampf(rt_.tree_draw_distance, 200.0f, 3800.0f);

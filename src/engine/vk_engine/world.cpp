@@ -10,6 +10,7 @@
 #include "engine/world_props.h"
 #include "engine/grass.h"
 #include "engine/terrain.h"
+#include "engine/water_course.h"
 #include "engine/highway.h"
 #include "engine/texture.h"
 
@@ -243,6 +244,29 @@ void VulkanEngine::init_world() {
                     float& h = hm.heights[size_t(z) * DW + x];
                     h = world_river_cut(h, hm.origin_x + float(x) * hm.cell, hm.origin_z + float(z) * hm.cell, rt_.water_level);
                 }
+        }
+        // The stream (engine/water_course.h): laid out over the ground as it now is (a saved
+        // sculpt included - laid out over the bare formula it floated metres above sculpted
+        // ground), then its channel cut into these heights AND into the baseline by the same
+        // rule: the shader carves the formula (rm_world_h) and adds (ground - baseline).
+        {
+            const int DW = hm.dim + 1;
+            wc::build_stream(rt_.water_level, [&](float x, float z) {
+                return (std::abs(x) < 1020.0f && std::abs(z) < 1020.0f) ? hm.sample_world(x, z) : world_ground_height_natural(x, z, rt_.water_level, 9);
+            });
+            const wc::Course& st = wc::stream(rt_.water_level);
+            const bool base_ok = terrain_baseline_heights_.size() == hm.heights.size();
+            for (const glm::vec4& B : st.box) {
+                const int bx0 = std::clamp(int((B.x - hm.origin_x) / hm.cell), 0, DW - 1), bx1 = std::clamp(int((B.z - hm.origin_x) / hm.cell) + 1, 0, DW - 1);
+                const int bz0 = std::clamp(int((B.y - hm.origin_z) / hm.cell), 0, DW - 1), bz1 = std::clamp(int((B.w - hm.origin_z) / hm.cell) + 1, 0, DW - 1);
+                for (int z = bz0; z <= bz1; ++z)
+                    for (int x = bx0; x <= bx1; ++x) {
+                        const size_t i = size_t(z) * DW + x;
+                        const glm::vec2 p(hm.origin_x + float(x) * hm.cell, hm.origin_z + float(z) * hm.cell);
+                        hm.heights[i] = wc::carve(st, hm.heights[i], p);
+                        if (base_ok) terrain_baseline_heights_[i] = wc::carve(st, terrain_baseline_heights_[i], p);
+                    }
+            }
         }
         // A road's shelf inside the home tile (the castle lane: engine/highway.h). The tile's
         // ground is these baked heights, so the shelf is cut into them - and into the BASELINE
@@ -590,6 +614,7 @@ void VulkanEngine::init_world() {
             game::append_stone_bridge(world_, bridge_a_, bridge_b_, 2.0f * castle_road_.half_width,
                                       [&](float x, float z) { return hm.sample_world(x, z); });
             bridge_col_end_ = world_.aabbs.size();
+            river_piers_stone_bridge(bridge_a_, bridge_b_, [&](float x, float z) { return hm.sample_world(x, z); }, rt_.water_level);     // (its piers in the river: the foam behind them, water_fx.cpp)
             bridge_placed_ = true;
             // A lantern post at each end, beside the parapet, its arm over the road.
             {

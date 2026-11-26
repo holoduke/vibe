@@ -275,6 +275,15 @@ layout(push_constant) uniform PC {
 #include "cube_noise_rays.glsl"   // Noise + random, ray-query helpers (any_hit*), sky sampling, voxel tower DDA
 #include "cube_wall_relief.glsl"   // Castle wall box relief (br_*): solidity margin, exit, open-air probe, silhouette clip
 #include "rock_form.glsl"   // Rock formations (rf_*): the landscape's rock scan on a mesh, its colour; used in cube_main_surfaces.glsl
+#include "water_course.glsl"   // the stream's surface (wc_stream_surface): a rock standing in water is wet below its waterline
+#include "ground_fx.glsl"      // the ground's object effects block (scene binding 60: ground_fx.cpp)
+#include "ground_paste.glsl"   // meshes pasted into the ground at their contact line (gp_*): used after cube_main_surfaces.glsl
+// (set by the surface branches for the paste below: the material's own height 0..1 where it
+//  knows one (-1: taken from the colour), a rock (its ground line, metres))
+float g_gp_h = -1.0;
+bool  g_gp_self_rock = false;
+float g_gp_rock_above = 1e9;
+float g_gp_share = 0.0;          // the ground's share at the pixel (its roughness)
 void main() {
     // Default depth = rasterized depth; SPOM silhouette path may bump
     // to 1.0 below. The depth_greater qualifier on the gl_FragDepth
@@ -762,9 +771,25 @@ void main() {
     // the ground (on boulders over the tops near the ground), and the last
     // hand-width sits in its own contact shade. Height = above the terrain
     // under this very pixel, so it follows slopes.
+    // (with the paste on - ground_paste.glsl, below - the soil and the shade are its; the moss stays here)
+    bool gp_on = gfx.paste.x > 0.5;
     if (g_veg_solid) {
         float gh = textureLod(u_heightmap_full, vWorldPos.xz / 2048.0 + 0.5, 0.0).r;
         float above = vWorldPos.y - gh;
+        if (gp_on) {
+            GpGround gg = gp_ground(vWorldPos, 1e9);
+            above = gg.above;
+            if (above < 1.8) {
+                bool  rock = int(vUv.y + 0.5) == 4;
+                float n1 = tnoise(vWorldPos.xz * 3.1 + vWorldPos.y * 2.3);
+                float n3 = tnoise(vWorldPos.xz * 1.9 + vWorldPos.y * 1.3 + 4.0);
+                float lum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+                g_gp_share = gp_paste(albedo, N, vWorldPos, normalize(vNormal), clamp(lum * 3.0, 0.0, 1.0), cam_dist, gg, rock, 0.55);
+                float moss_w = (1.0 - smoothstep(0.10, rock ? 0.95 : 1.50, above)) * smoothstep(0.42, 0.74, n3) *
+                               (rock ? smoothstep(0.15, 0.80, N.y) : 0.65);
+                albedo = mix(albedo, vec3(0.070, 0.105, 0.038) * mix(0.8, 1.25, n1), moss_w * 0.62 * (1.0 - g_gp_share));
+            }
+        } else
         if (above < 1.8) {
             bool  rock = int(vUv.y + 0.5) == 4;
             float n1 = tnoise(vWorldPos.xz * 3.1 + vWorldPos.y * 2.3);
@@ -779,6 +804,50 @@ void main() {
             albedo *= mix(0.55, 1.0, smoothstep(0.0, 0.20, above));
             // Ease the shading normal toward the ground's at the very foot.
             N = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.35 * (1.0 - smoothstep(0.0, 0.25, above))));
+        }
+    }
+    // THE PASTE into the ground at the contact line (ground_paste.glsl) for every other surface
+    // that may stand on the ground: the castle's walls and towers, the chapel, the sites' and
+    // the station's buildings, bridges, the lane's walls, props, crates, the rock formations.
+    // Left clean: the ground itself, leaves and far tree cards (vegetation has its own above),
+    // people (normal index -8), the army vehicles' paint (-7), and every draw that says so with
+    // tex_params.w = -1 (the cars, the weapon in the hand: castle_mesh.cpp / props.cpp). Of a
+    // building (not rock) only what faces sideways: an up-facing face is a floor, a step, a
+    // forecourt, and indoors (a roof within 4 m overhead - one ray, only near the ground) nothing.
+    if (!is_terrain && !veg_imp && !g_veg_solid && (gp_on || g_gp_self_rock) && cam_dist < 1600.0 &&
+        !is_foliage_px && int(vTexParams.y - 0.5) != -8 && int(vTexParams.y - 0.5) != -7 && vTexParams.w > -0.5) {
+        vec3 Ngp = normalize(vNormal);
+        GpGround gg = gp_ground(vWorldPos, g_gp_rock_above);
+        float reach = gfx.paste.w + 2.9 * clamp((cam_dist - 500.0) * 0.002, 0.0, 1.0) + 0.8;
+        bool  built = !g_gp_self_rock;
+        if (gg.above < reach && (!built || Ngp.y < 0.7)) {
+            bool indoor = false;
+            if (built) {
+                rayQueryEXT rq;
+                rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0x02u,
+                                      vWorldPos + Ngp * 0.06, 0.0, vec3(0.0, 1.0, 0.0), 4.0);
+                while (rayQueryProceedEXT(rq)) {}
+                indoor = rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
+                // (a roof alone is not a room: under a bridge's deck the abutment's face looks out over
+                //  open ground. Indoors there is a wall in front within 8 m as well.)
+                if (indoor) {
+                    rayQueryEXT ro;
+                    rayQueryInitializeEXT(ro, topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0x02u,
+                                          vWorldPos + Ngp * 0.06 + vec3(0.0, 0.5, 0.0), 0.0, normalize(vec3(Ngp.x, 0.0, Ngp.z) + vec3(0.0, 1e-4, 0.0)), 8.0);
+                    while (rayQueryProceedEXT(ro)) {}
+                    indoor = rayQueryGetIntersectionTypeEXT(ro, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
+                }
+            }
+            if (!indoor) {
+                float mh = g_gp_h;
+                if (mh < 0.0) {
+                    // (no height of its own: the colour against the texture's mean - the joints and
+                    //  hollows are darker than the faces of the stones)
+                    vec3 ref = use_albedo ? textureLod(u_albedo[clamp(albedo_idx_raw, 0, kTextureCount - 1)], vec2(0.5), 12.0).rgb * vColor : vColor;
+                    mh = clamp(0.5 * dot(albedo, vec3(0.333)) / max(dot(ref, vec3(0.333)), 1e-3), 0.0, 1.0);
+                }
+                g_gp_share = gp_paste(albedo, N, vWorldPos, Ngp, mh, cam_dist, gg, g_gp_self_rock, built ? 0.78 : 0.62);
+            }
         }
     }
     // GPU-veg rocks: snow caps on up-facing surfaces in the rock/snow band.
@@ -1052,6 +1121,7 @@ void main() {
                            float(fast_mat) / 255.0);
         vec2 rmf = surface_rough_metal(albedo_idx_raw, is_foliage_px, is_mesh_draw);
         rmf.x = mix(mix(rmf.x, rmf.x * 0.55, rain_wet), 0.04, rain_pool);
+        rmf.x = mix(rmf.x, 0.92, g_gp_share);          // (the ground pasted on: soil's roughness)
         if (cd_leaf) rmf.x = veg_imp ? 0.902 : min(length(vWorldPos - scene.camera_pos.xyz) * 0.005 + 0.45, 0.99);
         outGBuffer1 = vec4(octa_encode(N), is_terrain_pre ? terrain_pom_vis : rmf.x, gbuf_flags(is_foliage_px, rmf.y));
         return;

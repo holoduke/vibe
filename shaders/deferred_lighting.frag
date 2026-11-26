@@ -1,6 +1,10 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_ray_query : require
+#extension GL_EXT_nonuniform_qualifier : require
+#ifdef VIBE_LP_POSFETCH
+#extension GL_EXT_ray_tracing_position_fetch : require
+#endif
 
 // Deferred lighting pass (Phases 3-6 of the deferred-render migration).
 //
@@ -29,10 +33,12 @@ layout(set = 0, binding = 23) uniform sampler2D u_cloud_shadow;   // sunlight th
 #include "sun_horizon.glsl"
 layout(set = 0, binding = 24) uniform sampler2D u_skyview;       // the sky-view LUT (ground_haze.glsl: what the haze fades into)
 #include "ground_haze.glsl"
+#include "contact_shadow.glsl"
 layout(set = 0, binding = 20) uniform sampler2D u_sun_horizon;   // far-mountain sun shadow
 layout(set = 0, binding = 21) uniform sampler2D u_lawn_height;   // baked terrain height (blade roots)
 layout(set = 0, binding = 22) uniform sampler2D u_grass_mask;    // where the lawn grows
 #include "grass_blades.glsl"
+#include "ground_decals.glsl"   // deferred box decals with height-aware blending (binding 30: ground_fx.cpp)
 
 layout(set = 0, binding = 1) uniform accelerationStructureEXT topLevelAS;
 layout(set = 0, binding = 2) uniform sampler2D u_gbuffer0;
@@ -130,16 +136,38 @@ layout(set = 0, binding = 19) uniform sampler2D u_leaf_atlas;
 // cards in a non-opaque geometry (two triangles per card, corners in a
 // fixed order), so the card uv follows from the triangle's parity and the
 // barycentrics; the instance's SBT offset carries the atlas cell + 1.
-bool leaf_card_hit(rayQueryEXT rq) {
+// (the atlas texel the candidate hit lies on: rgb = the leaf's colour, a = coverage; a solid
+//  card without an atlas cell reads as fully covered and black)
+vec4 leaf_card_sample(rayQueryEXT rq) {
     uint cell1 = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);
-    if (cell1 == 0u) return true;
+    if (cell1 == 0u) return vec4(0.0, 0.0, 0.0, 1.0);
     vec2 b = rayQueryGetIntersectionBarycentricsEXT(rq, false);
     vec2 uv = ((rayQueryGetIntersectionPrimitiveIndexEXT(rq, false) & 1) == 0) ? vec2(b.x + b.y, b.y)
                                                                               : vec2(b.x, b.x + b.y);
     float cell = float(cell1 - 1u);
     vec2 auv = vec2(mod(cell, 2.0) * 0.5 + clamp(uv.x, 0.006, 0.994) * 0.5,
                     (cell >= 2.0 ? 0.5 : 0.0) + (1.0 - clamp(uv.y, 0.006, 0.994)) * 0.5);
-    return textureLod(LEAF_ATLAS, auv, 1.5).a > 0.33;
+    vec4 s = textureLod(LEAF_ATLAS, auv, 1.5);
+    if (cell1 >= 100u) s.rgb = vec3(0.0);     // (bare in winter: no tint)
+    return s;
+}
+bool leaf_card_hit(rayQueryEXT rq) {
+    return leaf_card_sample(rq).a > 0.33;
+}
+// Leaf-coloured sun shadows (scene.lp_flags bit 4; the reference game writes the leaf's colour
+// into a shadow colour map). While g_rq_leaf_tint is set, a ray that meets a leaf is not stopped:
+// the leaf lets a part of the light by, in its own hue - 25 % at the leaf's brightest channel -
+// and g_rq_T keeps the product of what all the leaves on the way let through. Below 3 % the
+// ray counts as blocked. Solid geometry stops it as always.
+bool g_rq_leaf_tint = false;
+vec3 g_rq_T = vec3(1.0);
+bool leaf_tint_candidate(rayQueryEXT rq) {      // true: confirm (the ray is blocked)
+    vec4 s = leaf_card_sample(rq);
+    if (s.a <= 0.33) return false;
+    float m = max(max(s.r, s.g), s.b);
+    if (m < 1e-3) return true;
+    g_rq_T *= s.rgb * (0.25 / m);
+    return max(max(g_rq_T.r, g_rq_T.g), g_rq_T.b) < 0.03;
 }
 // Leaf cards as solid cards for the rays traced while this is set (settings: 'foliage rays').
 // A ray through a tree crown otherwise stops at EVERY card on its way to ask the leaf
@@ -167,7 +195,7 @@ bool any_hit_once(vec3 origin, vec3 dir, float t_max, uint mask, out float t_hit
                           mask, origin, 0.001, dir, t_max);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
-            leaf_card_hit(rq)) rayQueryConfirmIntersectionEXT(rq);
+            (g_rq_leaf_tint ? leaf_tint_candidate(rq) : leaf_card_hit(rq))) rayQueryConfirmIntersectionEXT(rq);
     }
     t_hit = 0.0; from_behind = false;
     if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT) return false;
@@ -187,6 +215,36 @@ bool any_hit(vec3 origin, vec3 dir, float t_max) {
     return any_hit_m(origin, dir, t_max, 0x01u);
 }
 
+// ---- True colour at a bounce / reflection hit (scene.lp_flags bit 8; light_port.cpp) ----
+// The TLAS instances' materials table (rt.cpp: three vec4 a slot, the slot is the instance's
+// custom index; the merged static castle carries a sentinel and its brush is primitive / 12),
+// and the albedo textures, read at their smallest mip for a texture's mean colour.
+struct LpMaterial { vec4 color; vec4 emissive; vec4 tex; };
+layout(set = 0, binding = 25, std430) readonly buffer LpMaterials { LpMaterial lp_mats[]; };
+// All lamps (light_port.cpp; scene.lp_flags bit 16): two vec4 a lamp - (position, intensity; < 0 a
+// candle) and (x = its slot in scene.lamp_lights or -1) - nearest the eye first, from entry
+// scene.lp_flags.w (two regions, one a frame in flight).
+layout(set = 0, binding = 26, std430) readonly buffer LpLamps { vec4 lp_lamps[]; };
+#define LP_TEX_COUNT 43
+layout(set = 0, binding = 27) uniform sampler2D u_lp_albedo[LP_TEX_COUNT];
+// What the last closest hit was (closest_hit_once): its instance slot, primitive and - with
+// position fetch - the world normal of the triangle, turned toward the ray's origin.
+int  g_rq_inst = -1, g_rq_prim = 0;
+vec3 g_rq_ng = vec3(0.0);
+bool g_rq_ng_ok = false;
+vec3 lp_hit_albedo(vec3 guess) {
+    if ((scene.lp_flags.x & 8) == 0 || g_rq_inst < 0 || g_rq_inst == scene.lp_flags.z) return guess;   // (the ground: the guess - its colour is the terrain shader's)
+    int idx = (g_rq_inst == 0xFFFFFF) ? g_rq_prim / 12 : g_rq_inst;
+    LpMaterial m = lp_mats[idx];
+    vec3 c = m.color.rgb;
+    int ti = int(m.tex.x + 0.5);
+    if (m.tex.x >= 0.0 && ti < LP_TEX_COUNT) c *= textureLod(u_lp_albedo[nonuniformEXT(ti)], vec2(0.5), 14.0).rgb;
+    return clamp(c, vec3(0.0), vec3(0.95));
+}
+vec3 lp_hit_normal(vec3 dir) {
+    return ((scene.lp_flags.x & 8) != 0 && g_rq_ng_ok) ? g_rq_ng : -dir;
+}
+
 // Closest-hit with t-value — used by the PCSS blocker search.
 bool closest_hit_once(vec3 origin, vec3 dir, float t_max, uint mask, out float out_t, out bool from_behind) {
     from_behind = false;
@@ -197,10 +255,28 @@ bool closest_hit_once(vec3 origin, vec3 dir, float t_max, uint mask, out float o
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
             leaf_card_hit(rq)) rayQueryConfirmIntersectionEXT(rq);
     }
+    g_rq_inst = -1; g_rq_ng_ok = false;
     if (rayQueryGetIntersectionTypeEXT(rq, true) ==
         gl_RayQueryCommittedIntersectionTriangleEXT) {
         out_t = rayQueryGetIntersectionTEXT(rq, true);
         from_behind = !rayQueryGetIntersectionFrontFaceEXT(rq, true);
+        g_rq_inst = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        g_rq_prim = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+#ifdef VIBE_LP_POSFETCH
+        if ((scene.lp_flags.x & 8) != 0) {
+            vec3 v[3];
+            rayQueryGetIntersectionTriangleVertexPositionsEXT(rq, true, v);
+            mat4x3 o2w = rayQueryGetIntersectionObjectToWorldEXT(rq, true);
+            vec3 w0 = o2w * vec4(v[0], 1.0), w1 = o2w * vec4(v[1], 1.0), w2 = o2w * vec4(v[2], 1.0);
+            vec3 n = cross(w1 - w0, w2 - w0);
+            float nl = dot(n, n);
+            if (nl > 1e-20) {
+                n *= inversesqrt(nl);
+                g_rq_ng = dot(n, dir) > 0.0 ? -n : n;
+                g_rq_ng_ok = true;
+            }
+        }
+#endif
         return true;
     }
     return false;
@@ -277,6 +353,95 @@ bool rc_lookup(vec3 p, vec3 n, out vec3 radiance) {
 
 bool closest_hit(vec3 origin, vec3 dir, float t_max, out float out_t) {
     return closest_hit_m(origin, dir, t_max, 0x01u, out_t);
+}
+
+// ---- Screen march before the hardware ray (scene.lp_flags bit 32; light_port.cpp) ----
+// The reference game marches 16 steps over the depth picture before it traces a ray; where the
+// march hits, the light there is last frame's lit picture at that point. What the traced
+// scene lacks - grass, small plants, the screen-space-displaced relief - shows in reflections
+// and bounce light that way, and the ray is saved. The march skips its first 3 pixels (the
+// surface it starts on) and a hit must lie in front of the march by less than 1.5 steps'
+// change of depth (+ 1 % of the distance).
+// ---- Light thrown up by the water: reflected caustics (water_sim.cpp's cascades, binding 29) ----
+// The reference game splats them: from every sunlit water pixel it reflects (and refracts) the sun
+// at the water's normal, marches the ray against the depth buffer and adds energy where it lands
+// (half resolution, quarter rate, a temporal resolve). Here they are GATHERED where they land:
+// a surface above water facing down or sideways (a bridge's arch and piers, a quay or the castle's
+// wall by the lake, a boulder) is lit by the sun's mirror image in the water at the point W where
+// the reflected ray toward it leaves the surface - no splat, no atomics, no loss where the water is
+// off the screen (under an arch looking up). The waves' curvature focuses it: the light reaching
+// a point is 1 / |det(I - 2 t Hessian(h))| (t: the way from the water up to the point; the
+// reflected ray tilts by twice the slope), so it lies in moving lines and patches. Its strength:
+// the Fresnel of the sun's incidence (F0 0.02) x the sun x the receiver's cosine, faded over the
+// reference's range of 8 m ((1 - (t/8)^4)), in the sun's shadow at W (one ray) and the cloud's.
+// Strongest on calm, sunny water near the surface. VIBE_NO_REFL_CAUSTICS=1: off.
+layout(set = 0, binding = 29) uniform sampler2DArray u_ww_grad;
+#define WW_GRAD u_ww_grad
+#include "water_waves.glsl"
+vec3 refl_caustic(vec3 P, vec3 N, vec3 L) {
+    if (scene.water_flags.y < 0.5 || scene.water_params.x < 0.5 || L.y < 0.06 || scene.water_fft.x < 0.5) return vec3(0.0);
+    vec3  R = vec3(-L.x, L.y, -L.z);                 // the sun's light off level water
+    float cosr = dot(N, -R);
+    if (cosr <= 0.02) return vec3(0.0);
+    float wy = scene.water_params.y;
+    float hgt = P.y - wy;
+    if (hgt < 0.03 || hgt > 24.0 * R.y) return vec3(0.0);      // (24 m, not the reference's 8 - its range serves its screen march; light reflected off level water does not fade with distance. The stone bridge's arch crowns stand ~10 m over the river: 15 - 20 m along the reflected ray at an afternoon sun - with 8, then 14, the debug view showed the pier faces lit and the arches dark)
+    float t = hgt / R.y;
+    vec3  W = P - R * t;
+    vec2  uv = W.xz / 2048.0 + 0.5;
+    if (any(lessThan(uv, vec2(0.001))) || any(greaterThan(uv, vec2(0.999)))) return vec3(0.0);     // (the home tile's ground only: the lakes, the river)
+    float depth = wy - textureLod(u_lawn_height, uv, 0.0).r;
+    if (depth < 0.08) return vec3(0.0);
+    // the cascades a stretch of river or lake has (water_waves.glsl ww_fetch_w), never quite still
+    float amp = 0.30 + 0.35 * smoothstep(2.0, 10.0, scene.water_wind.z);
+    vec4  w = ww_fetch_w(60.0) * amp * vec4(0.0, 1.0, 1.0, 0.0);      // (the 13.7 and 4.4 m cascades: the shortest would alias over metres)
+    const float e = 0.06;
+    const vec2 gx = vec2(0.01, 0.0), gy = vec2(0.0, 0.01);
+    vec2  s0 = ww_fft_slope(W.xz, gx, gy, w).xy;
+    vec2  sx = ww_fft_slope(W.xz + vec2(e, 0.0), gx, gy, w).xy;
+    vec2  sz = ww_fft_slope(W.xz + vec2(0.0, e), gx, gy, w).xy;
+    mat2  Hs = mat2((sx - s0) / e, (sz - s0) / e);
+    mat2  J = mat2(1.0) - 2.0 * t * Hs;
+    float I = min(1.0 / max(abs(determinant(J)), 0.12), 5.0);
+    // (the weight: the reference's splat energy 0.96 - 0.96 (1 - N.L)^2, x 0.25 - with the bare Fresnel
+    //  of level water (3 - 4 % at an afternoon sun) the pattern did not show even on a shaded face)
+    float F = max(0.02 + 0.98 * pow(1.0 - L.y, 5.0), 0.25 * (0.96 - 0.96 * (1.0 - L.y) * (1.0 - L.y)));
+    float fade = 1.0 - pow(clamp(t / 24.0, 0.0, 1.0), 4.0);
+    float vis = cloud_shadow(W) * scene.water_sun.x * (any_hit(W + vec3(0.0, 0.05, 0.0), L, 200.0) ? 0.0 : 1.0);
+    return scene.sun_color.rgb * scene.sun_color.a * (F * cosr * I * fade * vis * smoothstep(0.08, 0.4, depth));
+}
+layout(set = 0, binding = 28) uniform sampler2D u_lp_prev_lit;
+bool lp_screen_march(vec3 ro, vec3 rd, float len, float jit, out vec3 rad) {
+    rad = vec3(0.0);
+    vec4 c0 = scene.lp_vp * vec4(ro, 1.0);
+    vec4 c1 = scene.lp_vp * vec4(ro + rd * len, 1.0);
+    const float kNear = 0.06;
+    if (c0.w < kNear) return false;
+    if (c1.w < kNear) c1 = mix(c0, c1, (c0.w - kNear) / (c0.w - c1.w));
+    vec2 sz = vec2(textureSize(u_depth, 0));
+    vec2 s0 = (c0.xy / c0.w * 0.5 + 0.5) * sz;
+    const int kSteps = 16;
+    float thick = abs(c1.w - c0.w) * (1.5 / float(kSteps)) + 0.01 * c0.w;
+    for (int i = 0; i < kSteps; ++i) {
+        float t = (float(i) + jit) / float(kSteps);
+        vec4 c = mix(c0, c1, t);
+        vec2 uv = (c.xy / c.w) * 0.5 + 0.5;
+        if (uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0) return false;
+        if (distance(uv * sz, s0) < 3.0) continue;
+        float zs = texelFetch(u_depth, ivec2(uv * sz), 0).r;
+        if (zs >= 0.999999) continue;
+        float dz = c.w - lp_view_depth(zs);
+        if (dz > 0.0 && dz < thick) {
+            vec4 w4 = pc.inv_vp * vec4(uv * 2.0 - 1.0, zs, 1.0);
+            vec4 pp = pc.prev_vp * vec4(w4.xyz / w4.w, 1.0);
+            if (pp.w < 1e-3) return false;
+            vec2 puv = (pp.xy / pp.w) * 0.5 + 0.5;
+            if (puv.x <= 0.0 || puv.y <= 0.0 || puv.x >= 1.0 || puv.y >= 1.0) return false;
+            rad = min(textureLod(u_lp_prev_lit, puv, 0.0).rgb, vec3(64.0));
+            return true;
+        }
+    }
+    return false;
 }
 
 // 32-tap Vogel disk — same one cube.frag uses for PCSS sample placement.
@@ -423,6 +588,19 @@ void main() {
         // terrain: snow / wet-ish rock smoother than soil and grass
         ? mix(0.92, 0.48, smoothstep(0.45, 0.75, dot(g0.rgb, vec3(0.333))))
         : clamp(g1.b, 0.05, 1.0);
+    // DECALS (ground_decals.glsl): moss, damp, dirt, oil, litter, cracks, mud, the gun's marks -
+    // projected onto what the G-buffer holds, the surface's high points poking through. On the
+    // raymarched ground (material 8, lit already) they tint the lit colour instead (gd_tint).
+    vec3 gd_tint = vec3(1.0);
+    if (gfx.dec.w > 0.5) {
+        if (material_id == 8) {
+            vec3 a8 = vec3(0.2), n8 = vec3(0.0, 1.0, 0.0);
+            float r8 = 0.9, h8 = g1.b > 0.69 ? clamp((g1.b - 0.7) / 0.3, 0.0, 1.0) : 0.3;
+            if (gfx_decals_apply(world_pos, ivec2(gl_FragCoord.xy), a8, n8, r8, h8) > 0.0) gd_tint = a8 / 0.2;
+        } else if (material_id == 1 || material_id == 3) {
+            gfx_decals_apply(world_pos, ivec2(gl_FragCoord.xy), albedo, N, roughness, 0.2 + 0.55 * smoothstep(0.15, 0.7, dot(albedo, vec3(0.333))));      // (a mesh: the brighter faces of its stones stand out)
+        }
+    }
     // Rain: wet surfaces are darker (water fills the pores, light is
     // trapped) and much smoother (a film of water). Mostly on faces the
     // rain can reach; leaves just get glossier.
@@ -471,7 +649,7 @@ void main() {
         float pre_d = length(pre_to);
         vec3 pre_beam = flashlight_beam(scene.camera_pos.xyz, pre_to / max(pre_d, 1e-3), pre_d,
                                         hash12(gl_FragCoord.xy + vec2(float(scene.rt_flags.w & 63) * 7.31, 3.7)));
-        outColor = vec4(texture(u_scene_color, uv).rgb + pre_beam, 0.0);
+        outColor = vec4(texture(u_scene_color, uv).rgb * gd_tint + pre_beam, 0.0);
         return;
     }
 
@@ -560,6 +738,9 @@ void main() {
     // rule. Brushes/dyn props use 0x01.
     uint shadow_mask = (material_id == 3) ? 0x02u : 0x01u;
     float shadow = 0.0;
+    // Leaf-coloured sun (scene.lp_flags bit 4): the hue of what the leaves on the way let through.
+    bool lp_tint = (scene.lp_flags.x & 4) != 0 && scene.season.w <= 0.02;
+    vec3 sun_tint = vec3(1.0), sun_vis3 = vec3(0.0);
     // Leaves are lit with wrap + transmission (below), so they need the
     // sun visibility on their far side as well.
     const float kLeafWrap = 0.5;
@@ -694,14 +875,21 @@ void main() {
                     vec3 dir = normalize(L + jitter);
                     // (exact leaf shapes near the camera; solid cards where a leaf is a pixel)
                     g_rq_leaf_solid = rq_leaf_mode() >= 2 || (rq_leaf_mode() == 1 && cam_dist > 70.0);
+                    g_rq_leaf_tint = lp_tint && !g_rq_leaf_solid;
+                    g_rq_T = vec3(1.0);
                     if (any_hit_m(origin, dir, kShadowTMax, shadow_mask)) blocked += 1.0;
+                    else { blocked += 1.0 - dot(g_rq_T, vec3(0.2126, 0.7152, 0.0722)); sun_vis3 += g_rq_T; }
+                    g_rq_leaf_tint = false;
                     g_rq_leaf_solid = false;
                     ++taken;
                 }
             }
             shadow = (taken > 0) ? (blocked / float(taken)) : 0.0;
+            // (the light let through, as a hue of luminance 1: white where no leaf was crossed)
+            if (taken > 0 && shadow < 0.999) sun_tint = (sun_vis3 / float(taken)) / (1.0 - shadow);
         }
         shadow *= clamp(scene.rt_params.w, 0.0, 1.0);
+        sun_tint = mix(vec3(1.0), sun_tint, clamp(scene.rt_params.w, 0.0, 1.0));
     }
 
     // Terrain receivers: sample the baked terrain shadow texture (covers
@@ -865,6 +1053,8 @@ void main() {
     // detail that sits above the rasterised LOD surface. Fade it out by
     // 45 m and skip the rays entirely beyond.
     float ao_w = 1.0 - smoothstep(18.0, 45.0, cam_dist);
+    vec3  ao_open = vec3(0.0), ao_all = vec3(0.0);      // (the bent cone, below)
+    float ao_n_open = 0.0, ao_n_all = 0.0;
     if (ao_mode > 0 && scene.rt_flags.z > 0 && ao_w > 0.01) {
         // 2-tap "fast" AO as default; full mode could expand to 4-8 taps.
         int n_taps = (ao_mode == 1) ? 2 : 4;
@@ -896,11 +1086,53 @@ void main() {
             vec3 dir = normalize(
                 t_u * (cos(phi) * st) + t_v * (sin(phi) * st) + Ng * ct);
             g_rq_leaf_solid = rq_leaf_mode() >= 1;
-            if (any_hit(origin, dir, ao_radius)) hits += 1.0;
+            bool ao_hit = any_hit(origin, dir, ao_radius);
+            if (ao_hit) hits += 1.0; else ao_open += dir * ao_w;
+            ao_all += dir * ao_w;
             g_rq_leaf_solid = false;
         }
+        ao_n_open += (float(n_taps) - hits) * ao_w;
+        ao_n_all  += float(n_taps) * ao_w;
         ao = mix(1.0, 1.0 - (hits / float(n_taps)), ao_w);
     }
+    // Far ambient occlusion (scene.lp_flags bit 2; the reference game's screen-space AO, whose
+    // radius grows with distance: 2 x (0.1 + d / 32) m). The rays above stop at 45 m; past
+    // 18 m these take over, four of them, out to 600 m, so that mid and far objects sit on
+    // the ground and in each other's shade. The turn of the four is the world-anchored grain
+    // of the surface (seed_stable) - steady on a surface, per frame under Ray Reconstruction.
+    // Not on the ground (material 3: its own baked cavity and horizon terms; its far rays met
+    // the traced detail above the drawn LOD).
+    if ((scene.lp_flags.x & 2) != 0 && ao_mode > 0 && scene.rt_flags.z > 0 && material_id != 3 &&
+        cam_dist > 18.0 && cam_dist < 600.0) {
+        float far_w = smoothstep(18.0, 45.0, cam_dist) * (1.0 - smoothstep(450.0, 600.0, cam_dist));
+        float far_r = min(2.0 * (0.1 + cam_dist / 32.0), 24.0);
+        vec3 t_u = abs(Ng.y) < 0.999 ? normalize(cross(vec3(0,1,0), Ng)) : vec3(1,0,0);
+        vec3 t_v = cross(Ng, t_u);
+        vec3 origin = wp_safe + Ng * (foliage ? 0.35 + cam_dist * 0.004 : 0.02 + cam_dist * 0.002);
+        float rot = rand(seed_stable + uvec3(5u, 61u, 17u)) * 6.28318530718;
+        float far_hits = 0.0;
+        const float kAoR2[4] = float[4](0.30, 0.62, 0.45, 0.78);
+        for (int i = 0; i < 4; ++i) {
+            float phi = rot + (float(i) + 0.37) * (6.28318530718 / 4.0);
+            float r2 = kAoR2[i];
+            float ct = sqrt(r2), st = sqrt(1.0 - r2);
+            vec3 dir = normalize(t_u * (cos(phi) * st) + t_v * (sin(phi) * st) + Ng * ct);
+            g_rq_leaf_solid = true;                 // ("is anything that way": a card is solid)
+            bool fh = any_hit(origin, dir, far_r);
+            g_rq_leaf_solid = false;
+            if (fh) far_hits += 1.0; else ao_open += dir * far_w;
+            ao_all += dir * far_w;
+        }
+        ao_n_open += (4.0 - far_hits) * far_w;
+        ao_n_all  += 4.0 * far_w;
+        ao *= mix(1.0, 1.0 - far_hits * 0.25, far_w);
+    }
+    // The bent direction: the mean open direction, as a turn of the normal away from what the
+    // rays found occluded (taken against the mean of all the rays' directions, so that a fully
+    // open surface keeps its normal whatever the fixed directions are).
+    vec3 ao_bent = N;
+    if ((scene.lp_flags.x & 2) != 0 && ao_n_open > 1e-3 && ao_n_open < ao_n_all - 1e-3)
+        ao_bent = normalize(N + 1.5 * (ao_open / ao_n_open - ao_all / max(ao_n_all, 1e-3)));
 
     // ---------------------------------------------------------------
     //  Path-traced GI (Phase 4b — simplified port of cube.frag's loop)
@@ -1033,9 +1265,19 @@ void main() {
             // occlusion/bounce on the indoor castle floor that the
             // accumulator lagged into the "floor shadow ghost". Crates
             // keep their direct sun shadow + AO (those rays use bit 0).
+            // (scene.lp_flags bit 32: a short screen march first - a hit takes last frame's light there)
+            vec3 sm_rad;
+            if ((scene.lp_flags.x & 32) != 0 && !skip_gi_inner &&
+                lp_screen_march(ro, dir, clamp(cam_dist * 0.25, 1.0, 8.0),
+                                hash12(gl_FragCoord.xy + fseed + vec2(i * 13.0, 211.0)), sm_rad)) {
+                gi_indirect += sm_rad;
+            } else
             if (closest_hit_m(ro, dir, gi_radius, 0x04u, t)) {
                 vec3 hit_pos = ro + dir * t;
-                vec3 hit_n   = -dir;
+                // (the hit's own normal and colour where known - scene.lp_flags bit 8; else -dir and
+                //  the two-colour guess below)
+                vec3 hit_n   = lp_hit_normal(dir);
+                vec3 lp_alb  = lp_hit_albedo(vec3(-1.0));
                 vec3 rc_rad;
                 if (!skip_gi_inner && rc_lookup(hit_pos, hit_n, rc_rad)) {
                     // Radiance cache hit: real surface colour + all
@@ -1054,6 +1296,7 @@ void main() {
                     vec3 hit_alb = (dir.y < -0.3 && hit_pos.y < 23.5)
                                        ? vec3(0.33, 0.45, 0.27)
                                        : vec3(0.55, 0.50, 0.44);
+                    if (lp_alb.x >= 0.0) hit_alb = lp_alb;
                     vec3 hit_light = scene.ambient.rgb * 0.6;
                     float n_dot_sun = max(dot(hit_n, L), 0.0);
                     if (n_dot_sun > 0.0 &&
@@ -1115,7 +1358,8 @@ void main() {
                         vec3 b_rad;
                         if (closest_hit_m(bro, bdir, gi_radius, 0x04u, bt)) {
                             vec3 b_pos = bro + bdir * bt;
-                            vec3 b_n   = -bdir;
+                            vec3 b_n   = lp_hit_normal(bdir);
+                            vec3 b_alb = lp_hit_albedo(vec3(0.5));
                             vec3 b_light = scene.ambient.rgb * 0.6;
                             float b_ndl = max(dot(b_n, L), 0.0);
                             if (b_ndl > 0.0 &&
@@ -1123,7 +1367,7 @@ void main() {
                                 b_light += scene.sun_color.rgb *
                                             scene.sun_color.a * b_ndl;
                             }
-                            b_rad = vec3(0.5) * b_light;
+                            b_rad = b_alb * b_light;
                         } else {
                             float bw = clamp(bdir.y, 0.0, 1.0);
                             b_rad = scene.sky_color.rgb *
@@ -1319,6 +1563,12 @@ void main() {
                     }
                 }
             }
+            // A sudden drop of the sky's light (light_port.cpp; scene.lp_params.z < 1): the history
+            // is scaled down with the caches, not left to fade over its 28 frames.
+            if (scene.lp_params.z < 0.999) {
+                prevRgb *= scene.lp_params.z;
+                if (fast_prev >= 0.0) fast_prev *= scene.lp_params.z;
+            }
             // Per-channel disocclusion: history that can't plausibly
             // belong to this surface (e.g. sky-blue irradiance on a
             // beige wall — equal LUMINANCE would fool a scalar test)
@@ -1445,7 +1695,8 @@ void main() {
     //  collapsing to shadow=1 + RTAO collapsing to ao=0 zeroes BOTH
     //  ambient and sun → pure black pixels (the scattered-black bug).
     // ---------------------------------------------------------------
-    float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+    // (the bent direction of the AO, when on: sky light from the open side of a corner)
+    float up = clamp(ao_bent.y * 0.5 + 0.5, 0.0, 1.0);
     // Warm-bias the ambient sky tint (12 % sun colour). See the matching
     // block in cube.frag — the raw saturated Rayleigh blue reads as
     // steel-blue on pure-shadow surfaces; bounce light off warm
@@ -1521,6 +1772,13 @@ void main() {
         float up_r = smoothstep(-0.15, 0.35, Rr.y);
         vec3  env  = mix(ambient_ground * ground_atten, sky_tint * ambient_strength * sky_factor, up_r);
         float so   = spec_occlusion(NoV, ao_floored * sky_factor, roughness);
+        // Specular occlusion by the bent cone (scene.lp_flags bit 2): the open cone has the
+        // aperture cos = sqrt(1 - ao) about the bent direction; a reflection leaving outside it
+        // is occluded, in proportion to how occluded the surface is.
+        if ((scene.lp_flags.x & 2) != 0 && ao < 0.999) {
+            float cos_c = sqrt(max(1.0 - ao, 0.0));
+            so *= mix(1.0, smoothstep(cos_c - 0.3, cos_c + 0.2, dot(ao_bent, Rr)), 1.0 - ao);
+        }
         // Ray-traced glossy reflections (roughness < 0.6, < 60 m): one
         // GGX-sampled ray per pixel (frame-varying; TAA / DLSS integrate it).
         // Hit = the GI's sun-visibility-lit surface estimate, miss = sky.
@@ -1550,11 +1808,19 @@ void main() {
                 vec3 ro = wp_safe + N * 0.03;
                 float th;
                 vec3 refl;
+                // (scene.lp_flags bit 32: a short screen march first - a hit takes last frame's light there)
+                vec3 sm_rad;
+                if ((scene.lp_flags.x & 32) != 0 &&
+                    lp_screen_march(ro, rd, clamp(cam_dist * 0.5, 4.0, 40.0),
+                                    hash12(gl_FragCoord.xy + fs * 53.0 + 17.0), sm_rad)) {
+                    refl = sm_rad;
+                } else
                 if (closest_hit_m(ro, rd, rr_q ? 300.0 : 120.0, 0x01u, th)) {
                     vec3 hp = ro + rd * th;
-                    vec3 hn = -rd;
+                    vec3 hn = lp_hit_normal(rd);
                     vec3 halb = (rd.y < -0.3 && hp.y < 23.5) ? vec3(0.33, 0.45, 0.27)
                                                              : vec3(0.55, 0.50, 0.44);
+                    halb = lp_hit_albedo(halb);
                     vec3 hl = scene.ambient.rgb * ambient_strength * 0.8;
                     if (!any_hit_m(hp + hn * 0.02, L, 200.0, 0x01u))
                         hl += scene.sun_color.rgb * scene.sun_color.a * 0.6;
@@ -1590,6 +1856,30 @@ void main() {
     if (lawn_rx && ndl > 0.0 && shadow < 0.98)
         shadow = 1.0 - (1.0 - shadow) * mix(1.0, grass_blade_vis(lawn_p, lawn_gy, L, 0.02), 0.7);
 
+    // Screen-space contact shadow (contact_shadow.glsl; scene.lp_flags bit 1): what the traced
+    // shadow does not see - grass, flowers, relief, far tree cards, people - throws a short
+    // shadow where it stands. Leaves as blockers let some light by (the reference weighs a
+    // foliage blocker by its brightness); leaves on leaves count half (a crown or a lawn would
+    // otherwise go dark all through).
+    if ((scene.lp_flags.x & 1) != 0 && (ndl_raw > 0.0 || leafy) && shadow < 0.995 && cam_dist < 400.0 &&
+        scene.rt_params.w > 1e-3) {
+        float cs_len = max(mix(0.2, 1.2, abs(Ng.y)), min(cam_dist * 0.03, 8.0));
+        vec3  cs_p = wp_safe + Ng * clamp(cam_dist * 0.002, 0.005, 0.5);
+        float cs_j = ign(gl_FragCoord.xy + vec2(float(scene.rt_flags.w & 63) * 5.588238));
+        vec2  cs_uv;
+        float cs_occ = contact_shadow(u_depth, cs_p, L, cs_len, cs_j, cs_uv);
+        if (cs_occ > 0.0) {
+            vec4 cs_g1 = textureLod(u_gbuffer1, cs_uv, 0.0);
+            bool cs_leaf = cs_g1.a > 0.83;
+            if (cs_leaf) {
+                vec3 cs_alb = textureLod(u_gbuffer0, cs_uv, 0.0).rgb;
+                cs_occ *= clamp(1.0 - dot(cs_alb, vec3(0.2126, 0.7152, 0.0722)) * 0.875, 0.0, 1.0);
+                if (leafy) cs_occ *= 0.5;
+            }
+            shadow = 1.0 - (1.0 - shadow) * (1.0 - cs_occ * clamp(scene.rt_params.w, 0.0, 1.0));
+        }
+    }
+
     // Sun term.
     // No shadow rays below N.L 0.04: fade the (untested) sun to 0 there
     // instead of letting up to 4 % leak into shadowed terminator areas.
@@ -1598,7 +1888,7 @@ void main() {
     // one factor for EVERY direct-sun term below (Lambert, specular, and the
     // leaf wrap / transmission lobes).
     float sun_gate = cloud_shadow(world_pos) * sun_horizon_lit(u_sun_horizon, world_pos);
-    vec3 sun_rad = scene.sun_color.rgb * scene.sun_color.a * ndl * term_fade * (1.0 - shadow) * sun_gate;
+    vec3 sun_rad = scene.sun_color.rgb * scene.sun_color.a * ndl * term_fade * (1.0 - shadow) * sun_gate * sun_tint;
     vec3 sun_term;
     {
         vec3  H   = normalize(L + Vv);
@@ -1620,7 +1910,7 @@ void main() {
     //    surface is edge-on to the light. The shadow ray stands in for
     //    the thickness: more canopy between leaf and sun -> less glow.
     if (leafy) {
-        vec3  sunE  = scene.sun_color.rgb * scene.sun_color.a * sun_gate;
+        vec3  sunE  = scene.sun_color.rgb * scene.sun_color.a * sun_gate * sun_tint;
         float lit   = 1.0 - shadow;
         float nw    = max(0.0, (ndl_raw + kLeafWrap) / (1.0 + kLeafWrap));
         const float kSw = 0.30;
@@ -1654,6 +1944,13 @@ void main() {
             float trans = max(0.0, 0.3 - ndl_raw) * 0.2319069 * 3.14159265;
             sun_term = max(spec_keep, vec3(0.0)) * 0.15 + sunE * lit * diff_albedo * (nw * 0.9 + trans);
         }
+    }
+    // Light thrown up by the water onto what stands over it and faces it (refl_caustic above).
+    {
+        vec3 rc = leafy ? vec3(0.0) : refl_caustic(world_pos, N, L);
+        sun_term += diff_albedo * rc;
+        // VIBE_DEBUG_REFL_CAUSTICS=1: its contribution in magenta, x 20 (water_flags.y = 2)
+        if (scene.water_flags.y > 1.5) sun_term += vec3(1.0, 0.0, 1.0) * (20.0 * dot(rc, vec3(0.2126, 0.7152, 0.0722)) / max(scene.sun_color.a, 1e-3));
     }
 
     // ---------------------------------------------------------------
@@ -1709,13 +2006,58 @@ void main() {
     // toward the object casting it.
     {
         vec2 lseed = vec2(float(scene.rt_flags.w & 31)) * vec2(17.13, 9.71);
-        for (int i = 0, lamp_n = int(scene.lamp_info.y + 0.5); i < lamp_n; ++i) {
-            float li = scene.lamp_lights[i].w;
+        // One picked lamp per pixel (scene.lp_flags bit 16; the reference game's many-light
+        // sampling): every lamp is in one list (binding 26, nearest the eye first, from
+        // light_port.cpp). The first lp_params.w of them are looped as before, each with its
+        // shadow ray - where only a few lamps are near nothing changes. Of the rest ONE is picked
+        // per pixel and frame by weighted reservoir sampling (weight: intensity x falloff x N.L
+        // at this pixel, so the lamp that lights this spot is picked nearly always) and shaded
+        // with one shadow ray, scaled by sum / weight; the temporal filter (Ray Reconstruction,
+        // FSR, TAA) averages the picks. Off: the 24 slots of the scene block, all looped.
+        bool lp_pick = (scene.lp_flags.x & 16) != 0 && scene.lp_flags.y > 0;
+        int  lp_base = scene.lp_flags.w;
+        int  lp_n = scene.lp_flags.y;
+        int  lp_k = lp_pick ? min(int(scene.lp_params.w + 0.5), lp_n) : 0;
+        int  lp_sel = -1;
+        float lp_wsum = 0.0, lp_wsel = 0.0;
+        if (lp_pick && lp_n > lp_k) {
+            float u = hash12(gl_FragCoord.xy + lseed + vec2(401.0, 97.0));
+            for (int i = lp_k; i < lp_n; ++i) {
+                vec4 la = lp_lamps[2 * (lp_base + i)];
+                float wi = abs(la.w);
+                if (wi < 1e-3) continue;
+                float rr = la.w < 0.0 ? 3.2 : 34.0;
+                vec3 to = la.xyz - world_pos;
+                float d2 = dot(to, to);
+                if (d2 >= rr * rr) continue;
+                float d = sqrt(d2);
+                float nl = dot(N, to) / max(d, 1e-3);
+                if (nl <= 0.0) continue;
+                float f = 1.0 - d / rr; f = la.w < 0.0 ? f * f : f * f * f * f * f;
+                float w = wi * f * nl;
+                if (w < 1e-6) continue;
+                lp_wsum += w;
+                float p = w / lp_wsum;
+                if (u < p) { lp_sel = i; lp_wsel = w; u = u / p; }
+                else       { u = (u - p) / max(1.0 - p, 1e-6); }
+            }
+        }
+        int n_shade = lp_pick ? lp_k + (lp_sel >= 0 ? 1 : 0) : int(scene.lamp_info.y + 0.5);
+        for (int s = 0; s < n_shade; ++s) {
+            vec4 lamp; int slot; float wmul = 1.0;
+            if (!lp_pick) { lamp = scene.lamp_lights[s]; slot = s; }
+            else {
+                int e = (s < lp_k) ? s : lp_sel;
+                lamp = lp_lamps[2 * (lp_base + e)];
+                slot = int(lp_lamps[2 * (lp_base + e) + 1].x);
+                if (s >= lp_k) wmul = lp_wsum / max(lp_wsel, 1e-6);
+            }
+            float li = lamp.w;
             // w < 0: a candle - a small flame, short reach (3.2 m).
             bool candle = li < 0.0;
             li = abs(li);
             if (li < 1e-3) continue;
-            vec3 lpos = scene.lamp_lights[i].xyz;
+            vec3 lpos = lamp.xyz;
             vec3 to = lpos - world_pos;
             float d = length(to);
             float kLampR = candle ? 3.2 : 34.0;
@@ -1724,9 +2066,9 @@ void main() {
             float pndl = max(dot(N, ld), 0.0);
             if (pndl <= 0.0) continue;
             float fall = 1.0 - d / kLampR; fall = candle ? fall * fall : fall * fall * fall * fall * fall;
-            vec3 jit = vec3(hash12(gl_FragCoord.xy + lseed + vec2(31.0 + float(i) * 7.0, 5.0)),
-                            hash12(gl_FragCoord.xy + lseed + vec2(57.0 + float(i) * 7.0, 11.0)),
-                            hash12(gl_FragCoord.xy + lseed + vec2(83.0 + float(i) * 7.0, 23.0))) - 0.5;
+            vec3 jit = vec3(hash12(gl_FragCoord.xy + lseed + vec2(31.0 + float(s) * 7.0, 5.0)),
+                            hash12(gl_FragCoord.xy + lseed + vec2(57.0 + float(s) * 7.0, 11.0)),
+                            hash12(gl_FragCoord.xy + lseed + vec2(83.0 + float(s) * 7.0, 23.0))) - 0.5;
             vec3 tj = lpos + jit * (candle ? 0.05 : 0.34) - world_pos;
             float dj = length(tj);
             if (any_hit_m(wp_safe + N * 0.06, tj / max(dj, 1e-3), max(dj - (candle ? 0.10 : 0.45), 0.05), 0x01u)) continue;
@@ -1734,11 +2076,11 @@ void main() {
             vec3 Fl = f_schlick(F0, clamp(dot(Vv, Hl), 0.0, 1.0));
             vec3 sl = d_ggx(clamp(dot(N, Hl), 0.0, 1.0), a_r) *
                       v_smith_ggx_correlated(NoV, pndl, a_r) * Fl * ms_comp * kPI;
-            float lamp_pv;
-            LAMP_PLANT_VIS(u_clutter_shadow, world_pos + N * 0.03, i, lamp_pv)
+            float lamp_pv = 1.0;
+            if (slot >= 0 && slot < 24) LAMP_PLANT_VIS(u_clutter_shadow, world_pos + N * 0.03, slot, lamp_pv)
             if (foliage) lamp_pv = mix(1.0, lamp_pv, 0.35);   // plants: gentle self-shadow
             if (lawn_rx) lamp_pv *= mix(1.0, grass_blade_vis(lawn_p, lawn_gy, ld, 0.02), 0.7);
-            point_term += (diff_albedo * (1.0 - Fl) + sl) * vec3(1.0, 0.62, 0.28) * (li * pndl * fall * lamp_pv);
+            point_term += (diff_albedo * (1.0 - Fl) + sl) * vec3(1.0, 0.62, 0.28) * (li * pndl * fall * lamp_pv * wmul);
         }
     }
     // Hand flashlight: a spot light with a shadow ray, diffuse + specular.

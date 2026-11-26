@@ -143,7 +143,7 @@ void VulkanEngine::dispatch_radiance_cache(VkCommandBuffer cmd) {
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rc_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rc_pipeline_layout_, 0, 1, &rc_set_, 0, nullptr);
-    float pc[4] = { float(kRadianceCacheEntries), 0.12f, 0.0f, 0.0f };
+    float pc[4] = { float(kRadianceCacheEntries), 0.12f, light_port_frame().cache_scale, 0.0f };   // (z: a sudden sky change scales every value - light_port.cpp)
     vkCmdPushConstants(cmd, rc_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
     vkCmdDispatch(cmd, kRadianceCacheEntries / 256, 1, 1);
 

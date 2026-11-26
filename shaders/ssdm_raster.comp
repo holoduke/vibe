@@ -1,0 +1,127 @@
+#version 460
+// Screen-space displacement - the compute rasterizer: our code for the reference game's
+// SoftwareRasterizerSSDMCS (background, 16 x 16 tiles at one vertex per pixel), read from its
+// compiled shader.
+//
+// One group = one 16 x 16-pixel tile; one thread = one grid vertex (17 x 17, the last row and
+// column shared with the next tile). Each vertex is displaced (ssdm_displace.glsl); each cell
+// of four displaced corners is split into the triangles (TL, TR, BL) and (TR, BR, BL) and
+// rasterized here into the 64-bit target with atomic max (nearest wins): depth, the offset to
+// the pixel whose G-buffer is to be shown there, and the displaced normal. A cell with a
+// triangle of more than 16 px^2 is left to the hardware path (ssdm_hwraster.*).
+//
+// (The game's tile also copies the undisplaced G-buffer into its output copy here; in this
+//  route the resolve pass writes every pixel of that copy, so the copy is left out.)
+#extension GL_GOOGLE_include_directive : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_vote : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_atomic_int64 : require
+#define SSDM_RASTER_BUF
+#include "ssdm_common.glsl"
+#include "ssdm_displace.glsl"
+
+layout(local_size_x = 17, local_size_y = 17, local_size_z = 1) in;
+
+shared uint s_tileMask;
+shared vec4 s_pos[289];     // screen x, y (pixels), depth (1 - z), flags as bits (1 cut, 2 displaced)
+shared vec2 s_src[289];     // the grid pixel the vertex came from
+shared vec4 s_nrm[289];     // the displacement direction
+
+uint ssdm_sm(int a) { return (uint(abs(a)) & 255u) | ((uint(a) >> 31) << 8); }
+
+void write_texel(ivec2 px, float u, float v, uint i0, uint i1, uint i2) {
+    vec2  s = s_src[i0] + u * (s_src[i1] - s_src[i0]) + v * (s_src[i2] - s_src[i0]);
+    int   dx = int(s.x) - px.x;
+    int   dy = int(s.y) - px.y;
+    vec3  n = s_nrm[i0].xyz + u * (s_nrm[i1].xyz - s_nrm[i0].xyz) + v * (s_nrm[i2].xyz - s_nrm[i0].xyz);
+    float z = s_pos[i0].z + u * (s_pos[i1].z - s_pos[i0].z) + v * (s_pos[i2].z - s_pos[i0].z);
+    vec2  o = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if (!(n.z >= 0.0)) o = (1.0 - abs(o.yx)) * vec2(o.x >= 0.0 ? 1.0 : -1.0, o.y >= 0.0 ? 1.0 : -1.0);
+    uint ox = uint(roundEven(o.x * 255.5 + 255.5)), oy = uint(roundEven(o.y * 255.5 + 255.5));
+    uint offs = (ssdm_sm(dy) | (ssdm_sm(dx) << 9)) ^ 131328u;
+    uint64_t key = (uint64_t(floatBitsToUint(z) & 0xFFFFFF00u) << 32)
+                 | (uint64_t(offs) << 20)
+                 | (uint64_t(((oy << 9) | ox) & 0x3FFFFu) << 2)
+                 | 274877906944UL;                                   // 1 << 38: the background pass
+    atomicMax(ssdm_r[uint(px.y) * uint(pc.size.x) + uint(px.x)], key);
+}
+
+// Triangle (i0, i1, i2); its box from (b0, b1, b2) - the game's second triangle takes its box
+// from (TR, TR, BL), leaving out its BR corner; kept as the game has it.
+void raster_tri(uint i0, uint i1, uint i2, uint b0, uint b1, uint b2) {
+    vec3 p0 = s_pos[i0].xyz, p1 = s_pos[i1].xyz, p2 = s_pos[i2].xyz;
+    if (p0.z < 0.0 || p1.z < 0.0 || p2.z < 0.0) return;
+    vec2  e1 = p1.xy - p0.xy, e2 = p2.xy - p0.xy;
+    float det = e2.x * e1.y - e2.y * e1.x;
+    if (!(det < 0.0)) return;
+    vec2 mn = floor(min(min(s_pos[b0].xy, s_pos[b1].xy), s_pos[b2].xy));
+    vec2 mx = ceil(max(max(s_pos[b0].xy, s_pos[b1].xy), s_pos[b2].xy));
+    if (mn.y >= pc.size.y || mn.x >= pc.size.x || mx.x < 0.0 || mx.y < 0.0) return;
+    mn = clamp(mn, vec2(0.0), pc.size.xy - 1.0);
+    mx = clamp(mx, vec2(0.0), pc.size.xy - 1.0);
+    float id = 1.0 / det;
+    float dudx = -e2.y * id, dudy = e2.x * id, dvdx = e1.y * id, dvdy = -e1.x * id;
+    float u0 = dudy * (mn.y - p0.y) + dudx * (mn.x - p0.x);
+    float v0 = dvdx * (mn.x - p0.x) + dvdy * (mn.y - p0.y);
+    if (dudy <= 0.0 && dudx <= 0.0 && u0 <= -1e-05) return;
+    if (dvdy <= 0.0 && dvdx <= 0.0 && v0 <= -1e-05) return;
+    if (dudy >= 0.0 && dudx >= 0.0 && u0 >= 1.00001) return;
+    if (!(mn.y <= mx.y) || (dvdy >= 0.0 && dvdx >= 0.0 && v0 >= 1.00001)) return;
+    float ur = u0, vr = v0;
+    for (float y = mn.y; y <= mx.y; y += 1.0) {
+        float u = ur, v = vr;
+        for (float x = mn.x; x <= mx.x; x += 1.0) {
+            if (u > -1e-05 && v > -1e-05 && u + v < 1.00001) write_texel(ivec2(x, y), u, v, i0, i1, i2);
+            u += dudx; v += dvdx;
+        }
+        ur += dudy; vr += dvdy;
+    }
+}
+
+void main() {
+    uvec2 gid = gl_WorkGroupID.xy, tid = gl_LocalInvocationID.xy;
+    if (!(float(gid.x) < pc.size.x * 0.0625 && float(gid.y) < pc.size.y * 0.0625)) return;
+    uvec2 vpix = gid * 16u + tid;
+
+    // ---- the whole tile is of classes that are never displaced: nothing to do ----
+    if (gl_LocalInvocationIndex == 0u) s_tileMask = 1u;
+    barrier();
+    uint c = ssdm_class(ivec2(vpix));
+    bool skip = c == 13u || c == 107u || c == 0u || c == 19u || (c - 52u) < 16u;
+    bool all_skip = subgroupAll(skip);
+    if (subgroupElect()) atomicAnd(s_tileMask, all_skip ? 1u : 0u);
+    barrier();
+    if (s_tileMask != 0u) return;
+
+    // ---- this thread's vertex ----
+    SsdmVtx vx = ssdm_displace(vec2(vpix), false);
+    uint i = tid.y * 17u + tid.x;
+    float zf = vx.clip.w > 0.0 ? 1.0 - vx.clip.z / vx.clip.w : -1.0;      // (behind the camera: dropped, as the game's reverse-Z does)
+    uint flags = (vx.state < 0.0 ? 1u : 0u) | (vx.state > 0.5 ? 2u : 0u);
+    s_pos[i] = vec4((vx.clip.x / vx.clip.w * 0.5 + 0.5) * pc.size.x, (vx.clip.y / vx.clip.w * 0.5 + 0.5) * pc.size.y, zf,
+                    uintBitsToFloat(flags));
+    s_src[i] = vx.uv * pc.size.xy;
+    s_nrm[i] = vec4(vx.N, vx.state == -1.0 ? -1.0 : 0.0);
+    barrier();
+    if (tid.x > 15u || tid.y > 15u) return;
+
+    // ---- this thread's cell ----
+    uint a = i, b = i + 1u, cc = i + 17u, d = i + 18u;
+    uint fa = floatBitsToUint(s_pos[a].w), fb = floatBitsToUint(s_pos[b].w), fc = floatBitsToUint(s_pos[cc].w), fd = floatBitsToUint(s_pos[d].w);
+    if (((fa & 2u) & fb & fc & fd) == 0u) return;
+    vec3  A = s_pos[a].xyz, B = s_pos[b].xyz, C = s_pos[cc].xyz, D = s_pos[d].xyz;
+    float e_bc = length(B - C), e_ab = length(A - B), e_ca = length(C - A);
+    float s1 = (e_ab + e_bc + e_ca) * 0.5;
+    float e_bd = length(B - D), e_dc = length(D - C);
+    float s2 = (e_bd + e_bc + e_dc) * 0.5;
+    float A1sq = s1 * (s1 - e_ab) * (s1 - e_bc) * (s1 - e_ca);
+    float A2sq = s2 * (s2 - e_bd) * (s2 - e_dc) * (s2 - e_bc);
+    if (max(A2sq, max(A1sq, 0.0)) > 256.0) {
+        uint slot = atomicAdd(ssdm_hw_count, 1u);
+        ssdm_hw_idx[slot] = (vpix.y & 0xFFFFu) | (vpix.x << 16);
+        return;
+    }
+    raster_tri(a, b, cc, a, b, cc);
+    raster_tri(b, d, cc, b, b, cc);
+}

@@ -17,6 +17,7 @@
 #include "engine/vk_pipelines.h"
 #include "engine/vk_initializers.h"
 #include "engine/log.h"
+#include "engine/terrain.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -28,9 +29,11 @@ namespace {
 constexpr int kLevels = 3;
 // The kinds of grass tuft_place.comp places (the game: the objects of a placement group), and
 // how many vec4 each has after the species table in the buffer at binding 3.
-constexpr int kGrassKinds = 3;           // 0 = long tufts (species 15), 1 = turf (species 17), 2 = flowering meadow (species 18, in fields only)
+constexpr int kGrassKinds = 4;           // 0 = long tufts (species 15), 1 = turf (species 17), 2 = flowering meadow (species 18, in fields only), 3 = small debris (species 19..26 by rule)
 constexpr int kGrassParams = 14;
-constexpr uint32_t kTuftRoom = 60000u, kTurfRoom = 150000u, kMeadowRoom = 120000u;      // room in each list of the species
+constexpr uint32_t kTuftRoom = 60000u, kTurfRoom = 150000u, kMeadowRoom = 120000u, kDebrisRoom = 16000u;      // room in each list of the species
+// (the debris' "mesh": 5 cm high at size 1, 0.5 m across - the culling sphere; tuft_place.comp P_SHAPE)
+const float kDebrisShape[4] = { 0.05f, 0.0f, 0.25f, 0.0f };
 VkBuffer pg_buffer(VmaAllocator a, VkDeviceSize size, VkBufferUsageFlags usage, bool host, VmaAllocation& alloc, void** mapped) {
     VkBufferCreateInfo bci{};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -59,6 +62,7 @@ void VulkanEngine::init_plant_gpu() {
     pg_->tuft_room = tufts_gpu ? kTuftRoom : 0u;
     pg_->turf_room = tufts_gpu && !std::getenv("VIBE_LAWN_RM") ? kTurfRoom : 0u;
     pg_->meadow_room = tufts_gpu && !std::getenv("VIBE_NO_MEADOW") ? kMeadowRoom : 0u;
+    pg_->debris_room = tufts_gpu ? kDebrisRoom : 0u;        // (the small debris, species 19..26: ground_fx; dispatched while rt_.ground_debris)
     if (total == 0 && !tufts_gpu) return;
     pg_->total = total;
     log::infof("[plants] GPU culling: %u plants", total);
@@ -79,7 +83,7 @@ void VulkanEngine::init_plant_gpu() {
             c.firstIndex = 0;
             c.vertexOffset = 0;
             c.firstInstance = base;
-            base += scatter_.plant_count[sp] + (sp == 15 ? pg_->tuft_room : sp == 17 ? pg_->turf_room : sp == 18 ? pg_->meadow_room : 0u);
+            base += scatter_.plant_count[sp] + (sp == 15 ? pg_->tuft_room : sp == 17 ? pg_->turf_room : sp == 18 ? pg_->meadow_room : sp >= 19 ? pg_->debris_room : 0u);
         }
     }
     pg_->packed_cap = std::max(base, 1u);
@@ -100,8 +104,8 @@ void VulkanEngine::init_plant_gpu() {
     pg_->inst_buf = pg_buffer(allocator_, VkDeviceSize(total) * sizeof(ScatterInstance), ssbo | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false, pg_->inst_alloc, nullptr);
     pg_->inst_gen = 0;
 
-    VkDescriptorSetLayoutBinding b[9]{};
-    for (uint32_t i = 0; i < 9; ++i) {
+    VkDescriptorSetLayoutBinding b[10]{};
+    for (uint32_t i = 0; i < 10; ++i) {          // (9: how much vegetation stands over the ground - the debris under trees, tuft_place.comp)
         b[i].binding = i;
         b[i].descriptorType = i >= 4 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[i].descriptorCount = 1;
@@ -109,9 +113,9 @@ void VulkanEngine::init_plant_gpu() {
     }
     VkDescriptorSetLayoutCreateInfo lci{};
     lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    lci.bindingCount = 9; lci.pBindings = b;
+    lci.bindingCount = 10; lci.pBindings = b;
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &pg_->set_layout), "plant gpu set layout");
-    VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 }, { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5 } };
+    VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 }, { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6 } };
     VkDescriptorPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pci.maxSets = 1; pci.poolSizeCount = 2; pci.pPoolSizes = ps;
@@ -204,21 +208,24 @@ void VulkanEngine::init_plant_gpu() {
 void VulkanEngine::write_tuft_ground_bindings() {
     if (!pg_->set || !pg_->tuft_view || !terrain_height_full_view_ || !grass_mask_.view) return;
     const VkImageView near_v = normal_textures_[kTexVegShade].view ? normal_textures_[kTexVegShade].view : grass_mask_.view;
-    if (pg_->ground_view == terrain_height_full_view_ && pg_->lawn_view == grass_mask_.view && pg_->near_view == near_v) return;
-    VkDescriptorImageInfo ii[4] = {
+    // (9: how much vegetation stands over the ground, the home tile - the debris under trees; ground_fx)
+    const VkImageView shade_v = albedo_textures_[kTexVegShade].view ? albedo_textures_[kTexVegShade].view : grass_mask_.view;
+    if (pg_->ground_view == terrain_height_full_view_ && pg_->lawn_view == grass_mask_.view && pg_->near_view == near_v && pg_->shade_view == shade_v) return;
+    VkDescriptorImageInfo ii[5] = {
         { pg_->tuft_sampler, pg_->tuft_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         { terrain_height_full_sampler_, terrain_height_full_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         { terrain_height_full_sampler_, grass_mask_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-        { texture_sampler_, near_v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
-    VkWriteDescriptorSet w[4]{};
-    for (uint32_t i = 0; i < 4; ++i) {
+        { texture_sampler_, near_v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+        { texture_sampler_, shade_v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+    VkWriteDescriptorSet w[5]{};
+    for (uint32_t i = 0; i < 5; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstSet = pg_->set; w[i].dstBinding = 5 + i; w[i].descriptorCount = 1;
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w[i].pImageInfo = &ii[i];
     }
-    vkUpdateDescriptorSets(device_, 4, w, 0, nullptr);
-    pg_->ground_view = terrain_height_full_view_; pg_->lawn_view = grass_mask_.view; pg_->near_view = near_v;
+    vkUpdateDescriptorSets(device_, 5, w, 0, nullptr);
+    pg_->ground_view = terrain_height_full_view_; pg_->lawn_view = grass_mask_.view; pg_->near_view = near_v; pg_->shade_view = shade_v;
 }
 
 // Is the ground's short grass drawn as turf clumps this frame (and the raymarched lawn left out)?
@@ -335,10 +342,18 @@ void VulkanEngine::cull_plants(VkCommandBuffer cmd) {
               12.0f, 0.0f, 0.0f, 30.0f,
               0.75f, 1.25f, 0.55f, 0.20f, 0.10f, 0.12f, 0.50f, ScatterSet::kMeadowShape, 2,
               glm::vec3(0.16f, 0.27f, 0.05f), glm::vec3(0.26f, 0.34f, 0.07f), straw },
+            // small debris (species 19..26, one per kind - tuft_place.comp "debris" picks the kind
+            // by rule): to 55 m, every candidate (the rules thin it), no clustering noise, flat
+            // pieces of 5 cm (so full snow covers them); the last 40 % of the range shrinks away
+            { 19, float(pg_->debris_room), 55.0f, 1.1f,
+              12.0f, 0.0f, 0.0f, 42.0f,
+              0.75f, 1.30f, 0.0f, 0.0f, 0.0f, 0.6f, 1.0f, kDebrisShape, 3,
+              glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f) },
         };
         for (int k = 0; k < kGrassKinds; ++k) {
             const Kind& K = kinds[k];
             if (!place || K.room <= 0.0f) continue;
+            if (K.lawn == 3 && !rt_.ground_debris) continue;        // (the debris: ground_fx's switch)
             if (K.lawn == 2) {          // (a kind of the fields: not dispatched at all away from them)
                 bool near_field = false;
                 for (const glm::vec4& F : flower_fields_) near_field |= glm::distance(glm::vec2(fv.eye_pos.x, fv.eye_pos.z), glm::vec2(F.x, F.y)) < F.z + F.w + K.range;
@@ -355,7 +370,20 @@ void VulkanEngine::cull_plants(VkCommandBuffer cmd) {
             P[5] = glm::vec4(K.shape[0], 2.0f * K.shape[2] + 0.5f * K.shape[0], K.range, K.band);
             P[6] = glm::vec4(K.c0, 0.0f); P[7] = glm::vec4(K.c1, 0.0f); P[8] = glm::vec4(K.c2, 0.0f);
             for (size_t i = 0; i < 4; ++i) P[9 + i] = K.lawn == 2 && i < flower_fields_.size() ? flower_fields_[i] : glm::vec4(0.0f);
-            P[13] = glm::vec4(K.fade0, K.fade1, glm::clamp(env_->snow, 0.0f, 1.0f), 0.0f);     // (.z: winter's snow cover - short grass is under it)
+            if (K.lawn == 3) {
+                // (the debris: where litter lies - the service station and the castle car park, terrain.h)
+                // As rectangles (x0, z0, x1, z1) on the paving itself - the forecourt stops short
+                // of the highway's verge - and P[11] the surface each lies on (0 = the ground's
+                // own height; the car park: its slab's top, which stands over the terrain).
+                P[9]  = glm::vec4(kStationRect[0] + 2.0f, kStationRect[1] + 2.0f, kStationRect[2] - 4.0f, kStationRect[3] - 2.0f);
+                P[10] = glm::vec4(kCastlePark[0] + 0.6f, kCastlePark[1] + 0.6f, kCastlePark[2] - 0.6f, kCastlePark[3] - 0.6f);
+                float park_top = 0.0f;
+                for (const DrivePad& d : drive_pads_) if (std::abs(d.x0 - kCastlePark[0]) < 0.01f && std::abs(d.z0 - kCastlePark[1]) < 0.01f) park_top = d.h0;
+                P[11] = glm::vec4(0.0f, park_top, 0.0f, 0.0f);
+                P[12] = glm::vec4(0.0f);
+            }
+            // (.z: winter's snow cover - short grass is under it; .w: autumn, how much of the leaves are down - the debris)
+            P[13] = glm::vec4(K.fade0, K.fade1, glm::clamp(env_->snow, 0.0f, 1.0f), season_w_[2]);
         }
         vkCmdUpdateBuffer(cmd, pg_->spec_buf, 0, sizeof(spec), spec);
     }

@@ -10,6 +10,10 @@ add_executable(vibe_tests
     test_npc.cpp
     test_sound_space.cpp
     test_glass.cpp
+    test_water_course.cpp
+    test_water_solver.cpp
+    ${CMAKE_SOURCE_DIR}/src/engine/water_course.cpp
+    ${CMAKE_SOURCE_DIR}/src/engine/log.cpp
 )
 
 target_link_libraries(vibe_tests PRIVATE

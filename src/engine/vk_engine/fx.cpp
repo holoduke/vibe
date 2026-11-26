@@ -1054,6 +1054,10 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // Tyre marks and tyre smoke (jeep.cpp).
     static RibbonBuilder marks; marks.v.clear();
     jeep_fx(marks.v, mist.v, flash.v, eye, cam_right, cam_up);
+    // Spray and mist at the falls, the rocks, the sea's whitecaps (water_spray.cpp): droplets with the
+    // splashes' (kind 4), the mist its own sheets lit through by the sun (kind 8).
+    static RibbonBuilder wmist; wmist.v.clear();
+    water_spray_fx(spray.v, wmist.v, eye, cam_right, cam_up);
     // Blood (npc_world.cpp): mist and drops face the eye, stains lie on what they landed on.
     static RibbonBuilder blood; blood.v.clear();
     for (const Blood& d : blood_) {
@@ -1295,8 +1299,8 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     const bool any_glass = !panes.empty() || !shard_v.empty() || lenses;
 
     const size_t n_smoke = smoke.v.size(), n_glow = glow.v.size(), n_flash = flash.v.size();
-    if (vols.empty() && decals_.empty() && !any_glass &&
-        n_smoke + n_glow + n_flash + cloth.v.size() + spray.v.size() + mist.v.size() + blood.v.size() == 0) return;
+    if (vols.empty() && decals_.empty() && !any_glass && !water_solver_drawing() &&
+        n_smoke + n_glow + n_flash + cloth.v.size() + spray.v.size() + mist.v.size() + blood.v.size() + wmist.v.size() == 0) return;
 
     // Upload ribbon vertices.
     const uint32_t slot = static_cast<uint32_t>(frame_number_ & 1);
@@ -1318,6 +1322,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     auto r_marks = put(marks.v);
     auto r_blood = put(blood.v);
     auto r_shard = put(shard_v);
+    auto r_wmist = put(wmist.v);
     vmaFlushAllocation(allocator_, fx_->valloc[slot], 0, total * sizeof(Vertex));
 
     // ---- Pass ----
@@ -1492,9 +1497,13 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         draw(r_mist,  5.0f, 1.0f);
         draw(r_blood, 7.0f, 1.0f);
         draw(r_spray, 4.0f, 1.0f);
+        draw(r_wmist, 8.0f, 1.0f);
         draw(r_glow,  1.0f, 1.0f);
         draw(r_flash, 2.0f, 1.0f);
     }
+    // The shallow-water solver's foam particles (water_solver.cpp; its own pipeline and set - last,
+    // so the scene set bound above stays for everything before).
+    water_solver_draw(cmd);
     vkCmdEndRendering(cmd);
     vkinit::transition_image_aspect(cmd, depth_image_,
                                     VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,

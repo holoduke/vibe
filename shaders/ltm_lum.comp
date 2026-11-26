@@ -1,0 +1,46 @@
+#version 460
+// Local tone mapping, step 1 of 4 (post_fx.cpp): exposure fusion after the reference game.
+// For every texel of the low-resolution level 0 (1/8 of the output): the HDR picture (8x8
+// pixels averaged), exposed as compose exposes it, at three synthetic exposures (shadows gain,
+// as is, highlights gain), each through the same tone curve to a perceptual luma; weight per
+// exposure = Gaussian of (luma - 0.5). A = the three lumas, W = their normalised weights.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D u_scene;
+layout(set = 0, binding = 1) uniform sampler2D u_depth;
+#include "post_fx.glsl"
+layout(std430, set = 0, binding = 2) readonly buffer PostFxB { PostFxData d; } pfx;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D o_a;
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D o_w;
+#include "tonemap.glsl"
+
+layout(push_constant) uniform PC { vec4 p; } pc;   // xy: level-0 size
+
+void main() {
+    ivec2 ip = ivec2(gl_GlobalInvocationID.xy);
+    if (ip.x >= int(pc.p.x) || ip.y >= int(pc.p.y)) return;
+    vec2 uv0 = (vec2(ip) + 0.5) / pc.p.xy;
+    vec2 px = 1.0 / (pc.p.xy * 8.0);            // one output pixel in uv
+    bool sky_in = pfx.d.expo3.z > 0.5;
+    vec3 c = vec3(0.0);
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x) {
+            vec2 uv = uv0 + (vec2(x, y) * 2.0 - 3.0) * px;
+            vec3 s = textureLod(u_scene, uv, 0.0).rgb;
+            if (!sky_in && textureLod(u_depth, uv, 0.0).r >= 0.99999) s = vec3(pfx.d.expo3.y);
+            c += s;
+        }
+    c = clamp(c * (1.0 / 16.0), vec3(0.0), vec3(64.0));
+    c *= pfx_exposure(pfx.d);
+    int mode = int(pfx.d.ltm2.x + 0.5);
+    float L = pfx_look_L(pfx.d), n = pfx.d.look.y, lk = pfx.d.look.x;
+    vec3 g = vec3(pfx.d.ltm.y, 1.0, pfx.d.ltm.z);
+    vec3 l;
+    l.x = pfx_ltm_luma(tone_curve(c * g.x, mode, lk, L, n));
+    l.y = pfx_ltm_luma(tone_curve(c,       mode, lk, L, n));
+    l.z = pfx_ltm_luma(tone_curve(c * g.z, mode, lk, L, n));
+    vec3 w = exp(-0.5 * pfx.d.ltm.w * (l - 0.5) * (l - 0.5)) + 1e-5;
+    w /= (w.x + w.y + w.z);
+    imageStore(o_a, ip, vec4(l, 1.0));
+    imageStore(o_w, ip, vec4(w, 1.0));
+}
