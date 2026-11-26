@@ -904,7 +904,7 @@ void VulkanEngine::load_terrain_pbr_overrides() {
         { kTexSand,  "Ground027" },
         { kTexSnow,  "Snow006"   },
         { kTexRoof,  "RoofingTiles012A" },
-        { kTexRoad,  "PavingStones131" },
+        { kTexRoad,  "PavingStones142" },       // (old cobbles for the castle road; PavingStones131 before)
         { kTexBark,  "Bark012" },
         { kTexAsphalt, "Asphalt031" },
         { kTexGravel,  "Gravel040" },

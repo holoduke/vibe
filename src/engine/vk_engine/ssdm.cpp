@@ -74,7 +74,7 @@ constexpr float kSsdmReach = 48.0f;
 constexpr float kSsdmAmpScale = 1.0f;
 // The ground (ssdm_ground.frag): the height in metres that the terrain shader's largest value
 // stands for (terrain_raymarch.frag / terrain_rm_heightfield.glsl kGndSsdmMax: keep the same).
-constexpr float kGndSsdmMax = 0.12f;
+constexpr float kGndSsdmMax = 0.20f;
 
 // How far the stones of a box brush stand out (m), 0 = not displaced. The depth the box relief
 // of cube.frag gives the same wall (deeper for bigger stones, never more than a part of the

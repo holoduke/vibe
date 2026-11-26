@@ -23,6 +23,7 @@ SETS = [
     ('tex/Bricks078/Bricks078_8K-JPG_Displacement.jpg', 'tex/Bricks078/Bricks078_SSDM.png', 4096, 30, 0.22, 0.70),   # castle walls: field stones in lime mortar
     ('tex/Tiles130/Tiles130_8K-JPG_Displacement.jpg',   'tex/Tiles130/Tiles130_SSDM.png',   4096, 40, 0.14, 0.55),   # courtyard: flags, flat tops
     ('terrain_pbr/PavingStones131/PavingStones131_2K-JPG_Displacement.jpg', 'terrain_pbr/PavingStones131/PavingStones131_SSDM.png', 2048, 45, 0.26, 0.70),   # the paved roads: setts
+    ('terrain_pbr/PavingStones142/PavingStones142_2K-JPG_Displacement.jpg', 'terrain_pbr/PavingStones142/PavingStones142_SSDM.png', 2048, 34, 0.24, 0.65),   # the castle road: old cobbles
 ]
 
 

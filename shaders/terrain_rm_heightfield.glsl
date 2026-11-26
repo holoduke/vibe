@@ -44,7 +44,7 @@ bool g_rm_no_relief = false;
 // screen-space pass moves the pixel by it. The materials' own parallax is then left out.
 // Only upward: shadows, collision and the grass's roots stay those of the marched surface.
 #define GND_SSDM ((int(scene.rm_perf.x) & 64) != 0)
-const float kGndSsdmMax = 0.12;          // (ssdm.cpp kGndSsdmMax: keep the two the same)
+const float kGndSsdmMax = 0.20;          // (ssdm.cpp kGndSsdmMax: keep the two the same; = the full displacement, as a wall stone gets)
 const float kSsdmReach  = 48.0;          // (ssdm.cpp kSsdmReach: the displacement pass's reach - keep the same)
 float g_gnd_ssdm_h = 0.0;                // metres, 0 = nothing to displace at this pixel
 // Two materials laid over each other by their heights (the reference game's blend: the one that

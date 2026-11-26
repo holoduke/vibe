@@ -158,7 +158,7 @@
         // Mip from the pixel footprint (no screen derivatives: road_uv is
         // discontinuous at the road edge and across the march).
         float fp = t * 2.0 / max(scene.viewport.y, 1.0);
-        float g_tile = max(scene.spom_params.z, 0.25);
+        float g_tile = RM_ROAD_TILE;
         rm_road_lod = log2(max(fp / g_tile * float(textureSize(u_albedo[kRmMatRoad], 0).x), 1.0));
         vec3 dirw  = vec3(rm_road_dir.x, 0.0, rm_road_dir.y);
         vec3 sidew = vec3(-rm_road_dir.y, 0.0, rm_road_dir.x);
@@ -500,20 +500,20 @@
         // The loose stones (terrain_rm_pebbles.glsl; the normal looked them up): with the march
         // they were part of the marched surface, with the patches they are raised here.
         if (peb0_h > 0.0) h = max(h, min(peb0_h, 0.10) * (1.0 - smoothstep(10.0, 20.0, t)) * (1.0 - plateauWeight(pos.xz)));
-        // The paved road, worn: the stones stand 7 cm out of their joints; along the two wheel
+        // The paved road, worn: the stones stand 16 cm out of their joints; along the two wheel
         // lines (a cart's, 1.5 m apart) and where the bed has settled they are pressed down - the
         // road's height is a FACTOR on what is there, as the reference game's road decal does it
         // (it multiplies the ground's height, so a track can only press the ground down). The
         // trodden earth beside the paving the same. Earth in the joints and in a missing stone's
         // hole, sunk stones: rm_cob_lvl, "Old, hand-laid paving" above.
         if (rm_road.x + rm_road.y > 0.001) {
-            float lat = abs(rm_road_uv.x) * max(scene.spom_params.z, 0.25);
+            float lat = abs(rm_road_uv.x) * RM_ROAD_TILE;
             float line = 1.0 - smoothstep(0.16, 0.46, abs(lat - min(0.75, 0.5 * scene.road_info.y)));
             line *= mix(0.45, 1.0, tile_noise2(pos.xz, 0.11, vec2(61.0)));                   // (they come and go)
             float settled = smoothstep(0.56, 0.80, tile_noise2(pos.xz, 0.55, vec2(77.0)));
             float press = (1.0 - 0.45 * line) * (1.0 - 0.35 * settled);
             h *= 1.0 - 0.55 * rm_road.y;
-            h = mix(max(h, 0.020 * rm_road.x), 0.07 * rm_cob_lvl * press, rm_road_wx);
+            h = mix(max(h, 0.020 * rm_road.x), 0.16 * rm_cob_lvl * press, rm_road_wx);     // (the castle road's cobbles: 16 cm from joint to top, the walls' order)
         }
         // Sand: a sheet a few centimetres thick with its ripples (the ones the normal is made
         // from), its lumps, and the prints pressed into it. Stones that stand higher than it

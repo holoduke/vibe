@@ -1,5 +1,8 @@
 // terrain_rm_noise_road.glsl - part of terrain_raymarch.frag (included there, in place; not a standalone shader).
 // Noise, plateau weight, road distance
+// The castle road's paving: metres per repeat of its texture. The scan (old cobbles) covers
+// about 2.7 m - 1.6 x the ground materials' repeat, so a stone is 13 - 16 cm across, not 9.
+#define RM_ROAD_TILE (max(scene.spom_params.z, 0.25) * 1.6)
 
 // === Hash + Value-Noise with analytical derivatives ===
 // dot/fract pattern (avoids sin() precision artifacts on some GPUs).

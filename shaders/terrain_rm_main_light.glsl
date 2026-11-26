@@ -162,6 +162,15 @@
     }
 #endif
 
+    // The raised stones shade each other (rm_bake_relief_shadow, terrain_rm_bake.glsl): the
+    // traced shadow knows only the flat ground.
+#if !defined(VIBE_WATER) && !defined(VIBE_BAKE) && !defined(VIBE_MARCH_ONLY) && !defined(VIBE_LITE)
+    if (GND_SSDM && t < kSsdmReach && shadow < 0.98 && g_gnd_ssdm_h > 0.0) {
+        float rs_fade = 1.0 - clamp(max(0.0, t - kSsdmReach * 0.75) / (kSsdmReach * 0.25), 0.0, 1.0);
+        float rs_amp  = rs_fade * (1.0 + 4.0 * clamp(t * 0.01, 0.0, 1.0));       // (the displacement's own amplitude over distance: ssdm_displace.glsl)
+        rm_road_vis = min(rm_road_vis, mix(1.0, rm_bake_relief_shadow(pos, t, sunDir, rs_amp), 0.85));
+    }
+#endif
     if (g_snow >= 0.01) rm_road_vis = mix(rm_road_vis, 1.0, snow_road_patch(pos.xz) * smoothstep(0.15, 0.6, g_snow));
     rm_road_vis = mix(rm_road_vis, 1.0, sand_cov);
     float sha = (1.0 - shadow) * rm_road_vis * sun_horizon_lit(u_sun_horizon, pos);
@@ -443,7 +452,7 @@
         float cv1 = tile_noise2(pos.xz, 6.5, vec2(9.1)) * 0.6 + tile_noise2(pos.xz, 2.1, vec2(1.7)) * 0.4, cv2 = tile_noise2(pos.xz, 0.55, vec2(3.3));
         cob *= mix(0.74, 1.22, cv1) * mix(vec3(1.06, 1.0, 0.92), vec3(0.94, 0.98, 1.05), cv2);
         {   // (the wheel lines of terrain_rm_main_ground.glsl: dirt in the joints, the tops rubbed pale)
-            float lat = abs(rm_road_uv.x) * max(scene.spom_params.z, 0.25);
+            float lat = abs(rm_road_uv.x) * RM_ROAD_TILE;
             float line = 1.0 - smoothstep(0.16, 0.46, abs(lat - min(0.75, 0.5 * scene.road_info.y)));
             line *= mix(0.45, 1.0, tile_noise2(pos.xz, 0.11, vec2(61.0)));
             cob *= mix(1.0, mix(0.70, 1.07, smoothstep(0.3, 0.8, rm_cob_h)), line);

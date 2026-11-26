@@ -61,4 +61,34 @@ bool rm_bake_fetch(vec3 pos, float t, out vec3 nor, out vec3 mate, out float hw_
     hw_pave = m.r; sand_cov = m.g; hw_gloss = m.b;
     return true;
 }
+// How much of the sun the raised ground around leaves the point at `pos` (1 = all): the stones
+// the screen-space displacement lifts shade each other - cobbles, the soil's stones, kerbs. A
+// short march toward the sun over the baked height (u_bake_a.a), the ray starting on the
+// displaced surface and rising with the sun; `amp` = the pass's amplitude factor at this distance.
+// (Ours: the reference game gets this from its screen-space shadow pass on the displaced depth;
+//  our ground is lit before the displacement runs.)
+float rm_bake_relief_shadow(vec3 pos, float t, vec3 L, float amp) {
+    if (g_bake_t0 <= 0.0 || L.y < 0.03) return 1.0;
+    float lf = max(log2(max(t / g_bake_t0, 1.0)), g_bake_lmin);
+    if (lf > 3.0) return 1.0;                                   // (texels of 6 cm and more: no stones in them)
+    float l0 = floor(lf);
+    float span0 = float(kBakeSize) * kBakeTexel0 * exp2(l0);
+    float hmax = kGndSsdmMax * amp;
+    float h0 = textureLod(u_bake_a, vec3(pos.xz / span0, l0), 0.0).a * hmax;
+    float lxz = length(L.xz);
+    if (lxz < 1e-3) return 1.0;
+    float rise = L.y / lxz;                                     // metres up per metre along
+    float smax = min((hmax - h0) / max(rise, 0.05), 0.9);       // until the ray is over the tallest stone
+    if (smax < 0.004) return 1.0;
+    vec2  dir = L.xz / lxz;
+    float j = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float occ = 0.0;
+    const int kN = 8;
+    for (int i = 0; i < kN; ++i) {
+        float s = smax * (float(i) + 0.35 + 0.65 * j) / float(kN);
+        float hs = textureLod(u_bake_a, vec3((pos.xz + dir * s) / span0, l0), 0.0).a * hmax;
+        occ = max(occ, hs - (h0 + s * rise));
+    }
+    return 1.0 - smoothstep(0.0, 0.025 * amp, occ);
+}
 #endif

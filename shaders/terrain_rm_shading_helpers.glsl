@@ -459,7 +459,7 @@ vec2 roadWeights(vec2 q, out vec2 road_uv, out vec2 r_dir) {
         }
     }
     if (abs(main_lat) < hw + 0.35) { best_lat = main_lat; r_along = main_along; r_dir = main_dir; }
-    float g_tile = max(scene.spom_params.z, 0.25);
+    float g_tile = RM_ROAD_TILE;
     if (best_lat < 1e8) road_uv = vec2(best_lat, r_along) / g_tile;
     float jit = (noise2(q * 1.7) - 0.5) * 0.45 + (noise2(q * 0.31 + 17.0) - 0.5) * 0.6;
     float road_w  = 1.0 - smoothstep(hw - 0.12, hw + 0.12, rd + jit);
