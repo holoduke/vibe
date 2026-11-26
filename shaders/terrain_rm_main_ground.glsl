@@ -406,13 +406,15 @@
     }
     // A highway (engine/highway.h): asphalt to about 5.5 m from the centre line, gravel under
     // its edge and out to 8 m. The surface's relief comes from the scans' normal maps.
-    float hw_verge = 0.0, hw_d = 0.0, hw_s = 0.0, hw_lod = 0.0, hw_hgt = 0.5, hw_wk = 1.0;
+    float hw_verge = 0.0, hw_d = 0.0, hw_s = 0.0, hw_lod = 0.0, hw_hgt = 0.5, hw_wk = 1.0, hw_ad = 64.0;
+    vec2  hw_mk = vec2(1.0, 0.0);       // a junction's paint (rm_hw_jn_surface)
     RmAt  hw_at, gv_at;                 // the asphalt's and the gravel's layouts here (rm_at: anti-tiling)
     hw_at.n = 0; gv_at.n = 0;
     vec2  hw_uv = vec2(0.0);
     if (rm_hw_in(pos.xz) && !RMDBG(4194304)) {
         hw_d = rm_hw_dh(pos.xz).x;
-        float ad = abs(hw_d), aa = max(t * 0.002, 0.015);
+        hw_ad = rm_hw_ad(pos.xz, hw_d);         // (at a junction: the two roads' paving and the corners between them)
+        float ad = hw_ad, aa = max(t * 0.002, 0.015);
         // The asphalt's edge is not a ruled line: it wanders a hand's width and has broken away in places.
         float edge = 5.5 + (tile_noise2(pos.xz, 0.45, vec2(0.0)) - 0.5) * 0.30 + (tile_noise2(pos.xz, 3.1, vec2(0.0)) - 0.5) * 0.12 * (1.0 - smoothstep(30.0, 80.0, t))
                          - 0.35 * smoothstep(0.72, 0.9, tile_noise2(pos.xz, 0.17, vec2(5.0)));
@@ -421,6 +423,7 @@
         if (hw_pave + hw_verge > 0.001) {
             hw_s = rm_hw_s(pos.xz);
             hw_wk = rm_hw_width(pos.xz);
+            rm_hw_jn_surface(pos.xz, t, hw_d, hw_s, hw_wk, hw_mk);      // (at a junction: whose asphalt this is)
             float fp = t * 2.0 / max(scene.viewport.y, 1.0);
             hw_uv = pos.xz / TILE_CELL(2.6);
             hw_lod = log2(max(fp / TILE_CELL(2.6) * float(textureSize(u_albedo[kRmMatAsphalt], 0).x), 1.0));

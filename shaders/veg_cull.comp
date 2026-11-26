@@ -55,13 +55,26 @@ void main() {
     vec4 ai = arch[a];
     vec3 c = I.pos_scale.xyz + vec3(0.0, ai.y * s * ysq, 0.0);
     float r = ai.x * s * max(ysq, 1.0) + 0.6;
+    float d = distance(c, pc.cam.xyz);
+    // Far trees are drawn larger (veg.vert veg_far_grow - keep in step): each stands for the
+    // ones the distance has thinned out round it (veg_stream.cpp).
+    if (ai.z > 0.5 && ai.w < 1.5) {
+        float g = 1.0 + 0.35 * smoothstep(1500.0, 3200.0, d);
+        c.y = I.pos_scale.y + ai.y * s * ysq * g;
+        r = (r - 0.6) * g + 0.6;
+    }
 
     for (int p = 0; p < 6; ++p)
         if (dot(pc.planes[p].xyz, c) + pc.planes[p].w < -r) return;
-    float d = distance(c, pc.cam.xyz);
     if (d > pc.params.y + r) return;
     float px = r / max(d, 0.1) * pc.cam.w * pc.params.z;
-    if (px < 0.9) return;
+    // No line where the trees end: every plant has its own number, and over the last fifth of
+    // the draw distance, and as a plant shrinks toward a pixel, fewer and fewer of them stay
+    // (the same ones from frame to frame). Small plants go first. Beyond, the ground itself
+    // has the woods' colour (terrain_rm_main_light.glsl).
+    float keep = fract(I.rot_arch_phase.z * 7.3891 + I.pos_scale.x * 0.37 + I.pos_scale.z * 0.61);
+    if (px < 0.9 + 0.7 * keep) return;
+    if (keep < smoothstep(0.8 * pc.params.y, pc.params.y, d)) return;
 
     // ---- Hi-Z occlusion (conservative) ----
     if (pc.params.w > 0.5 && d > r + 30.0) {

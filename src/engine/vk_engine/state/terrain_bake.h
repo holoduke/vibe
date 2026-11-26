@@ -47,6 +47,9 @@ struct VulkanEngine::TerrainBakeState {
     std::vector<glm::vec4> craters_seen, crater_last;
     int      crater_cool = 0;
     bool     height_dirty = false;
+    // Boxes of ground (chart x0, z0, x1, z1) whose height changed - a region's height tile
+    // came, went or was edited (terrain_bake_redraw): drawn again in every level, like a crater.
+    std::vector<glm::vec4> redo_boxes;
     float    t0 = 0.0f;         // the distance level 0 is made for
     int      lmin = 0, want_min = 0;    // the first level read this frame / wanted at this speed
     glm::vec3 prev_eye{0.0f};

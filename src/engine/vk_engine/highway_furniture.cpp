@@ -78,6 +78,64 @@ bool g_st_made = false;
 std::vector<uint8_t> g_lamp;
 std::vector<glm::vec3> g_lamp_light;
 const float kLampSide = 7.5f, kLampHigh = 8.0f, kLampArm = 2.4f;
+// The junction with the castle lane (highway.h Junction). `g_mouth[i]`: station i lies across
+// the lane's mouth - 1: the lane leaves on the landward side (no lamp, no reflector post
+// there), 2: on the seaward side (no guard rail there). The stop sign: on the lane's
+// right-hand side for whoever drives up to the highway, just before the stop line.
+std::vector<uint8_t> g_mouth;
+int       g_jn_station = -1;                 // the station nearest the junction (its stretch makes the sign)
+bool      g_sign_on = false;
+glm::vec3 g_sign_base(0.0f);                 // the foot of the sign's post, home coordinates
+const float kSignU = 7.5f, kSignSide = 3.3f, kSignHigh = 2.2f;      // metres from J along the lane; from the lane's axis; the sign's middle above the road
+
+// A flat polygon (a fan about its first point), seen from the side n points to.
+void fan(game::LevelMesh& m, const glm::vec3* p, int n_pts, glm::vec3 n) {
+    const uint32_t base = uint32_t(m.verts.size());
+    for (int i = 0; i < n_pts; ++i) push(m, p[i], n, 0.0f, 0.0f);
+    const bool flip = glm::dot(glm::cross(p[1] - p[0], p[2] - p[0]), n) < 0.0f;
+    for (int i = 1; i + 1 < n_pts; ++i) {
+        if (flip) m.idx.insert(m.idx.end(), { base, base + uint32_t(i + 1), base + uint32_t(i) });
+        else      m.idx.insert(m.idx.end(), { base, base + uint32_t(i), base + uint32_t(i + 1) });
+    }
+}
+// A stop sign: `foot` on the ground, `face` the way its front looks (unit, level), `right` the
+// reader's right (unit, level). An octagon 75 cm across - a white rim, a red field, the word in
+// white (letters built from bars, five by seven) - on a galvanised post, its middle kSignHigh up.
+void stop_sign(game::LevelMesh& steel, game::LevelMesh& red, game::LevelMesh& white, glm::vec3 foot, glm::vec3 face, glm::vec3 right) {
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+    post(steel, foot, right, face, 0.03f, 0.03f, -0.4f, kSignHigh + 0.30f);
+    const glm::vec3 c = foot + up * kSignHigh;
+    const float R = 0.375f / 0.92388f;                          // (to a corner)
+    glm::vec3 o[8], in[8], b[8];
+    for (int k = 0; k < 8; ++k) {
+        const float th = glm::radians(22.5f + 45.0f * float(k));
+        const glm::vec3 r = right * std::cos(th) + up * std::sin(th);
+        o[k] = c + face * 0.036f + r * R;
+        in[k] = c + face * 0.036f + r * (R * 0.92f);
+        b[k] = c + face * 0.031f + r * R;
+    }
+    for (int k = 0; k < 8; ++k) quad(white, o[k], o[(k + 1) % 8], in[(k + 1) % 8], in[k], face);       // the rim
+    fan(red, in, 8, face);
+    fan(steel, b, 8, -face);                                    // its back: bare sheet
+    static const uint8_t kFont[4][7] = {
+        { 0x0E, 0x11, 0x10, 0x0E, 0x01, 0x11, 0x0E },           // S
+        { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04 },           // T
+        { 0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E },           // O
+        { 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10 },           // P
+    };
+    const float cw = 0.026f, ch = 0.25f / 7.0f;                 // a bar's cell: the letters are a third of the sign high
+    const glm::vec3 lc = c + face * 0.041f;
+    for (int l = 0; l < 4; ++l)
+        for (int row = 0; row < 7; ++row)
+            for (int col = 0; col < 5;) {
+                if (!(kFont[l][row] & (0x10 >> col))) { ++col; continue; }
+                int e = col; while (e < 5 && (kFont[l][row] & (0x10 >> e))) ++e;
+                const float x0 = (-11.5f + 6.0f * float(l) + float(col)) * cw, x1 = (-11.5f + 6.0f * float(l) + float(e)) * cw;
+                const float y1 = (3.5f - float(row)) * ch, y0 = y1 - ch;
+                quad(white, lc + right * x0 + up * y0, lc + right * x1 + up * y0, lc + right * x1 + up * y1, lc + right * x0 + up * y1, face);
+                col = e;
+            }
+}
 
 void make_stations(glm::vec3 base) {
     g_st_made = true;
@@ -120,6 +178,25 @@ void make_stations(glm::vec3 base) {
         sea[i] = vote >= 0.0f ? n : -n;
     }
     for (size_t i = 0; i < g_st.size(); ++i) g_st[i].sea = sea[i];
+    // The junction: the stations across the lane's mouth (the lane and its two rounded corners,
+    // and a little more), and the stop sign.
+    g_mouth.assign(g_st.size(), 0);
+    g_jn_station = -1; g_sign_on = false;
+    if (const highway::Junction& jn = highway::junction(); jn.on) {
+        const glm::vec2 side(-jn.w.y, jn.w.x);
+        float bd = 1e30f;
+        for (size_t i = 0; i < g_st.size(); ++i) {
+            const glm::vec2 r = glm::vec2(g_st[i].p.x, g_st[i].p.z) - jn.j;
+            const float d2 = glm::dot(r, r);
+            if (d2 < bd) { bd = d2; g_jn_station = int(i); }
+            if (std::abs(glm::dot(r, jn.w)) < 12.0f && std::abs(glm::dot(r, side)) < highway::kPaved * jn.k + highway::kJnFlare + 2.5f)
+                g_mouth[i] = glm::dot(glm::vec2(g_st[i].sea.x, g_st[i].sea.z), jn.w) > 0.0f ? 2 : 1;
+        }
+        const glm::vec2 right(jn.w.y, -jn.w.x);                  // (of a driver coming up the lane to the highway)
+        const glm::vec2 f = jn.j + jn.w * kSignU + right * kSignSide;
+        g_sign_base = glm::vec3(f.x, highway::junction_lane_h(kSignU) - 0.05f, f.y);
+        g_sign_on = g_jn_station >= 0;
+    }
     // The lamps: the station nearest the launch site, and 500 stations (2 km) either way along
     // the road (the course is a ring: counted round it).
     g_lamp.assign(g_st.size(), 0);
@@ -130,11 +207,14 @@ void make_stations(glm::vec3 base) {
             if (d < bd) { bd = d; k0 = i; }
         }
         const size_t n = g_st.size();
-        for (size_t i = 5; i < n; i += 10) {
+        for (size_t i0 = 5; i0 < n; i0 += 10) {
+            size_t i = i0;
+            while (i + 1 < n && i < i0 + 5 && g_mouth[i] == 1) ++i;      // (not in the mouth of the castle lane: beside it)
             const size_t d = i > k0 ? i - k0 : k0 - i;
             if (std::min(d, n - d) > 500) continue;
             // (not in the mouth of the service station's way in: terrain.h kStation*)
             if (std::abs(g_st[i].p.z - kStationZ) < 19.0f && std::abs(g_st[i].p.x - (kStationX + 42.7f)) < 14.0f) continue;
+            if (g_mouth[i] == 1) continue;
             g_lamp[i] = 1;
             g_lamp_light.push_back(g_st[i].p - g_st[i].sea * (kLampSide - kLampArm) + glm::vec3(0.0f, kLampHigh - 0.25f, 0.0f));
             // (VIBE_LOG_LAMPS=1: where they stand and which way the road runs there - for test views)
@@ -171,13 +251,28 @@ void build_stretch(size_t c, std::vector<game::LevelMesh>& out, const globe::Rin
     const glm::vec3 up(0.0f, 1.0f, 0.0f);
     // The beam in section (toward the road, up): a W.
     const float prof[5][2] = { { 0.0f, 0.40f }, { 0.045f, 0.47f }, { 0.0f, 0.555f }, { 0.045f, 0.64f }, { 0.0f, 0.71f } };
-    game::LevelMesh steel, white, black, amber, pole, lamp;
+    game::LevelMesh steel, white, black, amber, pole, lamp, red;
+    auto mouth = [&](size_t i) { return i < g_mouth.size() ? g_mouth[i] : uint8_t(0); };
+    // -- the stop sign at the castle lane's mouth (made with the stretch its junction lies in) --
+    if (g_sign_on && size_t(g_jn_station) >= c0 && size_t(g_jn_station) < c1) {
+        const highway::Junction& jn = highway::junction();
+        glm::vec3 foot = g_sign_base, face(jn.w.x, 0.0f, jn.w.y), right(jn.w.y, 0.0f, -jn.w.x);
+        if (rg.on) {
+            const glm::dmat2 Ji = glm::inverse(rg.J);
+            const glm::dvec2 p = rg.wp0 + Ji * (glm::dvec2(foot.x, foot.z) - rg.h0);
+            const glm::dvec2 a = Ji * glm::dvec2(face.x, face.z), b = Ji * glm::dvec2(right.x, right.z);
+            foot = glm::vec3(float(p.x), foot.y, float(p.y));
+            face = glm::normalize(glm::vec3(float(a.x), 0.0f, float(a.y)));
+            right = glm::normalize(glm::vec3(float(b.x), 0.0f, float(b.y)));
+        }
+        stop_sign(steel, red, white, foot, face, right);
+    }
     for (size_t i = c0; i < c1; ++i) {
         const St& s = st[i];
-        // -- the post of the guard rail: a steel channel behind the beam --
-        post(steel, s.p + s.sea * (kRail + 0.09f), s.dir, s.sea, 0.045f, 0.06f, -0.25f, 0.72f);
+        // -- the post of the guard rail: a steel channel behind the beam (not across a side road's mouth) --
+        if (mouth(i) != 2) post(steel, s.p + s.sea * (kRail + 0.09f), s.dir, s.sea, 0.045f, 0.06f, -0.25f, 0.72f);
         // -- the beam, from every second station to the one 8 m on, seen from both sides --
-        if (i % 2 == 0 && i + 2 < st.size()) {
+        if (i % 2 == 0 && i + 2 < st.size() && mouth(i) != 2 && mouth(i + 1) != 2 && mouth(i + 2) != 2) {
             const St& e = st[i + 2];
             for (int k = 0; k < 4; ++k) {
                 auto at = [&](const St& q, int j) { return q.p + q.sea * (kRail - prof[j][0]) + up * prof[j][1]; };
@@ -207,7 +302,7 @@ void build_stretch(size_t c, std::vector<game::LevelMesh>& out, const globe::Rin
             quad(pole, h - s.sea * 0.58f - s.dir * 0.19f + up * 0.10f, h + s.sea * 0.13f - s.dir * 0.19f + up * 0.10f, h + s.sea * 0.13f + s.dir * 0.19f + up * 0.10f, h - s.sea * 0.58f + s.dir * 0.19f + up * 0.10f, up);
         }
         // -- a reflector post on the landward side, every 48 m --
-        if (i % 12 == 6) {
+        if (i % 12 == 6 && mouth(i) != 1) {
             const glm::vec3 b = s.p - s.sea * 6.7f;
             post(white, b, s.dir, s.sea, 0.06f, 0.022f, -0.2f, 1.05f);
             post(black, b, s.dir, s.sea, 0.063f, 0.025f, 0.74f, 0.96f);
@@ -223,6 +318,7 @@ void build_stretch(size_t c, std::vector<game::LevelMesh>& out, const globe::Rin
     if (!black.idx.empty()) { finish(black, -1, glm::vec3(0.02f, 0.02f, 0.022f)); out.push_back(std::move(black)); }
     if (!amber.idx.empty()) { finish(amber, -1, glm::vec3(0.95f, 0.50f, 0.06f)); out.push_back(std::move(amber)); }
     if (!pole.idx.empty()) { finish(pole, -5, glm::vec3(0.34f, 0.36f, 0.38f)); out.push_back(std::move(pole)); }
+    if (!red.idx.empty()) { finish(red, -1, glm::vec3(0.62f, 0.035f, 0.03f)); out.push_back(std::move(red)); }
     if (!lamp.idx.empty()) {
         finish(lamp, -1, glm::vec3(1.0f, 0.96f, 0.86f));
         lamp.emissive = glm::vec3(3.4f, 3.2f, 2.7f); lamp.full_emissive = true;
@@ -365,9 +461,13 @@ void VulkanEngine::hw_rail_boxes(glm::vec3 at, float reach, std::vector<PhysicsW
     if (!globe::current().home) return;
     lane_edge::car_boxes(at, reach, out);          // (a narrow road's dry-stone wall: lane_edge.cpp)
     if (!g_st_made || g_st.size() < 2) return;
+    // (the stop sign's post: thicker than it is, as the rail - a fast car's corner must not pass it between two steps)
+    if (g_sign_on && std::abs(g_sign_base.x - at.x) < reach && std::abs(g_sign_base.z - at.z) < reach)
+        out.push_back({ g_sign_base + glm::vec3(0.0f, 1.25f, 0.0f), glm::vec3(0.09f, 1.30f, 0.09f), 0.0f });
     for (size_t i = 0; i + 1 < g_st.size(); ++i) {
         const St& s = g_st[i];
         if (std::abs(s.p.x - at.x) > reach || std::abs(s.p.z - at.z) > reach) continue;
+        if (g_mouth[i] == 2 || g_mouth[i + 1] == 2) continue;      // (no rail across a side road's mouth)
         const St& e = g_st[i + 1];
         const glm::vec3 a = s.p + s.sea * 6.35f, b = e.p + e.sea * 6.35f;
         const glm::vec3 d = b - a;
@@ -387,6 +487,8 @@ void VulkanEngine::hw_rail_boxes(glm::vec3 at, float reach, std::vector<PhysicsW
 // The street lamps' poles near `at`, as boxes (for bolts: combat.cpp).
 void VulkanEngine::hw_pole_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const {
     if (!globe::current().home) return;
+    if (g_sign_on && std::abs(g_sign_base.x - at.x) < reach && std::abs(g_sign_base.z - at.z) < reach)       // (the stop sign's)
+        out.push_back({ g_sign_base + glm::vec3(0.0f, 1.25f, 0.0f), glm::vec3(0.05f, 1.30f, 0.05f), 0.0f });
     for (size_t i = 0; i < g_lamp.size() && i < g_st.size(); ++i) {
         if (!g_lamp[i]) continue;
         const glm::vec3 b = g_st[i].p - g_st[i].sea * kLampSide;

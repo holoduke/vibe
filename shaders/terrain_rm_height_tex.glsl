@@ -13,7 +13,13 @@ bool g_far_chart = false;        // (set first thing in main: scene.globe_info.x
 float terrainDetailNoise(vec2 worldXZ);
 vec3  noised(in vec2 p);   // single-octave value noise + analytical derivatives
 
+// Stored ground anywhere on the planet (the regions' height tiles: region_tiles.glsl) is a
+// delta over the formula like home's own sculpt, and is added here - so every height this
+// shader makes has it.
+#include "region_tiles.glsl"
+
 float sampleHeightDelta(vec2 worldXZ) {
+    float rd = region_delta(worldXZ);
     // Was: 4 compare branches before the fetch. Replaced with clamp +
     // textureLod 0 — sampler is CLAMP_TO_EDGE and the heightmap delta
     // is ~0 at the world boundary (no sculpting past the edge), so a
@@ -24,9 +30,9 @@ float sampleHeightDelta(vec2 worldXZ) {
     // of home): fade the delta out over the tile's last metres instead.
     vec2 aq = abs(worldXZ);
     float edge = kHeightmapSide * 0.5 - max(aq.x, aq.y);
-    if (edge <= 0.0) return 0.0;
+    if (edge <= 0.0) return rd;
     vec2 uv = (worldXZ / kHeightmapSide) + vec2(0.5);
-    return textureLod(u_terrain_height, uv, 0.0).r * smoothstep(0.0, 14.0, edge);
+    return textureLod(u_terrain_height, uv, 0.0).r * smoothstep(0.0, 14.0, edge) + rd;
 }
 
 // === Mesh-terrain height (water-only mode) ==========================

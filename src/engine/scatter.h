@@ -92,7 +92,7 @@ struct ScatterSet {
     // blades' roots lie within, how deep they are (scatter_plant_meshes.inl tuft_root).
     static constexpr float kTuftShape[4] = { 0.90f, 32.0f, 0.14f, 0.12f };
     static constexpr float kTurfShape[4] = { 0.36f, 32.0f, 0.22f, 0.06f };
-    static constexpr float kMeadowShape[4] = { 0.44f, 16.0f, 0.20f, 0.05f };
+    static constexpr float kMeadowShape[4] = { 0.66f, 16.0f, 0.20f, 0.05f };
 };
 
 struct ScatterParams {

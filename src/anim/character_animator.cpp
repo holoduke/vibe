@@ -501,11 +501,23 @@ void CharacterAnimator::seated(const CharacterAnimationInput& in) {
         } else {
             // A hand that lies somewhere (a knee): its fingers forward, down a little and inward.
             const glm::vec3 cur = glm::normalize(model_rotation(c) * glm::inverse(rest_rot[s]) * fingers[s]);
-            const glm::vec3 want = in.seat_wheel || in.seat_feet ? glm::normalize(glm::vec3(s == 0 ? 0.22f : -0.22f, -0.20f, -0.95f))
+            const glm::vec3 want = in.seat_desk ? glm::normalize(glm::vec3(s == 0 ? 0.20f : -0.20f, -0.10f, -0.97f))
+                                 : in.seat_wheel || in.seat_feet ? glm::normalize(glm::vec3(s == 0 ? 0.22f : -0.22f, -0.20f, -0.95f))
                                                                  : glm::normalize(glm::vec3(s == 0 ? 0.40f : -0.40f, 0.55f, -0.70f));
             const glm::vec3 ax = glm::cross(cur, want);
             const float sl = glm::length(ax), cl = glm::dot(cur, want);
             if (sl > 1e-5f) rotate_in_model(c, glm::angleAxis(std::atan2(sl, cl), ax / sl));
+            // At a desk: the fingers a little bent over the keys - and, typing, each going down
+            // and up at its own moment, in bursts (a pause now and then, as somebody thinks).
+            const AnimationSet::Hand& H = set_.hand[s];
+            if (in.seat_desk && H.ok && in.lod < 2) {
+                const float busy = std::clamp(in.seat_typing, 0.0f, 1.0f) * (0.5f + 0.5f * std::sin(time_ * 0.9f + ph * 5.0f) > 0.22f ? 1.0f : 0.0f);
+                for (int f = 0; f < 4; ++f) {
+                    const float tap = busy * std::max(0.0f, std::sin(time_ * (9.0f + 2.3f * float(f)) + float(f) * 1.9f + float(s) * 2.6f + ph * 3.0f));
+                    for (int j = 0; j < 3; ++j)
+                        if (H.finger[f][j] >= 0) pose_[size_t(H.finger[f][j])].r = glm::angleAxis((j == 0 ? 0.22f + 0.30f * tap : 0.34f + 0.10f * tap), H.b0);
+                }
+            }
         }
         if (layered > 1e-3f) {
             pose_[size_t(a)].r = glm::normalize(glm::slerp(pose_[size_t(a)].r, la, layered));
@@ -580,6 +592,24 @@ void CharacterAnimator::action(const CharacterAnimationInput& in) {
         if (f < 0) continue;
         foot[s] = glm::vec3(model_[size_t(f)][3]);
         stands[s] = foot[s].y < 0.24f;
+    }
+    // THE HANDS. The action clips come from a body without fingers (22 joints): as sampled,
+    // every hand is the rest pose's - flat, the fingers straight and spread, a doll's hand on a
+    // body that walks. A hand that holds nothing hangs with its fingers a little curled (as a
+    // free arm's does in arms()); a gesture then does what it likes with its own hand.
+    if (in.held == HeldItem::None && in.lod < 2) {
+        for (int side = 0; side < 2; ++side) {
+            const AnimationSet::Hand& H = set_.hand[side];
+            if (!H.ok) continue;
+            const float sx = side == 0 ? -1.0f : 1.0f;
+            static const float kCurl[3] = { 0.38f, 0.48f, 0.32f };
+            for (int f = 0; f < 4; ++f)
+                for (int j = 0; j < 3; ++j)
+                    if (H.finger[f][j] >= 0) pose_[size_t(H.finger[f][j])].r = glm::angleAxis(kCurl[j] * (1.0f + 0.12f * float(f)), H.b0);
+            for (int j = 0; j < 3; ++j)
+                if (H.thumb[j] >= 0)
+                    pose_[size_t(H.thumb[j])].r = glm::angleAxis(-sx * (j == 0 ? 0.35f : 0.0f), H.a0) * glm::angleAxis(sx * (j == 0 ? 0.10f : 0.30f) * 0.3f, H.n0);
+        }
     }
     // The life layers (life_layers.cpp): posture always; the rest for somebody who stays.
     life_layers(in, 2);

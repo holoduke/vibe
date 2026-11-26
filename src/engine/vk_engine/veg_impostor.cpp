@@ -292,7 +292,21 @@ VegImpostorAtlas bake_veg_impostors
                     }
                 tc.swap(c2); tn.swap(n2); td.swap(d2);
             }
-            const int ox = ((out.row[a] % kCols) * kN + fi) * kTile, oy = ((out.row[a] / kCols) * kN + fj) * kTile;
+            // What is still empty gets the tree's mean colour (coverage stays 0): the small mips a
+            // far tree is read from (veg_leaf.glsl, up to mip 4) average whole 16 x 16 blocks, and
+            // black there darkened every far crown toward its rim.
+            {
+                glm::vec3 mc(0.0f); float wsum = 0.0f, lfm = 0.0f;
+                for (size_t k = 0; k < tc.size(); ++k)
+                    if (tc[k].a > 0.0f) { mc += glm::vec3(tc[k]) * tc[k].a; lfm += tn[k].a * tc[k].a; wsum += tc[k].a; }
+                if (wsum > 0.0f)
+                    for (size_t k = 0; k < tc.size(); ++k)
+                        if (tc[k].a <= 0.0f && tn[k].a > -0.5f) {
+                            tc[k] = glm::vec4(mc / wsum, 0.0f);
+                            tn[k] = glm::vec4(0.0f, 1.0f, 0.0f, -3.0f + glm::clamp(lfm / wsum, 0.0f, 1.0f));
+                        }
+            }
+            const int ox =((out.row[a] % kCols) * kN + fi) * kTile, oy = ((out.row[a] / kCols) * kN + fj) * kTile;
             for (int y = 0; y < kTile; ++y)
                 for (int x = 0; x < kTile; ++x) {
                     const size_t k = size_t(y) * kTile + size_t(x);

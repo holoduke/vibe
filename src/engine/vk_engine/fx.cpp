@@ -22,6 +22,7 @@
 #include "engine/vk_engine/internal.h"
 #include "engine/vk_engine/state/environment.h"
 #include "engine/vk_engine/state/fx.h"
+#include "engine/vk_engine/state/glass.h"
 #include "engine/vk_engine/state/environment.h"
 #include "engine/vk_engine/state/spacejets.h"
 #include "engine/audio.h"
@@ -219,6 +220,7 @@ void VulkanEngine::spawn_explosion(glm::vec3 pos, float size, bool ground) {
     if (ground && !on_water) spawn_impact_decal(pos + glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0, -1, 0));
     // Big ground blasts (bombs, crashes, falling wreckage) shred the forest.
     if (ground && size >= 0.7f) blast_vegetation(pos, 7.5f * size);
+    glass_blast(pos, 10.0f * size);          // the windows near it (glass.cpp)
     // Craters cost a ~12 ms hitch each (height textures, physics, GPU
     // drain): only where they can be seen - not for every far-off bomb.
     if (ground && size >= 0.9f && glm::distance(pos, player_.eye_position()) < 380.0f) make_crater(pos, size);
@@ -377,6 +379,7 @@ void VulkanEngine::tick_fx(float dt) {
     }
     dt = std::min(dt, 0.05f);
     { CPU_SCOPE("+flags"); tick_flags(dt); }
+    { CPU_SCOPE("+glass"); glass_tick(dt); }          // broken panes and their pieces (glass.cpp)
     for (auto& e : explosions_) {
         e.t += dt;
         // Smoke drift is integrated (not wind * age): gusts then only
@@ -516,6 +519,12 @@ void VulkanEngine::init_fx() {
     cfg.depth_test = true;
     cfg.premultiplied_blend = false;
     fx_->glass_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
+    // A cracked or broken pane: the same state, its own shaders (glass.cpp, glass_pane.frag).
+    glass_->pane_vert = vkpipe::load_shader_module(device_, sd + "/glass_pane.vert.spv");
+    glass_->pane_frag = vkpipe::load_shader_module(device_, sd + "/glass_pane.frag.spv");
+    cfg.vert = glass_->pane_vert;
+    cfg.frag = glass_->pane_frag;
+    glass_->pane_pipeline = vkpipe::build_graphics_pipeline(device_, cfg);
 
     for (int i = 0; i < 2; ++i) {
         VkBufferCreateInfo bci{};
@@ -536,6 +545,7 @@ void VulkanEngine::init_fx() {
 
 void VulkanEngine::destroy_fx() {
     jobs::wait(flags_jobs_);
+    glass_destroy();
     for (VkPipeline* p : { &fx_->ribbon_refl_pipeline, &fx_->ribbon_pipeline, &fx_->volume_pipeline, &fx_->volume_inside_pipeline,
                            &fx_->decal_pipeline, &fx_->glass_pipeline }) {
         if (*p) vkDestroyPipeline(device_, *p, nullptr);
@@ -1271,8 +1281,21 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     for (auto& v : vols) v.dist = glm::distance(v.c, eye);
     std::sort(vols.begin(), vols.end(), [](const Vol& a, const Vol& b) { return a.dist > b.dist; });
 
+    // The glass in view (window panes; the pieces of broken ones; the lenses of the weapons in view).
+    std::vector<const CastleMeshGpu*> panes;
+    static std::vector<Vertex> shard_v;
+    shard_v.clear();
+    if (fx_->glass_pipeline && scene_copy_image_) {
+        const Frustum gfr = extract_frustum(fv.vp);
+        for (const CastleMeshGpu* gp : mesh_parts_now())
+            if (gp->tex_albedo == -3 && aabb_visible(gfr, gp->bmin, gp->bmax)) panes.push_back(gp);
+        glass_shard_verts(shard_v);
+    }
+    const bool lenses = fx_->glass_pipeline && scene_copy_image_ && glass_lenses_pending();
+    const bool any_glass = !panes.empty() || !shard_v.empty() || lenses;
+
     const size_t n_smoke = smoke.v.size(), n_glow = glow.v.size(), n_flash = flash.v.size();
-    if (vols.empty() && decals_.empty() &&
+    if (vols.empty() && decals_.empty() && !any_glass &&
         n_smoke + n_glow + n_flash + cloth.v.size() + spray.v.size() + mist.v.size() + blood.v.size() == 0) return;
 
     // Upload ribbon vertices.
@@ -1294,17 +1317,12 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     auto r_spray = put(spray.v);
     auto r_marks = put(marks.v);
     auto r_blood = put(blood.v);
+    auto r_shard = put(shard_v);
     vmaFlushAllocation(allocator_, fx_->valloc[slot], 0, total * sizeof(Vertex));
 
     // ---- Pass ----
-    // The glass in view; and for it a copy of the frame as it is now (what is seen through).
-    std::vector<const CastleMeshGpu*> panes;
-    if (fx_->glass_pipeline && scene_copy_image_) {
-        const Frustum gfr = extract_frustum(fv.vp);
-        for (const CastleMeshGpu* gp : mesh_parts_now())
-            if (gp->tex_albedo == -3 && aabb_visible(gfr, gp->bmin, gp->bmax)) panes.push_back(gp);
-    }
-    if (!panes.empty()) {
+    // For the glass a copy of the frame as it is now (what is seen through).
+    if (any_glass) {
         vkinit::transition_image(cmd, scene_color_image_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         vkinit::transition_image(cmd, scene_copy_image_, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         VkImageCopy rg{};
@@ -1354,7 +1372,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     draw_decals(cmd, fv.vp, fv.inv_vp);
 
     // The glass, before smoke and light: those lie over it. Farthest part first.
-    if (!panes.empty()) {
+    if (any_glass) {
         const glm::vec3 ge = fv.eye_pos;
         std::sort(panes.begin(), panes.end(), [&](const CastleMeshGpu* a, const CastleMeshGpu* b) {
             const glm::vec3 ca = 0.5f * (a->bmin + a->bmax) - ge, cb = 0.5f * (b->bmin + b->bmax) - ge;
@@ -1363,6 +1381,8 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fx_->glass_pipeline);
         VkDeviceSize goff = 0;
         for (const CastleMeshGpu* gp : panes) {
+            // (a part whose panes have been found is drawn pane by pane: a broken one its own way)
+            if (glass_draws(gp)) { glass_draw_part(cmd, gp, fv.vp); continue; }
             PushConstants pc{};
             pc.mvp = fv.vp * gp->xf;
             pc.model = gp->xf;
@@ -1373,6 +1393,20 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             vkCmdBindIndexBuffer(cmd, gp->mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(cmd, gp->mesh.index_count, 1, 0, 0, 0);
         }
+        // The pieces of broken panes, in the air and on the floor.
+        if (r_shard.second > 0) {
+            PushConstants pc{};
+            pc.mvp = fv.vp;
+            pc.model = glm::mat4(1.0f);
+            pc.prev_mvp = fv.vp;
+            pc.color = glm::vec4(0.055f, 0.085f, 0.095f, 1.0f);
+            pc.emissive = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);             // (glass.frag: a shard)
+            vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &fx_->vbuf[slot], &goff);
+            vkCmdDraw(cmd, r_shard.second, 1, r_shard.first, 0);
+        }
+        // The lenses of the sights of the weapons in view: last, they are nearest the eye.
+        glass_draw_lenses(cmd);
     }
 
     // Opaque cloth FIRST: drawn after the volumes it overwrote smoke that

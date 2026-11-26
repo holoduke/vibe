@@ -701,3 +701,89 @@ TEST_CASE("npc traffic: a car that is struck is pushed, and drives on", "[npc][t
     REQUIRE(std::abs(-after.pos.x - 1.9f) < 0.6f);    // in its lane
     REQUIRE(w.sane());
 }
+
+// An added site (the pavilion, the pad): desks with a keyboard each, spots to stand on, a way
+// between them - 300 m from the first site.
+namespace {
+const char* kOffice =
+    "seat desk 0 0.5 0 0 0 0.75 -0.6\nseat desk 1.5 0.5 0 0 1.5 0.75 -0.6\nseat desk 3 0.5 0 0 3 0.75 -0.6\nseat desk 4.5 0.5 0 0 4.5 0.75 -0.6\n"
+    "seat meet 9 0.5 4 0\nseat sofa 9 0.5 -4 3.1416\n"
+    "spot point 0.7 0 0.2 0 0 1.1 -0.9\nspot point 3.7 0 0.2 0 3 1.1 -0.9\nspot window 2 0 6 3.1416 2 20 80\nspot coffee 8 0 0 0\nspot wall -3 0 2 0 -3 2 -2\nspot rail 6 0 6 0\nspot terrace -3 0 6 0\n"
+    "spot group 20 0 0 0\nspot group 21 0 0.6 0\nspot group 20.9 0 -0.7 0\nspot watch 24 0 4 0 30 40 0\nspot watch 25 0 5 0 30 40 0\nspot edge 26 0 -5 0\nspot edge 27 0 -6 0\nspot tech 16 0 8 0\nspot tech 17 0 -8 0\n"
+    "node a 0 0 2\nnode b 4.5 0 2\nnode c 9 0 2\nnode d 2 0 5\nnode e 20 0 2\nnode f 25 0 2\n"
+    "link a b\nlink b c\nlink a d\nlink c e\nlink e f\n";
+}
+
+TEST_CASE("npc: an added site's people are there only while a player is near, and the first site is not changed by them", "[npc]") {
+    const glm::vec3 at(300.0f, 0.0f, 0.0f);
+    npc::World plain, w;
+    for (npc::World* x : { &plain, &w }) { REQUIRE(x->load_site_text(kSite, glm::vec3(0.0f))); x->set_road(ring_road()); }
+    REQUIRE(w.add_site_text(kOffice, at));
+    plain.populate(99); w.populate(99);
+    const int n0 = plain.agent_count(), n1 = w.agent_count();
+    REQUIRE(n1 > n0 + 8);
+    REQUIRE(n1 <= npc::kMaxAgents);
+    // Nobody near: none of them is there, and nothing of the first site's life differs.
+    run(plain, 120.0f); run(w, 120.0f);
+    REQUIRE(w.census().asleep == n1 - n0);
+    for (int i = 0; i < n0; ++i) {
+        REQUIRE(glm::distance(plain.state()[size_t(i)].pos, w.state()[size_t(i)].pos) < 1e-4f);
+        REQUIRE(plain.state()[size_t(i)].pose == w.state()[size_t(i)].pose);
+    }
+    for (int i = n0; i < n1; ++i) REQUIRE(w.state()[size_t(i)].hidden);
+    // A player comes near: they are at their places - at desks (style 4, the keyboard within
+    // reach in front), standing where there is something to do - and live on without harm.
+    w.set_eyes({ at + glm::vec3(50.0f, 0.0f, 0.0f) });
+    run(w, 1.0f);
+    REQUIRE(w.census().asleep == 0);
+    int at_desk = 0, standing = 0;
+    for (int i = n0; i < n1; ++i) {
+        const npc::View& v = w.state()[size_t(i)];
+        REQUIRE(!v.hidden);
+        REQUIRE(glm::distance(v.pos, at) < 60.0f);
+        if (v.pose == npc::Pose::Sit && v.style == 4) { ++at_desk; REQUIRE(glm::distance(v.aim, v.pos) < 1.0f); REQUIRE(glm::distance(v.aim, v.pos) > 0.3f); }
+        if (v.pose == npc::Pose::Stand && v.style >= 5) ++standing;
+    }
+    REQUIRE(at_desk >= 2);
+    REQUIRE(standing >= 3);
+    int walked = 0, pointed = 0;
+    for (int minute = 0; minute < 20; ++minute) {
+        for (int s = 0; s < 60; ++s) {
+            run(w, 1.0f);
+            for (int i = n0; i < n1; ++i) {
+                const npc::View& v = w.state()[size_t(i)];
+                walked += v.pose == npc::Pose::Walk ? 1 : 0;
+                pointed += (v.pose == npc::Pose::Stand && v.style == 5) ? 1 : 0;
+                REQUIRE(glm::distance(v.pos, at) < 60.0f);
+            }
+        }
+        REQUIRE(w.sane());
+    }
+    REQUIRE(walked > 50);
+    REQUIRE(pointed > 0);
+    // The whole world crosses the wire and comes out the same.
+    std::vector<uint8_t> m; w.serialize(m);
+    npc::World copy;
+    REQUIRE(copy.apply(m.data(), m.size()));
+    REQUIRE(copy.agent_count() == n1);
+    // The player leaves: they are gone again; and back: there again.
+    w.set_eyes({ at + glm::vec3(2000.0f, 0.0f, 0.0f) });
+    run(w, 1.0f);
+    REQUIRE(w.census().asleep == n1 - n0);
+    REQUIRE(w.sane());
+    w.set_eyes({ at });
+    run(w, 1.0f);
+    REQUIRE(w.census().asleep == 0);
+    REQUIRE(w.sane());
+    // Somebody shot at a desk is replaced there after a while.
+    int victim = -1;
+    for (int i = n0; i < n1; ++i) if (w.state()[size_t(i)].pose == npc::Pose::Sit) { victim = i; break; }
+    REQUIRE(victim >= 0);
+    REQUIRE(w.kill(victim));
+    run(w, 1.0f);
+    REQUIRE(w.state()[size_t(victim)].hidden);
+    run(w, 80.0f);
+    REQUIRE(!w.state()[size_t(victim)].hidden);
+    REQUIRE(glm::distance(w.state()[size_t(victim)].pos, at) < 60.0f);
+    REQUIRE(w.sane());
+}

@@ -373,6 +373,7 @@ void VulkanEngine::begin_frame_commands(FrameData& frame, uint32_t gpu_query_slo
     record_sun_horizon_upload(frame.command_buffer, gpu_query_slot);
     record_nf_upload(frame.command_buffer, gpu_query_slot);
     record_hw_upload(frame.command_buffer, gpu_query_slot);
+    record_region_uploads(frame.command_buffer, gpu_query_slot);     // (regions.cpp: a height tile -> its layer)
     record_tlas_publish(frame.command_buffer);   // this frame's TLAS -> tlas_
     prof_mark(frame.command_buffer, "uploads_tlas");
     // GPU vegetation: cull + LOD-select every instance, fill indirect draws.
@@ -1561,9 +1562,22 @@ void VulkanEngine::record_compose_and_ui(FrameData& frame, uint32_t img_index) {
         }
         // (see the sky fill above. The full matrix only where compose needs world POSITIONS: the
         // terrain brush ring and the underwater view - both flagged in brush_indicator.w.)
+        // The directions are those of the OUTPUT picture: without the sub-pixel jitter of this
+        // frame's projection. Compose runs after the temporal resolve / upscaler, whose result
+        // stands still; with the jittered matrix everything compose places by direction moved
+        // with the jitter - the stars (one output pixel wide) hopped up to a render pixel from
+        // frame to frame, two screen pixels at 50 % render scale. (The sky fill above keeps the
+        // jitter: it draws into the jittered picture the upscaler resolves.)
+        // VIBE_TEST_SKY_JITTER=1 puts the jitter back (to compare).
+        static const bool kSkyJitter = std::getenv("VIBE_TEST_SKY_JITTER") && std::atoi(std::getenv("VIBE_TEST_SKY_JITTER")) != 0;
+        glm::dmat4 out_proj(current_frame_view_.proj);
+        if (!kSkyJitter) {
+            out_proj[2][0] -= double(current_frame_view_.jitter.x);
+            out_proj[2][1] -= double(current_frame_view_.jitter.y);
+        }
         pc_data.inv_view_proj = (std::abs(pc_data.brush_indicator.w) > 0.5f && current_frame_view_.eye_pos.y <= 2000.0f)
             ? last_inv_view_proj_
-            : glm::mat4(glm::inverse(glm::dmat4(current_frame_view_.proj) * glm::dmat4(glm::dmat3(current_frame_view_.view))));
+            : glm::mat4(glm::inverse(out_proj * glm::dmat4(glm::dmat3(current_frame_view_.view))));
         // tone.x: tonemap mode, +8 = colour is DLSS output whose alpha
         // carries exact sky coverage (deferred writes geometry alpha 0).
         pc_data.tone = glm::vec4(float(rt_.tonemap_mode) +

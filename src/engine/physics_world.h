@@ -35,6 +35,10 @@ public:
     // broadphase tree rebuild). Bodies stay disabled until prepare returns.
     struct StaticBox { glm::vec3 center; glm::vec3 half_extents; };
     void add_static_boxes(const StaticBox* boxes, size_t count);
+    // Removes the static box that was added with this centre and these half extents (to the
+    // centimetre) - a sheet of glass that bolts fly through from now on (glass.cpp). False when
+    // there is none (a box that went into a compound is not found).
+    bool remove_static_box(glm::vec3 center, glm::vec3 half_extents);
     void add_static_box_compounds(const StaticBox* boxes, size_t count, float cell = 128.0f);
     // Removes every compound added above (the forest is being re-planted).
     void clear_static_box_compounds();

@@ -32,8 +32,11 @@ struct HwField {
 };
 HwField g_hw;
 constexpr VkDeviceSize kBytes = VkDeviceSize(highway::kFieldN) * highway::kFieldN * 4;
+glm::vec4 g_hw_jn[4]{};                       // the junction's record for the scene block (highway.h Junction), in the field's coordinates
 
 }  // namespace
+
+const glm::vec4* hw_junction_scene() { return g_hw_jn; }
 
 void VulkanEngine::hw_poll() {
     if (!scene_desc_set_ || !highway::ready()) return;
@@ -52,7 +55,7 @@ void VulkanEngine::hw_poll() {
     if (F.valid && glm::distance(e2, F.center) < 600.0f) return;
     const glm::vec2 c = glm::round(e2 / 256.0f) * 256.0f;
     glm::vec4 bbox(0.0f);
-    const bool any = highway::bake(c, F.px[0], F.px[1], bbox, rg);
+    const bool any = highway::bake(c, F.px[0], F.px[1], bbox, rg, g_hw_jn);
     F.center = c;
     F.valid = true;
     if (!F.made) {
@@ -96,6 +99,7 @@ void VulkanEngine::hw_shift(glm::dvec2 s) {
     if (hw_info_.z > 0.5f) {
         hw_info_.x -= float(s.x); hw_info_.y -= float(s.y);
         hw_bbox_ -= glm::vec4(float(s.x), float(s.y), float(s.x), float(s.y));
+        g_hw_jn[0].x -= float(s.x); g_hw_jn[0].y -= float(s.y);
     }
 }
 

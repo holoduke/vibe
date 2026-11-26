@@ -85,6 +85,8 @@ enum class Gesture : uint8_t {
     CheckWrist,    // the forearm up in front of the chest, the head down to it
     Shift,         // the weight moved on the seat (or from foot to foot), the back straightened
     Wave,          // a hand up beside the head, to and fro
+    Point,         // an arm out at something (CharacterAnimationInput::gesture_at), the first finger straight
+    Talk,          // a forearm up in front of the body, the open hand moving with what is said
     Count
 };
 

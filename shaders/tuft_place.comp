@@ -63,7 +63,7 @@ layout(push_constant) uniform PC {
 #define P_COL1  par[PB + 7]   // ... and the other
 #define P_COL2  par[PB + 8]   // dry
 #define P_FIELD(i) par[PB + 9u + uint(i)]   // a field of this kind: .xy its middle (world x, z), .z radius (0 = none), .w how frayed its edge is (m)
-#define P_FADE2 par[PB + 13]  // .x where the shrinking starts (share of the range), .y where it ends
+#define P_FADE2 par[PB + 13]  // .x where the shrinking starts (share of the range), .y where it ends, .z winter's snow cover 0..1
 
 const float kLod1 = 22.0, kLod2 = 48.0;       // = ScatterSet::kPlantFarLod / kPlantFarLod2
 const float kSide = 2048.0;                   // the home tile
@@ -270,6 +270,25 @@ void main() {
     // ---- 4. Rejections ----
     if (90.0 - Nn.y * 90.0 > P_OBJ.w) return;                                  // too steep
     if (h < pc.misc.z + 0.15) return;                                          // under water
+    // No grass in the snow. The ground's own rule (terrain_rm_shading_helpers.glsl getMaterial:
+    // keep in step): the snow line lies at 60 - 80 m by a slow noise, up to 16 m lower on a
+    // face turned north and as much higher on one turned south. Toward it the grass thins out
+    // and gets shorter, over the 9 m of height below the line; none from where the white starts.
+    // Grass that grows where the lawn does also ends where the ground's green does (home:
+    // grassEligibility, 55 - 75 m; the wider world's 52 - 70 m is in `grows` already).
+    float keep = 1.0;
+    if (h > 26.0) {                                                            // (the lowest the line can come, less the band)
+        float nz = tile_noise2(xz, 0.04, vec2(0.0)) * tile_noise2(xz, 0.005, vec2(0.0));
+        float line = 80.0 - 20.0 * nz + clamp(Nn.z * 30.0, -16.0, 16.0);
+        keep = 1.0 - smoothstep(line - 9.0, line + 0.5, h);
+        if (P_CAP.w > 0.5 && home) keep *= 1.0 - smoothstep(55.0, 75.0, h);
+    }
+    // Winter (P_FADE2.z = the snow cover, 0..1): the sheet of snow lies 6 - 44 cm deep
+    // (terrain_rm_heightfield.glsl snow_layer_h), so short grass is under it and long grass
+    // stands out of it: the shorter a clump, the more of them are left out.
+    float snow_keep = 1.0 - P_FADE2.z * (1.0 - smoothstep(0.30, 0.60, P_SHAPE.x * mix(P_OBJ2.x, P_OBJ2.y, h_sqrt(f))));
+    keep *= mix(1.0, snow_keep, smoothstep(0.1, 0.5, P_FADE2.z));
+    if (keep < 0.999 && (keep <= 0.03 || h_sqrt(seed + f + 9.0) > sqrt(keep))) return;
     float dens = P_OBJ.x * grows;
     if (dens < 10.0 && !(h_sqrt(seed + f + 3.0) > 1.0 / (dens * 10.0 + 1.0))) return;
     if (P_OBJ.y != 0.0) {
@@ -278,7 +297,7 @@ void main() {
     }
 
     // ---- 5. Transform ----
-    float size = mix(P_OBJ2.x, P_OBJ2.y, h_sqrt(f)) * fade;
+    float size = mix(P_OBJ2.x, P_OBJ2.y, h_sqrt(f)) * fade * mix(0.45, 1.0, keep);      // (shorter toward the snow)
     if (P_FADE.z > 0.0) {
         // A kind that thins out with distance (a share keeps its size, the rest shrinks away):
         // what stands is grown so that the ground it covers stays the same - no ring round the

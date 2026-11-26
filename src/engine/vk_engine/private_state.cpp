@@ -17,8 +17,10 @@
 #include "engine/vk_engine/state/fsr2.h"
 #include "engine/vk_engine/state/fsr3.h"
 #include "engine/vk_engine/state/fx.h"
+#include "engine/vk_engine/state/glass.h"
 #include "engine/vk_engine/state/multiplayer.h"
 #include "engine/vk_engine/state/plant_gpu.h"
+#include "engine/vk_engine/state/regions.h"
 #include "engine/vk_engine/state/rr_guides.h"
 #include "engine/vk_engine/state/sound_env.h"
 #include "engine/vk_engine/state/spacejets.h"
@@ -52,6 +54,7 @@ void VulkanEngine::alloc_private_state() {
     fsr2_ = new Fsr2State();
     fsr3_ = new Fsr3State();
     fx_ = new FxState();
+    glass_ = new GlassState();
     mp_ = new MultiplayerState();
     pg_ = new PlantGpuState();
     rr_ = new RrGuideState();
@@ -66,6 +69,7 @@ void VulkanEngine::alloc_private_state() {
     tr_ = new TerrainRaymarchState();
     tp_ = new TerrainPatchState();
     tb_ = new TerrainBakeState();
+    rg_ = new RegionState();
     voxel_ = new VoxelState();
 }
 
@@ -85,6 +89,7 @@ void VulkanEngine::free_private_state() {
     delete fsr2_; fsr2_ = nullptr;
     delete fsr3_; fsr3_ = nullptr;
     delete fx_; fx_ = nullptr;
+    delete glass_; glass_ = nullptr;
     delete mp_; mp_ = nullptr;
     delete pg_; pg_ = nullptr;
     delete rr_; rr_ = nullptr;
@@ -99,6 +104,7 @@ void VulkanEngine::free_private_state() {
     delete tr_; tr_ = nullptr;
     delete tp_; tp_ = nullptr;
     delete tb_; tb_ = nullptr;
+    delete rg_; rg_ = nullptr;
     delete voxel_; voxel_ = nullptr;
 }
 

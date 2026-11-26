@@ -250,7 +250,9 @@ void VulkanEngine::upload_terrain_height_full_payload(VkImageLayout src_layout) 
     vmaCreateBuffer(allocator_, &bci, &bac, &stage, &stage_alloc, nullptr);
     VmaAllocationInfo ai{};
     vmaGetAllocationInfo(allocator_, stage_alloc, &ai);
-    std::memcpy(ai.pMappedData, terrain_data_.heights.data(),
+    // (with the regions' height tiles that lie over home added: regions.cpp)
+    std::vector<float> with_regions;
+    std::memcpy(ai.pMappedData, regions_home_heights(with_regions).data(),
                 static_cast<size_t>(bytes));
     vkinit::one_time_submit(device_, graphics_queue_, graphics_queue_family_,
                             [&](VkCommandBuffer cb) {

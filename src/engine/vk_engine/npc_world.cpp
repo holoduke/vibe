@@ -18,6 +18,7 @@
 #include "npc/npc.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
@@ -26,7 +27,7 @@
 namespace vibe {
 
 namespace {
-constexpr int   kNpcBodies = 28;           // posed and drawn at most (of the 48 a frame can skin)
+constexpr int   kNpcBodies = 40;           // posed and drawn at most (of the 48 a frame can skin; 28 until the pavilion and the pad had people)
 constexpr float kNpcBodyReach = 150.0f;    // metres from the eye
 constexpr float kNpcCarBodyReach = 90.0f; // ... for those who sit in a car
 // (a segment against a box: multiplayer.cpp's)
@@ -126,6 +127,7 @@ void VulkanEngine::npc_dying_pose(float dt) {
 }
 
 void VulkanEngine::npc_tick(float dt) {
+    static_assert(sizeof(npc_gone_) / sizeof(npc_gone_[0]) >= size_t(npc::kMaxAgents) && sizeof(npc_nodriver_) / sizeof(npc_nodriver_[0]) >= size_t(npc::kMaxAgents), "a place for every agent");
     // Made once the road and the station are there (the road is built on another thread).
     if (!npc_) {
         if (!highway::ready() || station_pos_ == glm::vec3(0.0f) || std::getenv("VIBE_NO_NPC")) return;
@@ -145,6 +147,14 @@ void VulkanEngine::npc_tick(float dt) {
             return true;
         };
         npc_->set_road(std::move(road));
+        // The pavilion by the launch pad and the pad itself: people of their own, who are only
+        // there while a player is near (npc.cpp "THE ADDED SITES"). VIBE_NO_CROWD=1: without them.
+        if (!std::getenv("VIBE_NO_CROWD") && launch_site_placed_) {
+            const bool office = office_pos_ != glm::vec3(0.0f) && npc_->add_site("assets/office/office.nav", office_pos_);
+            const bool pad = npc_->add_site("assets/rocket/site.nav", launch_pad_);
+            if (!office) log::warnf("[npc] assets/office/office.nav missing - nobody in the pavilion (blender -b --python tools/office/make_office.py)");
+            if (!pad) log::warnf("[npc] assets/rocket/site.nav missing - nobody on the launch pad");
+        }
         // The soldiers' run: from the launch pad along the coast road (on its edge, the side the
         // castle lane leaves it) and up the lane to the castle's car park - and back.
         if (highway::line_count() > 1 && !std::getenv("VIBE_NO_RUNNERS")) {
@@ -232,13 +242,23 @@ void VulkanEngine::npc_tick(float dt) {
                 if (a.id && a.present && !a.seated && a.ride == 0 && !a.corpse) feet.push_back(glm::vec3(a.st.px, a.st.py - half, a.st.pz));
         }
         npc_->set_walkers(feet);
+        // (and where every player is, on foot or not: the people of the pavilion and the pad are
+        //  there while one of them is near)
+        std::vector<glm::vec3> eyes;
+        eyes.push_back(player_.position);
+        if (mp_) for (const MpAvatar& a : mp_->avatars) if (a.id && a.present) eyes.push_back(glm::vec3(a.st.px, a.st.py, a.st.pz));
+        npc_->set_eyes(eyes);
         npc_feed_obstacles();                  // (and the players' cars: the traffic keeps behind them and goes round them - jeep.cpp)
     }
+    // (VIBE_LOG_NPC: what the world's steps and the bodies' poses cost, as a mean over 300 frames)
+    static double cost_step = 0.0, cost_pose = 0.0;
+    const auto t_step = std::chrono::steady_clock::now();
     for (float left = dt * kFast; left > 1e-5f; left -= 0.1f) npc_->update(std::min(left, 0.1f));
+    cost_step += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_step).count();
     npc_->views(npc_views_);
     for (float& t : npc_nodriver_) t = std::max(0.0f, t - dt);
     // (shot or taken a moment ago, and this copy of the host's world has not heard yet)
-    for (size_t i = 0; i < npc_views_.size() && i < 100; ++i) {
+    for (size_t i = 0; i < npc_views_.size() && i < size_t(npc::kMaxAgents); ++i) {
         if (npc_gone_[i] <= 0.0f) continue;
         npc_gone_[i] -= dt;
         npc::View& v = npc_views_[i];
@@ -246,7 +266,11 @@ void VulkanEngine::npc_tick(float dt) {
     }
     npc_cars_place(npc_views_, dt);
     police_place(dt);                          // (the police cars' light bars and sirens; VIBE_LOG_TRAFFIC - jeep.cpp)
-    npc_pose(dt);
+    {
+        const auto t_pose = std::chrono::steady_clock::now();
+        npc_pose(dt);
+        cost_pose += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_pose).count();
+    }
     npc_dying_pose(dt);
     blood_update(dt);
     // VIBE_TEST_NPC_KILL=<frame>[,<skip>]: at that frame the six people nearest the eye that have a
@@ -255,7 +279,7 @@ void VulkanEngine::npc_tick(float dt) {
         int at = 0, skip = 0; std::sscanf(tk, "%d,%d", &at, &skip);
         if (int(frame_number_) == at) {
             std::vector<std::pair<float, int>> who;
-            for (const MpAvatar& a : npc_bodies_) if (a.present && a.id >= 1 && a.id <= 100 && !npc_views_[a.id - 1].hidden) who.push_back({ glm::distance(a.eye, current_frame_view_.eye_pos), int(a.id) - 1 });
+            for (const MpAvatar& a : npc_bodies_) if (a.present && a.id >= 1 && a.id <= uint32_t(npc::kMaxAgents) && a.id <= npc_views_.size() && !npc_views_[a.id - 1].hidden) who.push_back({ glm::distance(a.eye, current_frame_view_.eye_pos), int(a.id) - 1 });
             std::sort(who.begin(), who.end());
             for (size_t i = size_t(skip); i < who.size() && i < size_t(skip) + 6; ++i) {
                 const npc::View& v = npc_views_[size_t(who[i].second)];
@@ -268,7 +292,8 @@ void VulkanEngine::npc_tick(float dt) {
     // VIBE_NPC_CAM=<who>[,<metres>[,<degrees>[,<height>]]]: the eye is put beside somebody and
     // stays with them (tests and captures; use it with VIBE_TEST_HOLD). <who>: bar, table (eat,
     // talk), counter, look, walk or walk<0..7> (the way of walking), run, driver (a car that
-    // drives), id<n>. The nearest to where the game started that fits. <degrees>: 0 looks them
+    // drives), desk, point, group, watch, tech (the pavilion's and the pad's people), id<n>. The
+    // nearest to where the game started that fits. <degrees>: 0 looks them
     // in the face, 90 from their right side, 180 from behind; <height> above their feet.
     if (static const char* nc = std::getenv("VIBE_NPC_CAM"); nc) {
         char who[32] = { 0 }; float dist = 3.0f, ang = 35.0f, up = 1.45f;
@@ -285,7 +310,12 @@ void VulkanEngine::npc_tick(float dt) {
             if (w == "eat") return v.pose == npc::Pose::Sit && v.style == 2;
             if (w == "talk") return v.pose == npc::Pose::Sit && v.style == 3;
             if (w == "counter") return v.pose == npc::Pose::Work && v.style == 1;
-            if (w == "look") return v.pose == npc::Pose::Stand && v.style > 0;
+            if (w == "look") return v.pose == npc::Pose::Stand && v.style > 0 && v.style < 5;
+            if (w == "desk") return v.pose == npc::Pose::Sit && v.style == 4;
+            if (w == "point") return v.pose == npc::Pose::Stand && v.style == 5;
+            if (w == "group") return v.pose == npc::Pose::Stand && v.style == 6;
+            if (w == "watch") return v.pose == npc::Pose::Stand && v.style == 7;
+            if (w == "tech") return v.pose == npc::Pose::Work && v.style == 0 && v.car == 255 && glm::distance(v.pos, launch_pad_) < 120.0f;
             if (w == "run") return v.pose == npc::Pose::Run;
             if (w.rfind("walk", 0) == 0) return v.pose == npc::Pose::Walk && std::abs(v.speed) > 0.3f && (w.size() == 4 || int(v.look % 8) == std::atoi(w.c_str() + 4));
             return false;
@@ -333,8 +363,10 @@ void VulkanEngine::npc_tick(float dt) {
             log::infof("[npc] shown: car slots %zu lent %d, nearest car %.0f m; bodies present %d (level 3: %d, no palette: %d), nearest person %.0f m; bones %zu anim %d",
                        npc_cars_.size(), lent, double(near_car), present, lod3, nopal, double(near_man), body_bones_.size(), int(anim_set_.ok()));
         }
-        log::infof("[npc] people %d: sitting %d walking %d in cars %d, drawn %d | cars %d: at the station %d (longest %.0f s)%s",
-                   c.people, c.sitting, c.walking, c.hidden, drawn, c.cars, c.cars_at_site, double(c.longest_visit), npc_->replica() ? " - following the host" : "");
+        log::infof("[npc] people %d: sitting %d walking %d in cars %d, not there (nobody near their site) %d, drawn %d | cars %d: at the station %d (longest %.0f s)%s",
+                   c.people, c.sitting, c.walking, c.hidden, c.asleep, drawn, c.cars, c.cars_at_site, double(c.longest_visit), npc_->replica() ? " - following the host" : "");
+        log::infof("[npc] cost: the world's steps %.3f ms a frame, the bodies' poses %.3f ms a frame (%d agents, %d bodies; mean of 300 frames)", cost_step / 300.0, cost_pose / 300.0, npc_->agent_count(), drawn);
+        cost_step = cost_pose = 0.0;
     }
 }
 
@@ -432,6 +464,28 @@ void VulkanEngine::npc_pose(float dt) {
         anim::LayerMask layer_mask = anim::LayerMask::UpperBody;
         float fidgets = 0.0f;
         uint8_t free_hands = 3;
+        // AT A DESK (a seat of style 4; the pavilion): what this person is doing just now - 0
+        // typing, 1 reading (a hand on the mouse), 2 leaning back, 3 turned to the neighbour,
+        // talking - and who that neighbour is. A turn of 13 s or so each, everybody at a moment
+        // of his own, by this machine's clock (the network says "at a desk", not which).
+        int desk_do = -1, desk_peer = -1;
+        const bool at_desk = near_[k].car < 0 && v.act == npc::Act::None && v.pose == npc::Pose::Sit && v.style == 4;
+        if (at_desk) {
+            uint32_t hs = uint32_t((life_now + double(v.id) * 5.3) / 13.0) * 2654435761u ^ (uint32_t(v.id) * 40503u);
+            hs ^= hs >> 13; hs *= 0x5bd1e995u; hs ^= hs >> 15;
+            static const int kDo[10] = { 0, 0, 0, 0, 1, 1, 2, 3, 3, 0 };
+            desk_do = kDo[hs % 10u];
+            if (static const char* force = std::getenv("VIBE_NPC_DESK"); force) desk_do = std::clamp(std::atoi(force), 0, 3);
+            if (desk_do == 3) {
+                float bd = 2.0f;
+                for (const npc::View& o : npc_views_) {
+                    if (o.kind != npc::Kind::Person || o.hidden || o.id == v.id || o.pose != npc::Pose::Sit || o.style != 4) continue;
+                    const float d = glm::distance(o.pos, v.pos);
+                    if (d < bd) { bd = d; desk_peer = int(o.id); }
+                }
+                if (desk_peer < 0) desk_do = 1;                  // (nobody beside him: he reads)
+            }
+        }
         if (near_[k].car < 0 && v.act == npc::Act::None) {
             static const char* kShow = std::getenv("VIBE_NPC_ACT");
             // Somebody who stays does not do one thing for ever: at the bar they drink, talk and
@@ -448,7 +502,10 @@ void VulkanEngine::npc_pose(float dt) {
             static const char* kTalk[3] = { "table_talk", "table_idle", "table_drink" };
             static const char* kTill[3] = { "cashier", "cashier_take", "cashier_idle" };
             static const char* kLook[5][2] = { { nullptr, nullptr }, { "look_crossed", "look_around" }, { "look_hips", "look_hips" }, { "look_phone", "look_watch" }, { "look_far", "look_far" } };
-            static const char* kWalkClip[8] = { nullptr, "walk_brisk", "walk_tired", "walk_pockets", "walk_phone", "walk_relaxed", "walk_swagger", nullptr };
+            // (2 was "walk_tired" and 6 "walk_swagger" until 2026-11-26: a shuffle at 0.57 m/s with the
+            //  body hanging, and a walk with the arms held wide of the body - the two that read as
+            //  the walking dead. Both clips are still in the set; nobody walks them.)
+            static const char* kWalkClip[8] = { nullptr, "walk_brisk", "walk_relaxed", "walk_pockets", "walk_phone", "walk_relaxed", nullptr, nullptr };
             auto have = [&](const char* nm) { return nm && rtm0.find_clip(nm) >= 0; };
             if (v.pose == npc::Pose::Sit) {
                 loop_nm = v.style == 1 ? kBar[turn(3, 17.0)] : v.style == 2 ? kEat[turn(3, 15.0)] : v.style == 3 ? kTalk[turn(3, 16.0)] : nullptr;
@@ -458,9 +515,19 @@ void VulkanEngine::npc_pose(float dt) {
                 loop_nm = v.style == 1 ? kTill[turn(3, 12.0)] : (v.style == 2 || v.car != 255) ? "fuel" : "till";
                 if (!have(loop_nm) && v.style == 1) loop_nm = "cashier";
             } else if (v.pose == npc::Pose::Stand) {
-                loop_nm = kLook[v.style % 5][v.id & 1];
-                if (!have(loop_nm)) loop_nm = kLook[v.style % 5][0];
-            } else if (v.pose == npc::Pose::Walk && std::abs(v.speed) > 0.3f) { loop_nm = kWalkClip[v.look % 8]; loop_walk = loop_nm != nullptr; }
+                // (5 points at something, 6 talks in a group, 7 looks at something - the pavilion's and
+                //  the pad's people: the arm, the hands and the head are the life layers', the body
+                //  stands some way of its own or plainly)
+                static const char* kTalkStand[4] = { nullptr, "look_hips", nullptr, "look_crossed" };
+                static const char* kWatchStand[4] = { "look_far", "look_hips", nullptr, "look_crossed" };
+                loop_nm = v.style == 5 ? nullptr : v.style == 6 ? kTalkStand[v.id & 3] : v.style == 7 ? kWatchStand[v.id & 3] : kLook[v.style % 5][v.id & 1];
+                if (!have(loop_nm)) loop_nm = v.style >= 5 ? nullptr : kLook[v.style % 5][0];
+            } else if (v.pose == npc::Pose::Walk && std::abs(v.speed) > 0.5f * 1.35f * npc::kPace[v.look % 8]) {
+                // (a way of walking of its own once it is under way: its first and last steps are
+                //  the plain walk's, which has starts and stops - a walking clip slowed to a
+                //  third of its pace is a body wading)
+                loop_nm = kWalkClip[v.look % 8]; loop_walk = loop_nm != nullptr;
+            }
             if (kShow && v.pose != npc::Pose::Walk && v.pose != npc::Pose::Run && !loop_seat) loop_nm = kShow;
             if (loop_nm && rtm0.find_clip(loop_nm) < 0) { loop_nm = nullptr; loop_seat = loop_walk = false; }
             // COMBINED. On top of that clip, part of the time, another one over part of the body
@@ -472,7 +539,8 @@ void VulkanEngine::npc_pose(float dt) {
             const int turn2 = turn(3, 9.5);
             if (v.pose == npc::Pose::Sit) {
                 fidgets = 1.0f;
-                if (!loop_nm) {
+                if (at_desk) { fidgets = desk_do == 2 ? 1.0f : 0.3f; free_hands = desk_do == 2 ? 3 : desk_do == 3 ? 0 : 2; }
+                else if (!loop_nm) {
                     if (v.id % 3 == 0) { layer_nm = "look_phone"; free_hands = 0; }
                     else if (v.id % 3 == 1) layer_nm = "sit_idle";
                 } else if (is("table_idle") && turn2 == 0) { layer_nm = "table_talk"; layer_mask = anim::LayerMask::Arms; }
@@ -486,9 +554,13 @@ void VulkanEngine::npc_pose(float dt) {
                 fidgets = 1.0f;
                 if (is("look_phone")) free_hands = 0;
                 else if (is("look_far")) free_hands = 1;
-                if ((!loop_nm || is("look_hips") || is("look_far")) && turn2 == 0) { layer_nm = have("look_around") ? "look_around" : "look_crossed"; layer_mask = anim::LayerMask::Head; }
+                if (v.style < 5 && (!loop_nm || is("look_hips") || is("look_far")) && turn2 == 0) { layer_nm = have("look_around") ? "look_around" : "look_crossed"; layer_mask = anim::LayerMask::Head; }
+                if (v.style == 6) fidgets = 0.5f;
+                if (v.style == 5 || v.style == 7) fidgets = 0.3f;
             } else if (v.pose == npc::Pose::Walk && std::abs(v.speed) > 0.3f) {
-                if (!is("walk_phone") && !is("walk_tired") && turn2 == 0) { layer_nm = have("look_around") ? "look_around" : "look_crossed"; layer_mask = anim::LayerMask::Head; }
+                // (walking, the head is the walk's own, and glances about by the look layer. Until
+                //  2026-11-26 a third of the time the head of "look_around" was laid over the walk: a
+                //  head turning on a clock of its own over a body that walks on.)
                 if (is("walk_phone")) free_hands = 1;
             }
             if (!have(layer_nm)) layer_nm = nullptr;
@@ -511,8 +583,11 @@ void VulkanEngine::npc_pose(float dt) {
         // Upright. The soldier's walk is a patrol walk: hunched, the head down over a rifle. Somebody
         // strolling to a shop door carries the head up - the spine, neck and head are raised by what
         // the aim's pitch raises them (upper_body), more the faster they walk.
-        static const float kUp = std::getenv("VIBE_NPC_UPRIGHT") ? float(std::atof(std::getenv("VIBE_NPC_UPRIGHT"))) : 0.42f;
-        in.aim_pitch = run ? 0.12f : kUp * (0.35f + 0.65f * glm::clamp(std::abs(v.speed) / 1.35f, 0.0f, 1.0f));
+        // (0.42 at a walk until 2026-11-26: that bent the back 7 degrees BACKWARD and tipped the
+        //  head back 12 - somebody leaning away from where he goes, the chin in the air. Standing
+        //  it was 0.15, which is what levels the head; a walk now gets 0.26.)
+        static const float kUp = std::getenv("VIBE_NPC_UPRIGHT") ? float(std::atof(std::getenv("VIBE_NPC_UPRIGHT"))) : 0.26f;
+        in.aim_pitch = run ? 0.12f : kUp * (0.56f + 0.44f * glm::clamp(std::abs(v.speed) / 1.35f, 0.0f, 1.0f));
         a.seated = false;
         // On a seat: the hips on it, the animator's seat pose, the hands where they belong.
         auto sit = [&](const glm::mat4& hip, glm::vec3 hand_l, glm::vec3 hand_r, float legs) {
@@ -536,6 +611,57 @@ void VulkanEngine::npc_pose(float dt) {
             in.take_seat(more, glm::inverse(rf.model));      // (the wheel's frame, the feet's places, the backrest: this car's own)
             if (static const bool lg = std::getenv("VIBE_LOG_NPC") != nullptr; lg && frame_number_ % 300 == 0)
                 log::infof("[npc]   in car %d seat %d: body %u (last frame: level %d, palette %d, drawn %d, mesh %d) at %.1f %.1f %.1f, %.0f m from the eye", near_[k].car, near_[k].seat, a.id, a.lod, a.palette_prev, int(a.drawn), a.mesh_lod, rf.eye.x, rf.eye.y, rf.eye.z, double(near_[k].d));
+        } else if (at_desk) {
+            // AT A DESK: the seat pose (the body fitted to this chair and this desk by rule, not a
+            // clip - no clip's keyboard is where this one is), the hips on the front half of the
+            // chair, the wrists where the work is. `v.aim` is the middle of the keyboard's top
+            // (the NPC engine has it from the pavilion's file); the mouse lies 30 cm to its left,
+            // the screen stands a hand behind it. What the hands do follows desk_do; they go from
+            // one place to the next at a hand's pace (eased here: the seat pose puts the wrists
+            // exactly where it is told).
+            const glm::vec3 right(std::cos(v.yaw), 0.0f, std::sin(v.yaw)), up(0.0f, 1.0f, 0.0f);
+            const glm::vec3 K = v.aim;
+            // (as far forward on the cushion as it takes to have the keyboard 47 cm before the
+            //  hips - elbows bent, not arms held out straight: the chairs stand 55 - 66 cm from it)
+            const float sit_fwd = glm::clamp(glm::dot(K - v.pos, fwd) - 0.47f, 0.05f, 0.18f);
+            const glm::mat4 hip(glm::vec4(right, 0.0f), glm::vec4(up, 0.0f), glm::vec4(-fwd, 0.0f), glm::vec4(v.pos + fwd * sit_fwd + up * 0.10f, 1.0f));
+            const float t = float(life_now) + float(a.id) * 1.37f;
+            glm::vec3 hl, hr; float back = 1.5f, typing = 0.0f;
+            if (desk_do == 0) {
+                // typing: both wrists before the keys, each wandering a little along them
+                hl = K - fwd * 0.105f - right * (0.105f + 0.022f * std::sin(t * 1.3f)) + up * (0.030f + 0.004f * std::sin(t * 7.0f));
+                hr = K - fwd * 0.105f + right * (0.105f + 0.022f * std::sin(t * 1.7f + 1.0f)) + up * (0.030f + 0.004f * std::sin(t * 6.1f + 2.0f));
+                typing = 1.0f;
+            } else if (desk_do == 2) {
+                // leaning back: the back into the chair's, the forearms on its armrests
+                hl = v.pos - right * 0.265f + fwd * 0.13f + up * 0.215f;
+                hr = v.pos + right * 0.265f + fwd * 0.13f + up * 0.215f;
+                back = 21.0f;
+            } else {
+                // reading, or turned to the neighbour: a hand on the mouse (it moves it now and
+                // then), the other at rest on the desk's edge
+                hl = K - right * (0.30f + 0.020f * std::sin(t * 0.9f)) - fwd * (0.075f + 0.018f * std::sin(t * 1.4f + 0.7f)) + up * 0.032f;
+                hr = K + right * 0.17f - fwd * 0.20f + up * 0.022f;
+                back = desk_do == 3 ? 9.0f : 6.0f;
+            }
+            static glm::vec3 desk_l[kNpcBodies], desk_r[kNpcBodies];
+            static float desk_back[kNpcBodies], desk_type[kNpcBodies];
+            static uint32_t desk_of[kNpcBodies] = {};
+            const size_t di = size_t(body_of[k]);
+            if (a.fresh_pose || desk_of[di] != a.id) { desk_of[di] = a.id; desk_l[di] = hl; desk_r[di] = hr; desk_back[di] = back; desk_type[di] = typing; }
+            const float e = 1.0f - std::exp(-dt / 0.22f);
+            desk_l[di] += (hl - desk_l[di]) * e; desk_r[di] += (hr - desk_r[di]) * e;
+            desk_back[di] += (back - desk_back[di]) * (1.0f - std::exp(-dt / 0.45f));
+            // (the fingers stop while a hand is on its way, and begin when it is there)
+            desk_type[di] += ((glm::distance(desk_l[di], hl) < 0.03f ? typing : 0.0f) - desk_type[di]) * e;
+            sit(hip, desk_l[di], desk_r[di], 0.0f);
+            in.seat_desk = true;
+            in.seat_typing = desk_type[di];
+            in.seat_back = desk_back[di];
+            if (static const bool lg = std::getenv("VIBE_LOG_NPC") != nullptr; lg && frame_number_ % 300 == 0)
+                log::infof("[npc]   at a desk: person %d %s, the keyboard %.2f m in front of the hips, %.2f m to the side", int(v.id),
+                           desk_do == 0 ? "types" : desk_do == 1 ? "reads" : desk_do == 2 ? "leans back" : "talks to the neighbour",
+                           double(glm::dot(K - glm::vec3(hip[3]), fwd)), double(glm::dot(K - glm::vec3(hip[3]), right)));
         } else if (v.pose == npc::Pose::Sit && !loop_seat) {
             // (a hand above the cushion's top; the hands on the knees)
             const glm::vec3 right(std::cos(v.yaw), 0.0f, std::sin(v.yaw));
@@ -654,6 +780,30 @@ void VulkanEngine::npc_pose(float dt) {
             glm::vec3 at(0.0f); float wt = 0.0f; uint32_t what = 0;
             const float dp = glm::distance(head, cam);
             if (dp < (sits ? 3.5f : 4.5f)) { at = cam; wt = 1.6f; what = 1; }
+            // The pavilion's and the pad's people. At a desk: the screen (a hand behind the
+            // keyboard, 30 cm over it) most of the time, or the neighbour talked to, all of the
+            // time. Standing: what is pointed at, mostly; what is looked at - the rocket, the
+            // hall below - all of the time (and the trunk goes back with a look that goes up);
+            // whoever stands nearest in the group that talks.
+            const bool stands_here = v.pose == npc::Pose::Stand && !in_car;
+            if (wt == 0.0f && at_desk) {
+                if (desk_do == 3 && desk_peer >= 0 && size_t(desk_peer) < npc_views_.size()) { at = npc_views_[size_t(desk_peer)].pos + glm::vec3(0.0f, 0.62f, 0.0f); wt = 4.0f; what = 200u + uint32_t(desk_peer); }
+                else if (desk_do != 2) { at = v.aim + fwd * 0.33f + glm::vec3(0.0f, 0.30f, 0.0f); wt = 3.2f; what = 3; }
+            }
+            if (wt == 0.0f && stands_here && v.style == 5) { at = v.aim; wt = 3.0f; what = 4; }
+            if (wt == 0.0f && stands_here && v.style == 7) {
+                at = v.aim; wt = 4.0f; what = 5;
+                const glm::vec3 d = at - head;
+                in.aim_pitch += 0.45f * glm::clamp(std::atan2(d.y, std::max(glm::length(glm::vec2(d.x, d.z)), 0.5f)), -0.3f, 0.9f);
+            }
+            if (wt == 0.0f && stands_here && v.style == 6) {
+                float bd = 2.8f;
+                for (const npc::View& o : npc_views_) {
+                    if (o.kind != npc::Kind::Person || o.hidden || o.id == v.id) continue;
+                    const float d = glm::distance(o.pos, v.pos);
+                    if (d < bd) { bd = d; at = o.pos + glm::vec3(0.0f, o.pose == npc::Pose::Sit ? 0.62f : 1.62f, 0.0f); wt = 2.6f; what = 200u + o.id; }
+                }
+            }
             if (wt == 0.0f && (outside || v.style == 2) && !in_car) {
                 // (a car going by: the nearest that moves)
                 float bd = 28.0f;
@@ -693,6 +843,16 @@ void VulkanEngine::npc_pose(float dt) {
             if (near_now) seen[bi] = true; else if (dp > 9.0f) seen[bi] = false;
             // (VIBE_NPC_GESTURE=<n>: everybody does gesture n - 1 a hand to the head, 2 to the neck,
             //  3 a look at the wrist, 4 a shift of weight, 5 a wave - every five seconds: to see them)
+            // An arm that points (style 5: every six seconds or so, at what `aim` is), a hand
+            // that talks (style 6, and at a desk turned to the neighbour: each at moments of his
+            // own, so that in a group now one talks and now another).
+            if (stands_here && v.style == 5) {
+                in.gesture = anim::Gesture::Point; in.gesture_seq = 1000u + uint32_t((life_now + double(a.id) * 1.7) / 6.5);
+                in.gesture_at = glm::vec3(glm::inverse(rf.model) * glm::vec4(v.aim, 1.0f));
+            } else if ((stands_here && v.style == 6) || (at_desk && desk_do == 3)) {
+                in.gesture = anim::Gesture::Talk; in.gesture_seq = 2000u + uint32_t((life_now + double(a.id) * 2.9) / (7.0 + double(a.id % 4u)));
+                if (at_desk) in.fidget_arms = 2;                 // (the right hand: the left is on the mouse)
+            }
             if (kGesture > 0) { in.gesture = anim::Gesture(kGesture); in.gesture_seq = uint32_t(life_now / 5.0 + double(a.id) * 0.37); }
         } else if (near_[k].d < 7.0f && !a.seated && !run && !loop_seat && v.act == npc::Act::None) {
             // (the soldiers on their run, and with VIBE_NPC_NO_LIFE everybody: somebody near looks at the player)
@@ -727,7 +887,7 @@ void VulkanEngine::npc_pose(float dt) {
             if (a.lod >= 3) { r.in.lod = 2; r.in.dt = 0.0f; pose_character(*a.animator, r.in, nullptr); }
             const glm::mat4 vi(glm::vec4(std::cos(a.dying_st.yaw), 0.0f, std::sin(a.dying_st.yaw), 0.0f), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f),
                                glm::vec4(-std::sin(a.dying_st.yaw), 0.0f, std::cos(a.dying_st.yaw), 0.0f), glm::vec4(r.rf.eye, 1.0f));
-            if (npc_ && a.id >= 1 && a.id <= 100) { if (npc_->replica()) npc_gone_[a.id - 1] = 3.0f; else npc_->kill(int(a.id) - 1); }
+            if (npc_ && a.id >= 1 && a.id <= uint32_t(npc::kMaxAgents)) { if (npc_->replica()) npc_gone_[a.id - 1] = 3.0f; else npc_->kill(int(a.id) - 1); }
             // (the driver of a car that has nobody of the NPC world at its wheel: the car's to lose)
             if (npc_ && a.id >= 1000u && a.id < 1100u) { if (npc_->replica()) npc_nodriver_[a.id - 1000u] = 3.0f; else npc_->kill(int(a.id - 1000u)); }
             // On its feet: the reaction first (npc_dying_pose). On a seat, or in the middle of
@@ -785,7 +945,7 @@ bool VulkanEngine::npc_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
     for (const MpAvatar& av : npc_bodies_) {
         if (!av.present || !av.id) continue;
         const int agent = av.id >= 1000u ? int(av.id - 1000u) : int(av.id) - 1;
-        if (agent < 0 || size_t(agent) >= npc_views_.size() || agent >= 100) continue;
+        if (agent < 0 || size_t(agent) >= npc_views_.size() || agent >= npc::kMaxAgents) continue;
         if (av.id < 1000u && !npc_views_[size_t(agent)].hidden) continue;      // (on foot: above)
         const glm::vec3 mn = av.eye + glm::vec3(-0.27f, -0.70f, -0.27f), mx = av.eye + glm::vec3(0.27f, 0.22f, 0.27f);
         float t = 0.0f;
@@ -811,7 +971,7 @@ bool VulkanEngine::npc_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
 // world: the authority's kill(), which the copies follow. Until a copy has followed, the person
 // is kept from being drawn again beside their own body (npc_gone_).
 void VulkanEngine::npc_hit(int agent, glm::vec3 hit, glm::vec3 dir) {
-    if (!npc_ || agent < 0 || size_t(agent) >= npc_views_.size() || agent >= 100) return;
+    if (!npc_ || agent < 0 || size_t(agent) >= npc_views_.size() || agent >= npc::kMaxAgents) return;
     const npc::View& v = npc_views_[size_t(agent)];
     // Who: somebody on foot or on a seat; somebody in a car (hidden, with a car); or - `agent`
     // is a car - the driver of a car that drives with nobody of the NPC world at its wheel.

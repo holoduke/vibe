@@ -147,6 +147,15 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     // unit). [1]: x = half its width, y = half its length, z = how far behind it the grass is
     // still coming up (m), w = 1 when there is a car.
     vec4   car_press[4];
+    // The fields of the flowering meadow (the engine's flower_fields_, as tuft_place.comp gets
+    // them): xy = the middle (world x, z), z = radius (0 = none), w = how frayed the edge is (m).
+    // The ground inside one takes the field's colour with distance (terrain_rm_main_light.glsl).
+    vec4   flower_field[4];
+    // Where a side road leaves a highway (engine/highway.h Junction; terrain_rm_noise_road.glsl
+    // rm_jn_*). [0]: xy = the point J on the highway's centre line (chart x, z), zw = the way the
+    // side road leaves (unit). [1]: x = 1 when there is one, y = the side road's width class,
+    // z = its metres at J as the field counts them. [2], [3]: its centre line heights at 0, 8 .. 56 m.
+    vec4   hw_jn[4];
 } scene;
 
 // The "shading test" (Graphics tab; gfx_quality.cpp apply_shade_test): measuring switches.

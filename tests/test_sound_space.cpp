@@ -31,6 +31,39 @@ TEST_CASE("a source's loudness falls without a step from beside it to silence", 
     REQUIRE(ss::gain(100.0f, ref) / ss::gain(50.0f, ref) == Approx(0.5f * std::pow(10.0f, -ss::kExcessDbPerM * 50.0f / 20.0f)).margin(0.01f));
 }
 
+TEST_CASE("a siren carries a kilometre: clear at 300 m, faint at 600 - 800 m, nothing at 1 km, no step", "[sound]") {
+    const ss::Shape S = ss::kSirenShape;
+    auto db = [&](float d) { return 20.0f * std::log10(ss::gain(d, S)); };
+    float prev = ss::gain(0.0f, S);
+    REQUIRE(prev == Approx(1.0f));
+    for (float d = 0.5f; d <= S.hear_m + 50.0f; d += 0.5f) {
+        const float g = ss::gain(d, S);
+        REQUIRE(g <= prev);                        // never louder further off
+        REQUIRE(prev - g < 0.015f);                // half a metre is never a step (steepest beside the source)
+        if (d > 200.0f) REQUIRE(prev - g < 0.0005f);
+        if (d < S.hear_m) REQUIRE(g > 0.0f);       // (heard, however faintly, all the way)
+        prev = g;
+    }
+    REQUIRE(ss::gain(S.hear_m, S) == 0.0f);
+    REQUIRE(ss::gain(S.hear_m + 500.0f, S) == 0.0f);
+    REQUIRE(db(300.0f) > -32.0f);                  // clearly there: louder than a car's engine at 100 m
+    REQUIRE(ss::gain(300.0f, S) > ss::gain(100.0f, 6.0f));
+    REQUIRE(db(600.0f) < -38.0f); REQUIRE(db(600.0f) > -48.0f);      // faint
+    REQUIRE(db(800.0f) < -48.0f); REQUIRE(db(800.0f) > -60.0f);      // almost gone, above the floor still
+    REQUIRE(ss::gain(800.0f, S) > ss::kFloor);
+    // it is heard where an engine has no voice any more
+    REQUIRE(ss::gain(ss::kHear, 6.0f) == 0.0f);
+    REQUIRE(ss::gain(ss::kHear, S) > 0.01f);
+    // its tone (650 - 1500 Hz and overtones) is not shut out by the air's low-pass on the way
+    REQUIRE(ss::cutoff_hz(300.0f, S.top_hz, S.air_half_m) > 2000.0f);
+    REQUIRE(ss::cutoff_hz(900.0f, S.top_hz, S.air_half_m) > 900.0f);
+    float hz_prev = ss::cutoff_hz(0.0f, S.top_hz, S.air_half_m);
+    for (float d = 1.0f; d <= S.hear_m; d += 1.0f) { const float hz = ss::cutoff_hz(d, S.top_hz, S.air_half_m); REQUIRE(hz <= hz_prev); hz_prev = hz; }
+    // a plain shape is the engines' law, unchanged
+    const ss::Shape car{ 6.0f, 4500.0f };
+    for (float d : { 0.0f, 10.0f, 100.0f, 320.0f, 449.0f, 450.0f }) REQUIRE(ss::gain(d, car) == ss::gain(d, 6.0f));
+}
+
 TEST_CASE("the further the duller, and what goes to the reverb falls slower than the sound itself", "[sound]") {
     float prev = ss::cutoff_hz(0.0f, 4500.0f);
     REQUIRE(prev == Approx(4500.0f));

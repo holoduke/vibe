@@ -186,12 +186,78 @@ vec2 rm_hw_dh(vec2 wp) {             // x: signed distance to the centre line (t
     if (abs(dh.x) < 34.0) {
         vec4 g = textureGather(u_normal[30], uv, 0);
         if (all(lessThan(min(g, 1.0 - g), vec4(0.002)))) dh.x = 64.0;
+        // The same between two ROADS: where the nearest road changes from one texel to the next
+        // (beside a junction: along a line some 20 degrees off the side road) the one's distance
+        // may be +40 and the other's -40, and the read between them goes through zero - a streak
+        // of asphalt, paint and shelf across the field. A real centre line has a texel within
+        // 16 on each side of it (the road's measure; 5.7 m - a texel's diagonal - on a road as
+        // narrow as the castle lane, the narrowest this holds for); four texels of both signs
+        // that are all further off than that are two roads, not one.
+        vec4 gd = g * 127.5 - 63.75;
+        if (min(min(gd.x, gd.y), min(gd.z, gd.w)) < -16.5 && max(max(gd.x, gd.y), max(gd.z, gd.w)) > 16.5
+            && all(greaterThan(abs(gd), vec4(16.5)))) dh.x = 64.0;
     }
     return dh;
 }
 float rm_hw_s(vec2 wp) {             // metres along the road (from a reference that keeps the dashes' place)
     vec3 f = textureLod(u_normal[31], (wp - scene.hw_info.xy) / scene.hw_info.w + 0.5, 0.0).rgb;
     return (f.r * 16711680.0 + f.g * 65280.0 + f.b * 255.0 - 8388608.0) * 0.001;
+}
+// ---- A junction: a side road leaving a highway (engine/highway.h Junction: the rule and the
+// numbers are written there; highway.cpp ground(), junction_lane_h, junction_ad - keep in step).
+// Round it the field holds the highway alone; the side road is worked out here from the
+// record in scene.hw_jn and laid over the highway's ground.
+bool  rm_jn_on() { return scene.hw_jn[1].x > 0.5; }
+// u: metres from J along the side road, v: metres to the side of its axis.
+vec2  rm_jn_uv(vec2 wp) { vec2 r = wp - scene.hw_jn[0].xy, w = scene.hw_jn[0].zw; return vec2(dot(r, w), dot(r, vec2(-w.y, w.x))); }
+// (where the surface is the junction's: it hands back to the field at 43.5 m, where the field's side road is whole again)
+bool  rm_jn_surf_in(vec2 uv) { return uv.x > -8.0 && uv.x < 43.5 && abs(uv.y) < 24.0; }
+// Metres from the highway's centre line: the field's distance - not in the side road's corridor
+// beyond 29 m, where the field's texels turn into the side road's (the highway has ended by there).
+float rm_jn_xh(vec2 uv, float d) { return (uv.x > 29.0 && abs(uv.y) < 18.0) ? 64.0 : abs(d); }
+float rm_jn_cr(float p0, float p1, float p2, float p3, float t) {
+    float t2 = t * t, t3 = t2 * t;
+    return 0.5 * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
+}
+float rm_jn_hs(int i) { return i < 4 ? scene.hw_jn[2][i] : scene.hw_jn[3][i - 4]; }
+// The side road's centre line height u metres from J: its line is a Catmull-Rom curve through
+// points 8 m apart, cut into four straight pieces a span - the same pieces here.
+float rm_jn_lane_h(float u) {
+    u = clamp(u, 0.0, 47.999);
+    int i = int(u / 8.0), a = max(i - 1, 0);
+    float h0 = rm_jn_hs(a), h1 = rm_jn_hs(i), h2 = rm_jn_hs(i + 1), h3 = rm_jn_hs(i + 2);
+    float u0 = 8.0 * float(a), u1 = 8.0 * float(i), u2 = u1 + 8.0, u3 = u1 + 16.0;
+    float ua = u1, ha = h1;
+    for (int k = 1; k <= 4; ++k) {
+        float t = 0.25 * float(k);
+        float ub = k == 4 ? u2 : rm_jn_cr(u0, u1, u2, u3, t), hb = k == 4 ? h2 : rm_jn_cr(h0, h1, h2, h3, t);
+        if (u <= ub || k == 4) return mix(ha, hb, clamp((u - ua) / max(ub - ua, 1e-4), 0.0, 1.0));
+        ua = ub; ha = hb;
+    }
+    return h2;
+}
+// The paving: the two roads' asphalt and the corners between them rounded to 4 m, as a
+// distance in a road's measure (5.5 = the edge). xh: metres from the highway's centre line.
+float rm_jn_ad(vec2 uv, float xh) {
+    float k = scene.hw_jn[1].y, av = abs(uv.y);
+    float a = xh - 5.5, b = uv.x > 0.0 ? av - 5.5 * k : 1.0e3, r = 4.0;
+    float sd = max(r, min(a, b)) - length(max(vec2(r - a, r - b), vec2(0.0)));
+    float lw = smoothstep(5.5, 9.5, xh) * (1.0 - smoothstep(8.0, 12.0, av));      // (the side road's measure where it is its edge)
+    return 5.5 + sd / mix(1.0, k, lw);
+}
+// The ground: h the land, hr the highway's shelf on it (the field's), xh metres from the highway.
+float rm_jn_ground(float h, float hr, float xh, vec2 uv) {
+    float u = uv.x, av = abs(uv.y), k = scene.hw_jn[1].y;
+    float hh = mix(hr, h, smoothstep(25.0, 29.0, u) * (1.0 - smoothstep(16.0, 20.0, av)));
+    float res = hh;
+    float adl = av / k;
+    if (u > 0.0 && adl < 30.0) {
+        // (nothing of the side road inside the highway's asphalt, all of it 8 m beyond: one surface)
+        float m = u > 20.0 ? 1.0 : smoothstep(5.5, 13.5, xh);
+        float fall = 0.02 * min(adl, 5.5) + 0.05 * clamp(adl - 5.5, 0.0, 2.5);
+        res = mix(hh, rm_jn_lane_h(u) - fall, (1.0 - smoothstep(8.0, 30.0, adl)) * m);
+    }
+    return u > 41.0 ? mix(res, hr, min((u - 41.0) / 5.0, 1.0)) : res;
 }
 // The ground with the road's shelf: level to the verge (8 m), met by the natural ground at 30 m
 // (highway.cpp ground() - keep in step).
@@ -216,7 +282,46 @@ float rm_highway(float h, vec2 wp) {
         float hz = a <= 0.0 ? h : mix(41.825, dh.y - fall, k);
         hr = mix(hr, hz, smoothstep(503.0, 509.0, wp.y) * (1.0 - smoothstep(565.0, 573.0, wp.y)));
     }
+    if (rm_jn_on()) {
+        vec2 uv = rm_jn_uv(wp);
+        if (uv.x > -8.0 && uv.x < 46.0 && abs(uv.y) < 24.0) hr = rm_jn_ground(h, hr, abs(dh.x), uv);
+    }
     return hr;
+}
+// "How far from the asphalt", as a distance from a centre line in a road's measure (5.5 = the
+// paving's edge, 8 = the verge's): the field's distance, and at a junction the two roads
+// and the rounded corners between them. d: rm_hw_dh's distance here.
+float rm_hw_ad(vec2 wp, float d) {
+    if (!rm_jn_on()) return abs(d);
+    vec2 uv = rm_jn_uv(wp);
+    if (!rm_jn_surf_in(uv)) return abs(d);
+    return rm_jn_ad(uv, rm_jn_xh(uv, d));
+}
+// The surface at a junction: whose asphalt this is, and the paint that belongs to the junction.
+// In: d, s, wk as the field has them (the highway's, round a junction). Out: the same of the
+// road whose surface is here - the highway's inside its own paving, the side road's beyond -
+// and mk for rm_hw_asphalt: x = how much of the edge line is there (broken across the mouth),
+// y = paint laid across (the stop line: a bar 45 cm wide a metre short of the highway's edge
+// line, and the side road's own edge lines up to it).
+void rm_hw_jn_surface(vec2 wp, float t, inout float d, inout float s, inout float wk, out vec2 mk) {
+    mk = vec2(1.0, 0.0);
+    if (!rm_jn_on()) return;
+    vec2 uv = rm_jn_uv(wp);
+    if (!rm_jn_surf_in(uv)) return;
+    float u = uv.x, av = abs(uv.y), k = scene.hw_jn[1].y;
+    float xh = rm_jn_xh(uv, d);
+    float pw = max(t * 0.0022, 0.01);
+    if (u <= 0.0) return;
+    if (xh < 5.5) {
+        float in_m = clamp((5.5 * k + 4.0 - av) / pw + 0.5, 0.0, 1.0);                       // (the mouth: the lane and its two corners)
+        float dash = clamp((0.25 - abs(fract(uv.y * 0.5) - 0.5)) * 2.0 / pw + 0.5, 0.0, 1.0);    // (1 m of every 2)
+        mk.x = 1.0 - in_m * (1.0 - dash);
+        float bar  = clamp((0.225 - abs(xh - 5.025)) / pw + 0.5, 0.0, 1.0) * clamp((5.5 * k - 0.2 - av) / pw + 0.5, 0.0, 1.0) * min(1.0, 0.45 / pw);
+        float stub = clamp((0.05 - abs(av - 1.74)) / pw + 0.5, 0.0, 1.0) * min(1.0, 0.10 / pw) * step(5.25, xh);
+        mk.y = max(bar, stub);
+        return;
+    }
+    if (av < 12.0) { d = uv.y / k; s = scene.hw_jn[1].z + u; wk = k; }
 }
 // Land or sea (.x, wm_continent's value) and the ranges (.y) at a chart position, as the
 // height formula reads them - from the formula itself.
@@ -457,7 +562,8 @@ float rm_hw_plates(vec2 p, out float id) {
 }
 // `wk`: the road's width (rm_hw_width). A road of one lane (wk < 0.75) has one pair of wheel
 // tracks about its middle, an edge line a hand inside each edge, and no line down the middle.
-vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, float wk, out float gloss, out float lvl) {
+// `mk`: a junction's paint (rm_hw_jn_surface): x = how much of the edge line is there, y = paint laid across.
+vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, float wk, vec2 mk, out float gloss, out float lvl) {
     float ad = abs(d), lane = d < 0.0 ? -1.0 : 1.0;
     bool  one = wk < 0.75;
     float ar = ad * wk;                                   // metres from the centre line
@@ -552,7 +658,7 @@ vec3 rm_hw_asphalt(vec2 wp, float d, float s, float t, vec3 tex, float hgt, floa
                       : clamp((0.075 + jit - abs(ad - 3.75)) / pw + 0.5, 0.0, 1.0) * min(1.0, 0.15 / pw);
         float dx = abs(fract(s / 12.0) * 12.0 - 1.5);
         float c = clamp((0.075 + jit - ad) / pw + 0.5, 0.0, 1.0) * min(1.0, 0.15 / pw) * clamp((1.5 - dx) / (pw * 3.0) + 0.5, 0.0, 1.0);
-        float paint = one ? e : max(e, c);
+        float paint = max(one ? e : max(e * mk.x, c), mk.y);
         float wear = smoothstep(0.42, 0.82, tile_noise2(wp, 1.7, vec2(7.0)) * 0.55 + tile_noise2(wp, 23.0, vec2(0.0)) * 0.25 * near + hgt * 0.35 * near + 0.10);
         paint *= 1.0 - mix(0.22, 0.80 * wear, near);
         a = mix(a, vec3(0.50, 0.50, 0.47) * mix(0.85, 1.0, tile_noise2(wp, 0.8, vec2(0.0))), paint);

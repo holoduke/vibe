@@ -552,14 +552,14 @@ void build_meadow(std::vector<Vertex>& v, std::vector<uint32_t>& ix, int level =
         const glm::vec3 lean(std::cos(a), 0.0f, std::sin(a));
         if (i % 3 != 2) {
             // a stalk with its head: two crossed blades with one number (they turn as one)
-            const float len = 0.05f + 0.24f + 0.20f * rnd();
+            const float len = 0.05f + 0.38f + 0.30f * rnd();          // (half as long again as at first: 0.43 - 0.73 m)
             const float arch = 0.10f + 0.35f * outer * rnd(), hw = 0.011f + 0.006f * rnd();
             if (level == 2 && (i % 2) == 1) continue;
             const float wide = level == 2 ? 2.0f : level == 1 ? 1.35f : 1.0f;
             grass_blade(v, ix, base, lean, len, 0.0050f * wide, arch, 0.0f, i, 10.0f, hw * wide);
             if (level == 0) grass_blade(v, ix, base, lean, len, 0.0050f, arch, 2.2f, i, 10.0f, hw * 0.8f);
         } else {
-            const float len = 0.05f + 0.16f + 0.16f * rnd();
+            const float len = 0.05f + 0.26f + 0.24f * rnd();
             const float wid = 0.0100f + 0.0050f * rnd(), ar = 0.25f + 0.75f * outer * rnd(), tw = (rnd() - 0.5f) * 1.6f;
             if (level == 0) grass_blade(v, ix, base, lean, len, wid, ar, tw, i);
         }

@@ -62,7 +62,7 @@ void main() {
             }
             c = cs / wg;
             float z = dot(bw * gm, a4) / wg;
-            lr_depth = min(1.0000333 - 0.05 / max(z, 0.05), 0.999989);
+            lr_depth = min(1.0000016667 - 0.05 / max(z, 0.05), 0.999989);
             edge_motion = vec3(0.0, 0.0, 1.0);          // (a still camera: nothing moves)
             kept = true;
             outline_done = true;
@@ -82,7 +82,7 @@ void main() {
     if (!outline_done && pc.tex_params.x > 0.5 && edge_motion.z < 0.5) {
         vec2 hq = g_uv_true + pc.emissive.zw - pc.emissive.xy;
         vec4 h = (pc.tex_params.y > 0.5) ? textureLod(u_lrb_depth, hq, 0.0) : textureLod(u_lrb_color, hq, 0.0);
-        float zc = 0.05 / max(1.0000333 - lr_depth, 1e-7);
+        float zc = 0.05 / max(1.0000016667 - lr_depth, 1e-7);
         if (h.a > 0.0 && abs(h.a - zc) < 0.06 * zc + 0.03) { c = h.rgb; kept = true; }
     }
     // The G-buffer, as the full-resolution terrain writes it (terrain_raymarch.frag): material 8

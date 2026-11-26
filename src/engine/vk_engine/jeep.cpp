@@ -453,7 +453,7 @@ void VulkanEngine::destroy_jeep() {
     for (JeepState* c : jeep_all_) delete c;
     if (audio_) for (auto& kv : car_voices_) audio_->engine_stop(kv.second);
     car_voices_.clear();
-    if (audio_ && cars_x_) for (auto& b : cars_x_->bars) if (b.voice) { audio_->stop_voice(b.voice, 0.0f); b.voice = 0; }
+    if (cars_x_) { if (audio_) for (auto& kv : cars_x_->sirens) audio_->source_stop(kv.second.src); cars_x_->sirens.clear(); }
     for (NpcCar& c : npc_cars_) delete c.car;
     npc_cars_.clear();
     jeep_all_.clear();
@@ -542,7 +542,9 @@ void VulkanEngine::jeep_feed_world() {
         }
     }
     // -- what stands near --
-    const size_t sig = wv_cols_.size() * 31u + world_.aabbs.size() + lane_rock_cols_.size() * 7u;
+    uint32_t rockf_gen = 0;
+    const std::vector<collision::AABB>& rockf_boxes = rockf_colliders(&rockf_gen);      // (rock formations near the player)
+    const size_t sig = wv_cols_.size() * 31u + world_.aabbs.size() + lane_rock_cols_.size() * 7u + size_t(rockf_gen) * 1013u;
     if (glm::distance(p2, J.obst_centre) > 22.0f || sig != J.obst_sig) {
         J.obst_centre = p2; J.obst_sig = sig;
         std::vector<PhysicsWorld::OrientedBox> ob;
@@ -557,6 +559,9 @@ void VulkanEngine::jeep_feed_world() {
         for (const auto& a : wv_cols_) take(a);
         for (const auto& a : world_.aabbs) take(a);
         hw_rail_boxes(pos, reach, ob);
+        // (rock formations: what of them a car can run into - within 35 m, not far over its roof)
+        for (const auto& a : rockf_boxes)
+            if (a.min.y < pos.y + 4.0f && a.max.x > pos.x - 35.0f && a.min.x < pos.x + 35.0f && a.max.z > pos.z - 35.0f && a.min.z < pos.z + 35.0f) take(a);
         if (ob.size() > 900) ob.resize(900);
         physics_->vehicle_set_obstacles(ob.data(), ob.size());
     }
@@ -1346,6 +1351,7 @@ void VulkanEngine::car_audio_tick(float dt) {
                        J.dir.substr(J.dir.find_last_of("/\\") + 1).c_str(), double(heard.distance), double(heard.gain), heard.gain > 0.0f ? 20.0 * std::log10(double(heard.gain)) : -999.0,
                        double(heard.cutoff_hz), double(heard.doppler), double(heard.pan), double(heard.send), double(heard.occlusion), double(sp), c.wanted ? "" : " (let go)");
     }
+    siren_audio_tick(dt);       // (the sirens: sources of the same spatialiser, after the listener's speed and the surroundings are set)
     // VIBE_LOG_AUDIO_COST=1: every 300 frames, what the mixer cost since the last line (all the
     // engine's sound, on the audio thread) and how many engine voices and loops were in it.
     if (static const bool lg = std::getenv("VIBE_LOG_AUDIO_COST") != nullptr; lg && frame_number_ % 300 == 0) {
@@ -2465,7 +2471,8 @@ void VulkanEngine::npc_feed_obstacles() {
 //   the siren  engine/siren_synth.h makes the sound - wail and yelp, no recording - and
 //              siren_audio_tick plays it from the car.
 // Hooks: VIBE_LOG_TRAFFIC=1 (who pulls out to pass, who is back, sirens on and off, what is
-// heard), VIBE_TEST_SIREN=1 (every siren on), VIBE_NO_SIREN=1 (no sound), VIBE_SIREN_GAIN=<x>,
+// heard: each siren's distance and gain every half second), VIBE_TEST_SIREN=1 (every siren on;
+// =stay: and the eye is put beside one and stays - with VIBE_TEST_HOLD), VIBE_NO_SIREN=1 (no sound), VIBE_SIREN_GAIN=<x>,
 // VIBE_NPC_CAM=police / passing (the eye goes with a police car / a car that is passing).
 namespace {
 // The bar's three boxes in its own frame (the roof's middle at 0): middle and half size.
@@ -2573,64 +2580,115 @@ void VulkanEngine::police_place(float dt) {
             CastleMeshGpu& g = jeep_draw_[X.bars[i].first + size_t(p)];
             g.xf = g.xf_prev = away; g.bmin = g.bmax = glm::vec3(0.0f, -20000.0f, 0.0f); g.emissive = glm::vec4(0.0f);
         }
-    siren_audio_tick(dt);
 }
 
-// THE SIREN'S SOUND, apart from the engines' (car_audio_tick): one tracked voice
-// (AudioEngine::play_tracked / set_voice / set_voice_rate) for each police car that is shown
-// with its siren on. The clip is engine/siren_synth.h's, written to
-// assets/sounds/siren_wail.wav the first time it is needed and not there; it is started again
-// when it has run out (it begins and ends at the same pitch). Here, not in the audio engine:
-// how loud by distance (half at 40 m, then by the square of the distance, nothing from 650 m),
-// the Doppler shift (the car's speed toward the listener against the listener's own - the
-// rate of the voice), and the fades (up in an eighth of a second, down in a third).
+// THE SIREN'S SOUND: a source of the one spatialiser (audio.h "A SOURCE": source_start /
+// source_update / source_stop), as the engines are - the distance law down to silence, the
+// air's low-pass, Doppler, the side it is on, a hill in the way, the echo, the cabin. This
+// function only says where each siren is, how fast it moves and how loud it is beside it.
+//   whose: every police car of the NPC engine whose siren is on (View::style, the same on
+//     every machine), BY ITS AGENT NUMBER and from the NPC world's own place and speed -
+//     whether a car model is lent to it or not (only the nearest 15 cars within 700 m are
+//     drawn; a siren carries a kilometre: sound_space::kSirenShape).
+//   starts: when it comes within hearing (the gain is 0 there: out of silence) or is switched
+//     on (the spatialiser brings it up in a tenth of a second).
+//   stops: switched off, the car taken or gone - source_stop fades it where it was and frees
+//     it; driven out of hearing - it has faded to nothing by the distance law before that.
+// The clip (engine/siren_synth.h, 16 s) loops; each car begins at another place in it. It is
+// written to assets/sounds/siren_wail.wav the first time it is needed and not there.
+// (Before 2026-11-25 this was a tracked voice a roof-bar slot with its own law - half at 40 m,
+// by the square of the distance: 41 dB down at 300 m - that only sounded while the car was
+// drawn and changed car when the bars were dealt out anew.)
+// Called from car_audio_tick, every frame.
 void VulkanEngine::siren_audio_tick(float dt) {
     if (!cars_x_ || !audio_ || !audio_->ok() || dt <= 0.0f) return;
     CarTrafficState& X = *cars_x_;
     static const bool off = std::getenv("VIBE_NO_SIREN") != nullptr;
     static const bool lg = std::getenv("VIBE_LOG_TRAFFIC") != nullptr;
     static const float kGain = std::getenv("VIBE_SIREN_GAIN") ? float(std::atof(std::getenv("VIBE_SIREN_GAIN"))) : 1.0f;
-    const glm::vec3 eye = player_.eye_position();
-    const bool cabin = jeep_ && jeep_->driving && jeep_->cam_mode == 0;
-    int k = 0;
-    for (CarTrafficState::Bar& b : X.bars) {
-        ++k;
-        const bool on = !off && b.agent >= 0 && b.siren && globe::current().home;
-        const glm::vec3 pos = 0.5f * (b.lamp[0] + b.lamp[1]);
-        float want = 0.0f, rate = b.rate, d = 0.0f;
-        if (on) {
-            if (X.siren_clip == 0) {
-                const char* path = "assets/sounds/siren_wail.wav";
-                std::error_code ec;
-                const bool made = !std::filesystem::exists(path, ec) && siren::write_siren_wav(path);
-                X.siren_clip = std::filesystem::exists(path, ec) ? 1 : -1;
-                if (X.siren_clip > 0) audio_->load_clip(ClipID::Siren, path);
-                log::infof("[traffic] the siren's sound: %s%s", X.siren_clip > 0 ? path : "could not be written - no siren", made ? " (made now: 16 s, engine/siren_synth.h)" : "");
-            }
-            if (X.siren_clip > 0) {
-                const glm::vec3 v_now = b.has_last ? (pos - b.last) / dt : glm::vec3(0.0f);
-                b.vel += ((glm::length(v_now) < 120.0f ? v_now : glm::vec3(0.0f)) - b.vel) * std::min(1.0f, dt * 8.0f);
-                b.last = pos; b.has_last = true;
-                d = glm::distance(pos, eye);
-                want = 0.50f * kGain / (1.0f + (d / 40.0f) * (d / 40.0f)) * (1.0f - glm::smoothstep(450.0f, 650.0f, d)) * (cabin ? 0.6f : 1.0f);
-                const glm::vec3 to = d > 1.0f ? (eye - pos) / d : glm::vec3(0.0f);
-                rate = std::clamp(343.0f / (343.0f - std::clamp(glm::dot(b.vel - car_ear_vel_, to), -90.0f, 90.0f)), 0.78f, 1.36f);
-                b.rate = rate;
-                if (want > 0.0006f && (!b.voice || !audio_->voice_playing(b.voice))) {
-                    const bool again = b.voice != 0;                 // (it ran out: on from the start, as loud as it was)
-                    b.voice = audio_->play_tracked(ClipID::Siren, pos, again ? b.vol : 0.0f, rate, again ? 0.0f : float(k) * 2.3f);
-                    if (!again) b.vol = 0.0f;
-                }
-            }
-        } else b.has_last = false;
-        b.vol += (want - b.vol) * std::min(1.0f, dt / (want > b.vol ? 0.125f : 0.33f));
-        if (b.voice) {
-            if (want <= 0.0f && b.vol < 0.0006f) { audio_->stop_voice(b.voice, 0.05f); b.voice = 0; b.vol = 0.0f; b.rate = 1.0f; }
-            else { audio_->set_voice(b.voice, pos, b.vol); audio_->set_voice_rate(b.voice, rate); }
+    constexpr float kLevel = 0.55f;                     // how loud it is beside the car (1 = the clip as written)
+    const sound_space::Shape S = sound_space::kSirenShape;
+    const uint8_t kOn = npc::kCarPolice | npc::kCarSiren;
+    auto sounds = [&](const npc::View& v) { return v.kind == npc::Kind::Car && !v.hidden && (v.style & kOn) == kOn; };
+    // VIBE_TEST_SIREN=stay: once, the eye is put 12 m beside the nearest police car that drives
+    // with its siren on, and stays there (with VIBE_TEST_HOLD) - the car drives away: the fade
+    // read as numbers (VIBE_LOG_TRAFFIC).
+    if (static const bool stay = std::getenv("VIBE_TEST_SIREN") && std::string(std::getenv("VIBE_TEST_SIREN")) == "stay"; stay && !X.siren_test_placed && frame_number_ > 30) {
+        int best = -1; float bd = 1e18f;
+        for (size_t i = 0; i < npc_views_.size(); ++i) {
+            const npc::View& v = npc_views_[i];
+            if (!sounds(v) || v.speed < 15.0f) continue;
+            const float d = glm::distance(v.pos, player_.position);
+            if (d < bd) { bd = d; best = int(i); }
         }
-        if (lg && on && frame_number_ % 120 == 0)
-            log::infof("[traffic] siren of police car %d: %.0f m from the eye, volume %.4f, pitch x%.3f, voice %s, lamps %d%d", b.agent, double(d), double(b.vol), double(rate),
-                       b.voice && audio_->voice_playing(b.voice) ? "playing" : "silent", int(b.lit[0]), int(b.lit[1]));
+        if (best >= 0) {
+            const npc::View& v = npc_views_[size_t(best)];
+            player_.position = v.pos + glm::vec3(std::cos(v.yaw), 0.0f, std::sin(v.yaw)) * 12.0f + glm::vec3(0.0f, 1.2f, 0.0f);
+            player_.velocity = glm::vec3(0.0f);
+            prev_player_position_ = player_.position;
+            globe_moved_player_ = true;                 // (VIBE_TEST_HOLD holds this place now)
+            X.siren_test_placed = true;
+            log::infof("[traffic] siren test: the eye stands at (%.1f, %.1f, %.1f), 12 m beside police car %d that drives %.1f m/s", player_.position.x, player_.position.y, player_.position.z, best, double(v.speed));
+            return;                                     // (the listener is there from the next frame)
+        }
+    }
+    const glm::vec3 eye = player_.eye_position();
+    bool seen[npc::kMaxAgents] = {};
+    if (!off && globe::current().home) {
+        for (size_t i = 0; i < npc_views_.size() && i < size_t(npc::kMaxAgents); ++i) {
+            const npc::View& v = npc_views_[i];
+            if (!sounds(v)) continue;
+            const glm::vec3 pos = v.pos + glm::vec3(0.0f, 1.5f, 0.0f);      // (the roof)
+            const float d = glm::distance(pos, eye);
+            auto it = X.sirens.find(int(i));
+            // (an agent's number that now belongs to another car somewhere else: not this siren
+            // moved - the old one fades where it was, the new one comes up where it is)
+            if (it != X.sirens.end() && glm::distance(pos, it->second.pos) > 60.0f) { audio_->source_stop(it->second.src); X.sirens.erase(it); it = X.sirens.end(); }
+            if (it == X.sirens.end()) {
+                if (d >= S.hear_m) continue;
+                if (X.siren_clip == 0) {
+                    const char* path = "assets/sounds/siren_wail.wav";
+                    std::error_code ec;
+                    const bool made = !std::filesystem::exists(path, ec) && siren::write_siren_wav(path);
+                    X.siren_clip = std::filesystem::exists(path, ec) ? 1 : -1;
+                    if (X.siren_clip > 0) audio_->load_clip(ClipID::Siren, path);
+                    log::infof("[traffic] the siren's sound: %s%s", X.siren_clip > 0 ? path : "could not be written - no siren", made ? " (made now: 16 s, engine/siren_synth.h)" : "");
+                }
+                if (X.siren_clip <= 0) continue;
+                const uint32_t h = audio_->source_start(ClipID::Siren, S, true, float(i % 7) * 2.3f);
+                if (!h) continue;
+                CarTrafficState::Siren s; s.src = h;
+                it = X.sirens.emplace(int(i), s).first;
+                if (lg) log::infof("[traffic] siren of police car %d: begins to sound, %.0f m from the eye", int(i), double(d));
+            } else if (d > S.hear_m + 60.0f) {          // (silent since hear_m: let go, with a margin so that it is not started and stopped at the edge)
+                audio_->source_stop(it->second.src);
+                X.sirens.erase(it);
+                if (lg) log::infof("[traffic] siren of police car %d: out of hearing, %.0f m from the eye", int(i), double(d));
+                continue;
+            }
+            seen[i] = true;
+            CarTrafficState::Siren& s = it->second;
+            s.pos = pos;
+            // (its speed: the NPC engine's own, along its nose - exact, as for the engines' sound)
+            const glm::vec3 vel = glm::vec3(std::sin(v.yaw), 0.0f, -std::cos(v.yaw)) * v.speed;
+            const AudioEngine::Heard heard = audio_->source_update(s.src, pos, vel, kLevel * kGain, 1.0f);
+            s.log_t -= dt;
+            if (lg && s.log_t <= 0.0f) {
+                s.log_t += 0.5f; if (s.log_t < 0.0f) s.log_t = 0.5f;
+                bool drawn = false;
+                for (const NpcCar& nc : npc_cars_) if (nc.agent == int(i)) { drawn = true; break; }
+                log::infof("[traffic] siren of police car %d: %6.1f m from the eye, gain %.5f (%6.1f dB), low-pass %4.0f Hz, pitch x%.4f, pan %+.2f, reverb %.5f, blocked %.2f, %.1f m/s, car %s", int(i), double(heard.distance),
+                           double(heard.gain), heard.gain > 0.0f ? 20.0 * std::log10(double(heard.gain)) : -999.0, double(heard.cutoff_hz), double(heard.doppler), double(heard.pan), double(heard.send),
+                           double(heard.occlusion), double(v.speed), drawn ? "drawn" : "not drawn");
+            }
+        }
+    }
+    // (switched off, taken, gone, another part of the planet: it fades out where it was)
+    for (auto it = X.sirens.begin(); it != X.sirens.end();) {
+        if (it->first >= 0 && it->first < npc::kMaxAgents && seen[it->first]) { ++it; continue; }
+        audio_->source_stop(it->second.src);
+        if (lg) log::infof("[traffic] siren of police car %d: off", it->first);
+        it = X.sirens.erase(it);
     }
 }
 

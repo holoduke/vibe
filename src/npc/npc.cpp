@@ -33,12 +33,17 @@ float wrap_pi(float a) { while (a > kPi) a -= 2.0f * kPi; while (a < -kPi) a += 
 // The game's yaw of a direction (x, z): 0 looks toward -z, + turns toward +x.
 float yaw_of(glm::vec2 d) { return std::atan2(d.x, -d.y); }
 
-struct Node { std::string name; glm::vec3 p; std::vector<int> adj; };
-struct Place { std::string kind; glm::vec3 p; float yaw = 0.0f; int user = -1; int node = -1; };   // a seat, a spot, a bay or a stop
+struct Node { std::string name; glm::vec3 p; std::vector<int> adj; uint8_t zone = 0; };
+// A seat, a spot, a bay or a stop. `aim`: what the hands or the eyes go to there (a desk's
+// keyboard, the screen pointed at, the rocket) - for the renderer (View::aim). `zone`: which
+// site it belongs to (0 the first one loaded, 1.. those added with add_site).
+struct Place { std::string kind; glm::vec3 p; float yaw = 0.0f; int user = -1; int node = -1; glm::vec3 aim{0.0f}; bool has_aim = false; uint8_t zone = 0; };
 
-enum Role : uint8_t { Cashier, Cook, Server, Local, Traveller, Runner };
+enum Role : uint8_t { Cashier, Cook, Server, Local, Traveller, Runner,
+                      // the people of an added site (THE ADDED SITES, below)
+                      Desk, Floater, Visitor, Crew };
 enum TaskType : uint8_t { GoNode, GoPoint, Sit, Stand, EnterCar, DoAct };
-struct Task { TaskType type; int a = -1; glm::vec3 p{0.0f}; float yaw = 0.0f; float time = 0.0f; Pose pose = Pose::Stand; uint8_t style = 0; };
+struct Task { TaskType type; int a = -1; glm::vec3 p{0.0f}; float yaw = 0.0f; float time = 0.0f; Pose pose = Pose::Stand; uint8_t style = 0; glm::vec3 aim{0.0f}; bool has_aim = false; };
 
 enum CarState : uint8_t { Cruise, Approach, OnPath, Waiting, Parked };
 enum Cls : uint8_t { Slow, Normal, Fast, Speeder, Police };      // the kinds of driver (make_driver)
@@ -56,6 +61,9 @@ struct Agent {
     int at_node = -1;
     int seat = -1, spot = -1;            // what it holds
     int home_seat = -1;
+    int home_spot = -1;                  // somebody of an added site: the spot it begins on (or home_seat)
+    uint8_t zone = 0;                    // ... and which site that is (0: the first site, the road)
+    bool asleep = false;                 // ... nobody is near that site: it is not there
     int car = -1;                        // a traveller's car (agent index)
     int car_seat = 0;                    // which seat of it: 0 the driver's, 1 beside, 2 behind
     float timer = 0.0f;
@@ -138,6 +146,13 @@ struct World::Impl {
     Road road;
     float s_in = 0.0f, s_out = 0.0f;         // where the site's way in leaves the road, and where its way out joins it
     bool site = false;
+    int home_nodes = 0;                      // how many of `nodes` are the first site's (the rest: added sites')
+    // THE ADDED SITES (add_site): the pavilion by the launch pad, the pad itself. Their people
+    // are only there while a player is near (set_eyes): see wake_zones.
+    struct Zone { glm::vec3 centre{0.0f}; float radius = 0.0f; bool awake = false; };
+    std::vector<Zone> zones;
+    std::vector<glm::vec3> eyes;             // where the players are (set_eyes)
+    Rng zrng;                                // the added sites' own chances (the first site's life does not change with them)
 
     std::vector<Agent> agents;
     Rng rng;
@@ -159,9 +174,10 @@ struct World::Impl {
     float replica_gap = 0.25f;               // seconds between the last two states taken in
 
     // ---------------------------------------------------------------- the site
-    int nearest_node(glm::vec3 p) const {
+    int nearest_node(glm::vec3 p, int zone = -1) const {
         int best = -1; float bd = 1e30f;
         for (size_t i = 0; i < nodes.size(); ++i) {
+            if (zone >= 0 && int(nodes[i].zone) != zone) continue;
             const float d = glm::distance(nodes[i].p, p);
             if (d < bd) { bd = d; best = int(i); }
         }
@@ -189,8 +205,11 @@ struct World::Impl {
         for (int n = b; n != a; n = from[size_t(n)]) out.push_back(n);
         return out;
     }
-    bool parse(std::istream& in) {
-        nodes.clear(); node_of.clear(); seats.clear(); spots.clear(); bays.clear(); stops.clear(); paths.clear();
+    // `zone` 0: the site (everything there was is dropped). 1..: a site ADDED to it - its nodes,
+    // seats and spots join the same lists (a link may name a node of a site read before it).
+    bool parse(std::istream& in, uint8_t zone = 0) {
+        if (zone == 0) { nodes.clear(); node_of.clear(); seats.clear(); spots.clear(); bays.clear(); stops.clear(); paths.clear(); zones.clear(); }
+        const size_t node0 = nodes.size();
         std::string line;
         std::vector<std::pair<std::string, std::string>> links;
         while (std::getline(in, line)) {
@@ -198,12 +217,14 @@ struct World::Impl {
             std::string kw; ls >> kw;
             if (kw.empty() || kw[0] == '#') continue;
             if (kw == "node") {
-                Node n; ls >> n.name >> n.p.x >> n.p.y >> n.p.z; n.p += origin;
+                Node n; ls >> n.name >> n.p.x >> n.p.y >> n.p.z; n.p += origin; n.zone = zone;
                 node_of[n.name] = int(nodes.size()); nodes.push_back(n);
             } else if (kw == "link") {
                 std::string a, b; ls >> a >> b; links.push_back({ a, b });
             } else if (kw == "seat" || kw == "spot" || kw == "stop") {
-                Place p; ls >> p.kind >> p.p.x >> p.p.y >> p.p.z >> p.yaw; p.p += origin;
+                Place p; ls >> p.kind >> p.p.x >> p.p.y >> p.p.z >> p.yaw; p.p += origin; p.zone = zone;
+                // (and, for some, the point the hands or the eyes go to there)
+                if (glm::vec3 q; ls >> q.x >> q.y >> q.z) { p.aim = q + origin; p.has_aim = true; }
                 (kw == "seat" ? seats : kw == "spot" ? spots : stops).push_back(p);
             } else if (kw == "bay") {
                 Place p; p.kind = "bay"; ls >> p.p.x >> p.p.y >> p.p.z >> p.yaw; p.p += origin; bays.push_back(p);
@@ -217,11 +238,32 @@ struct World::Impl {
             nodes[size_t(a->second)].adj.push_back(b->second); nodes[size_t(b->second)].adj.push_back(a->second);
         }
         for (auto* v : { &seats, &spots, &bays, &stops })
-            for (Place& p : *v) p.node = nearest_node(p.p);
+            for (Place& p : *v) if (p.zone == zone) p.node = nearest_node(p.p, zone);
         // (a pump's stop and the spot of the same name: the driver's place beside the car)
         for (Place& p : stops) { auto it = node_of.find(p.kind); if (it != node_of.end()) p.node = it->second; }
-        site = !nodes.empty();
-        return site;
+        if (zone == 0) { site = !nodes.empty(); home_nodes = int(nodes.size()); return site; }
+        // An added site. Which way somebody stands on a spot: toward what is looked at from
+        // there, and in a group toward its middle (the spots of a group within 2.5 m).
+        for (Place& p : spots) {
+            if (p.zone != zone) continue;
+            glm::vec2 to(0.0f);
+            if (p.kind == "group") {
+                glm::vec2 c(0.0f); int n = 0;
+                for (const Place& o : spots) if (o.zone == zone && o.kind == "group" && glm::distance(o.p, p.p) < 2.5f) { c += glm::vec2(o.p.x, o.p.z); ++n; }
+                if (n > 1) to = c / float(n) - glm::vec2(p.p.x, p.p.z);
+            } else if (p.has_aim) to = glm::vec2(p.aim.x - p.p.x, p.aim.z - p.p.z);
+            if (glm::dot(to, to) > 1e-4f) p.yaw = yaw_of(to);
+        }
+        // Where it is and how far it reaches: its people are there while a player is near.
+        if (nodes.size() > node0) {
+            Zone z;
+            for (size_t i = node0; i < nodes.size(); ++i) z.centre += nodes[i].p;
+            z.centre /= float(nodes.size() - node0);
+            for (size_t i = node0; i < nodes.size(); ++i) z.radius = std::max(z.radius, glm::distance(nodes[i].p, z.centre));
+            if (zones.size() < size_t(zone)) zones.resize(size_t(zone));
+            zones[size_t(zone) - 1] = z;
+        }
+        return nodes.size() > node0;
     }
     // Where along the road a point of the site lies nearest.
     float road_s_of(glm::vec3 p) const {
@@ -261,9 +303,162 @@ struct World::Impl {
     void plan_stay(Agent& a, std::vector<Task>& plan, bool is_seat, int idx, float time, Pose pose) {
         const Place& pl = is_seat ? seats[size_t(idx)] : spots[size_t(idx)];
         Task go; go.type = GoNode; go.a = pl.node; plan.push_back(go);
-        Task ap; ap.type = GoPoint; ap.p = pl.p; if (is_seat) ap.p = glm::mix(nodes[size_t(std::max(pl.node, 0))].p, pl.p, 0.55f); plan.push_back(ap);
+        Task ap; ap.type = GoPoint; ap.p = pl.p; if (is_seat) ap.p = seat_stand_point(idx); plan.push_back(ap);
         Task st; st.type = is_seat ? Sit : Stand; st.a = idx; st.p = pl.p; st.yaw = pl.yaw; st.time = time; st.pose = pose; plan.push_back(st);
         (void)a;
+    }
+    // Where somebody stands to sit down on a seat, and gets up to: in front of it, toward the
+    // way that leads there. A chair pushed in at a desk or a table has no room in front: beside
+    // it, on the side the way comes from.
+    glm::vec3 seat_stand_point(int idx) const {
+        const Place& pl = seats[size_t(idx)];
+        const glm::vec3 np = nodes[size_t(std::max(pl.node, 0))].p;
+        if (pl.kind != "desk" && pl.kind != "meet") return glm::mix(np, pl.p, 0.55f);
+        const glm::vec3 right(std::cos(pl.yaw), 0.0f, std::sin(pl.yaw)), fwd(std::sin(pl.yaw), 0.0f, -std::cos(pl.yaw));
+        const float side = glm::dot(np - pl.p, right) < 0.0f ? -1.0f : 1.0f;
+        glm::vec3 p = pl.p + right * (side * 0.56f) - fwd * 0.12f;
+        p.y = np.y;
+        return p;
+    }
+    // ---------------------------------------------------------------- THE ADDED SITES
+    // The pavilion by the launch pad and the pad itself (add_site: assets/office/office.nav from
+    // tools/office/make_office.py, assets/rocket/site.nav). Who lives there:
+    //   Desk     somebody with a desk of his own (seat kind "desk", or a chair at the meeting
+    //            table): works there most of the time; now and then gets up - to a colleague's
+    //            desk to point at the screen ("point": only beside somebody who sits), to the
+    //            kitchen ("coffee"), to the glass to look at the pad ("window"), to the wall of
+    //            screens ("wall"), to a sofa - and comes back.
+    //   Floater  somebody who is on the way most of the time: from one of those places to
+    //            another, up the stair to the rail of the mezzanine ("rail"), out on the terrace.
+    //   Visitor  outside: in a small group that talks ("group"), looking up at the rocket
+    //            ("watch"), at the apron's edge ("edge"); moves on after a minute or two.
+    //   Crew     the technicians: from one thing to see to ("tech": a tank, the pump house,
+    //            the tower's foot, the mount, the control house) to the next, busy there a while.
+    // THEY ARE ONLY THERE WHILE A PLAYER IS NEAR (wake_zones): nobody near, they are hidden and
+    // not stepped; when a player comes within reach they begin again at their places. Their
+    // chances come from a generator of their own (zrng), so the first site's life - the service
+    // station, the traffic - is step for step what it is without them.
+    int free_in_zone(std::vector<Place>& v, const char* kind, uint8_t zone) {
+        std::vector<int> c;
+        for (size_t i = 0; i < v.size(); ++i) if (v[i].user < 0 && v[i].zone == zone && v[i].kind == kind) c.push_back(int(i));
+        return c.empty() ? -1 : c[size_t(zrng.pick(int(c.size())))];
+    }
+    // How somebody stands on a spot of that kind (View::style), and whether he is busy with his hands.
+    static void spot_manner(const Place& pl, Task& st, Rng& r) {
+        if (pl.kind == "tech") { st.pose = Pose::Work; st.style = 0; }
+        else if (pl.kind == "point") st.style = 5;
+        else if (pl.kind == "wall") st.style = r.chance(0.5f) ? 5 : 7;
+        else if (pl.kind == "group" || pl.kind == "coffee") st.style = 6;
+        else st.style = 7;                                   // (window, terrace, rail, watch, edge: looks at what is there)
+        st.aim = pl.aim; st.has_aim = pl.has_aim;
+    }
+    bool zone_stand(Agent& a, std::vector<Task>& plan, const char* kind, float t0, float t1) {
+        int i = -1;
+        if (std::string(kind) == "point") {
+            // (only beside a colleague who sits at that desk)
+            std::vector<int> c;
+            for (size_t k = 0; k < spots.size(); ++k) {
+                if (spots[k].user >= 0 || spots[k].zone != a.zone || spots[k].kind != "point") continue;
+                for (const Place& s : seats)
+                    if (s.user >= 0 && s.kind == "desk" && glm::distance(s.p, spots[k].p) < 1.2f && agents[size_t(s.user)].pose == Pose::Sit) { c.push_back(int(k)); break; }
+            }
+            if (!c.empty()) i = c[size_t(zrng.pick(int(c.size())))];
+        } else if (std::string(kind) == "group") {
+            // (rather where somebody stands already: a group, not three people each alone)
+            std::vector<int> c;
+            for (size_t k = 0; k < spots.size(); ++k) {
+                if (spots[k].user >= 0 || spots[k].zone != a.zone || spots[k].kind != "group") continue;
+                for (const Place& o : spots)
+                    if (o.user >= 0 && o.kind == "group" && glm::distance(o.p, spots[k].p) < 2.5f) { c.push_back(int(k)); break; }
+            }
+            i = c.empty() ? free_in_zone(spots, kind, a.zone) : c[size_t(zrng.pick(int(c.size())))];
+        } else i = free_in_zone(spots, kind, a.zone);
+        if (i < 0) return false;
+        spots[size_t(i)].user = int(&a - agents.data()); a.spot = i;
+        plan_stay(a, plan, false, i, zrng.range(t0, t1), Pose::Stand);
+        spot_manner(spots[size_t(i)], plan.back(), zrng);
+        return true;
+    }
+    bool zone_sit(Agent& a, std::vector<Task>& plan, int seat, float t0, float t1) {
+        if (seat < 0 || seats[size_t(seat)].user >= 0) return false;
+        seats[size_t(seat)].user = int(&a - agents.data()); a.seat = seat;
+        plan_stay(a, plan, true, seat, zrng.range(t0, t1), Pose::Sit);
+        return true;
+    }
+    void think_zone(Agent& a, std::vector<Task>& plan) {
+        const float r = zrng.uni();
+        switch (a.role) {
+        case Desk: {
+            const bool meeting = a.home_seat >= 0 && seats[size_t(a.home_seat)].kind == "meet";
+            if (r < (meeting ? 0.86f : 0.66f) && zone_sit(a, plan, a.home_seat, 50.0f, 190.0f)) break;
+            if (r < 0.80f && zone_stand(a, plan, "point", 14.0f, 36.0f)) break;
+            if (r < 0.88f && zone_stand(a, plan, "coffee", 20.0f, 55.0f)) break;
+            if (r < 0.93f && zone_stand(a, plan, "window", 15.0f, 40.0f)) break;
+            if (r < 0.97f && zone_stand(a, plan, "wall", 12.0f, 30.0f)) break;
+            if (zone_sit(a, plan, free_in_zone(seats, "sofa", a.zone), 40.0f, 120.0f)) break;
+            zone_sit(a, plan, a.home_seat, 50.0f, 190.0f);
+            break; }
+        case Floater: {
+            static const char* kinds[6] = { "rail", "window", "coffee", "wall", "terrace", "point" };
+            for (int tries = 0; tries < 4 && plan.empty(); ++tries) zone_stand(a, plan, kinds[zrng.pick(6)], 7.0f, 20.0f);
+            break; }
+        case Visitor:
+            if (r < 0.50f && zone_stand(a, plan, "group", 50.0f, 160.0f)) break;
+            if (r < 0.82f && zone_stand(a, plan, "watch", 30.0f, 100.0f)) break;
+            if (zone_stand(a, plan, "edge", 30.0f, 90.0f)) break;
+            zone_stand(a, plan, "group", 50.0f, 160.0f);
+            break;
+        case Crew:
+            if (r < 0.14f && zone_stand(a, plan, "group", 20.0f, 50.0f)) break;
+            zone_stand(a, plan, "tech", 12.0f, 34.0f);
+            break;
+        default: break;
+        }
+        if (plan.empty()) { Task st; st.type = Stand; st.p = a.pos; st.yaw = a.yaw; st.time = zrng.range(3.0f, 8.0f); plan.push_back(st); }
+    }
+    // Somebody of an added site at the place it begins on (when its site wakes, and when
+    // somebody new takes the place of one who was shot).
+    void zone_start(Agent& a) {
+        const int me = int(&a - agents.data());
+        release(a);
+        a.tasks.clear(); a.route.clear(); a.act = 0; a.act_t = 0.0f; a.hidden = false; a.asleep = false; a.gone = 0.0f;
+        a.speed = a.walk_v = 0.0f; a.stall_t = 0.0f; a.stall_d = 1e9f; a.style = 0; a.pose = Pose::Stand; a.from = glm::vec3(0.0f);
+        if (a.home_seat >= 0 && seats[size_t(a.home_seat)].user < 0) {
+            const Place& s = seats[size_t(a.home_seat)];
+            seats[size_t(a.home_seat)].user = me; a.seat = a.home_seat;
+            a.pos = s.p; a.yaw = s.yaw; a.pose = Pose::Sit; a.at_node = s.node;
+            Task st; st.type = Sit; st.a = a.home_seat; st.p = s.p; st.yaw = s.yaw; st.time = zrng.range(15.0f, 190.0f);
+            a.tasks.push_back(st);
+        } else if (a.home_spot >= 0 && spots[size_t(a.home_spot)].user < 0) {
+            const Place& s = spots[size_t(a.home_spot)];
+            spots[size_t(a.home_spot)].user = me; a.spot = a.home_spot;
+            a.pos = s.p; a.yaw = s.yaw; a.at_node = s.node;
+            Task st; st.type = Stand; st.a = a.home_spot; st.p = s.p; st.yaw = s.yaw; st.time = zrng.range(10.0f, 120.0f);
+            spot_manner(s, st, zrng);
+            if (st.pose == Pose::Work) st.time = zrng.range(6.0f, 30.0f);
+            a.tasks.push_back(st);
+        } else {
+            std::vector<int> c;
+            for (size_t i = 0; i < nodes.size(); ++i) if (nodes[i].zone == a.zone) c.push_back(int(i));
+            if (!c.empty()) { a.at_node = c[size_t(zrng.pick(int(c.size())))]; a.pos = nodes[size_t(a.at_node)].p; }
+        }
+    }
+    // A site's people are there while a player is within reach of it (430 m from its edge; they
+    // go when the last player is 560 m away - bodies are drawn to 150 m, so nobody sees either).
+    void wake_zones() {
+        for (size_t z = 0; z < zones.size(); ++z) {
+            Zone& zn = zones[z];
+            bool near_ = false;
+            for (const glm::vec3& e : eyes)
+                if (glm::distance(glm::vec2(e.x, e.z), glm::vec2(zn.centre.x, zn.centre.z)) < zn.radius + (zn.awake ? 560.0f : 430.0f)) { near_ = true; break; }
+            if (near_ == zn.awake) continue;
+            zn.awake = near_;
+            for (Agent& a : agents) {
+                if (a.kind != Kind::Person || int(a.zone) != int(z) + 1) continue;
+                if (near_) zone_start(a);
+                else { release(a); a.tasks.clear(); a.route.clear(); a.act = 0; a.hidden = true; a.asleep = true; a.speed = a.walk_v = 0.0f; a.pose = Pose::Stand; }
+            }
+        }
     }
     void set_plan(Agent& a, std::vector<Task>& plan) {
         a.tasks.assign(plan.rbegin(), plan.rend());
@@ -282,7 +477,9 @@ struct World::Impl {
     void think(Agent& a) {
         std::vector<Task> plan;
         release(a);
+        if (a.zone) { think_zone(a, plan); set_plan(a, plan); return; }      // (the pavilion's and the pad's people: THE ADDED SITES)
         switch (a.role) {
+        default: break;
         case Cashier:
             if (hold_spot(a, "cashier")) plan_stay(a, plan, false, a.spot, rng.range(120.0f, 400.0f), Pose::Work);
             break;
@@ -312,7 +509,7 @@ struct World::Impl {
             } else if (hold_seat(a, rng.chance(0.5f) ? "picnic" : "bench")) {
                 plan_stay(a, plan, true, a.seat, rng.range(40.0f, 160.0f), Pose::Sit);
             } else {
-                Task go; go.type = GoNode; go.a = rng.pick(int(nodes.size())); plan.push_back(go);
+                Task go; go.type = GoNode; go.a = rng.pick(home_nodes); plan.push_back(go);
                 Task st; st.type = Stand; st.p = nodes[size_t(go.a)].p; st.yaw = rng.range(-kPi, kPi); st.time = rng.range(5.0f, 20.0f); plan.push_back(st);
             }
             break; }
@@ -515,7 +712,7 @@ struct World::Impl {
         a.kind = k; a.look = look;
         if (k == Kind::Person) {
             a.role = Local;
-            if (!nodes.empty()) { const int nd = rng.pick(int(nodes.size())); a.pos = nodes[size_t(nd)].p; a.at_node = nd; }
+            if (home_nodes > 0) { const int nd = rng.pick(home_nodes); a.pos = nodes[size_t(nd)].p; a.at_node = nd; }
         } else {
             a.cs = Cruise; a.pose = Pose::Drive; a.dir = rng.chance(0.5f) ? 1 : -1;
             a.s = rng.range(0.0f, std::max(road.length, 1.0f)); make_driver(a, police ? int(Police) : speeder ? int(Speeder) : -1); a.speed = a.v_want;
@@ -530,6 +727,12 @@ struct World::Impl {
         }
     }
     void step_person(Agent& a, float dt) {
+        if (a.asleep) return;                  // (of an added site nobody is near: not there)
+        if (a.zone && a.gone > 0.0f) {         // (shot: after a while somebody new is at that place)
+            a.gone -= dt;
+            if (a.gone <= 0.0f) { a.look = uint8_t(zrng.pick(256)); a.pos.y += 20000.0f; zone_start(a); }
+            return;
+        }
         if (a.gone > 0.0f) { a.gone -= dt; if (a.gone <= 0.0f) respawn(a); return; }
         if (a.leave > 0.0f) {                  // (put out of a car out on the road - put_out: there is nowhere to walk to)
             a.leave -= dt; a.pose = Pose::Stand; a.speed = 0.0f;
@@ -580,7 +783,9 @@ struct World::Impl {
             // (how it sits: at the bar on a stool; at a table eating or talking; plain on a bench)
             if (a.pose == Pose::Sit && t.a >= 0) {
                 const std::string& k = seats[size_t(t.a)].kind;
-                a.style = k == "stool" ? 1 : (k == "booth" || k == "chair" || k == "picnic") ? uint8_t(2 + ((a.look >> 3) & 1)) : 0;
+                a.style = k == "stool" ? 1 : (k == "booth" || k == "chair" || k == "picnic") ? uint8_t(2 + ((a.look >> 3) & 1)) : k == "desk" ? 4 : k == "meet" ? 3 : 0;
+                // (at a desk: where its keyboard is - the renderer puts the hands there)
+                if (a.act == 0 && seats[size_t(t.a)].has_aim) a.aim = seats[size_t(t.a)].aim;
             }
             if (a.act == uint8_t(Act::StandUp)) {
                 a.pose = Pose::Stand; a.pos = a.from; a.yaw = t.yaw; a.speed = 0.0f;
@@ -599,7 +804,7 @@ struct World::Impl {
                 // (where it gets up to: where it sat down from - or, if it began the world seated, in front of the seat)
                 if (t.a >= 0 && glm::distance(a.from, t.p) > 1.6f) {
                     const glm::vec3 np = nodes[size_t(std::max(seats[size_t(t.a)].node, 0))].p;
-                    a.from = glm::mix(np, seats[size_t(t.a)].p, 0.55f); a.from.y = np.y;
+                    a.from = seat_stand_point(t.a); a.from.y = np.y;
                 }
                 if (t.a >= 0) a.at_node = seats[size_t(t.a)].node;
                 a.act = uint8_t(Act::StandUp); a.act_t = 0.0f; a.aim = t.p;
@@ -614,6 +819,7 @@ struct World::Impl {
             break; }
         case Stand: {
             a.pose = t.pose; a.style = t.style;
+            if (t.has_aim) a.aim = t.aim;      // (what is pointed or looked at from here)
             turn_to(a, t.yaw, dt);
             a.walk_v = 0.0f; a.speed = 0.0f;
             t.time -= dt;
@@ -1313,6 +1519,7 @@ struct World::Impl {
     void step() {
         build_things();
         for (Agent& a : agents) if (a.kind == Kind::Car) step_car(a, kStep);
+        wake_zones();
         for (Agent& a : agents) if (a.kind == Kind::Person) step_person(a, kStep);
         // (and once more when everybody has moved: somebody who got up from a seat, or out of a
         //  car, stands where a walker was passing - the walker steps clear)
@@ -1339,6 +1546,25 @@ bool World::load_site_text(const std::string& text, glm::vec3 origin) {
     d_->link_road();
     return ok;
 }
+bool World::add_site(const std::string& nav_file, glm::vec3 origin) {
+    std::ifstream f(nav_file);
+    if (!f || d_->zones.size() >= 250) return false;
+    const glm::vec3 keep = d_->origin;
+    d_->origin = origin;
+    const bool ok = d_->parse(f, uint8_t(d_->zones.size() + 1));
+    d_->origin = keep;
+    return ok;
+}
+bool World::add_site_text(const std::string& text, glm::vec3 origin) {
+    std::istringstream f(text);
+    if (d_->zones.size() >= 250) return false;
+    const glm::vec3 keep = d_->origin;
+    d_->origin = origin;
+    const bool ok = d_->parse(f, uint8_t(d_->zones.size() + 1));
+    d_->origin = keep;
+    return ok;
+}
+void World::set_eyes(const std::vector<glm::vec3>& at) { d_->eyes = at; }
 void World::set_road(Road road) { d_->road = std::move(road); d_->link_road(); }
 
 void World::populate(uint32_t seed, int traffic) {
@@ -1373,7 +1599,7 @@ void World::populate(uint32_t seed, int traffic) {
                 Task st; st.type = Sit; st.a = s; st.p = a->pos; st.yaw = a->yaw; st.time = w.rng.range(20.0f, 200.0f);
                 a->tasks.push_back(st);
             } else if (!w.nodes.empty()) {
-                const int n = w.rng.pick(int(w.nodes.size()));
+                const int n = w.rng.pick(w.home_nodes);
                 a->pos = w.nodes[size_t(n)].p; a->at_node = n;
             }
         }
@@ -1430,6 +1656,41 @@ void World::populate(uint32_t seed, int traffic) {
                 glm::vec3 dir; poly_at(w.run_path, a->run_s, dir);
                 a->yaw = yaw_of(glm::vec2(dir.x, dir.z) * float(a->run_dir));
             }
+    }
+    // ---- the people of the added sites (THE ADDED SITES): made last, so that everybody else
+    //      has the number he had without them; asleep until a player comes near (wake_zones).
+    w.zrng.s = (seed ? seed : 1u) * 2654435761u + 0x51ED270Bu; if (!w.zrng.s) w.zrng.s = 1u;
+    for (Impl::Zone& z : w.zones) z.awake = false;
+    for (size_t zi = 0; zi < w.zones.size(); ++zi) {
+        const uint8_t zone = uint8_t(zi + 1);
+        auto of_kind = [&](std::vector<Place>& v, const char* kind) {
+            std::vector<int> c;
+            for (size_t i = 0; i < v.size(); ++i) if (v[i].zone == zone && v[i].kind == kind) c.push_back(int(i));
+            return c;
+        };
+        auto shuffled = [&](std::vector<int> c) {
+            for (size_t i = c.size(); i > 1; --i) std::swap(c[i - 1], c[size_t(w.zrng.pick(int(i)))]);
+            return c;
+        };
+        auto add = [&](Role role, int seat, int spot) {
+            if (int(w.agents.size()) >= kMaxAgents) return;
+            Agent a; a.kind = Kind::Person; a.role = role; a.look = uint8_t(w.zrng.pick(256));
+            a.zone = zone; a.home_seat = seat; a.home_spot = spot; a.hidden = true; a.asleep = true;
+            a.pos = w.zones[zi].centre;
+            w.agents.push_back(a);
+        };
+        // at the desks: rather more than half of them taken; three round the meeting table; two on the way
+        const std::vector<int> desks = shuffled(of_kind(w.seats, "desk")), meet = shuffled(of_kind(w.seats, "meet"));
+        for (size_t i = 0; i < desks.size() && i < (desks.size() * 11 + 10) / 20; ++i) add(Desk, desks[i], -1);
+        for (size_t i = 0; i < meet.size() && i < 3; ++i) add(Desk, meet[i], -1);
+        if (!desks.empty()) for (int i = 0; i < 2; ++i) add(Floater, -1, -1);
+        // outside: every group but one, most of those who look up, half of the apron's edge, half of the things to see to
+        const std::vector<int> group = of_kind(w.spots, "group"), watch = shuffled(of_kind(w.spots, "watch")),
+                               edge = shuffled(of_kind(w.spots, "edge")), tech = shuffled(of_kind(w.spots, "tech"));
+        for (size_t i = 0; i < group.size(); ++i) if (i / 3 != 2) add(Visitor, -1, group[i]);
+        for (size_t i = 0; i < watch.size() && i < (watch.size() * 2 + 2) / 3; ++i) add(Visitor, -1, watch[i]);
+        for (size_t i = 0; i < edge.size() && i < edge.size() / 2; ++i) add(Visitor, -1, edge[i]);
+        for (size_t i = 0; i < tech.size() && i < tech.size() / 2; ++i) add(Crew, -1, tech[i]);
     }
     w.snapshot(w.cur); w.prev = w.cur;
 }
@@ -1634,6 +1895,7 @@ World::Census World::census() const {
         }
     }
     for (const Agent& a : d_->agents) if (a.kind == Kind::Car && (a.cs == OnPath || a.cs == Waiting || a.cs == Parked)) { ++c.cars_at_site; c.longest_visit = std::max(c.longest_visit, a.visit); }
+    for (const Agent& a : d_->agents) if (a.kind == Kind::Person && a.asleep) { ++c.asleep; --c.hidden; }
     return c;
 }
 

@@ -56,21 +56,33 @@ constexpr float kSendLevel    = 0.50f;      // how loud the reverb is beside the
 constexpr float kSendPower    = 0.80f;      // 1 = the reverb falls as the direct sound does; less = a far source is more echo than itself
 
 // What kind of source: how far it carries and how bright it is from beside it.
+// The last three are for a source that is made to carry (a siren, a horn): it is heard further
+// than an engine, loses less to ground and air a metre, and keeps its highs longer. The window
+// to nothing begins at two thirds of hear_m (as kFadeFrom is of kHear).
 struct Shape {
     float ref_m  = 6.0f;        // full loudness within about this distance, then the inverse of the distance
     float top_hz = 4500.0f;     // its low-pass heard from beside it (the -3 dB point)
+    float hear_m = kHear;       // beyond this it has no voice (m)
+    float excess_db_m = kExcessDbPerM;      // ground and air, on top of the distance law (dB a metre)
+    float air_half_m  = kAirHalfM;          // the cut-off is halved at this distance (m)
 };
+// A SIREN: made to be heard. Beside it as loud as it is; at 300 m clearly there (-30 dB), at
+// 600 m faint (-42 dB), at 800 m almost gone (-52 dB), at 1 km nothing. Its tone (650 - 1500 Hz
+// and overtones) comes through the air's low-pass to the end: 2.6 kHz at 300 m, 1 kHz at 1 km.
+constexpr Shape kSirenShape{ 20.0f, 9000.0f, 1000.0f, 0.02f, 120.0f };
 
 inline float smooth01(float t) { t = std::clamp(t, 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
 
-inline float gain(float d, float ref_m) {
+inline float gain(float d, const Shape& s) {
     d = (std::max)(d, 0.0f);
-    const float window = 1.0f - smooth01((d - kFadeFrom) / (kHear - kFadeFrom));
-    return ref_m / std::sqrt(ref_m * ref_m + d * d) * std::pow(10.0f, -kExcessDbPerM * d / 20.0f) * window;
+    const float from = s.hear_m * (kFadeFrom / kHear);
+    const float window = 1.0f - smooth01((d - from) / (std::max)(s.hear_m - from, 1.0f));
+    return s.ref_m / std::sqrt(s.ref_m * s.ref_m + d * d) * std::pow(10.0f, -s.excess_db_m * d / 20.0f) * window;
 }
+inline float gain(float d, float ref_m) { Shape s; s.ref_m = ref_m; return gain(d, s); }
 
-inline float cutoff_hz(float d, float top_hz) {
-    return (std::max)(top_hz / (1.0f + (std::max)(d, 0.0f) / kAirHalfM), kMinCutoffHz);
+inline float cutoff_hz(float d, float top_hz, float air_half_m = kAirHalfM) {
+    return (std::max)(top_hz / (1.0f + (std::max)(d, 0.0f) / air_half_m), kMinCutoffHz);
 }
 
 // to_listener: the unit vector from the source to the listener. Speeds in m/s along it:

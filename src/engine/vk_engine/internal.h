@@ -414,7 +414,10 @@ struct SceneUBO {
     glm::vec4  wm_cache;         // the world's slow fields as textures, near and far (wm_cache.cpp; shaders: rm_world_vr)
     glm::vec4  wm_cache1;
     glm::vec4  car_press[4];     // cars pressing the grass down (scene_ubo.glsl car_press)
+    glm::vec4  flower_field[4];  // the flowering meadow's fields (flower_fields_; scene_ubo.glsl flower_field)
+    glm::vec4  hw_jn[4];         // where a side road leaves a highway (highway_field.cpp hw_junction_scene; scene_ubo.glsl hw_jn)
 };
+const glm::vec4* hw_junction_scene();      // (highway_field.cpp: four vec4, in the chart's coordinates)
 
 // ---- KHR ray tracing entry points ----
 //

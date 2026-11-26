@@ -14,7 +14,7 @@
 
 namespace vibe::net {
 
-constexpr uint8_t  kProtocolVersion = 9;       // 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in. 5: the NPC world (kMsgNpc). 6: its wire format 4 (styles, runners). 7: shots at NPCs and their cars taken, as events. 8: NpcHit may name somebody who sits in a car, or a car (its driver); a car with people in it can be taken. 9: the NPC world's wire format 5 (a car's speed in thirds of a m/s, its kind and siren in the style bits), NpcCarPush
+constexpr uint8_t  kProtocolVersion = 10;      // 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in. 5: the NPC world (kMsgNpc). 6: its wire format 4 (styles, runners). 7: shots at NPCs and their cars taken, as events. 8: NpcHit may name somebody who sits in a car, or a car (its driver); a car with people in it can be taken. 9: the NPC world's wire format 5 (a car's speed in thirds of a m/s, its kind and siren in the style bits), NpcCarPush. 10: the NPC world may have 160 agents (the same 27 bytes each), and people have styles 4 (sitting) and 5..7 (standing)
 constexpr uint32_t kInterpDelayMs = 100;       // remote players are shown at least this far in the past
 constexpr uint32_t kMaxInterpDelayMs = 500;    // ... and at most this far, however slow the link
 constexpr uint32_t kMaxExtrapolateMs = 250;    // nothing newer: carry on along the last velocity this long at most

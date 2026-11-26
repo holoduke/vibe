@@ -46,7 +46,7 @@ void VulkanEngine::init_descriptors() {
     // Descriptor pool: 1 UBO + 1 AS + 2 SSBO (materials, prev_transforms) +
     // 2 sampler arrays (albedo[N], normal[N]).
     VkDescriptorPoolSize sizes[] = {
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 },             // the scene block; the regions' table (49)
         { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 },
         // 2 originals (materials, prev_transforms) + 2 ReSTIR reservoirs
         // + 2 voxel SSBOs (brick atlas + shape directory, bindings 24/25).
@@ -74,7 +74,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 33 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
+            kTextureCount * 2 + 34 + kSpomMaterialCount },      // + the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -94,7 +94,7 @@ void VulkanEngine::init_descriptors() {
     //              terrain_raymarch_scale < 1.
     //          15=ReSTIR reservoir SSBO (read prev), 16=write cur.
     //              Owned by restir.cpp; cube.frag's GI loop reads/writes.
-    VkDescriptorSetLayoutBinding bindings[49]{};
+    VkDescriptorSetLayoutBinding bindings[51]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -383,10 +383,18 @@ void VulkanEngine::init_descriptors() {
 
     // Bindings 46..48: the baked ground texture's three pictures, arrays of levels (terrain_bake.cpp).
     for (int b = 46; b <= 48; ++b) { bindings[b] = bindings[31]; bindings[b].binding = uint32_t(b); }
+    // Bindings 49, 50: the regions' height tiles - the table that says which tile lies where,
+    // and the tiles, an array texture (regions.cpp; shaders/region_tiles.glsl). Read by every
+    // shader that works out the ground's height: the terrain's passes and the patch vertex shader.
+    bindings[49] = bindings[0];
+    bindings[49].binding = 49;
+    bindings[49].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[50] = bindings[39];
+    bindings[50].binding = 50;
     VkDescriptorSetLayoutCreateInfo lci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr, .flags = 0,
-        .bindingCount = 49, .pBindings = bindings,
+        .bindingCount = 51, .pBindings = bindings,
     };
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr,
                                          &scene_desc_set_layout_),
@@ -1019,6 +1027,7 @@ void VulkanEngine::update_scene_ubo() {
     data.site_ground = site_uniform(&data.site_shape);       // (sites.cpp)
     data.hw_info = hw_info_;
     data.hw_bbox = hw_bbox_;
+    for (int i = 0; i < 4; ++i) data.hw_jn[i] = hw_info_.z > 0.5f ? hw_junction_scene()[i] : glm::vec4(0.0f);
     {   // home's flat formula from this chart, where it applies (engine/globe.h Ring)
         const globe::Ring& rg = globe::ring_now();
         data.ring_info = glm::vec4(rg.on ? 1.0f : 0.0f, float(rg.wp0.x), float(rg.wp0.y), float(globe::current().org.y));     // (.w: the chart origin's local z; its x is globe_info.y)
@@ -1256,6 +1265,12 @@ void VulkanEngine::update_scene_ubo() {
     VmaAllocationInfo ai{};
     vmaGetAllocationInfo(allocator_, scene_ubo_alloc_, &ai);
     wm_cache_plan(data);
+    {   // The meadow's fields, for the ground's far colour (terrain_rm_main_light.glsl): where the
+        // placement puts the meadow (plant_gpu.cpp: home's chart only). VIBE_NO_FIELD_TINT=1: none.
+        static const bool no_tint = std::getenv("VIBE_NO_MEADOW") != nullptr || std::getenv("VIBE_NO_FIELD_TINT") != nullptr;
+        for (size_t i = 0; i < 4; ++i)
+            data.flower_field[i] = !no_tint && globe::current().home && i < flower_fields_.size() ? flower_fields_[i] : glm::vec4(0.0f);
+    }
     terrain_bake_signature(data);       // (what the baked ground texture depends on: terrain_bake.cpp)
     upload(scene_ubo_buffer_, 0, &data, sizeof(data), ai.pMappedData);   // staged while a frame is in flight
     // Defensive flush — no-op on coherent host memory but required by spec

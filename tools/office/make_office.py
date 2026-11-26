@@ -32,6 +32,8 @@ G = {}          # material -> [(p, n, uv)] three per triangle
 COL = []        # (lo, hi) boxes the player collides with
 LIGHTS = []     # points
 RNG = random.Random(7)         # the small disorder of a used room: the same every run
+CHAIRS = []     # (x, y, floor z, face) of every task chair: nav() makes the seats from them
+KEYBOARDS = []  # the middle of every keyboard's top
 
 
 def planar_uv(p, n):
@@ -179,6 +181,7 @@ def chair(x, y, face, g_seat='o_fabric', zf=None):
     """A task chair at (x, y), facing `face` (radians, 0 = +Y): five-star base on casters, gas
     lift, a shaped seat, a framed back on a spine, armrests."""
     z = F if zf is None else zf
+    CHAIRS.append((x, y, z, face))
     for k in range(5):
         a = face + TAU * k / 5 + 0.3
         ex, ey = x + 0.30 * math.cos(a), y + 0.30 * math.sin(a)
@@ -207,6 +210,7 @@ def monitor(x, y, face, zf=None, extras=True):
     a, b, c, d = opt(x, y, face, -0.298, 0.016, z + 0.142), opt(x, y, face, 0.298, 0.016, z + 0.142), opt(x, y, face, 0.298, 0.016, z + 0.488), opt(x, y, face, -0.298, 0.016, z + 0.488)
     screen(b, a, d, c)
     if extras:
+        KEYBOARDS.append(opt(x, y, face, 0.0, 0.305, z + 0.014))
         obox('o_black', x, y, face, (-0.21, 0.24, z), (0.21, 0.37, z + 0.014))             # keyboard
         obox('o_white', x, y, face, (0.27, 0.26, z), (0.33, 0.36, z + 0.022))              # mouse
 
@@ -239,8 +243,9 @@ def bench_desk(xa, xb, y, seats):
         monitor(x, y - 0.26, math.pi); monitor(x, y + 0.26, 0.0)
         if RNG.random() < 0.55: mug(x + 0.42, y - 0.5 - 0.1 * RNG.random(), F + 0.75, 'o_orange' if RNG.random() < 0.3 else 'o_white')
         if RNG.random() < 0.55: mug(x - 0.42, y + 0.5 + 0.1 * RNG.random(), F + 0.75)
-        chair(x + RNG.uniform(-0.12, 0.12), y - 1.28 - RNG.uniform(0.0, 0.25), RNG.uniform(-0.35, 0.35), 'o_orange' if i % 4 == 1 else 'o_fabric')
-        chair(x + RNG.uniform(-0.12, 0.12), y + 1.28 + RNG.uniform(0.0, 0.25), math.pi + RNG.uniform(-0.35, 0.35), 'o_orange' if i % 4 == 2 else 'o_fabric')
+        # (a chair somebody works on: near enough to the desk for the hands to reach the keyboard)
+        chair(x + RNG.uniform(-0.12, 0.12), y - 1.12 - 0.4 * RNG.uniform(0.0, 0.25), RNG.uniform(-0.35, 0.35), 'o_orange' if i % 4 == 1 else 'o_fabric')
+        chair(x + RNG.uniform(-0.12, 0.12), y + 1.12 + 0.4 * RNG.uniform(0.0, 0.25), math.pi + RNG.uniform(-0.35, 0.35), 'o_orange' if i % 4 == 2 else 'o_fabric')
 
 
 def leaf(g, base, yaw, pitch, length, width):
@@ -564,7 +569,7 @@ def build():
     # reception: a concrete and timber desk facing the door
     box(CONC, (5.2, -4.9, F), (5.6, -2.3, F + 1.05)); box(WOOD, (5.1, -5.0, F + 1.05), (6.3, -2.2, F + 1.09)); box('o_white', (5.6, -4.9, F), (6.3, -2.3, F + 0.74))
     collide((5.1, -5.0, F), (6.3, -2.2, F + 1.1))
-    monitor(5.92, -3.6, -math.pi * 0.5, F + 0.74); chair(6.95, -3.55, math.pi * 0.5 + 0.2); mug(5.9, -2.9, F + 0.74)
+    monitor(5.92, -3.6, -math.pi * 0.5, F + 0.74); chair(6.82, -3.58, math.pi * 0.5 + 0.2); mug(5.9, -2.9, F + 0.74)
     # a model of the rocket on a plinth, by the entrance
     box(CONC, (-5.7, -6.3, F), (-4.7, -5.3, F + 0.5), True)
     cyl('o_white', (-5.2, -5.8, F + 0.56), (-5.2, -5.8, F + 2.5), 0.16, 20)
@@ -591,7 +596,7 @@ def build():
     for i in range(3):
         x = 5.7 + 1.3 * i
         monitor(x, 2.84, math.pi, MEZ + 0.75); monitor(x, 3.36, 0.0, MEZ + 0.75)
-        chair(x + RNG.uniform(-0.1, 0.1), 1.80, RNG.uniform(-0.3, 0.3), 'o_fabric', MEZ); chair(x + RNG.uniform(-0.1, 0.1), 4.42, math.pi + RNG.uniform(-0.3, 0.3), 'o_orange' if i == 1 else 'o_fabric', MEZ)
+        chair(x + RNG.uniform(-0.1, 0.1), 1.96, RNG.uniform(-0.3, 0.3), 'o_fabric', MEZ); chair(x + RNG.uniform(-0.1, 0.1), 4.24, math.pi + RNG.uniform(-0.3, 0.3), 'o_orange' if i == 1 else 'o_fabric', MEZ)
     pendant_bar(5.2, 8.8, 3.1, MEZ + 2.3, EAVE - 0.42)
     # shelving on the back wall, and two armchairs looking out over the hall
     for (sa, sb) in ((9.7, 11.72), (12.28, 14.3)):          # (two runs, either side of the frame's column)
@@ -649,8 +654,99 @@ def add_name():
         print('NAME: skipped (%s)' % e)
 
 
+# ------------------------------------------------------------------ for those who work here
+# office.nav, read by the NPC engine (src/npc: World::add_site) - the same format as the service
+# station's: where one can walk (node, link), sit (seat) and stand doing something (spot). A
+# seat or a spot may name a point after its yaw: what the hands or the eyes go to there (the
+# keyboard of that desk, the screen pointed at, the rocket).
+NAV = {'seat': [], 'spot': [], 'node': [], 'link': []}
+
+def nav():
+    def seat(kind, x, y, z, fx, fy, aim=None): NAV['seat'].append((kind, x, y, z, fx, fy, aim))
+    def spot(kind, x, y, z, fx, fy, aim=None): NAV['spot'].append((kind, x, y, z, fx, fy, aim))
+    def node(name, x, y, z=F): NAV['node'].append((name, x, y, z))
+    def link(*names):
+        for a, b in zip(names[:-1], names[1:]): NAV['link'].append((a, b))
+    ROCKET = (0.0, -86.0, 42.0)                 # the rocket on its mount, from here
+    # ---- the task chairs: at a desk with a keyboard (the person faces the keyboard, whichever
+    #      way the chair was left turned), or round the meeting table
+    desks = []
+    for (x, y, z, face) in CHAIRS:
+        kb = min(KEYBOARDS, key=lambda k: (k[0] - x) ** 2 + (k[1] - y) ** 2 + 4.0 * (k[2] - z - 0.76) ** 2)
+        d = math.hypot(kb[0] - x, kb[1] - y)
+        if d < 0.95 and abs(kb[2] - z - 0.76) < 0.1:
+            seat('desk', x, y, z + 0.495, (kb[0] - x) / d, (kb[1] - y) / d, kb)
+            desks.append((x, y, z, (kb[0] - x) / d, (kb[1] - y) / d, kb))
+        else:
+            seat('meet', x, y, z + 0.495, -math.sin(face), math.cos(face), (11.8, 4.0, F + 0.9))
+    # ---- beside some of them: where a colleague stands and points at that screen
+    for i in (1, 4, 9, 14, 19, 22, 25):
+        if i >= len(desks): continue
+        (x, y, z, fx, fy, kb) = desks[i]
+        side = 1.0 if i % 2 else -1.0
+        px, py = x + side * 0.62 * fy - 0.18 * fx, y - side * 0.62 * fx - 0.18 * fy
+        sx, sy = kb[0] + 0.32 * fx, kb[1] + 0.32 * fy
+        d = math.hypot(sx - px, sy - py)
+        spot('point', px, py, z, (sx - px) / d, (sy - py) / d, (sx, sy, kb[2] + 0.30))
+    # ---- the lounge's sofas, the two armchairs on the mezzanine
+    for x in (0.7, 1.9): seat('sofa', x, -3.02, F + 0.44, 0.0, -1.0)
+    for y in (-5.0, -4.0): seat('sofa', 3.96, y, F + 0.44, -1.0, 0.0)
+    for x in (11.0, 12.6): seat('sofa', x, 1.62, MEZ + 0.42, 0.0, -1.0)
+    # ---- standing: at the glass looking at the pad, in front of the mission wall, at the
+    #      kitchen island, at the mezzanine's rail
+    for x in (-15.3, -10.6, -7.6, 1.3, 10.6): spot('window', x, YS + 0.85, F, 0.0, -1.0, ROCKET)
+    for (x, sx) in ((-15.6, -14.9), (-13.4, -14.0), (-9.6, -9.0), (-7.4, -8.2)): spot('wall', x, 4.7, F, (sx - x) / 2.2, 0.98, (sx, YN - 0.2, F + 2.6))
+    for (x, fx) in ((4.9, 0.45), (5.9, -0.45), (6.9, -0.3)): spot('coffee', x, 4.95, F, fx, -0.9)
+    spot('coffee', 5.4, 2.45, F, 0.3, 0.95)
+    for x in (5.6, 7.9): spot('rail', x, 1.12, MEZ, 0.0, -1.0, (-9.0, -1.0, F + 1.0))
+    spot('rail', 3.62, 3.4, MEZ, -1.0, 0.0, (-11.0, 3.0, F + 2.5))
+    # ---- the ways: from the apron up the steps and in at the door; an aisle round the desks
+    #      and one between them; the lounge, reception, the kitchen, the meeting room; the stair
+    #      (its two ends are nodes, so a walker climbs along the line of the treads) and the
+    #      mezzanine.
+    node('o_gnd', -3.0, YS - 7.5, 0.0); node('o_steps', -3.0, YS - 5.7); node('o_ter', -3.0, YS - 3.7); node('o_door', -3.0, YS + 0.1); node('o_in', -3.0, -5.6)
+    link('o_gnd', 'o_steps', 'o_ter', 'o_door', 'o_in')
+    node('o_ter_w', -12.0, YS - 3.9); node('o_ter_e', 7.6, YS - 4.0); link('o_ter_w', 'o_ter', 'o_ter_e')
+    for x in (-9.5, 10.4): spot('terrace', x, YS - 5.0, F, 0.0, -1.0, ROCKET)
+    for (nm, y) in (('s', -5.6), ('c', -1.35), ('n', 3.5)):
+        for (k, x) in enumerate((-16.5, -13.7, -11.0, -8.3)): node('a_%s%d' % (nm, k), x, y if k else y + 0.1)
+        link('a_%s0' % nm, 'a_%s1' % nm, 'a_%s2' % nm, 'a_%s3' % nm)
+    node('a_se', -5.9, -4.7); node('a_e', -5.5, -1.35); node('a_ne', -5.5, 3.5); node('o_in2', -3.6, -4.6)
+    link('a_s3', 'a_se', 'a_e', 'a_ne'); link('a_c3', 'a_e'); link('a_n3', 'a_ne'); link('a_s0', 'a_c0', 'a_n0')
+    link('a_se', 'o_in2', 'o_in')
+    node('h_c', -3.0, -1.0); link('a_e', 'h_c', 'o_in')
+    node('l_w', -0.5, -3.78); node('l_c', 3.15, -3.78); link('o_in', 'l_w', 'l_c')
+    node('l_nw', -0.9, -1.95); node('l_ne', 4.8, -1.75); node('rc', 7.6, -2.6); link('h_c', 'l_nw', 'l_ne', 'rc')
+    node('k_w', 1.5, 2.2); node('k_s', 6.0, 2.2); node('k_nw', 3.45, 5.3); node('k_n', 5.9, 5.3)
+    link('h_c', 'k_w', 'k_s'); link('k_w', 'k_nw', 'k_n'); link('l_ne', 'k_s')
+    node('mt_d', 8.3, 1.85); node('mt_in', 9.55, 1.85); node('mt_s', 11.8, 1.95); node('mt_w', 9.55, 4.0); node('mt_n', 11.8, 6.1)
+    link('k_s', 'mt_d', 'mt_in', 'mt_s'); link('mt_in', 'mt_w', 'mt_n')
+    rise = (MEZ - F) / 18.0
+    node('st_b', -5.4, 5.9); node('st_0', -4.6, 5.9, F + 0.5 * rise); node('st_1', MEZ_X0, 5.9, MEZ + 0.5 * rise); node('m_top', 3.75, 5.85, MEZ)
+    link('a_ne', 'st_b', 'st_0', 'st_1', 'm_top')
+    node('m_n', 7.0, 5.35, MEZ); node('m_ne', 10.0, 5.35, MEZ); node('m_e', 9.75, 1.2, MEZ); node('m_s', 7.0, 1.2, MEZ); node('m_sw', 3.9, 1.3, MEZ); node('m_se', 11.8, 0.98, MEZ)
+    link('m_top', 'm_n', 'm_ne', 'm_e', 'm_s', 'm_sw', 'm_top'); link('m_e', 'm_se')
+
+
+def write_nav():
+    def yaw(fx, fy): return math.atan2(fx, fy)        # the game's yaw of a way of facing (0 = north, toward -z)
+    with open(os.path.join(OUT, 'office.nav'), 'w') as f:
+        f.write('# office: where people sit, stand and walk - game space (x east, y up, z south), from its origin.\n')
+        f.write('# seat / spot: kind, place, yaw, and for some the point the hands or the eyes go to there.\n')
+        for key in ('seat', 'spot'):
+            for (k, x, y, z, fx, fy, aim) in NAV[key]:
+                f.write('%s %s %.3f %.3f %.3f %.4f' % (key, k, x, z, -y, yaw(fx, fy)))
+                if aim: f.write(' %.3f %.3f %.3f' % (aim[0], aim[2], -aim[1]))
+                f.write('\n')
+        for (nm, x, y, z) in NAV['node']: f.write('node %s %.3f %.3f %.3f\n' % (nm, x, z, -y))
+        for (a, b) in NAV['link']: f.write('link %s %s\n' % (a, b))
+
+
 build()
 add_name()
+nav()
+write_nav()
+print('NAV', len(NAV['seat']), 'seats', len(NAV['spot']), 'spots', len(NAV['node']), 'nodes', len(CHAIRS), 'chairs', len(KEYBOARDS), 'keyboards')
 
 with open(os.path.join(OUT, 'office.mesh'), 'w') as f:
     for g, v in G.items():

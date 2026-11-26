@@ -439,8 +439,11 @@ void VulkanEngine::refresh_terrain_collision() {
     if (physics_) {
         const int W = terrain_data_.dim + 1;
         const int physics_samples = (W % 2 == 0) ? W : (W - 1);
+        // (home's heights, with the regions' height tiles that lie over home added: regions.cpp)
+        std::vector<float> with_regions;
+        const std::vector<float>& src_heights = regions_home_heights(with_regions);
         if (physics_samples == W) {
-            physics_->add_static_heightfield(terrain_data_.heights.data(),
+            physics_->add_static_heightfield(src_heights.data(),
                                              terrain_data_.dim,
                                              glm::vec2(terrain_data_.origin_x,
                                                         terrain_data_.origin_z),
@@ -452,7 +455,7 @@ void VulkanEngine::refresh_terrain_collision() {
                 std::memcpy(jolt_heights.data() +
                                 static_cast<size_t>(z) *
                                 static_cast<size_t>(physics_samples),
-                            terrain_data_.heights.data() +
+                            src_heights.data() +
                                 static_cast<size_t>(z) * static_cast<size_t>(W),
                             static_cast<size_t>(physics_samples) * sizeof(float));
             }
@@ -530,7 +533,7 @@ void VulkanEngine::refresh_terrain_blas() {
         hm.cell = terrain_data_.cell;
         hm.origin_x = terrain_data_.origin_x;
         hm.origin_z = terrain_data_.origin_z;
-        hm.heights = terrain_data_.heights;
+        { std::vector<float> with_regions; hm.heights = regions_home_heights(with_regions); }      // (+ the regions' tiles over home)
         // Rebuild the full-mesh vertex buffer in place by abusing the
         // chunk rebuild helper on a virtual "chunk" covering the whole
         // mesh.

@@ -170,6 +170,7 @@ void walk_node(const tinygltf::Model& model, int node_idx,
             if (prim.material >= 0 &&
                 static_cast<size_t>(prim.material) < model.materials.size()) {
                 const auto& mat = model.materials[prim.material];
+                p.material = mat.name;
                 if (mat.pbrMetallicRoughness.baseColorFactor.size() == 4) {
                     p.base_color = glm::vec4(
                         static_cast<float>(mat.pbrMetallicRoughness.baseColorFactor[0]),

@@ -151,7 +151,7 @@ bool tr_upscale() {
     // side that owns the pixel (bilinear weight >= 1/2, the same outline
     // the blend would give) and take depth AND colour from that side only.
     {
-        vec4 z4 = 0.05 / max(vec4(1.0000333) - d4, vec4(1e-7));   // view distance (near 0.05, far 1500)
+        vec4 z4 = 0.05 / max(vec4(1.0000016667) - d4, vec4(1e-7));   // view distance (near 0.05, far 1500)
         float zmin = min(min(z4.x, z4.y), min(z4.z, z4.w));
         float zmax = max(max(z4.x, z4.y), max(z4.z, z4.w));
         // A depth step, and not just a plane seen at a grazing angle: NDC
@@ -164,7 +164,7 @@ bool tr_upscale() {
         float dU = lrD(uv - vec2(0.0, lt_d.y));
         float dD = lrD(uv + vec2(0.0, lt_d.y));
         float curv = max(abs(dL + dR - 2.0 * lr_depth), abs(dU + dD - 2.0 * lr_depth));
-        bool  stepped = curv > 0.12 * (1.0000333 - lr_depth);
+        bool  stepped = curv > 0.12 * (1.0000016667 - lr_depth);
         if (stepped && zmax > zmin * 1.2 + 0.05) {
             vec2 fr = fract(uv * vec2(textureSize(u_lr_depth, 0)) - 0.5);
             // textureGather order: .x (0,1)  .y (1,1)  .z (1,0)  .w (0,0)

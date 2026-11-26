@@ -1,0 +1,135 @@
+# The launch site: where its ground crew and its visitors stand, work and walk - game space
+# (x east, y up, z south), from the pad's centre. Read by the NPC engine after the pavilion's
+# office.nav (src/npc: World::add_site); the last link joins the two.
+# The apron's top is 0.35 above the ground round it and ends 70 m out. The tower stands north of
+# the mount (z -19.5 .. -9.5), the tank farm south-west, the control house 88 m west, the
+# pavilion's steps 72 m north.
+# spot: kind, place, yaw (0 = toward -z, + turns toward +x), and what is looked at from there.
+#
+# ---- small groups that stand and talk (each a circle of three; which way each stands is worked
+#      out by the NPC engine: toward the circle's middle)
+spot group -18.75 0.35 -52.00 1.5708
+spot group -17.30 0.35 -52.70 -1.1345
+spot group -17.45 0.35 -51.15 -2.2689
+spot group 29.30 0.35 -30.00 1.5708
+spot group 30.75 0.35 -30.65 -1.1345
+spot group 30.60 0.35 -29.20 -2.2689
+spot group -40.70 0.35 10.00 1.5708
+spot group -39.25 0.35 9.35 -1.1345
+spot group -39.40 0.35 10.80 -2.2689
+spot group 5.30 0.00 -73.40 1.5708
+spot group 6.75 0.00 -74.05 -1.1345
+spot group 6.60 0.00 -72.60 -2.2689
+spot group 11.25 0.35 -48.00 0
+spot group 12.70 0.35 -48.70 0
+spot group 12.55 0.35 -47.15 0
+spot group -8.75 0.35 -30.00 0
+spot group -7.30 0.35 -30.70 0
+spot group -7.45 0.35 -29.15 0
+spot group -28.75 0.35 28.00 0
+spot group -27.30 0.35 27.30 0
+spot group -27.45 0.35 28.85 0
+# ---- people who look up at the rocket
+spot watch 22.00 0.35 -58.00 2.7780 0.0 46.0 0.0
+spot watch 23.60 0.35 -57.10 2.7493 0.0 46.0 0.0
+spot watch -30.00 0.35 -60.00 -2.6779 0.0 46.0 0.0
+spot watch 48.00 0.35 -20.00 -1.9656 0.0 46.0 0.0
+spot watch 49.20 0.35 -17.80 -1.9180 0.0 46.0 0.0
+spot watch -12.00 0.35 -66.00 -2.9617 0.0 46.0 0.0
+spot watch 58.00 0.35 30.00 -1.0934 0.0 46.0 0.0
+spot watch 6.00 0.35 -40.00 0 0.0 46.0 0.0
+spot watch 7.60 0.35 -39.20 0 0.0 46.0 0.0
+spot watch -22.00 0.35 -38.00 0 0.0 46.0 0.0
+spot watch 35.00 0.35 -45.00 0 0.0 46.0 0.0
+# ---- on the apron's edge
+spot edge 40.00 0.35 -68.60 2.6100 0.0 30.0 0.0
+spot edge 41.60 0.35 -68.70 2.5900 0.0 30.0 0.0
+spot edge -25.00 0.35 -68.60 -2.7900 0.0 30.0 0.0
+spot edge 68.60 0.35 5.00 -1.6400 0.0 30.0 0.0
+spot edge 68.70 0.35 6.70 -1.6700 0.0 30.0 0.0
+spot edge -68.60 0.35 -30.00 1.9800 0.0 30.0 0.0
+spot edge 12.00 0.35 -68.70 0 0.0 30.0 0.0
+spot edge -45.00 0.35 -68.60 0 0.0 30.0 0.0
+# ---- where a technician has something to do: the tanks, the pump house, the tower's foot,
+#      the mount, the control house's door
+spot tech -49.80 0.35 47.85 3.1416
+spot tech -33.40 0.35 47.85 3.1416
+spot tech -52.00 0.35 34.90 3.1416
+spot tech -32.00 0.35 34.90 3.1416
+spot tech -61.10 0.35 44.00 -1.5708
+spot tech -5.95 0.35 -14.50 1.5708
+spot tech 5.95 0.35 -14.50 -1.5708
+spot tech 0.00 0.35 -20.45 3.1416
+spot tech 13.40 0.35 7.80 -1.0439
+spot tech -90.00 0.00 -8.70 0.0
+spot tech -41.60 0.35 47.85 3.1416
+spot tech -57.90 0.35 47.85 3.1416
+spot tech -13.40 0.35 7.80 1.0439
+spot tech 0.00 0.35 15.60 0.0
+# ---- the ways. Round the mount (never nearer than 14 m), round the tower, down the lane
+#      between the tanks, out to the control house, north to the pavilion's steps.
+node p_sw -14.0 0.35 18.0
+node p_s 0.0 0.35 22.0
+node p_se 16.0 0.35 14.0
+node p_e 20.0 0.35 -4.0
+node p_te 9.0 0.35 -14.5
+node p_ne 9.0 0.35 -23.0
+node p_tn 0.0 0.35 -23.0
+node p_nw -9.0 0.35 -23.0
+node p_tw -9.0 0.35 -14.5
+node p_w -18.0 0.35 -6.0
+link p_sw p_s
+link p_s p_se
+link p_se p_e
+link p_e p_te
+link p_te p_ne
+link p_ne p_tn
+link p_tn p_nw
+link p_nw p_tw
+link p_tw p_w
+link p_w p_sw
+node p_tl_e -20.0 0.35 44.5
+node p_tl_m -41.6 0.35 44.5
+node p_tl_w -58.0 0.35 44.5
+node p_ht -42.0 0.35 33.6
+node p_ht_e -21.0 0.35 33.6
+link p_sw p_tl_e
+link p_tl_e p_tl_m
+link p_tl_m p_tl_w
+link p_sw p_ht_e
+link p_ht_e p_ht
+link p_ht_e p_tl_e
+node p_n1 -3.0 0.35 -45.0
+node p_n2 -3.0 0.35 -69.4
+link p_tn p_n1
+link p_n1 p_n2
+node p_o_n 22.0 0.35 -52.0
+node p_o_ne 46.0 0.35 -22.0
+node p_o_e 62.0 0.35 18.0
+node p_o_nw -26.0 0.35 -57.0
+node p_o_x 40.0 0.35 -62.0
+link p_n1 p_o_n
+link p_o_n p_o_ne
+link p_o_ne p_e
+link p_o_ne p_o_e
+link p_o_e p_se
+link p_n1 p_o_nw
+link p_o_n p_o_x
+node p_w1 -40.0 0.35 -8.0
+node p_w2 -69.3 0.35 -8.6
+node p_w3 -71.6 0.00 -8.6
+node p_h -86.5 0.00 -7.6
+node p_o_w -42.0 0.35 12.0
+node p_o_wn -60.0 0.35 -30.0
+link p_w p_w1
+link p_w1 p_w2
+link p_w2 p_w3
+link p_w3 p_h
+link p_w1 p_o_w
+link p_o_w p_sw
+link p_o_nw p_w1
+link p_w1 p_o_wn
+node p_gate 5.0 0.00 -71.3
+link p_n2 p_gate
+# (the pavilion's steps: office.nav's o_gnd)
+link p_n2 o_gnd

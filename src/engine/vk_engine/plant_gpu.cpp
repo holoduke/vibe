@@ -13,6 +13,7 @@
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
 #include "engine/vk_engine/state/plant_gpu.h"
+#include "engine/vk_engine/state/environment.h"
 #include "engine/vk_pipelines.h"
 #include "engine/vk_initializers.h"
 #include "engine/log.h"
@@ -354,7 +355,7 @@ void VulkanEngine::cull_plants(VkCommandBuffer cmd) {
             P[5] = glm::vec4(K.shape[0], 2.0f * K.shape[2] + 0.5f * K.shape[0], K.range, K.band);
             P[6] = glm::vec4(K.c0, 0.0f); P[7] = glm::vec4(K.c1, 0.0f); P[8] = glm::vec4(K.c2, 0.0f);
             for (size_t i = 0; i < 4; ++i) P[9 + i] = K.lawn == 2 && i < flower_fields_.size() ? flower_fields_[i] : glm::vec4(0.0f);
-            P[13] = glm::vec4(K.fade0, K.fade1, 0.0f, 0.0f);
+            P[13] = glm::vec4(K.fade0, K.fade1, glm::clamp(env_->snow, 0.0f, 1.0f), 0.0f);     // (.z: winter's snow cover - short grass is under it)
         }
         vkCmdUpdateBuffer(cmd, pg_->spec_buf, 0, sizeof(spec), spec);
     }

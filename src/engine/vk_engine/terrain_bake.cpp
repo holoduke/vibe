@@ -156,6 +156,12 @@ void VulkanEngine::destroy_terrain_bake() {
 //  this call, arriving with the crater or a frame or two later, is then not a reason to make
 //  everything again.)
 void VulkanEngine::terrain_bake_invalidate() { if (tb_) tb_->height_dirty = true; }
+// The ground inside a box changed (a region's height tile: regions.cpp): only that part of the
+// pictures is drawn again.
+void VulkanEngine::terrain_bake_redraw(float x0, float z0, float x1, float z1) {
+    if (tb_ && tb_->redo_boxes.size() < 64) tb_->redo_boxes.push_back(glm::vec4(x0, z0, x1, z1));
+    else if (tb_) tb_->height_dirty = true;
+}
 
 // What the ground's material is worked out from, hashed: called by update_scene_ubo with the
 // frame's scene constants. (Not the sun, not the camera: lighting stays per pixel, and the
@@ -170,6 +176,8 @@ void VulkanEngine::terrain_bake_signature(const SceneUBO& d) {
     addv(d.rm_rock); addv(d.rm_ground_dry); addv(d.rm_ground_green); addv(d.rm_red_sand);
     addv(d.terrain_sand_color); addv(d.grass_color_ground); addv(d.grass_color_ground_far); addv(d.grass_color_bottom);
     addv(d.road_info); addv(d.spom_params); addv(d.site_ground); addv(d.site_shape); addv(d.terrain_extra);
+    for (const glm::vec4& f : d.flower_field) addv(f);       // (the ground in a flower field takes the field's colour with distance)
+    for (const glm::vec4& f : d.hw_jn) addv(f);              // (a junction's paving and markings: highway.h Junction)
     const float q[] = { d.water_params.x, d.water_params.y, std::floor(d.ripple_info.z), d.globe_info.x, d.globe_info.w,
                         std::round(d.season.x * 64.0f), std::round(d.season.y * 64.0f), std::round(d.season.z * 64.0f), std::round(d.season.w * 64.0f),
                         d.viewport.w, float(int(d.rm_perf.x) & (2 | 64)), d.rm_perf.w,
@@ -223,6 +231,7 @@ void VulkanEngine::update_terrain_bake(VkCommandBuffer cmd) {
         if (S.sig_still < 20) return;
         S.sig_baked = S.sig;
         for (TerrainBakeState::Level& lv : S.level) { lv.valid = false; lv.tiles = 0; }
+        S.redo_boxes.clear();                                 // (everything is drawn again anyway)
     }
     // Level 0 is made for the distance at which one of its texels is one pixel (never further
     // than its window allows: 3.2 m).
@@ -261,6 +270,21 @@ void VulkanEngine::update_terrain_bake(VkCommandBuffer cmd) {
             add_world(l, w0, x0, x1, z0, z1);
         }
     }
+    // Boxes whose height changed (terrain_bake_redraw): the same. A level that is being filled
+    // and has drawn part of such a box already starts again.
+    for (int l = 0; l < TerrainBakeState::kLevels; ++l) {
+        TerrainBakeState::Level& lv = S.level[l];
+        const double texel = double(TerrainBakeState::kTexel0) * double(1 << l);
+        const glm::ivec2 w0 = lv.c - H;
+        for (const glm::vec4& bx : S.redo_boxes) {
+            const int x0 = std::max(int(std::floor(double(bx.x) / texel)), w0.x), x1 = std::min(int(std::ceil(double(bx.z) / texel)), w0.x + N);
+            const int z0 = std::max(int(std::floor(double(bx.y) / texel)), w0.y), z1 = std::min(int(std::ceil(double(bx.w) / texel)), w0.y + N);
+            if (x1 <= x0 || z1 <= z0) continue;
+            if (lv.valid) add_world(l, w0, x0, x1, z0, z1);
+            else lv.tiles = 0;
+        }
+    }
+    S.redo_boxes.clear();
     // (a blast the size of a crashed aircraft reaches further than the near levels are wide: that
     //  is not a strip but most of the pictures - they are filled again at the usual rate, and the
     //  terrain pass works the material out per pixel meanwhile)

@@ -356,6 +356,34 @@ float grassEligibility(vec2 worldXZ, float terrainY) {
     return mg.r * slope_w * alt_factor * underwater;
 }
 
+// How much of a flower field a place is in: 1 inside, 0 outside, the edge frayed - the rule the
+// meadow's plants are placed by (tuft_place.comp field_w and crowd_noise: keep in step).
+float rm_field_noise(vec2 p) {
+    float n = 0.5 * sin(p.x * 1.5) * sin(p.y * 1.5);
+    vec2  q = vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y);
+    n += 0.25 * sin(q.x * 3.03) * sin(q.y * 3.03);
+    q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.02;
+    n += 0.125 * sin(q.x * 3.045) * sin(q.y * 3.045);
+    q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.03;
+    n += 0.0625 * sin(q.x * 3.015) * sin(q.y * 3.015);
+    q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.01;
+    n += 0.03125 * sin(q.x * 3.06) * sin(q.y * 3.06);
+    q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.04;
+    n += 0.015625 * sin(q.x * 3.015) * sin(q.y * 3.015);
+    return n;
+}
+float rm_flower_field(vec2 xz) {
+    float w = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        vec4 F = scene.flower_field[i];
+        if (F.z <= 0.0) continue;
+        float d = distance(xz, F.xy);
+        if (d > F.z + F.w) continue;
+        w = max(w, 1.0 - smoothstep(F.z - F.w, F.z, d + rm_field_noise(xz * 0.07) * F.w));
+    }
+    return w;
+}
+
 // Castle road, as on the mesh terrain (cube.frag "Castle road"): exact XZ
 // distance to the road polyline in the scene UBO gives the cobble / dirt-
 // verge weights; the bisector-partitioned second loop gives a road-space

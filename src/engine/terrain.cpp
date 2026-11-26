@@ -1,6 +1,7 @@
 #include "engine/terrain.h"
 #include "engine/highway.h"
 #include "engine/globe.h"
+#include "engine/region_tile.h"
 
 #include "engine/log.h"
 
@@ -455,7 +456,9 @@ float world_ground_height(float x, float z, float water_level, int octaves) {
     const float h = world_ground_height_impl(x, z, water_level, octaves);
     // A highway's shelf (its lines are in home coordinates; shaders: rm_highway).
     glm::dvec2 hp;
-    return (highway::ready() && home_coords(x, z, hp)) ? highway::ground(h, float(hp.x), float(hp.y)) : h;
+    // Stored ground (the regions' height tiles: engine/region_tile.h) is added last, as the
+    // shader adds it (sampleHeightDelta after rm_world_h).
+    return ((highway::ready() && home_coords(x, z, hp)) ? highway::ground(h, float(hp.x), float(hp.y)) : h) + region::ground_delta(x, z);
 }
 
 float raymarch_fine_correction(const Heightmap& hm, const HeightmapParams& p,

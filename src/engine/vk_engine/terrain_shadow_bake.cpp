@@ -7,6 +7,7 @@
 
 #include "engine/vk_engine/internal.h"
 #include "engine/gltf_loader.h"
+#include "engine/region_tile.h"
 #include "engine/grass.h"
 #include "engine/skybox.h"
 #include "engine/terrain.h"
@@ -504,7 +505,8 @@ float VulkanEngine::sample_terrain_height(float x, float z) const {
     float h11 = h(ix + 1, iz + 1);
     float h0 = h00 * (1.0f - tx) + h10 * tx;
     float h1 = h01 * (1.0f - tx) + h11 * tx;
-    return h0 * (1.0f - tz) + h1 * tz;
+    // (a region's height tile may lie over home's: it adds to it - engine/region_tile.h)
+    return h0 * (1.0f - tz) + h1 * tz + region::ground_delta(x, z);
 }
 
 

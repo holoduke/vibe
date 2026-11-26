@@ -251,6 +251,7 @@ void VulkanEngine::init() {
     init_terrain_raymarch_pipeline();
     init_terrain_patches();      // before the low-resolution targets: their size depends on it
     init_terrain_bake();
+    init_regions();              // (scene set bindings 49, 50: valid before any terrain shader runs)
     init_terrain_water_pipeline();
     init_terrain_raymarch_compose_pipeline();
     init_terrain_raymarch_lowres();
@@ -935,6 +936,7 @@ void VulkanEngine::shutdown() {
     guarded("destroy_terrain_raymarch_pipeline", [&]{ destroy_terrain_raymarch_pipeline(); });
     guarded("destroy_terrain_patches", [&]{ destroy_terrain_patches(); });
     guarded("destroy_terrain_bake", [&]{ destroy_terrain_bake(); });
+    guarded("destroy_regions", [&]{ destroy_regions(); });
     guarded("destroy_terrain_water_pipeline", [&]{ destroy_terrain_water_pipeline(); });
     guarded("destroy_terrain_pipelines", [&]{ destroy_terrain_pipelines(); });
     guarded("destroy_sun_shadow_pipeline", [&]{ destroy_sun_shadow_pipeline(); });

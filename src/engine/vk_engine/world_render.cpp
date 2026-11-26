@@ -68,7 +68,15 @@ VulkanEngine::FrameView VulkanEngine::compute_frame_view() {
     // From the air the far plane moves out (the near plane stays: the weapon in the hand).
     // Depth this far out is coarse (metres), which is fine for objects a few pixels tall;
     // the limits follow from where terrain_raymarch.frag clamps its depth.
-    view_far_   = glm::clamp(1500.0f + (fv.eye_pos.y - 1000.0f) * 30.0f, 1500.0f, 30000.0f);
+    // (2026-11-25: the far plane is 30 km at every height. It was 1500 m up to 1 km altitude:
+    // with the near plane at 0.05 the depth 0.99999 - which every pass reads as "sky" - then lay
+    // 1154 m out, so nothing could be drawn beyond that on the ground; far trees ended there.
+    // At 30 km it lies 4.3 km out and the terrain's own clamp, 0.999989, at 3.9 km. The depth's
+    // resolution is set by the near plane and does not change. The shaders that turn the
+    // terrain's depth into a distance by hand carry the matching constant, 1.0000016667
+    // = far / (far - near): terrain_rm_upscale.glsl, terrain_rm_resolve.frag,
+    // terrain_raymarch_compose.frag - change them together with this.)
+    view_far_   = 30000.0f;
     object_far_ = std::min(view_far_ - 50.0f, 3800.0f);
     // The terrain's distance LOD (fewer octaves of the height formula beyond a few hundred metres) is a
     // saving for the view along the ground. From the air it showed: a smoothed version of the land

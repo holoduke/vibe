@@ -285,7 +285,7 @@ AudioEngine::Heard AudioEngine::Impl::spatial_update(Spatial& s, glm::vec3 pos, 
         send = level * kRiddenSend * space_now.amount;
         s.occ = s.occ_target = 0.0f;
     } else {
-        const float dg = ss::gain(d, s.shape.ref_m);
+        const float dg = ss::gain(d, s.shape);
         s.occ_wait -= dt;
         if (s.occ_wait <= 0.0f) {
             s.occ_wait = kOccEveryS;
@@ -295,7 +295,7 @@ AudioEngine::Heard AudioEngine::Impl::spatial_update(Spatial& s, glm::vec3 pos, 
         s.occ += (s.occ_target - s.occ) * follow(dt, kOccS);
         e = ss::ears(glm::dot(-n, ear_right), glm::dot(-n, ear_front), d);
         g = level * dg * ss::occluded_gain(s.occ) * space_now.outside_gain;
-        hz = (std::min)(ss::cutoff_hz(d, s.shape.top_hz) * ss::occluded_cutoff(s.occ) * (1.0f - ss::kRearDull * e.rear), space_now.outside_hz);
+        hz = (std::min)(ss::cutoff_hz(d, s.shape.top_hz, s.shape.air_half_m) * ss::occluded_cutoff(s.occ) * (1.0f - ss::kRearDull * e.rear), space_now.outside_hz);
         send = level * ss::send(dg) * space_now.amount * space_now.outside_gain;
         dop = ss::doppler(glm::dot(vel, n), glm::dot(ear_vel, n), d);
     }
@@ -397,7 +397,7 @@ void AudioEngine::engine_stop(uint32_t h) {
 }
 
 // Sources (audio.h "A SOURCE").
-uint32_t AudioEngine::source_start(ClipID id, sound_space::Shape shape, bool loop) {
+uint32_t AudioEngine::source_start(ClipID id, sound_space::Shape shape, bool loop, float start_s) {
     if (!impl_->ok) return 0;
     const auto idx = static_cast<size_t>(id);
     if (idx >= static_cast<size_t>(ClipID::Count) || impl_->clip_paths[idx].empty()) return 0;
@@ -407,6 +407,11 @@ uint32_t AudioEngine::source_start(ClipID id, sound_space::Shape shape, bool loo
     s->sp = sp; s->loop = loop;
     if (!impl_->sound_into(*sp, impl_->clip_paths[idx], &s->snd)) { impl_->spatial_free(sp); delete s; return 0; }
     ma_sound_set_looping(&s->snd, loop ? MA_TRUE : MA_FALSE);
+    if (start_s > 0.0f) {       // (it begins this far into the clip: two of a kind do not sound as one)
+        ma_uint32 rate = 0;
+        if (ma_sound_get_data_format(&s->snd, nullptr, nullptr, &rate, nullptr, 0) == MA_SUCCESS && rate > 0)
+            ma_sound_seek_to_pcm_frame(&s->snd, ma_uint64(double(start_s) * double(rate)));
+    }
     const uint32_t h = impl_->next_handle++;
     if (impl_->next_handle == 0) impl_->next_handle = 1;
     impl_->sources[h] = s;

@@ -6,7 +6,8 @@
 //   b  clip layer  a clip over part of the body (a mask a joint), eased in and out
 //   c  breathing, and the weight going from one side to the other, on the person's own clocks
 //   d  a gesture   a hand to the head, to the neck, a look at the wrist, a shift on the seat, a
-//                  wave: one arm solved to a place on the body and blended over what it did
+//                  wave, an arm that points at something, a hand that talks: one arm solved to
+//                  a place on the body (or toward the thing) and blended over what it did
 //   e  the look    head, neck, chest (and eyes: face_layer) to what is worth a look, within
 //                  what a neck can do, at a head's pace, with glances away
 //
@@ -231,9 +232,12 @@ void CharacterAnimator::gesture_layer(const CharacterAnimationInput& in, float d
         gest_ = g;
         gest_t_ = 0.0f;
         const float r = rnd();
-        gest_dur_ = g == Gesture::Wave ? 2.3f + 0.9f * r : g == Gesture::CheckWrist ? 2.6f + 1.2f * r : g == Gesture::Shift ? 1.8f + 0.9f * r : 2.4f + 1.8f * r;
-        // (the wrist that has the watch is the left one, the hand that waves the right - if it is free)
+        gest_dur_ = g == Gesture::Wave ? 2.3f + 0.9f * r : g == Gesture::CheckWrist ? 2.6f + 1.2f * r : g == Gesture::Shift ? 1.8f + 0.9f * r
+                  : g == Gesture::Point ? 2.7f + 1.3f * r : g == Gesture::Talk ? 3.0f + 2.4f * r : 2.4f + 1.8f * r;
+        // (the wrist that has the watch is the left one, the hand that waves the right - if it is
+        //  free; the arm that points is the one on the side the thing is)
         int side = g == Gesture::CheckWrist ? 0 : g == Gesture::Wave ? 1 : (rnd() < 0.5f ? 0 : 1);
+        if (g == Gesture::Point && std::abs(in.gesture_at.x) > 0.12f) side = in.gesture_at.x > 0.0f ? 1 : 0;
         if (!(in.fidget_arms & (1u << side))) side = 1 - side;
         gest_side_ = side;
     };
@@ -303,6 +307,23 @@ void CharacterAnimator::gesture_layer(const CharacterAnimationInput& in, float d
         gest_look_yaw_ = sx * 0.06f * w;
         gest_look_pitch_ = -0.42f * w;                           // (the head goes down to it)
         break;
+    case Gesture::Point: {
+        // (the arm out toward the thing, not quite straight; it holds there and stirs a little -
+        //  "this here" - and the head goes with it)
+        const glm::vec3 to = in.gesture_at - shoulder;
+        const float len = glm::length(to);
+        const glm::vec3 dir = len > 1e-3f ? to / len : B * glm::vec3(0.0f, 0.0f, -1.0f);
+        target = shoulder + dir * 0.54f + glm::vec3(0.0f, 0.012f * std::sin(t * 6.5f), 0.0f) + B * glm::vec3(0.010f * std::sin(t * 4.1f), 0.0f, 0.0f);
+        pole = B * glm::vec3(sx * 0.7f, -0.9f, 0.2f);
+        curl = 1.25f;                                            // (a fist, but for the first finger: below)
+        break; }
+    case Gesture::Talk:
+        // (the forearm up in front of the body, the hand going out and back and up and down
+        //  with what is said: two unhurried beats of its own)
+        target = neck + B * glm::vec3(sx * (0.21f + 0.045f * std::sin(t * 3.3f + 0.6f)), -0.31f + 0.055f * std::sin(t * 4.6f), -0.29f - 0.035f * std::sin(t * 2.7f + 1.1f));
+        pole = B * glm::vec3(sx * 0.9f, -0.7f, 0.25f);
+        curl = 0.28f + 0.10f * std::sin(t * 3.3f);
+        break;
     default:   // Wave
         target = shoulder + B * glm::vec3(sx * 0.18f + 0.085f * std::sin(t * 8.5f), 0.34f + 0.02f * std::cos(t * 8.5f), -0.12f);
         pole = B * glm::vec3(sx * 0.8f, -0.7f, 0.2f);
@@ -320,7 +341,7 @@ void CharacterAnimator::gesture_layer(const CharacterAnimationInput& in, float d
         for (int f = 0; f < 4; ++f)
             for (int j = 0; j < 3; ++j)
                 if (H.finger[f][j] >= 0)
-                    pose_[size_t(H.finger[f][j])].r = glm::normalize(glm::slerp(pose_[size_t(H.finger[f][j])].r, glm::angleAxis(curl * (j == 0 ? 0.6f : 1.0f), H.b0), w));
+                    pose_[size_t(H.finger[f][j])].r = glm::normalize(glm::slerp(pose_[size_t(H.finger[f][j])].r, glm::angleAxis((gest_ == Gesture::Point && f == 0 ? 0.06f : curl) * (j == 0 ? 0.6f : 1.0f), H.b0), w));
     rt.local_to_model(*ctx_, pose_, model_, ua);
 }
 

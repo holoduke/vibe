@@ -103,7 +103,43 @@ bool  deck(float x, float z, float& h);
 // the field only there). Returns false when no road is in the window.
 // `ring`: when the engine is in a chart that is not home's (engine/globe.h Ring, `on`), the
 // field is laid out in that chart's coordinates: the lines are carried into it first.
-bool bake(glm::vec2 center, std::vector<uint8_t>& a, std::vector<uint8_t>& b, glm::vec4& bbox, const globe::Ring& ring);
+// `jn`: the junction's record for the shaders, in the field's coordinates (below).
+bool bake(glm::vec2 center, std::vector<uint8_t>& a, std::vector<uint8_t>& b, glm::vec4& bbox, const globe::Ring& ring, glm::vec4* jn = nullptr);
+
+// THE JUNCTION: where the castle lane leaves the coast road.
+// The field holds ONE road per texel (the nearest), read bilinearly - so where two roads meet,
+// distance, height and metres along are mixed between unlike texels: torn markings, a seam in
+// the shelf, the one road's lines running onto the other. A junction is therefore not left to
+// the field. It is a record: the point J on the highway's centre line, the way the lane leaves
+// (unit, level; straight for its first 48 m), and the lane's heights at 0, 8 .. 56 m. Round it
+//   * the field holds the highway alone (bake: the lane's texels are left out for its first
+//     35 m), so the highway's surface, markings and wear run through undisturbed;
+//   * the lane is worked out from the record, laid OVER the highway's ground: nothing inside
+//     the highway's asphalt, all of its own section by 8 m beyond it - one surface;
+//   * the paving is the union of the two roads with the corners rounded (kJnFlare);
+//   * 41..46 m out the lane is handed back to the field.
+// ground() and the shader (terrain_rm_noise_road.glsl rm_jn_*) work by the same rule and the
+// same numbers - keep them in step.
+// u: metres from J along the lane, v: metres to the side of the lane's axis.
+constexpr float kJnFlare = 4.0f;                      // the mouth's corner radius (m)
+constexpr float kJnU0 = -8.0f, kJnU1 = 46.0f, kJnV = 24.0f;      // the junction's box
+constexpr float kJnFieldU = 35.0f;                    // the field holds the highway alone to here
+constexpr float kJnStopA = 4.80f, kJnStopB = 5.25f;   // the stop line: a bar from here to here from the highway's centre line (its edge line is at 3.75)
+struct Junction {
+    bool      on = false;
+    int       line = 1;            // the side road
+    glm::vec2 j{0.0f}, w{0.0f};    // J (x, z) and the way the lane leaves, home coordinates
+    float     k = 1.0f;            // the lane's width class
+    float     s0 = 0.0f;           // the lane's metres at J
+    float     hs[8]{};             // the lane's centre line heights at u = 0, 8 .. 56
+};
+const Junction& junction();
+// The lane's centre line height u metres from J (0..48), as its line has it.
+float junction_lane_h(float u);
+// "How far from the asphalt" at the junction, as a distance from a centre line in a road's
+// measure (5.5 = the edge of the paving): the two roads and the rounded corners between them.
+// xh: metres from the highway's centre line.
+float junction_ad(float u, float v, float xh);
 
 // The lines themselves (for what is built along them: vk_engine/highway_furniture.cpp).
 int line_count();

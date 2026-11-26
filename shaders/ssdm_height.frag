@@ -16,6 +16,11 @@
 #include "scene_ubo.glsl"
 
 layout(set = 0, binding = 12) uniform sampler2D u_height[6];
+// Rock formations take their height from the landscape's rock scan (the normal's alpha, slot 7),
+// laid on by world position: rock_form.glsl. (43 = cube.frag kTextureCount - keep the same.)
+layout(set = 0, binding = 4) uniform sampler2D u_normal[43];
+#define RF_HEIGHT_ONLY
+#include "rock_form.glsl"
 
 layout(push_constant) uniform PC {
     mat4 mvp;
@@ -45,6 +50,27 @@ void main() {
     float fade = 1.0 - smoothstep(pc.grass_params.y, pc.grass_params.z,
                                   distance(vWorldPos, scene.camera_pos.xyz));
     int hix = height_idx_for_albedo(int(pc.tex_params.x + 0.5));
+    int rlook = int(pc.tex_params.y - 0.5);
+    if (rlook == -9 || rlook == -10) {
+        // A rock formation: what of the scan stands above a third of its height rises (ribs,
+        // knobs, the edges of plates); its pores and cracks stay where the mesh is.
+        // Chalk (-10): its blocks rise between their partings and joints (rf_chalk_h), the
+        // scan's grain on top of them.
+        if (fade <= 0.0) { outHeight = vec4(0.0); return; }
+        vec3  rn = normalize(vNormal);
+        RfMat rf = rf_material(vWorldPos, rn, dFdx(vWorldPos), dFdy(vWorldPos), distance(vWorldPos, scene.camera_pos.xyz));
+        float rh = smoothstep(0.30, 0.95, rf.h);
+        if (rlook == -10) {
+            float fl;
+            float ch = rf_chalk_h(vWorldPos, rn, fl);
+            // (blocks finer than a few pixels: their mean, or the grid is combed)
+            float px = length(dFdx(vWorldPos)) + length(dFdy(vWorldPos));
+            rh = mix(0.8 * ch + 0.2 * rh, 0.7, smoothstep(0.03, 0.10, px));
+        }
+        if (dot(rn, scene.camera_pos.xyz - vWorldPos) < 0.0) rn = -rn;
+        outHeight = vec4(rn, rh * pc.grass_params.x * fade + 1e-4);
+        return;
+    }
     if (fade <= 0.0 || hix < 0) { outHeight = vec4(0.0); return; }
     vec3  n = normalize(vNormal);
     vec2  muv;

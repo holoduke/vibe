@@ -7,7 +7,8 @@
 //
 // write_siren_wav() writes it as a 16-bit mono WAV at 44.1 kHz. jeep.cpp (siren_audio_tick)
 // writes assets/sounds/siren_wail.wav the first time a siren is to be heard and the file is not
-// there, and plays it through AudioEngine::play_tracked.
+// there, and plays it as a source of the spatialiser (AudioEngine::source_start, looping;
+// how far it carries: sound_space::kSirenShape).
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

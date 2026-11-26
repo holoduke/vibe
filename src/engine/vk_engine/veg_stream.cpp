@@ -15,7 +15,7 @@
 //     inside the vegetation instance buffer, so the existing GPU path draws them:
 //     culling, levels of detail, impostors, shadows, ray tracing.
 //   * A cell's trees are ordered by a rank. With distance only a leading part of
-//     the list is live (all, half, a quarter, a twelfth; bushes only close by),
+//     the list is live (all, half, a quarter, then only the trees under a rank limit; bushes only close by),
 //     so the far woods are thinner, not different: every tree that stands far
 //     away still stands when you get there.
 //   * Trunk colliders exist for the cells around the player.
@@ -45,10 +45,18 @@ constexpr float kCell      = 128.0f;
 constexpr float kHomeHalf  = 1000.0f;     // the home tile's own planting reaches this far
 constexpr int   kTreeGrid  = 19;          // candidates per cell side: one per 6.7 m (~45 m2 a tree in closed forest)
 constexpr int   kBushGrid  = 30;          // one per 4.3 m
-constexpr int   kLevels    = 5;
+constexpr int   kLevels    = 7;
+constexpr int   kNearLevels = 4;         // levels 0 .. 3 need the cell's whole list; the far ones (4 ..) only its leading trees
 // Live share of a cell's trees by level, and the distance (to the cell's centre) each level reaches.
-constexpr float kShare[kLevels] = { 1.0f, 1.0f, 0.5f, 0.25f, 0.085f };
-constexpr float kReach[kLevels] = { 260.0f, 650.0f, 1100.0f, 1600.0f, 1e9f };     // level 0 also has the bushes
+// The near levels are a share of the cell's rank-ordered list. The far levels are the trees whose
+// rank lies under a limit (kFarRank) - also a leading part of that list, but one that can be
+// found without making the rest of the cell: a far cell is generated "lite" (those trees only,
+// no bushes, no colliders) and costs a few hundred bytes. Far cards are drawn larger with
+// distance (veg.vert veg_far_grow), so the thinned wood keeps its cover.
+constexpr float kShare[kNearLevels] = { 1.0f, 1.0f, 0.5f, 0.25f };
+constexpr float kReach[kLevels] = { 260.0f, 650.0f, 1100.0f, 1600.0f, 2400.0f, 3200.0f, 1e9f };     // level 0 also has the bushes
+constexpr float kFarRank[kLevels - kNearLevels] = { 0.14f, 0.085f, 0.05f };      // (rank = random / size: about 14 %, 8.5 %, 5 % of the trees, the big ones first)
+constexpr float kLiteBack  = 2700.0f;     // a whole cell further off than this is cut back to its lite part
 
 struct CellKey {
     int x, z;
@@ -62,6 +70,9 @@ struct CellData {
     std::vector<VegInstance>     items;     // trees by rank (lowest first), then the bushes
     std::vector<collision::AABB> cols;      // one per tree, same order
     uint32_t                     trees = 0;
+    uint32_t                     n_far[kLevels - kNearLevels] = {};   // how many of the leading trees each far level shows
+    bool                         lite = false;                        // only the trees of the far levels were made
+    uint32_t                     ground_serial = 0;                   // WvState::ground_serial when it was made
 };
 
 inline uint32_t hash3(uint32_t a, uint32_t b, uint32_t c) {
@@ -79,7 +90,14 @@ struct VulkanEngine::WvState {
         int  level = kLevels;                 // kLevels: nothing live
         bool requested = false;
         bool cols_live = false;
+        // The ground under it has changed (wv_ground_changed): it is made again; what stands
+        // there stays until the new cell (`fresh`) is in.
+        bool stale = false;
+        std::shared_ptr<CellData> fresh;
     };
+    std::atomic<uint32_t>  ground_serial{0};  // counts changes of the ground: a cell made across one is not used
+    std::vector<glm::vec3> ground_changed;    // (chart x, z, radius) of each, until the next scan
+    struct Job { CellKey k; bool lite; };
     std::unordered_map<CellKey, Cell, CellHash> cells;
     std::vector<uint32_t> free_slots;
     std::vector<uint32_t> arch_used;
@@ -94,7 +112,7 @@ struct VulkanEngine::WvState {
     std::vector<std::thread> workers;
     std::mutex mu;
     std::condition_variable cv;
-    std::vector<CellKey> jobs;                // nearest LAST (workers pop the back)
+    std::vector<Job> jobs;                    // nearest LAST (workers pop the back)
     std::vector<std::pair<CellKey, std::shared_ptr<CellData>>> done;
     bool quit = false;
     // The near field for the grass (wv_nf_poll).
@@ -255,8 +273,12 @@ glm::dvec2 chart_to_key(const globe::Chart& C, const glm::dvec2& p) {
     return C.home ? p : globe::home_az(globe::to_planet(C, p.x, p.y));
 }
 
-std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState& S) {
+// `lite`: only the trees the far levels show (rank under kFarRank[0]) - the same trees, in the
+// same order, as the head of the whole cell's list (every decision below is made the same way;
+// the others are only skipped sooner).
+std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState& S, bool lite) {
     auto out = std::make_shared<CellData>();
+    out->lite = lite;
     // (x0, z0, and lx / lz below: home coordinates - what the cell is cut out of)
     const float x0 = float(key.x) * kCell, z0 = float(key.z) * kCell;
     // Where the cell lies in the chart the engine is in: its corner and its two edges (the cell
@@ -320,6 +342,8 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
             const float x = cx_of(lx, lz), z = cz_of(lx, lz);          // (in the chart)
             const float pick = u(), kind = u(), size = u(), oldp = u(), rot = u(), phase = u(), which = u(), rank = u();
             if (in_home(x0 + lx, z0 + lz)) continue;
+            // (lite: its rank is at least rank / (1.3 * 1.8), whatever tree it turns out to be)
+            if (lite && rank >= kFarRank[0] * 2.34f) continue;
             if (world_highway_distance(x, z) < 12.0f || world_site_clearing(x, z)) continue;              // (nor a lone tree in the road)
             const float hc = h_at(lx, lz);
             if (hc < wl + 2.0f) continue;
@@ -341,6 +365,7 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
             Ranked r;
             // Big trees outlast small ones as the wood thins with distance.
             r.rank = rank / (scale * (old_tree ? 1.8f : 1.0f));
+            if (lite && r.rank >= kFarRank[0]) continue;
             r.vi.pos_scale = glm::vec4(x, h - 0.05f, z, scale);
             r.vi.rot_arch_phase = glm::vec4(rot * 6.2831853f, float(ai), phase * 6.2831853f, 0.0f);
             const float tr = 0.38f * scale;
@@ -351,7 +376,12 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
     out->trees = uint32_t(trees.size());
     out->items.reserve(trees.size() + 64);
     out->cols.reserve(trees.size());
-    for (const auto& t : trees) { out->items.push_back(t.vi); out->cols.push_back(t.col); }
+    for (const auto& t : trees) {
+        out->items.push_back(t.vi);
+        if (!lite) out->cols.push_back(t.col);
+        for (int l = 0; l < kLevels - kNearLevels; ++l) if (t.rank < kFarRank[l]) ++out->n_far[l];
+    }
+    if (lite) return out;
 
     // Bushes: undergrowth inside the woods and thickets along their edges.
     if (!S.bushes.empty()) {
@@ -443,6 +473,16 @@ void VulkanEngine::record_nf_upload(VkCommandBuffer cmd, uint32_t slot) {
 }
 
 void VulkanEngine::wv_nf_invalidate() { if (wv_) wv_->nf_valid = false; }
+
+// The ground within `radius` of a chart position has changed (a region's height tile came,
+// went or was edited): the woods' cells there are made again, and whatever a generator has
+// under way is not used.
+void VulkanEngine::wv_ground_changed(glm::vec2 c, float radius) {
+    if (!wv_) return;
+    wv_->ground_serial.fetch_add(1);
+    wv_->ground_changed.push_back(glm::vec3(c.x, c.y, radius));
+    wv_->dirty = true;
+}
 
 void VulkanEngine::wv_nf_poll() {
     if (!wv_ || !scene_desc_set_) return;
@@ -581,7 +621,7 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
             S.workers.emplace_back([this]() {
                 WvState& W = *wv_;
                 for (;;) {
-                    CellKey k;
+                    WvState::Job k;
                     {
                         std::unique_lock<std::mutex> lk(W.mu);
                         W.cv.wait(lk, [&]() { return W.quit || !W.jobs.empty(); });
@@ -590,10 +630,12 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
                         W.jobs.pop_back();
                     }
                     const uint32_t serial0 = globe::chart_serial();
-                    auto d = generate_cell(k, W);
+                    const uint32_t ground0 = W.ground_serial.load();
+                    auto d = generate_cell(k.k, W, k.lite);
                     if (serial0 != globe::chart_serial()) continue;        // (made while the engine changed chart: half in each - not used)
+                    d->ground_serial = ground0;
                     std::lock_guard<std::mutex> lk(W.mu);
-                    W.done.emplace_back(k, std::move(d));
+                    W.done.emplace_back(k.k, std::move(d));
                 }
             });
         log::infof("[wveg] world vegetation: %u slots, %u generator threads", unsigned(kWvPool), nt);
@@ -606,9 +648,26 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
         std::lock_guard<std::mutex> lk(S.mu);
         for (auto& d : S.done) {
             auto it = S.cells.find(d.first);
-            if (it != S.cells.end()) { it->second.data = std::move(d.second); S.dirty = true; }
+            // (made on the ground as it was before a height tile came or went: asked for again by the scan)
+            if (d.second->ground_serial != S.ground_serial.load()) { S.dirty = true; continue; }
+            if (it != S.cells.end() && it->second.stale) { it->second.fresh = std::move(d.second); S.dirty = true; continue; }
+            // (a lite cell never replaces a whole one; a whole one takes over a lite one's live
+            //  slots as they are - the lite trees are the head of its list)
+            if (it != S.cells.end() && !(it->second.data && !it->second.data->lite && d.second->lite)) { it->second.data = std::move(d.second); S.dirty = true; }
         }
         S.done.clear();
+    }
+    // The ground has changed somewhere (a region's height tile: regions.cpp): the cells there
+    // are made again on the new ground.
+    if (!S.ground_changed.empty()) {
+        const globe::Chart& GC0 = globe::current();
+        for (auto& kv : S.cells) {
+            if (!kv.second.data) continue;
+            const glm::dvec2 cc = key_to_chart(GC0, glm::dvec2((double(kv.first.x) + 0.5) * double(kCell), (double(kv.first.z) + 0.5) * double(kCell)));
+            for (const glm::vec3& g : S.ground_changed)
+                if (glm::distance(glm::vec2(cc), glm::vec2(g.x, g.y)) < g.z + kCell) { kv.second.stale = true; kv.second.fresh.reset(); S.dirty = true; break; }
+        }
+        S.ground_changed.clear();
     }
 
     const float far_m = std::min(object_far_, rt_.tree_draw_distance) + 0.75f * kCell;
@@ -656,6 +715,10 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
     }
     const bool moved = S.parked || glm::distance(glm::vec2(eye.x, eye.z), glm::vec2(S.scan_eye.x, S.scan_eye.z)) > 24.0f ||
                        std::abs(far_m - S.scan_far) > 1.0f;
+    {   // (VIBE_LOG_WVEG: a scan every two seconds even when nothing changed, for its log line)
+        static const bool log_scan = std::getenv("VIBE_LOG_WVEG") != nullptr;
+        if (log_scan && std::chrono::duration<float>(now - S.scan_t).count() > 2.0f) S.dirty = true;
+    }
     if (!moved && !S.dirty) return;
     // At most ten scans a second (a scan walks every cell in range).
     if (!S.parked && std::chrono::duration<float>(now - S.scan_t).count() < 0.1f) { S.dirty = true; return; }
@@ -708,7 +771,7 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
     const int ccx = int(std::floor(eye_k.x / double(kCell))), ccz = int(std::floor(eye_k.y / double(kCell)));
     const int rc = int(std::ceil(far_m * k_stretch / kCell)) + 1;
 
-    std::vector<std::pair<float, CellKey>> want_jobs;
+    std::vector<std::pair<float, WvState::Job>> want_jobs;
     bool cols_changed = false, any_change = false;
     // Camera height: from the air the forest thins out as a whole (no bushes under an aeroplane).
     // Not by the 3D distance to each cell, as it was: that kept the full forest in a disc under
@@ -728,6 +791,15 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
                 if (x0 >= -kHomeHalf && x0 + kCell <= kHomeHalf && z0 >= -kHomeHalf && z0 + kCell <= kHomeHalf) continue;
             }
             WvState::Cell& c = S.cells[k];
+            if (c.fresh) {                      // the cell made again on changed ground: the old trees out, the new in
+                if (c.data && !c.slots.empty()) set_live(c, 0);
+                c.data = std::move(c.fresh);
+                c.fresh.reset();
+                c.stale = false;
+                c.level = kLevels;
+                if (c.cols_live) { c.cols_live = false; cols_changed = true; }
+                any_change = true;
+            }
             const float d = std::sqrt(d_h * d_h + eye_h * eye_h);        // (the order cells are generated in)
             int lvl = kLevels - 1, lvl_a = kLevels - 1;
             for (int l = 0; l < kLevels; ++l) {
@@ -740,19 +812,35 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
                 if (eye_h < reach) { lvl_a = l; break; }
             }
             lvl = std::max(lvl, lvl_a);
-            if (!c.data) {
+            // Not made yet, or made lite and now near enough to need all of it. (A lite cell
+            // goes on showing its far trees until the whole one arrives.)
+            if (!c.data || (c.data->lite && lvl < kNearLevels)) {
                 c.requested = true;
-                want_jobs.push_back({ d, k });
-                continue;
+                want_jobs.push_back({ d, WvState::Job{ k, lvl >= kNearLevels } });
+                if (!c.data) continue;
+                lvl = kNearLevels;
+            } else if (c.stale) {
+                want_jobs.push_back({ d, WvState::Job{ k, c.data->lite } });
             }
-            if (lvl != c.level) {
+            // A whole cell far behind: back to its lite part (the head of its list), the rest freed.
+            if (!c.data->lite && lvl > kNearLevels && d_h > kLiteBack) {
+                CellData& D = *c.data;
+                if (c.slots.size() > D.n_far[0]) set_live(c, D.n_far[0]);
+                D.items.resize(D.n_far[0]); D.items.shrink_to_fit();
+                std::vector<collision::AABB>().swap(D.cols);
+                D.trees = D.n_far[0];
+                D.lite = true;
+            }
+            if (lvl != c.level || (lvl >= kNearLevels && c.slots.size() != c.data->n_far[lvl - kNearLevels])) {
                 const CellData& D = *c.data;
-                const size_t want = lvl == 0 ? D.items.size() : size_t(std::ceil(float(D.trees) * kShare[lvl]));
+                const size_t want = lvl == 0 ? D.items.size()
+                                  : lvl < kNearLevels ? std::max(size_t(std::ceil(float(D.trees) * kShare[lvl])), size_t(D.n_far[0]))
+                                  : size_t(D.n_far[lvl - kNearLevels]);
                 set_live(c, want);
                 c.level = lvl;
                 any_change = true;
             }
-            const bool cols = d_h < 200.0f && eye_h < 150.0f;
+            const bool cols = d_h < 200.0f && eye_h < 150.0f && !c.data->lite;
             if (cols != c.cols_live) { c.cols_live = cols; cols_changed = true; }
         }
     // Out of range: give the slots back; forget cells well outside (their data is regenerated on return).
@@ -776,7 +864,7 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
         wv_cols_.clear();
         for (const auto& kv : S.cells) {
             const auto& c = kv.second;
-            if (!c.cols_live || !c.data) continue;
+            if (!c.cols_live || !c.data || c.data->lite) continue;
             const size_t n = std::min<size_t>(c.slots.size(), c.data->trees);
             for (size_t i = 0; i < n; ++i)
                 if (c.slots[i] != UINT32_MAX) wv_cols_.push_back(c.data->cols[i]);
@@ -791,6 +879,24 @@ void VulkanEngine::wv_update(glm::vec3 eye) {
         S.jobs.clear();
         for (const auto& j : want_jobs) S.jobs.push_back(j.second);
         if (!S.jobs.empty()) { S.dirty = true; S.cv.notify_all(); }
+    }
+    // VIBE_LOG_WVEG=1: every two seconds, what the streamed woods hold.
+    static const bool log_on = std::getenv("VIBE_LOG_WVEG") != nullptr;
+    if (log_on) {
+        static std::chrono::steady_clock::time_point t_log{};
+        if (std::chrono::duration<float>(now - t_log).count() > 2.0f) {
+            t_log = now;
+            size_t made = 0, lite = 0, bytes = 0;
+            for (const auto& kv : S.cells) {
+                if (!kv.second.data) continue;
+                ++made;
+                if (kv.second.data->lite) ++lite;
+                bytes += kv.second.data->items.capacity() * sizeof(VegInstance) + kv.second.data->cols.capacity() * sizeof(collision::AABB) + sizeof(CellData);
+            }
+            log::infof("[wveg] to %.0f m: %zu cells in range, %zu made (%zu lite), %zu waiting, %zu plants live of %u, cell data %zu KB, scan %.2f ms",
+                       far_m, S.cells.size(), made, lite, want_jobs.size(), size_t(kWvPool) - S.free_slots.size(), unsigned(kWvPool), bytes / 1024,
+                       std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - now).count());
+        }
     }
 }
 

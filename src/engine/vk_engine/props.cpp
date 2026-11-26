@@ -146,18 +146,101 @@ void VulkanEngine::init_viewmodel() {
                 log::infof("viewmodel: %s fore-end at z %.3f: underside y %.3f (top %.3f), x %.3f .. %.3f", path, gz, ylo, yhi, xlo, xhi);
             }
         }
+        // A sight's tube is modelled solid: flat faces of the housing close it in front of or
+        // behind its glass, and with the glass clear one would look at them. They are left out.
+        // Which: a face of another (unlit) part that lies across the lens's axis (the model's x:
+        // the bore) and covers the line of sight - the axis and two points half way to the
+        // rim - within 6 cm ahead of the glass or 3 cm behind it. All of that part's triangles
+        // in that plane inside the lens's circle go with it (the whole end face, however it was
+        // cut into triangles). What only stands ON the axis (a sight's dot) is not such a face.
+        struct LensSpan { glm::vec3 lo, hi; };
+        std::vector<LensSpan> lens_spans;
+        for (const auto& prim : gltf.primitives) {
+            if (prim.material != "Lens" || prim.vertices.empty()) continue;
+            LensSpan s{ glm::vec3(1e9f), glm::vec3(-1e9f) };
+            for (const auto& v : prim.vertices) { s.lo = glm::min(s.lo, v.position); s.hi = glm::max(s.hi, v.position); }
+            lens_spans.push_back(s);
+        }
+        size_t caps_removed = 0;
         for (const auto& prim : gltf.primitives) {
             ViewmodelMesh vm{};
+            std::vector<uint32_t> kept;
+            const bool lit = prim.emissive.x + prim.emissive.y + prim.emissive.z > 0.0f;
+            if (prim.material != "Lens" && !lit && !lens_spans.empty()) {
+                const size_t nt = prim.indices.size() / 3;
+                auto corner = [&](size_t t, int k) { return prim.vertices[prim.indices[t * 3 + size_t(k)]].position; };
+                auto across = [&](size_t t) {            // the triangle's plane is square to the bore
+                    const glm::vec3 n = glm::cross(corner(t, 1) - corner(t, 0), corner(t, 2) - corner(t, 0));
+                    const float nl = glm::length(n);
+                    return nl > 1e-12f && std::abs(n.x) / nl > 0.985f;
+                };
+                auto covers = [&](size_t t, glm::vec2 q) {  // (y, z) inside the triangle seen along the bore
+                    const glm::vec3 a = corner(t, 0), b = corner(t, 1), c = corner(t, 2);
+                    const float d = (b.z - c.z) * (a.y - c.y) + (c.y - b.y) * (a.z - c.z);
+                    if (std::abs(d) < 1e-14f) return false;
+                    const float w0 = ((b.z - c.z) * (q.x - c.y) + (c.y - b.y) * (q.y - c.z)) / d;
+                    const float w1 = ((c.z - a.z) * (q.x - c.y) + (a.y - c.y) * (q.y - c.z)) / d;
+                    return w0 >= 0.0f && w1 >= 0.0f && w0 + w1 <= 1.0f;
+                };
+                std::vector<char> drop(nt, 0);
+                for (const LensSpan& s : lens_spans) {
+                    const glm::vec3 c = 0.5f * (s.lo + s.hi);
+                    const float R = 0.5f * std::max(s.hi.y - s.lo.y, s.hi.z - s.lo.z);
+                    const glm::vec2 sight[3] = { { c.y, c.z }, { c.y + 0.5f * R, c.z + 0.1f * R }, { c.y - 0.3f * R, c.z - 0.45f * R } };
+                    // the planes in which this part covers the line of sight
+                    std::vector<float> planes;
+                    for (int k = 0; k < 3; ++k) {
+                        std::vector<float> here;
+                        for (size_t t = 0; t < nt; ++t) {
+                            const float x = corner(t, 0).x;
+                            if (x < s.lo.x - 0.06f || x > s.hi.x + 0.03f || !across(t) || !covers(t, sight[k])) continue;
+                            here.push_back(x);
+                        }
+                        if (k == 0) planes = here;
+                        else planes.erase(std::remove_if(planes.begin(), planes.end(), [&](float x) {
+                                 for (float h : here) if (std::abs(h - x) < 0.0003f) return false;
+                                 return true; }), planes.end());
+                    }
+                    for (size_t t = 0; t < nt; ++t) {
+                        if (drop[t] || !across(t)) continue;
+                        bool in_plane = false;
+                        for (float x : planes) if (std::abs(corner(t, 0).x - x) < 0.0003f) in_plane = true;
+                        if (!in_plane) continue;
+                        float rmax = 0.0f;
+                        for (int k = 0; k < 3; ++k) { const glm::vec3 q = corner(t, k); rmax = std::max(rmax, glm::length(glm::vec2(q.y - c.y, q.z - c.z))); }
+                        if (rmax < 1.7f * R) drop[t] = 1;
+                    }
+                }
+                kept.reserve(prim.indices.size());
+                for (size_t t = 0; t < nt; ++t) {
+                    if (drop[t]) { ++caps_removed; continue; }
+                    kept.insert(kept.end(), { prim.indices[t * 3], prim.indices[t * 3 + 1], prim.indices[t * 3 + 2] });
+                }
+            }
+            const std::vector<uint32_t>& use = kept.empty() ? prim.indices : kept;
             vm.mesh = create_mesh_from_data(device_, allocator_, graphics_queue_,
                                             graphics_queue_family_,
                                             prim.vertices.data(),
                                             static_cast<uint32_t>(prim.vertices.size()),
-                                            prim.indices.data(),
-                                            static_cast<uint32_t>(prim.indices.size()));
+                                            use.data(),
+                                            static_cast<uint32_t>(use.size()));
             vm.base_color = prim.base_color;
             vm.emissive = prim.emissive;
+            // The sight's glass: drawn as glass (glass.cpp), about the gun's own axis (the
+            // model's x: the bore) through the middle of the part.
+            if (prim.material == "Lens" && !prim.vertices.empty()) {
+                glm::vec3 lo(1e9f), hi(-1e9f);
+                for (const auto& v : prim.vertices) { lo = glm::min(lo, v.position); hi = glm::max(hi, v.position); }
+                vm.lens = true;
+                vm.lens_centre = 0.5f * (lo + hi);
+                vm.lens_axis = glm::vec3(1.0f, 0.0f, 0.0f);
+                vm.lens_radius = 0.5f * std::max(hi.y - lo.y, hi.z - lo.z);
+                log::infof("viewmodel: %s has a lens: %zu vertices, %.1f mm across, %.1f mm deep", path, prim.vertices.size(),
+                           double(vm.lens_radius) * 2000.0 * double(scale), double(hi.x - lo.x) * 1000.0 * double(scale));
+            }
             meshes.push_back(std::move(vm));
         }
+        if (caps_removed) log::infof("viewmodel: %s: %zu triangles of the housing behind its lenses left out (the sight is looked through)", path, caps_removed);
         log::infof("viewmodel: %s loaded with %zu primitives", path, meshes.size());
         return true;
     };
@@ -1194,6 +1277,8 @@ void VulkanEngine::draw_viewmodel(VkCommandBuffer cmd, const glm::mat4& vp_world
         if (!meshes.empty()) {
             glm::mat4 root = view_inv_recoil * (rifle ? rifle_root_offset_ : viewmodel_root_offset_);
             for (const auto& vm : meshes) {
+                // (a sight's lens is glass: left for the glass pass, after the lighting - glass.cpp)
+                if (vm.lens && rel) { glass_lens(vm, root, vp, mp_->draw == nullptr, rifle); continue; }
                 draw_part(vm.mesh, root, vm.base_color, vm.emissive, false);
             }
             return;
@@ -1366,9 +1451,12 @@ void VulkanEngine::rebuild_tick_aabbs() {
         tick_aabbs_.push_back(slot.aabb);
     }
     jeep_player_colliders(tick_aabbs_);          // the cars (not the one the player sits in)
+    glass_player_colliders(tick_aabbs_);         // the panes still standing in a sheet of glass that has lost one (glass.cpp)
     if (globe::current().home)                   // the castle lane's stones near the player
         for (const collision::AABB& a : lane_rock_cols_)
             if (std::abs(0.5f * (a.min.x + a.max.x) - player_.position.x) < 12.0f && std::abs(0.5f * (a.min.z + a.max.z) - player_.position.z) < 12.0f) tick_aabbs_.push_back(a);
+    for (const collision::AABB& a : rockf_colliders())      // the rock formations near the player (rock_formations_gpu.cpp)
+        if (a.max.x > player_.position.x - 6.0f && a.min.x < player_.position.x + 6.0f && a.max.z > player_.position.z - 6.0f && a.min.z < player_.position.z + 6.0f) tick_aabbs_.push_back(a);
 }
 
 void VulkanEngine::init_doors() {

@@ -4,9 +4,12 @@ add_executable(vibe_tests
     test_frustum.cpp
     test_site_store.cpp
     test_globe.cpp
+    test_sector.cpp
+    test_region_tile.cpp
     test_terrain_keep.cpp
     test_npc.cpp
     test_sound_space.cpp
+    test_glass.cpp
 )
 
 target_link_libraries(vibe_tests PRIVATE

@@ -391,6 +391,29 @@ void PhysicsWorld::add_static_boxes(const StaticBox* boxes, size_t count) {
                           state, JPH::EActivation::DontActivate);
 }
 
+bool PhysicsWorld::remove_static_box(glm::vec3 c, glm::vec3 he) {
+    struct Found : JPH::CollideShapeBodyCollector {
+        std::vector<JPH::BodyID> ids;
+        void AddHit(const JPH::BodyID& id) override { ids.push_back(id); }
+    } found;
+    const JPH::Vec3 jc(c.x, c.y, c.z);
+    impl_->system.GetBroadPhaseQuery().CollideAABox(JPH::AABox(jc - JPH::Vec3::sReplicate(0.02f), jc + JPH::Vec3::sReplicate(0.02f)), found);
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    for (const JPH::BodyID& id : found.ids) {
+        if (bi.GetMotionType(id) != JPH::EMotionType::Static) continue;
+        JPH::RefConst<JPH::Shape> shape = bi.GetShape(id);
+        if (!shape || shape->GetSubType() != JPH::EShapeSubType::Box) continue;
+        const JPH::Vec3 h = static_cast<const JPH::BoxShape*>(shape.GetPtr())->GetHalfExtent();
+        const JPH::RVec3 p = bi.GetCenterOfMassPosition(id);
+        if (std::abs(float(p.GetX()) - c.x) > 0.01f || std::abs(float(p.GetY()) - c.y) > 0.01f || std::abs(float(p.GetZ()) - c.z) > 0.01f) continue;
+        if (std::abs(h.GetX() - he.x) > 0.01f || std::abs(h.GetY() - he.y) > 0.01f || std::abs(h.GetZ() - he.z) > 0.01f) continue;
+        bi.RemoveBody(id);
+        bi.DestroyBody(id);
+        return true;
+    }
+    return false;
+}
+
 // Many small static boxes (tree trunks, rocks) merged into one static
 // compound body per `cell` metres of XZ - keeps the body count far below
 // Jolt's max_bodies (16k individual boxes exhausted it and the terrain

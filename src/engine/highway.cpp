@@ -188,6 +188,7 @@ constexpr float kLaneWidth = 2.0f / kPaved;         // 4 m of asphalt
 constexpr float kLaneS0 = 20000.0f;                 // its metres start here (apart from the course's)
 const glm::vec2 kLaneEnd(127.0f, 334.0f);           // where it ends: the gate in the car park's east side (terrain.h kCastlePark*)
 glm::vec3 g_lane_end(0.0f), g_lane_end_dir(0.0f);
+Junction g_jn;                                       // where it leaves the highway (highway.h)
 
 void build_castle_lane(float wl) {
     const glm::vec2* R = nullptr;
@@ -252,7 +253,9 @@ void build_castle_lane(float wl) {
     std::vector<glm::vec2> plan;
     std::vector<uint8_t> fixed;
     auto put = [&](glm::vec2 p, bool fx) { plan.push_back(p); fixed.push_back(fx ? 1 : 0); };
-    for (float d : { 0.0f, 8.0f, 16.0f, 24.0f }) put(j0 + west * d, true);
+    // (straight for 56 m: the junction is worked out from a record that takes the lane as a
+    //  straight line for its first 48 m - highway.h Junction)
+    for (float d : { 0.0f, 8.0f, 16.0f, 24.0f, 32.0f, 40.0f, 48.0f, 56.0f }) put(j0 + west * d, true);
     std::vector<glm::vec2> sec;
     section(kB0, kCross0, 1.0f, sec);
     {   // (from the junction round to the bank: a quarter bend)
@@ -302,7 +305,7 @@ void build_castle_lane(float wl) {
         for (size_t i = 4; i + 4 < n; ++i) {
             if (radius_at(i) >= kMinRadius) continue;
             tight = true;
-            for (size_t k = std::max<size_t>(i, 6) - 3; k <= std::min(i + 3, n - 4); ++k) nx[k] = glm::mix(pts[k], 0.5f * (pts[k - 1] + pts[k + 1]), 0.5f);
+            for (size_t k = std::max<size_t>(i, 11) - 3; k <= std::min(i + 3, n - 4); ++k) nx[k] = glm::mix(pts[k], 0.5f * (pts[k - 1] + pts[k + 1]), 0.5f);      // (the first eight stay: the junction's straight)
         }
         if (!tight) break;
         pts.swap(nx);
@@ -356,6 +359,14 @@ void build_castle_lane(float wl) {
     finish_line(L, kLaneS0);
     g_lane_end = L.p.back();
     { const glm::vec3 d = L.p.back() - L.p[L.p.size() - 4]; g_lane_end_dir = glm::normalize(glm::vec3(d.x, 0.0f, d.z)); }
+    // The junction's record (highway.h): only when the lane's first points are where the plan put them.
+    if (m >= 10 && glm::distance(pts[7], j0 + west * 56.0f) < 0.05f && !std::getenv("VIBE_NO_JUNCTION")) {
+        g_jn.on = true;
+        g_jn.line = int(g_lines.size());
+        g_jn.j = j0; g_jn.w = west;
+        g_jn.k = kLaneWidth; g_jn.s0 = kLaneS0;
+        for (int i = 0; i < 8; ++i) g_jn.hs[i] = hs[size_t(i)];
+    }
     g_lines.push_back(std::move(L));
 }
 
@@ -598,32 +609,114 @@ void build(float water_level) {
     g_ready.store(true, std::memory_order_release);
 }
 
-bool nearest(float x, float z, float reach, float& d, float& h, float& s) { int li; return nearest(x, z, reach, d, h, s, li); }
-bool nearest(float x, float z, float reach, float& d, float& h, float& s, int& line) {
+namespace {
+// `skip`: a line left out of the search (-1: none).
+bool nearest_but(float x, float z, float reach, float& d, float& h, float& s, int& line, int skip) {
     if (!ready() || g_lines.empty()) return false;
     const auto it = g_grid.find(cell_key(int(std::floor(x / kCell)), int(std::floor(z / kCell))));
     if (it == g_grid.end()) return false;
     const glm::vec2 q(x, z);
     Hit best;
-    for (uint32_t key : it->second) test_segment(q, key >> 20, key & 0xFFFFFu, best);
+    for (uint32_t key : it->second) if (int(key >> 20) != skip) test_segment(q, key >> 20, key & 0xFFFFFu, best);
     if (best.d2 > reach * reach) return false;
     resolve(g_lines, q, best, d, h, s);
     line = int(best.li);
     return true;
 }
+// Metres from the nearest centre line that is not the junction's side road (64 when none is near).
+float jn_main_dist(float x, float z) {
+    float d, h, s; int li = 0;
+    return nearest_but(x, z, kFieldMaxD, d, h, s, li, g_jn.line) ? std::abs(d) * g_lines[size_t(li)].k : kFieldMaxD;
+}
+glm::vec2 jn_uv(float x, float z) {
+    const glm::vec2 r = glm::vec2(x, z) - g_jn.j;
+    return glm::vec2(glm::dot(r, g_jn.w), glm::dot(r, glm::vec2(-g_jn.w.y, g_jn.w.x)));
+}
+}  // namespace
+
+bool nearest(float x, float z, float reach, float& d, float& h, float& s) { int li; return nearest(x, z, reach, d, h, s, li); }
+bool nearest(float x, float z, float reach, float& d, float& h, float& s, int& line) { return nearest_but(x, z, reach, d, h, s, line, -1); }
+
+const Junction& junction() { return g_jn; }
+
+// (terrain_rm_noise_road.glsl rm_jn_lane_h - keep in step.) The lane's line is a Catmull-Rom
+// curve through its 8 m points, cut into four straight pieces a span (build_castle_lane): the
+// same pieces here, so this is the line's own height to the last digit.
+float junction_lane_h(float u) {
+    const Junction& J = g_jn;
+    u = std::clamp(u, 0.0f, 47.999f);
+    const int i = int(u / 8.0f);
+    auto cr = [](float p0, float p1, float p2, float p3, float t) {
+        const float t2 = t * t, t3 = t2 * t;
+        return 0.5f * ((2.0f * p1) + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+    };
+    const int a = std::max(i - 1, 0);
+    const float h0 = J.hs[a], h1 = J.hs[i], h2 = J.hs[i + 1], h3 = J.hs[i + 2];
+    const float u0 = 8.0f * float(a), u1 = 8.0f * float(i), u2 = u1 + 8.0f, u3 = u1 + 16.0f;
+    float ua = u1, ha = h1;
+    for (int k = 1; k <= 4; ++k) {
+        const float t = 0.25f * float(k);
+        const float ub = k == 4 ? u2 : cr(u0, u1, u2, u3, t), hb = k == 4 ? h2 : cr(h0, h1, h2, h3, t);
+        if (u <= ub || k == 4) return glm::mix(ha, hb, std::clamp((u - ua) / std::max(ub - ua, 1e-4f), 0.0f, 1.0f));
+        ua = ub; ha = hb;
+    }
+    return h2;
+}
+
+// (terrain_rm_noise_road.glsl rm_jn_ad - keep in step.)
+float junction_ad(float u, float v, float xh) {
+    const float a = xh - kPaved, b = u > 0.0f ? std::abs(v) - kPaved * g_jn.k : 1e3f, r = kJnFlare;
+    // (the two pavings' union with the corner between them rounded to r)
+    const float sd = std::max(r, std::min(a, b)) - glm::length(glm::max(glm::vec2(r - a, r - b), glm::vec2(0.0f)));
+    // (in the lane's measure where it is the lane's edge, in the highway's by the highway)
+    const float lw = sstep(kPaved, kPaved + 4.0f, xh) * (1.0f - sstep(8.0f, 12.0f, std::abs(v)));
+    return kPaved + sd / glm::mix(1.0f, g_jn.k, lw);
+}
 
 float distance(float x, float z) {
     float d, h, s;
-    return nearest(x, z, kFieldMaxD, d, h, s) ? std::abs(d) : 1e9f;
+    float r = nearest(x, z, kFieldMaxD, d, h, s) ? std::abs(d) : 1e9f;
+    // (the junction's mouth is paved between the two roads' own asphalt)
+    if (g_jn.on) {
+        const glm::vec2 uv = jn_uv(x, z);
+        if (uv.x > 0.0f && uv.x < 16.0f && std::abs(uv.y) < 12.0f) r = std::min(r, junction_ad(uv.x, uv.y, jn_main_dist(x, z)));
+    }
+    return r;
 }
 
 // The road is not flat across: the asphalt falls 2 % from the crown to its edge (the rain
 // runs off), the verge 5 % beyond. (shaders: rm_highway - keep in step.)
 float cross_fall(float ad) { return 0.02f * std::min(ad, kPaved) + 0.05f * std::clamp(ad - kPaved, 0.0f, kVerge - kPaved); }
 
+namespace { float ground_but(float h_nat, float x, float z, int skip); }
+
 float ground(float h_nat, float x, float z) {
+    const Junction& J = g_jn;
+    if (!J.on) return ground_but(h_nat, x, z, -1);
+    const glm::vec2 uv = jn_uv(x, z);
+    const float u = uv.x, av = std::abs(uv.y);
+    if (!(u > kJnU0 && u < kJnU1 && av < kJnV)) return ground_but(h_nat, x, z, -1);
+    // At the junction (highway.h Junction; terrain_rm_noise_road.glsl rm_jn_ground - keep in
+    // step): the highway's ground first, as if the lane were not there ...
+    float hh = ground_but(h_nat, x, z, J.line);
+    // (... which the field does not hold beyond kJnFieldU in the lane's corridor: it has ended by there)
+    hh = glm::mix(hh, h_nat, sstep(25.0f, 29.0f, u) * (1.0f - sstep(16.0f, 20.0f, av)));
+    float res = hh;
+    // ... then the lane laid over it: nothing of it inside the highway's asphalt, all of it 8 m on.
+    const float adl = av / J.k;
+    if (u > 0.0f && adl < kBlend) {
+        const float m = u > 20.0f ? 1.0f : sstep(kPaved, kPaved + 8.0f, jn_main_dist(x, z));
+        res = glm::mix(hh, junction_lane_h(u) - cross_fall(adl), (1.0f - sstep(kVerge, kBlend, adl)) * m);
+    }
+    // (and back to the field's lane)
+    if (u > 41.0f) res = glm::mix(res, ground_but(h_nat, x, z, -1), std::min((u - 41.0f) / 5.0f, 1.0f));
+    return res;
+}
+
+namespace {
+float ground_but(float h_nat, float x, float z, int skip) {
     float d, h, s; int li = 0;
-    if (!nearest(x, z, kBlend + 8.0f, d, h, s, li)) return h_nat;
+    if (!nearest_but(x, z, kBlend + 8.0f, d, h, s, li, skip)) return h_nat;
     // Near a bridge's end the ground is worked out AS THE SHADER READS IT: from the field's
     // texels (4 m apart, their centres at 4 k + 2 in home coordinates - the window's centre
     // is a multiple of 256), read bilinearly. The exact answer switches from shelf to bare
@@ -640,7 +733,7 @@ float ground(float h_nat, float x, float z) {
         for (int k = 0; k < 4; ++k) {
             const float cx = (ix + float(k & 1)) * kFieldCell + 0.5f * kFieldCell, cz = (iz + float(k >> 1)) * kFieldCell + 0.5f * kFieldCell;
             float cd, ch, cs; int cl = 0;
-            if (nearest(cx, cz, kFieldMaxD, cd, ch, cs, cl)) {
+            if (nearest_but(cx, cz, kFieldMaxD, cd, ch, cs, cl, skip)) {
                 cd = std::clamp(cd, -kFieldMaxD, kFieldMaxD);
                 if (in_span(uint32_t(cl), cs)) cd = cd < 0.0f ? -kFieldMaxD : kFieldMaxD;
             } else { cd = kFieldMaxD; ch = 0.0f; }
@@ -666,13 +759,22 @@ float ground(float h_nat, float x, float z) {
     }
     return hr;
 }
+}  // namespace
 
-bool bake(glm::vec2 center, std::vector<uint8_t>& A, std::vector<uint8_t>& B, glm::vec4& bbox, const globe::Ring& ring) {
+bool bake(glm::vec2 center, std::vector<uint8_t>& A, std::vector<uint8_t>& B, glm::vec4& bbox, const globe::Ring& ring, glm::vec4* jn) {
     const int N = kFieldN;
     A.assign(size_t(N) * N * 4, 0);
     B.assign(size_t(N) * N * 4, 255);
     bbox = glm::vec4(0.0f);
+    if (jn) for (int i = 0; i < 4; ++i) jn[i] = glm::vec4(0.0f);
     if (!ready() || g_lines.empty()) return false;
+    // The junction in the coordinates the field is laid out in (highway.h Junction).
+    glm::vec2 cj = g_jn.j, cw = g_jn.w;
+    if (g_jn.on && ring.on) {
+        const glm::dmat2 Ji = glm::inverse(ring.J);
+        const glm::dvec2 c = ring.wp0 + Ji * (glm::dvec2(cj) - ring.h0), w = Ji * glm::dvec2(cw);
+        cj = glm::vec2(c); cw = glm::normalize(glm::vec2(w));
+    }
     // The lines in the coordinates the field is laid out in.
     std::vector<Line> carried;
     if (ring.on) {
@@ -705,9 +807,16 @@ bool bake(glm::vec2 center, std::vector<uint8_t>& A, std::vector<uint8_t>& B, gl
             const int j0 = std::max(0, int(std::floor((mn.y - org.y) / kFieldCell))), j1 = std::min(N - 1, int(std::floor((mx.y - org.y) / kFieldCell)));
             const glm::vec2 ab = b - a;
             const float inv = 1.0f / std::max(glm::dot(ab, ab), 1e-6f);
+            // (round the junction the field holds the highway alone: the side road is not written there)
+            const bool side_road = g_jn.on && int(li) == g_jn.line && L.s[i] < g_jn.s0 + 160.0f;
             for (int j = j0; j <= j1; ++j)
                 for (int ii = i0; ii <= i1; ++ii) {
                     const glm::vec2 q = org + (glm::vec2(float(ii), float(j)) + 0.5f) * kFieldCell;
+                    if (side_road) {
+                        const glm::vec2 r = q - cj;
+                        const float u = glm::dot(r, cw), v = glm::dot(r, glm::vec2(-cw.y, cw.x));
+                        if (u > kJnU0 && u < kJnFieldU && std::abs(v) < kJnV) continue;
+                    }
                     const float t = std::clamp(glm::dot(q - a, ab) * inv, 0.0f, 1.0f);
                     const glm::vec2 dv = q - (a + ab * t);
                     const float d2 = glm::dot(dv, dv) / (L.k * L.k);       // (the road's own measure)
@@ -718,6 +827,12 @@ bool bake(glm::vec2 center, std::vector<uint8_t>& A, std::vector<uint8_t>& B, gl
     }
     if (!any) return false;
     const float s_ref = std::round(s_near / 12.0f) * 12.0f;               // (a whole number of dash periods: the pattern keeps its place)
+    if (jn && g_jn.on) {
+        jn[0] = glm::vec4(cj, cw);
+        jn[1] = glm::vec4(1.0f, g_jn.k, g_jn.s0 - s_ref, 0.0f);            // (.z: the lane's metres at J, as the field counts them)
+        jn[2] = glm::vec4(g_jn.hs[0], g_jn.hs[1], g_jn.hs[2], g_jn.hs[3]);
+        jn[3] = glm::vec4(g_jn.hs[4], g_jn.hs[5], g_jn.hs[6], g_jn.hs[7]);
+    }
     for (int j = 0; j < N; ++j)
         for (int i = 0; i < N; ++i) {
             const size_t k = size_t(j) * N + size_t(i);

@@ -307,6 +307,29 @@
             mate = mix(mate, turfc, turf * 0.85);
         }
     }
+    // A flower field from far off: the ground carries the colour of what stands on it (the
+    // reference game paints a top-down picture of its placed plants onto the far terrain, as
+    // colour only). Close by the ground stays what it is - earth and turf between the stalks;
+    // with distance it takes the meadow's mean colour (yellow heads over green leaves), and has
+    // it all by the distance at which the meadow's plants end (plant_gpu.cpp: 230 m, thinning
+    // from 28 m) - so the field does not turn green where its plants stop. Where the plants may
+    // stand: tuft_place.comp's rule.
+    {
+        float fw = t > 20.0 ? rm_flower_field(pos.xz) : 0.0;
+        if (fw > 0.0) {
+            float wl = scene.water_params.y;
+            vec2  fq = abs(pos.xz);
+            float grow = max(fq.x, fq.y) < kHeightmapSide * 0.5
+                       ? grassEligibility(pos.xz, pos.y)
+                       : smoothstep(wl + 1.2, wl + 2.6, pos.y) * (1.0 - smoothstep(52.0, 70.0, pos.y)) *
+                         smoothstep(84.0, 92.0, distance(pos.xz, vec2(1600.0, 830.0)));        // (the launch site's apron: world_map.glsl wm_pad_c)
+            grow *= 1.0 - smoothstep(0.25, 0.60, 1.0 - nor.y);
+            // (patches: more flower here, more leaf there, a few metres to tens of metres across)
+            float pn = tile_noise2(pos.xz, 0.031, vec2(5.0)) * 0.6 + tile_noise2(pos.xz, 0.13, vec2(0.0)) * 0.4;
+            vec3  fieldc = mix(vec3(0.115, 0.150, 0.030), vec3(0.330, 0.250, 0.022), 0.42 + 0.40 * pn) * (0.90 + 0.20 * tile_noise2(pos.xz, 0.47, vec2(2.0)));
+            mate = mix(mate, fieldc, fw * grow * 0.94 * smoothstep(20.0, 185.0, t) * (1.0 - smoothstep(0.1, 0.5, g_snow)));
+        }
+    }
     // The lake bed seen directly (camera under water): the same stones as
     // the bed seen through the surface from above (water branch, bed_h).
     float bed_sub = 0.0;
@@ -442,14 +465,14 @@
         vec3 grav = rm_at_albedo(kRmMatGravel, gv_at, hw_lod + 0.6) * 0.50;
         grav *= mix(0.78, 1.12, tile_noise2(pos.xz, 0.6, vec2(2.0))) * vec3(1.0, 0.97, 0.92);
         // (the land's own cover comes back through it toward its outer edge)
-        float grav_w = hw_verge * (1.0 - 0.55 * smoothstep(7.0, 8.6, abs(hw_d)) * tile_noise2(pos.xz, 1.9, vec2(0.0)));
+        float grav_w = hw_verge * (1.0 - 0.55 * smoothstep(7.0, 8.6, hw_ad) * tile_noise2(pos.xz, 1.9, vec2(0.0)));
         // (close by the gravel thins out stone by stone: the land comes up between the stones first)
         if (GND_SSDM && t < 45.0 && hw_pave < 0.5) grav_w = mix(rm_height_blend(0.45, hw_hgt, grav_w), grav_w, smoothstep(20.0, 45.0, t));
         mate = mix(mate, grav, grav_w);
         if (hw_pave > 0.001) {
             vec3 tex = rm_at_albedo(kRmMatAsphalt, hw_at, hw_lod) * 0.50;
             float gl = 0.0, lvl = 1.0;
-            vec3 asph = rm_hw_asphalt(pos.xz, hw_d, hw_s, t, tex, hw_hgt, hw_wk, gl, lvl);
+            vec3 asph = rm_hw_asphalt(pos.xz, hw_d, hw_s, t, tex, hw_hgt, hw_wk, hw_mk, gl, lvl);
             // (cracks, tarred joints and ruts sink, a patch stands proud: the height written for the
             //  screen-space displacement, by a factor - within its reach only)
             if (GND_SSDM && g_gnd_ssdm_h > 0.0) g_gnd_ssdm_h = max(g_gnd_ssdm_h * mix(1.0, lvl, hw_pave), 0.006 * kGndSsdmMax);

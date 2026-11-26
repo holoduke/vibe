@@ -60,7 +60,7 @@ float rm_ground_detail_raw(vec2 wp, float t, float h);
 float rm_ground_detail(vec2 wp, float t, float h) {
     float keep = 1.0;
     if (t < 26.0 && rm_hw_in(wp)) {
-        keep = smoothstep(5.4, 8.4, abs(rm_hw_dh(wp).x));
+        keep = smoothstep(5.4, 8.4, rm_hw_ad(wp, rm_hw_dh(wp).x));
         if (keep <= 0.0) return 0.0;
     }
     // No rills and stones under the service station's paving and its way in (terrain.h kStation*):

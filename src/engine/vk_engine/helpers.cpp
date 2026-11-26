@@ -50,7 +50,9 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 8448 (the globe: chart frame + FBM lattice).
 //     → 9376 (wm_cache, wm_cache1: the world's slow fields as textures).
 //     → 9696 (lamp_lights[8] -> [24]: a row of street lamps lights the road far ahead).
-static_assert(sizeof(SceneUBO) == 9696, "scene ubo layout");
+//     → 9760 (flower_field[4]: the flowering meadow's fields, for the ground's far colour).
+//     → 9824 (hw_jn[4]: the junction of a side road with a highway).
+static_assert(sizeof(SceneUBO) == 9824, "scene ubo layout");
 
 RtFuncs g_rt;
 

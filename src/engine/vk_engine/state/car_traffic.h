@@ -25,16 +25,20 @@ struct VulkanEngine::CarTrafficState {
         bool      siren = false;
         glm::vec3 lamp[2]{};                             // where the two lamps are (world): their glow (jeep_fx)
         bool      lit[2] = { false, false };
-        // its siren's voice (siren_audio_tick)
-        uint32_t  voice = 0;
-        float     vol = 0.0f;
-        float     rate = 1.0f;                           // its pitch (kept while it fades out)
-        glm::vec3 last{0.0f}, vel{0.0f};
-        bool      has_last = false;
     };
     std::vector<Bar> bars;
     float flash_t = 0.0f;
+    // The sirens that sound (siren_audio_tick): one source of the spatialiser
+    // (AudioEngine::source_*) a police car whose siren is on, BY THE NPC ENGINE'S AGENT - not
+    // by the bar, not by whether the car is drawn.
+    struct Siren {
+        uint32_t  src = 0;
+        glm::vec3 pos{0.0f};                             // where it was last frame (an agent's number given to another car: not the same siren)
+        float     log_t = 0.0f;                          // VIBE_LOG_TRAFFIC: a line every half second
+    };
+    std::unordered_map<int, Siren> sirens;
     int   siren_clip = 0;                                // 0 not asked for yet, 1 there, -1 none
+    bool  siren_test_placed = false;                     // VIBE_TEST_SIREN=stay: the eye was put by the road
     uint8_t style_was[100] = {};                         // each NPC car's View::style last frame (VIBE_LOG_TRAFFIC: what changed)
 };
 

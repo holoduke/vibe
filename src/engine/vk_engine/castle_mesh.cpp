@@ -167,6 +167,7 @@ const std::vector<const VulkanEngine::CastleMeshGpu*>& VulkanEngine::mesh_parts_
     if (globe::current().home) for (const auto& g : castle_meshes_) mesh_parts_now_.push_back(&g);
     if (site_here()) for (const auto& g : site_meshes_) mesh_parts_now_.push_back(&g);
     for (const auto& ch : hw_chunks_) for (const auto& g : ch.second) mesh_parts_now_.push_back(&g);
+    rockf_parts(mesh_parts_now_);                                                                            // (rock formations: rock_formations_gpu.cpp)
     if (globe::current().home) for (const auto& g : jeep_draw_) mesh_parts_now_.push_back(&g);              // (jeep.cpp)       // (a highway's roadside objects: highway_furniture.cpp)
     return mesh_parts_now_;
 }
@@ -174,6 +175,7 @@ const std::vector<const VulkanEngine::CastleMeshGpu*>& VulkanEngine::mesh_parts_
 void VulkanEngine::destroy_castle_meshes() {
     destroy_sites();
     hw_objects_destroy();
+    rockf_destroy();
     river_stream::destroy(allocator_);
     destroy_jeep();
     destroy_mesh_parts(castle_meshes_);

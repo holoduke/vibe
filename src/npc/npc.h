@@ -28,7 +28,7 @@
 
 namespace vibe::npc {
 
-constexpr int   kMaxAgents = 100;
+constexpr int   kMaxAgents = 160;              // (100 until 2026-11-26: the pavilion and the launch pad got people of their own)
 constexpr float kStep = 0.1f;                  // seconds a step
 constexpr float kTakeSpeed = 1.5f;             // m/s: a car no faster than this can be taken (take_car)
 
@@ -81,11 +81,14 @@ struct View {
 // The road: a closed course of `length` metres. at(s) gives the centre line's point and its
 // unit direction (x, z) for increasing s; s wraps.
 // View::style. Sitting: 0 plain, 1 at the bar (a high stool), 2 eating at a table, 3 talking at a
-// table. Standing: 0 plain, 1 arms crossed, 2 hands on the hips, 3 at a phone, 4 looking far.
-// Working: 0 at a machine (a till's buttons), 1 a cashier, 2 at a pump.
-// How somebody walks: `look % 8` - 0 and 5..7 plainly, 1 briskly, 2 tired, 3 hands in the pockets, 4 at a
-// phone - and how fast that is, of the plain pace.
-constexpr float kPace[8] = { 1.0f, 0.85f, 0.42f, 0.67f, 0.81f, 0.82f, 1.0f, 1.0f };      // (the clips' own paces, a little quicker: they were made slow)
+// table, 4 working at a desk (View::aim: the middle of its keyboard). Standing: 0 plain, 1 arms
+// crossed, 2 hands on the hips, 3 at a phone, 4 looking far, 5 pointing at something (View::aim:
+// a colleague's screen), 6 talking with whoever stands near, 7 looking at something (View::aim:
+// the rocket, the hall below). Working: 0 at a machine (a till's buttons, a tank's valves), 1 a
+// cashier, 2 at a pump.
+// How somebody walks: `look % 8` - 0, 6 and 7 plainly, 1 briskly, 2 and 5 at ease, 3 hands in the
+// pockets, 4 at a phone - and how fast that is, of the plain pace.
+constexpr float kPace[8] = { 1.0f, 0.85f, 0.82f, 0.67f, 0.81f, 0.82f, 1.0f, 1.0f };      // (the clips' own paces, a little quicker: they were made slow. 2 was 0.42, the "tired" shuffle, until 2026-11-26)
 constexpr int kSeatHeightCm[2] = { 45, 75 };      // a chair's seat above its floor, a bar stool's
 
 struct Road {
@@ -104,6 +107,16 @@ public:
     bool load_site(const std::string& nav_file, glm::vec3 origin);
     // The same from text (tests).
     bool load_site_text(const std::string& text, glm::vec3 origin);
+    // ANOTHER SITE beside the first (after load_site, before populate): its nodes, seats and
+    // spots - the pavilion by the launch pad, the pad itself. It has people of its own
+    // (npc.cpp "THE ADDED SITES"), who are only there while a player is near it (set_eyes):
+    // nobody near, they are hidden and cost nothing. A link in its file may name a node of a
+    // site read before it. No cars. False (and nothing added) when it cannot be read.
+    bool add_site(const std::string& nav_file, glm::vec3 origin);
+    bool add_site_text(const std::string& text, glm::vec3 origin);
+    // Where the players are, on foot or not (the authority's, given every frame): what decides
+    // whether an added site's people are there.
+    void set_eyes(const std::vector<glm::vec3>& at);
     void set_road(Road road);
     // Makes the people and the cars. Call after the site and the road are set.
     // The way the soldiers run, there and back (before populate; empty: none).
@@ -160,6 +173,7 @@ public:
     // For tests and logs: how many people sit, walk; how many cars stand at the site.
     struct Census {
         int people = 0, sitting = 0, walking = 0, hidden = 0, cars = 0, cars_at_site = 0, cars_moving = 0;
+        int asleep = 0;                  // people of added sites nobody is near (not counted as hidden)
         float longest_visit = 0.0f;      // seconds the car that has been at the site longest (not the parked ones) has been there
     };
     Census census() const;

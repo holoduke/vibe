@@ -291,6 +291,8 @@ add_library(vibe_core STATIC
     src/npc/npc.cpp
     src/engine/site_store.cpp
     src/engine/globe.cpp
+    src/engine/sector.cpp
+    src/engine/region_tile.cpp
     src/game/physics.cpp
     src/game/collision.cpp
     src/game/level.cpp
@@ -354,10 +356,13 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/private_state.cpp
     src/engine/vk_engine/terrain_patches.cpp
     src/engine/vk_engine/terrain_bake.cpp
+    src/engine/vk_engine/regions.cpp
     src/engine/vk_engine/sites.cpp
     src/engine/vk_engine/highway_field.cpp
     src/engine/vk_engine/highway_furniture.cpp
     src/engine/vk_engine/lane_edge.cpp
+    src/engine/vk_engine/rock_formations.cpp
+    src/engine/vk_engine/rock_formations_gpu.cpp
     src/engine/vk_engine/river_stream.cpp
     src/engine/vk_engine/jeep.cpp
     src/engine/vk_engine/sound_env.cpp
@@ -376,6 +381,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/rt.cpp
     src/engine/vk_engine/castle_mesh.cpp
     src/engine/vk_engine/fx.cpp
+    src/engine/vk_engine/glass.cpp
     src/engine/vk_engine/vegetation.cpp
     src/engine/vk_engine/veg_impostor.cpp
     src/engine/vk_engine/clutter_shadow.cpp

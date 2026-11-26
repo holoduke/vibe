@@ -457,11 +457,13 @@ void VulkanEngine::loop_weapons_and_edit(InputFrame& in, float frame_dt) {
                     terrain_brush_has_hit_ = false;
                 }
             }
+            // (region tiles are sculpted anywhere on the planet: the brush is aimed at the CPU's ground)
+            if (regions_edit_on()) regions_brush_aim();
             // Height tools only work on the mesh terrain; grass and zone
             // painting work on both renderers.
             const bool zone_tool = terrain_brush_mode_ == TerrainBrushMode::ZonePaint;
             const bool tool_ok = zone_tool || brush_mode_is_grass(terrain_brush_mode_) ||
-                                 !rt_.terrain_raymarch_enabled;
+                                 !rt_.terrain_raymarch_enabled || regions_edit_on();
             bool sculpt_active = (in.fire_held || in.alt_fire_held) &&
                                   terrain_brush_has_hit_ && tool_ok;
             if (sculpt_active) {
@@ -483,7 +485,7 @@ void VulkanEngine::loop_weapons_and_edit(InputFrame& in, float frame_dt) {
                 }
                 if (zone_tool)      // right button erases (back to automatic)
                     paint_veg(in.alt_fire_held && !in.fire_held);
-                else
+                else if (!regions_brush(frame_dt))          // (a region tile's, when those are being edited: regions.cpp)
                     apply_terrain_brush(frame_dt);
                 terrain_brush_mode_ = prev_mode;
                 // CLOD raster reads the heightmap texture, so the
@@ -496,7 +498,9 @@ void VulkanEngine::loop_weapons_and_edit(InputFrame& in, float frame_dt) {
                 // strokes have no dirty bits to consume — the
                 // mask reupload already happened the frame the
                 // stroke modified the CPU mirror.
-                if (zone_tool) {
+                if (regions_edit_on() && !zone_tool) {
+                    regions_stroke_end();
+                } else if (zone_tool) {
                     if (veg_auto_replant_) request_paint_apply(false);
                 } else if (!brush_mode_is_grass(terrain_brush_mode_)) {
                     refresh_terrain_blas();
@@ -867,9 +871,11 @@ void VulkanEngine::loop_upkeep(InputFrame& in, float frame_dt) {
         veg_replant_request_ = false;
         start_veg_replant();                 // placement runs in the background
     }
+    regions_update();                        // (regions.cpp: the height tiles round the camera; before what reads the ground)
     wv_nf_poll();
     hw_poll();
     hw_objects_poll();
+    rockf_poll();                            // (rock formations near the player: rock_formations_gpu.cpp)
     river_stream::poll(allocator_, player_.eye_position(), globe::current().home, rt_.water_level, std::clamp(rt_.terrain_raymarch_octaves, 4, 24));   // (the river's plants beyond the home tile)
     if (veg_job_active_ && veg_job_.valid() &&
         veg_job_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {

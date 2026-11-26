@@ -597,6 +597,27 @@ private:
     void update_terrain_bake(VkCommandBuffer cmd);          // draw what is missing of the pictures (before the world pass)
     void terrain_bake_signature(const struct SceneUBO& d);  // hash what the material depends on (update_scene_ubo)
     void terrain_bake_invalidate();                         // the ground itself was changed
+    void terrain_bake_redraw(float x0, float z0, float x1, float z1);   // ... inside this box only (chart x, z)
+    // Regions: stored ground (height tiles) anywhere on the planet, streamed round the camera
+    // (vk_engine/regions.cpp; state: vk_engine/state/regions.h; engine/region_tile.h, engine/sector.h;
+    // docs/ARCHITECTURE.md "Regions").
+    struct RegionState;
+    RegionState* rg_ = nullptr;
+    void init_regions();                                    // the tiles' array texture and the shaders' table
+    void destroy_regions();
+    void regions_update();                                  // once a frame: what is in reach, read / free, the loaded set
+    void record_region_uploads(VkCommandBuffer cmd, uint32_t slot);     // a read or edited tile -> its layer
+    void regions_ground_changed(uint64_t tile);             // tell what stands on the ground under that tile (sector::Id::v)
+    void regions_box_changed(float x0, float z0, float x1, float z1);   // ... the cheap part of it, inside a box
+    const std::vector<float>& regions_home_heights(std::vector<float>& buf) const;     // home's heightmap + the tiles over it
+    void regions_refresh_home();
+    bool regions_edit_on() const;                           // the terrain brush works on region tiles
+    void regions_brush_aim();
+    bool regions_brush(float dt);
+    void regions_stroke_end();
+    bool regions_new_tile_here();
+    void regions_stamp_here(int shape, float radius, float height);
+    void regions_menu();
     bool terrain_bake_ready() const;                        // the terrain pass may read the pictures this frame
     float terrain_bake_t0() const;                          // ... and the distance their first level is made for
 
@@ -1018,6 +1039,11 @@ private:
         Mesh mesh;
         glm::vec4 base_color = glm::vec4(0.6f, 0.6f, 0.65f, 1.0f);
         glm::vec3 emissive = glm::vec3(0.0f);       // glowing parts (from the glTF material)
+        // A sight's lens (glTF material "Lens"): not drawn with the gun but as glass, after the
+        // lighting (glass.cpp glass_lens). Its centre, axis and radius in the model's space.
+        bool      lens = false;
+        glm::vec3 lens_centre{0.0f}, lens_axis{1.0f, 0.0f, 0.0f};
+        float     lens_radius = 0.0f;
     };
     std::vector<ViewmodelMesh> viewmodel_gltf_;
     glm::mat4 viewmodel_root_offset_{ 1.0f };    // local-to-camera placement
@@ -1919,7 +1945,27 @@ private:
     const std::vector<const CastleMeshGpu*>& mesh_parts_now();
     CastleMeshGpu make_mesh_part(const game::LevelMesh& lm);
     void destroy_mesh_parts(std::vector<CastleMeshGpu>& parts);
+    // Breakable glass and the weapons' lenses (glass.cpp; its state is private to it:
+    // vk_engine/state/glass.h; docs/ARCHITECTURE.md "Breakable glass").
+    struct GlassState;
+    GlassState* glass_ = nullptr;
+    void glass_destroy();
+    void glass_tick(float dt);
+    int  glass_adopt(int level_mesh);                    // looks at a glass part of the level: its panes, its colliders
+    bool glass_ray(glm::vec3 a, glm::vec3 b, glm::vec3 dir, float energy, bool break_out = false);   // a bolt's way against the glass
+    void glass_hit(int part, int pane, glm::vec2 uv, glm::vec3 at, glm::vec3 dir, float energy);
+    void glass_burst(int part, int pane, glm::vec3 at, glm::vec3 dir);
+    void glass_blast(glm::vec3 pos, float radius);
+    void glass_sound(int kind, glm::vec3 at);
+    void glass_player_colliders(std::vector<collision::AABB>& out) const;
+    bool glass_draws(const CastleMeshGpu* gp) const;     // the glass pass draws this part pane by pane (glass_draw_part)
+    void glass_draw_part(VkCommandBuffer cmd, const CastleMeshGpu* gp, const glm::mat4& vp);
+    void glass_shard_verts(std::vector<Vertex>& out) const;
+    void glass_lens(const ViewmodelMesh& vm, const glm::mat4& model, const glm::mat4& vp, bool own, bool rifle);
+    bool glass_lenses_pending() const;
+    void glass_draw_lenses(VkCommandBuffer cmd);
     void wv_nf_invalidate();                     // (veg_stream.cpp) the near ground is baked again
+    void wv_ground_changed(glm::vec2 c, float radius);      // (veg_stream.cpp) the ground there changed: the woods' cells are made again
     void wv_rechart(const globe::Chart& from, const globe::Chart& to, const globe::Chart* from_ptr);       // (veg_stream.cpp) the streamed woods carried into another chart
     // The engine's coordinates have just shifted by whole tiles (old = new + s): what the
     // renderer remembers of the last frame in coordinates is shifted with them, so that
@@ -2100,6 +2146,14 @@ private:
     // made when the camera comes near and freed when it has left.
     void      hw_objects_poll();
     void      hw_objects_destroy();
+    // Rock formations (vk_engine/rock_formations.h: the kit and the rule; rock_formations_gpu.cpp:
+    // which are drawn at which level, their colliders; state in state/rock_formations.h).
+    struct RockfState;
+    RockfState* rockf_ = nullptr;
+    void      rockf_poll();
+    void      rockf_destroy();
+    void      rockf_parts(std::vector<const CastleMeshGpu*>& out) const;
+    const std::vector<collision::AABB>& rockf_colliders(uint32_t* gen = nullptr) const;
     void      hw_rail_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const;     // the guard rail near a place, for physics
     // The jeep (jeep.cpp): a vehicle to drive.
     struct JeepState;
@@ -2144,13 +2198,13 @@ private:
     bool      npc_take_car(float reach);          // (jeep.cpp) the standing NPC car within reach becomes one of the player's
     // Multiplayer (docs/ARCHITECTURE.md "NPCs and every player"): a shot at somebody and a car that is
     // taken are events; the host's NPC world decides, every machine shows it.
-    float     npc_gone_[100] = {};                // seconds an agent is not shown here although the copy of the host's world still has it (a replica: shot or taken a moment ago)
+    float     npc_gone_[160] = {};                // seconds an agent is not shown here although the copy of the host's world still has it (a replica: shot or taken a moment ago)
     std::vector<net::NpcCarTaken> npc_taken_;     // the NPC cars that became players' cars, in the order of their numbers
     std::vector<net::NpcCarTaken> npc_taken_wait_; // ... told of before the ones in front of them
     float     npc_taken_resend_ = -1.0f;          // seconds until this machine tells a player who joined of them
     size_t    npc_players_seen_ = 0;
     float     npc_take_asked_ = 0.0f;             // (a client asked the host for a car: not again for a moment)
-    float     npc_nodriver_[100] = {};            // seconds a car is shown without the driver nobody of the NPC world sits for (he was shot, and a copy of the host's world has not heard yet)
+    float     npc_nodriver_[160] = {};            // seconds a car is shown without the driver nobody of the NPC world sits for (he was shot, and a copy of the host's world has not heard yet)
     void      npc_test_input(InputFrame& in);     // (npc_world.cpp) VIBE_TEST_NPC_SHOOT: aims at somebody and pulls the trigger
     void      npc_car_test(InputFrame& in);       // (jeep.cpp) VIBE_TEST_NPC_CAR: into an NPC car, and away
     void      npc_car_add(const JeepState& kind); // (jeep.cpp) one more car without physics of that kind in the pool lent to the NPC cars

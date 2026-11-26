@@ -31,10 +31,11 @@ void main() {
         if (vVegInfo.y > 0.5 ? (n >= vVegInfo.x) : (n < vVegInfo.x)) discard;
     }
     vec3 col, nrm, surf; float leaf;
-    if (!veg_imp_sample(u_normal[15], u_normal[18], vWorldPos, scene.camera_pos.xyz, vObjectPos, vShellBase, vObjectNormal, px,
+    vec3 info = vec3(vObjectNormal.x, abs(vObjectNormal.y), vObjectNormal.z);      // (radius < 0: a far card - veg.vert)
+    if (!veg_imp_sample(u_normal[15], u_normal[18], vWorldPos, scene.camera_pos.xyz, vObjectPos, vShellBase, info, px,
                         col, nrm, leaf, surf)) discard;
     if (veg_imp_bare(surf, leaf, vVegInfo.z, scene.season.w)) discard;
     precise vec4 sc = pc.mvp * vec4(surf, 1.0);
     precise float z = sc.z / sc.w;
-    gl_FragDepth = max(gl_FragCoord.z, z);
+    if (vObjectNormal.y > 0.0) gl_FragDepth = max(gl_FragCoord.z, z);      // (a far card keeps its own depth)
 }

@@ -274,6 +274,7 @@ layout(push_constant) uniform PC {
 #include "cube_surface_helpers.glsl"   // Texturing helpers: triplanar sampling, terrain / mesh parallax (tpom_*, pom_*), grass blade shadow, army paint, roughness table
 #include "cube_noise_rays.glsl"   // Noise + random, ray-query helpers (any_hit*), sky sampling, voxel tower DDA
 #include "cube_wall_relief.glsl"   // Castle wall box relief (br_*): solidity margin, exit, open-air probe, silhouette clip
+#include "rock_form.glsl"   // Rock formations (rf_*): the landscape's rock scan on a mesh, its colour; used in cube_main_surfaces.glsl
 void main() {
     // Default depth = rasterized depth; SPOM silhouette path may bump
     // to 1.0 below. The depth_greater qualifier on the gl_FragDepth
@@ -422,13 +423,14 @@ void main() {
         // silhouette, colour, normal and depth from the baked views round the direction to
         // the camera. (The same cut and the same depth as the pre-pass, veg_imp_depth.frag.)
         vec3 ic, inr; float ilf;
-        if (!veg_imp_sample(u_normal[15], u_normal[18], vWorldPos, scene.camera_pos.xyz, vObjectPos, vShellBase, vObjectNormal, imp_px,
+        vec3 iinfo = vec3(vObjectNormal.x, abs(vObjectNormal.y), vObjectNormal.z);      // (radius < 0: a far card - veg.vert)
+        if (!veg_imp_sample(u_normal[15], u_normal[18], vWorldPos, scene.camera_pos.xyz, vObjectPos, vShellBase, iinfo, imp_px,
                             ic, inr, ilf, imp_surf)) discard;
         if (veg_imp_bare(imp_surf, ilf, vVegInfo.z, scene.season.w)) discard;
         imp_col = vec4(ic, 1.0); imp_nrm = vec4(inr, ilf);
         precise vec4 isc = pc.mvp * vec4(imp_surf, 1.0);
         precise float iz = isc.z / isc.w;
-        gl_FragDepth = max(gl_FragCoord.z, iz);
+        if (vObjectNormal.y > 0.0) gl_FragDepth = max(gl_FragCoord.z, iz);      // (a far card keeps its own depth: veg_imp_depth.frag does the same)
     } else if (pc.grass_params.w < -0.5 && pc.grass_params.x > 0.5) {
         // GPU vegetation canopy / bush: leafy cut-out silhouette (veg_leaf.glsl).
         int vm = int(vUv.y + 0.5);

@@ -97,6 +97,9 @@ void VulkanEngine::init_world() {
         highway::build(rt_.water_level);           // (engine/highway.h: the coast road; the ground's height includes its shelf from here on)
         { const glm::vec4 tb = highway::tightest_bend(); log::infof("highway: tightest bend: radius %.0f m at (%.1f, %.1f, %.1f)", double(tb.w), double(tb.x), double(tb.y), double(tb.z)); }
         log::infof("highway: the course is %.0f m round", double(highway::course_length()));
+        if (const highway::Junction& jn = highway::junction(); jn.on)
+            log::infof("highway: junction at (%.1f, %.1f, %.1f), the lane leaves (%.3f, %.3f); its heights 0..56 m: %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f", double(jn.j.x), double(jn.hs[0]), double(jn.j.y), double(jn.w.x), double(jn.w.y),
+                       double(jn.hs[0]), double(jn.hs[1]), double(jn.hs[2]), double(jn.hs[3]), double(jn.hs[4]), double(jn.hs[5]), double(jn.hs[6]), double(jn.hs[7]));
         for (float m : { 0.0f, 1500.0f, 3000.0f, 4500.0f, 6000.0f, 7500.0f, 9000.0f, 10500.0f, 12000.0f }) {
             glm::vec3 hp; glm::vec2 hd;
             if (highway::point_along(m, hp, hd)) log::infof("highway: %+.0f m along: (%.1f, %.1f, %.1f) heading (%.2f, %.2f)", double(m), double(hp.x), double(hp.y), double(hp.z), double(hd.x), double(hd.y));

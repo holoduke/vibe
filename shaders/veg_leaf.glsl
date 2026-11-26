@@ -188,9 +188,19 @@ bool veg_imp_sample(sampler2D colT, sampler2D auxT, vec3 wpos, vec3 cam, vec3 ba
     vec2  asz = vec2(textureSize(colT, 0));
     float blk = floor(info.x + 0.5);
     vec2  org = vec2(mod(blk, kImpCols), floor(blk / kImpCols)) * kImpN;       // the block's first tile
-    // (the mip by hand: the uv jumps between views. Never past 2: tiles would bleed.)
-    float lod = clamp(log2(px / (2.0 * R * ssy.x) * kImpTile + 1e-6), 0.0, 2.0);
-    float m   = (0.5 + exp2(lod)) / kImpTile;                                 // keeps the taps inside the tile
+    // (the mip by hand: the uv jumps between views. Never past 4 - a tile is 6 texels there, and
+    //  the margin below keeps the taps inside it; it was 2, and a tree a few pixels tall was read
+    //  from a 24-texel tile at a handful of scattered points: it flickered and lost its thin parts.)
+    float lod_raw = log2(px / (2.0 * R * ssy.x) * kImpTile + 1e-6);
+    float lod = clamp(lod_raw, 0.0, 4.0);
+    // The cut follows the mip, as in the reference game: a small mip's coverage is an average
+    // over leaves and the gaps between them, and cut at 0.5 a far crown shrinks and a far wood
+    // thins out. 0.5 up to mip 2, 0.3 from mip 4 on.
+    float cut = 0.5 - 0.1 * clamp(lod_raw - 2.0, 0.0, 2.0);
+    // (keeps the taps inside the tile. Past mip 2 half a texel of the coarser mip in use is enough -
+    //  a tile is 96 = 3 x 32 texels, so the mips up to 5 never mix two tiles - and a wider margin
+    //  cut the top and the foot off a small far tree and smeared its edge: a pillar.)
+    float m   = (lod <= 2.0 ? 0.5 + exp2(lod) : 0.5 * exp2(ceil(lod))) / kImpTile;
     float al = 0.0, lf = 0.0;
     vec3  off = vec3(0.0), nn = vec3(0.0);
     for (int k = 0; k < 3; ++k) {
@@ -209,7 +219,7 @@ bool veg_imp_sample(sampler2D colT, sampler2D auxT, vec3 wpos, vec3 cam, vec3 ba
         nn  += wa * veg_oct_dec(ta.rg);
         lf  += wa * ta.a;
     }
-    if (al < 0.5) return false;                                     // (the game's cut)
+    if (al < cut) return false;                                     // (the game's cut, by mip)
     col /= al; off /= al; lf /= al;
     leaf = lf;
     vec3 sl = (p + c0 + off) * sc;

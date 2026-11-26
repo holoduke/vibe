@@ -116,7 +116,7 @@ public:
     // The people and cars that live their own life (src/npc): the host's world, as its own
     // bytes (npc::World::serialize) - the session only carries them. Host: to all clients, a few
     // times a second, unreliable (the next one replaces a lost one). Client: the newest received.
-    static constexpr size_t kMaxNpcBytes = 4 + 100 * 27;
+    static constexpr size_t kMaxNpcBytes = 4 + 160 * 27;      // (npc::kMaxAgents agents of 27 bytes)
     void send_npc(const uint8_t* data, size_t size);
     bool take_npc(std::vector<uint8_t>& out);
 

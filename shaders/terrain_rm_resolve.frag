@@ -130,7 +130,7 @@ void main() {
             if (w > 0.24) {
                 float sd = texelFetch(u_lr_depth, ki, 0).r;
                 if (sd >= 0.99999) { outResolved = vec4(0.0, 0.0, 0.0, -1.0); return; }
-                outResolved = vec4(hr.a > 0.0 ? mix(hr.rgb, smp, 0.6) : smp, 0.05 / max(1.0000333 - sd, 1e-7));
+                outResolved = vec4(hr.a > 0.0 ? mix(hr.rgb, smp, 0.6) : smp, 0.05 / max(1.0000016667 - sd, 1e-7));
                 return;
             }
             if (hr.a != 0.0) { outResolved = hr; return; }
@@ -138,7 +138,7 @@ void main() {
     }
     if (!cur) { outResolved = vec4(0.0); return; }
     vec3  c  = g_c;
-    float zc = 0.05 / max(1.0000333 - g_depth, 1e-7);       // view distance (near 0.05)
+    float zc = 0.05 / max(1.0000016667 - g_depth, 1e-7);       // view distance (near 0.05)
     if (h.a > 0.0 && g_edge_motion.z < 0.5 && abs(h.a - zc) < 0.08 * zc + 0.05) {
         // What was kept may not be further from this frame's own colour here than the four
         // low-resolution colours round the pixel differ, and more. (Wide: those four do not span

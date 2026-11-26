@@ -314,6 +314,17 @@ void VulkanEngine::update_projectiles(float dt) {
                     glm::vec3 c_hit;
                     if (corpse_bolt_hits(std::isnan(it->prev_pos.x) ? it->spawn_origin : it->prev_pos, bp, c_hit)) drop = true;
                 }
+                // Glass (glass.cpp): the bolt leaves its mark on the pane it went through and
+                // flies on. (A bolt that was stopped this step stands a bolt's half length and
+                // a wall's thickness short of what stopped it - glass set in a wall, or glass
+                // far off that still has its physics box: its way is taken that much further.)
+                if (!drop) {
+                    glm::vec3 to = bp;
+                    const glm::vec3 gv = physics_->get_linear_velocity_h(it->jolt_handle);
+                    const float gs = glm::length(gv);
+                    if (gs < 30.0f || glm::dot(gv / std::max(gs, 1e-3f), it->initial_dir) < 0.906f) to = bp + it->initial_dir * 1.3f;
+                    glass_ray(std::isnan(it->prev_pos.x) ? it->spawn_origin : it->prev_pos, to, it->initial_dir, 1.0f);
+                }
                 // Pre-compute segment midpoint + half-length for the
                 // cheap sphere-vs-sphere distance gate below.
                 const glm::vec3 seg_mid = 0.5f * (bp + b_prev);

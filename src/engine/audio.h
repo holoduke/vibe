@@ -33,6 +33,8 @@ enum class ClipID : uint8_t {
     Beep,       // the count's tick (assets/sounds/beep.wav, synthesised)
     Land,       // landing after a fall (assets/sounds/land.ogg)
     Siren,      // a police siren: wail and yelp, 16 s that loop (assets/sounds/siren_wail.wav, synthesised: engine/siren_synth.h)
+    GlassCrack1, GlassCrack2,   // a bolt through a pane (assets/sounds/glass_crack_*.wav, synthesised: engine/glass_synth.h)
+    GlassShatter,               // a pane coming down (assets/sounds/glass_shatter.wav, synthesised: engine/glass_synth.h)
     Count
 };
 
@@ -143,7 +145,9 @@ public:
     //     source_stop(h);                                       // fades to nothing, then frees itself
     // level 1 = the clip as recorded, heard from within Shape::ref_m; a level of 0 fades it
     // out without letting it go. Not updated for a frame: it keeps its last place.
-    uint32_t source_start(ClipID id, sound_space::Shape shape = {}, bool loop = true);
+    // Shape also says how far it carries (hear_m: an engine 450 m, sound_space::kSirenShape
+    // 1 km). start_s: where in the clip it begins.
+    uint32_t source_start(ClipID id, sound_space::Shape shape = {}, bool loop = true, float start_s = 0.0f);
     Heard    source_update(uint32_t h, glm::vec3 pos, glm::vec3 vel, float level = 1.0f, float pitch = 1.0f);
     void     source_stop(uint32_t h);
     // The surroundings (how much echo, the listener under a roof or in a cabin): from the game

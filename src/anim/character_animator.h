@@ -279,6 +279,12 @@ struct CharacterAnimationInput {
     uint8_t   fidget_arms = 3;
     Gesture   gesture = Gesture::None;
     uint32_t  gesture_seq = 0;
+    glm::vec3 gesture_at{0.0f, 1.2f, -1.0f};   // model space: what Gesture::Point points at
+    // AT A DESK (with `seated`, not at a wheel): seat_hand_* are the wrists over a keyboard, a
+    // mouse or the desk - the hands lie flat, fingers forward. seat_typing 0 .. 1: how busily
+    // the fingers go.
+    bool      seat_desk = false;
+    float     seat_typing = 0.0f;
     ClipId    layer_clip = kNoClip;
     LayerMask layer_mask = LayerMask::UpperBody;
     float     layer_rate = 1.0f, layer_weight = 1.0f;

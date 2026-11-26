@@ -124,6 +124,11 @@ void main() {
         // inPosition = (u, v, the baked sphere's radius), inNormal = (its middle's height, kind, 0).
         // A square facing the camera, on the near side of that sphere (the depth the pixel
         // shader writes is the tree's own, never nearer than the card): veg_leaf.glsl.
+        // Far away a tree is drawn larger: it stands for the ones the distance has thinned out
+        // round it (veg_stream.cpp), so a far wood keeps its cover. (veg_cull.comp has the same
+        // line for its bounds - keep in step. The pixel shader gets the larger size as the tree's.)
+        if (arch[uint(I.rot_arch_phase.y + 0.5)].w < 1.5)
+            s *= 1.0 + 0.35 * smoothstep(1500.0, 3200.0, distance(scene.camera_pos.xyz, I.pos_scale.xyz + vec3(0.0, arch[uint(I.rot_arch_phase.y + 0.5)].y * s * ysq, 0.0)));
         vec3  mid = I.pos_scale.xyz + vec3(0.0, inNormal.x * s * ysq, 0.0);
         float Rw  = inPosition.z * s * max(ysq, 1.0);
         vec3  toc = scene.camera_pos.xyz - mid;
@@ -131,13 +136,20 @@ void main() {
         vec3  f   = toc / dl;
         vec3  rt  = normalize(cross(vec3(0.0, 1.0, 0.0), f) + vec3(1e-6, 0.0, 0.0));
         vec3  up  = cross(f, rt);
-        float fwd = min(Rw, dl * 0.5);
+        // Beyond 300 m the card stands in the plane through the tree's middle and its pixels keep
+        // the card's own depth (the sign of the radius below tells the pixel shaders). Up close the
+        // baked depth matters - the card cuts into the ground and its neighbours like the tree.
+        // Far away it is a fraction of the depth buffer's step, and the colour pass (depth EQUAL)
+        // lost every pixel where its own sum for that depth came out one step away from the
+        // pre-pass's: far trees were drawn as holes in the colour of the cleared picture.
+        bool  far_card = dl > 300.0;
+        float fwd = far_card ? 0.0 : min(Rw, dl * 0.5);
         // (seen from the eye the sphere is a little wider than its radius at that plane)
         float wid = Rw * (dl - fwd) / sqrt(max(dl * dl - Rw * Rw, 0.25 * dl * dl));
         wp = mid + f * fwd + (rt * inPosition.x + up * inPosition.y) * wid;
         N = f;
         imp_uv = vec2(inPosition.x, inPosition.y * 0.5 + 0.5);
-        imp_info = vec3(arch[uint(I.rot_arch_phase.y + 0.5)].z - 1.0, inPosition.z, inNormal.x);
+        imp_info = vec3(arch[uint(I.rot_arch_phase.y + 0.5)].z - 1.0, far_card ? -inPosition.z : inPosition.z, inNormal.x);
     }
 
     const vec3 rest_wp = wp;   // pre-sway position: anchors the leaf cut-out pattern

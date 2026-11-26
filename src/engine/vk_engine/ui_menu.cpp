@@ -1408,6 +1408,7 @@ void VulkanEngine::build_menu_ui() {
     // and the destructive editing tools are one click away from the
     // tab bar instead of buried inside a CollapsingHeader.
     if (ImGui::BeginTabItem("Terrain Edit")) {
+        regions_menu();                  // (regions.cpp: stored ground anywhere on the planet)
         ImGui::SeparatorText("Heightmap save / load");
         if (ImGui::Button("Save heightmap")) {
             save_terrain_heights();
