@@ -117,7 +117,13 @@ void main() {
     float s2 = (e_bd + e_bc + e_dc) * 0.5;
     float A1sq = s1 * (s1 - e_ab) * (s1 - e_bc) * (s1 - e_ca);
     float A2sq = s2 * (s2 - e_bd) * (s2 - e_dc) * (s2 - e_bc);
-    if (max(A2sq, max(A1sq, 0.0)) > 256.0) {
+    // (ours, besides the game's area test: Heron's formula loses its digits on a long thin
+    //  sliver, which then passed as small while its box spanned the screen - one thread
+    //  looping over a million pixels set off the GPU's watchdog on AMD. A cell whose corners
+    //  lie more than 24 px apart goes to the hardware path too, as a big one does.)
+    const vec2 bmn = min(min(A.xy, B.xy), min(C.xy, D.xy)), bmx = max(max(A.xy, B.xy), max(C.xy, D.xy));
+    const bool wide = !(bmx.x - bmn.x <= 24.0 && bmx.y - bmn.y <= 24.0);       // (NaN counts as wide)
+    if (wide || max(A2sq, max(A1sq, 0.0)) > 256.0) {
         uint slot = atomicAdd(ssdm_hw_count, 1u);
         ssdm_hw_idx[slot] = (vpix.y & 0xFFFFu) | (vpix.x << 16);
         return;
