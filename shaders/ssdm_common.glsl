@@ -21,7 +21,7 @@ layout(push_constant) uniform SsdmPC {
     vec4 size;       // render size in pixels, and 1 / it               (game: _bufferSizeAndInvSize)
     vec4 depth;      // x, y: linear depth = x / (y - z); z the reach T in m (game: _terrainNormalParams.x); w the amplitude scale (game: _deformBlurParam.y)
     vec4 view;       // xyz the camera's forward axis (game: _viewDir); w tan(horizontal fov / 2) (game: _screenPercentage.x)
-    vec4 misc;       // x frame number, y debug view, z game _deformBlurParam.x (0: the edge / puddle fade for every class), w 0
+    vec4 misc;       // x frame number, y debug view, z game _deformBlurParam.x (0: the edge / puddle fade for every class), w the height 0..1 a full value of the ground's G-buffer height stands for (ssdm_ground.frag)
 } pc;
 
 layout(set = 0, binding = 0) uniform sampler2D u_hn;      // the height feed: xyz vertex normal, w height 0..1 in 1/255 steps (w < 0: none)

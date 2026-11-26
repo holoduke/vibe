@@ -51,6 +51,15 @@ VulkanEngine::CastleMeshGpu VulkanEngine::make_mesh_part(const game::LevelMesh& 
         // ~20 cm at relief 1 the parallax relief shows.
         g.ssdm = lm.ssdm > 0.0f ? lm.ssdm
                : ((lm.tex_albedo == 1 || lm.tex_albedo == 4) && !lm.triplanar) ? 0.28f * glm::clamp(lm.relief, 0.0f, 1.0f) : 0.0f;
+        // The service station's surfaces carry their height in the normal map's alpha
+        // (world_textures.cpp): displaced too, as the reference game does every object with a
+        // height texture. How far each stands out (m): brick, asphalt, checker tile, cladding,
+        // pavers, wall tile.
+        if (g.ssdm <= 0.0f && !lm.triplanar && lm.tex_albedo >= kTexStation && lm.tex_albedo < kTexStation + 6 &&
+            lm.tex_normal == lm.tex_albedo) {
+            static constexpr float kStationRelief[6] = { 0.020f, 0.006f, 0.0f, 0.012f, 0.020f, 0.004f };
+            g.ssdm = kStationRelief[lm.tex_albedo - kTexStation];      // (their `relief` is 0: no parallax march on them)
+        }
         g.emissive = glm::vec4(lm.emissive, lm.full_emissive ? (lm.lit_by_day ? 2.0f : 1.0f) : 0.0f);      // (.a 2: as bright by day)
         return g;
     }

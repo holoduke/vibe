@@ -18,7 +18,7 @@ layout(push_constant) uniform PC {
     vec4 color;
     vec4 emissive;
     vec4 tex_params;    // x albedo index, y normal index, z uv scale
-    vec4 grass_params;  // HERE: x displacement amplitude (m), y fade start (m), z fade end (m)
+    vec4 grass_params;  // HERE: x the material's height factor (0..1), w 1 = box brush
 } pc;
 
 #include "scene_ubo.glsl"

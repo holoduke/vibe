@@ -169,9 +169,9 @@
         // layered march + bisection, then a short self-shadow march
         // toward the sun so the joints between stones go dark.
         float pom_D = 0.035 * (1.0 - smoothstep(35.0, 70.0, t)) * smoothstep(0.3, 0.9, rm_road.x);
-        // (close by the stones are lifted in screen space instead - GND_SSDM, below - and shade
-        //  each other there: ssdm_solve.frag)
-        if (GND_SSDM) pom_D *= smoothstep(16.0, 24.0, t);
+        // (with the screen-space displacement on there is no parallax: the reference game's ground
+        //  shader marches only when its displacement pass is off - GND_SSDM, below)
+        if (GND_SSDM) pom_D = 0.0;
         if (pom_D > 0.002) {
             vec3 Vt = vec3(dot(-rd, rT), dot(-rd, rB), dot(-rd, nor));
             Vt.z = max(Vt.z, 0.22);
@@ -287,7 +287,7 @@
                 vec3 pB = cross(nor, pT);
                 vec2 vts = vec2(dot(-rd, pT), dot(-rd, pB)) / max(dot(-rd, nor), 0.25);
                 float pk = 0.045 * (1.0 - smoothstep(14.0, 30.0, t));          // 10 cm of relief per 2 m tile
-                if (GND_SSDM) pk *= smoothstep(16.0, 24.0, t);                 // (close by: lifted in screen space instead, below)
+                if (GND_SSDM) pk = 0.0;                                         // (the screen-space displacement does it, below)
                 float lodP = log2(max(t * 2.0 * scene.viewport.w * 0.45 * float(textureSize(u_albedo[kSoil], 0).x), 1.0));
                 for (int pi = 0; pi < 2; ++pi)
                     uvS = pos.xz * 0.45 + vts * ((textureLod(u_normal[kSoil], uvS, lodP).a - 0.5) * pk);
@@ -468,7 +468,7 @@
     // reference game's rule). Here: all that lies under the snow; the snow, which fills the
     // low places of this first, follows.
     float gnd_h = 0.0, gnd_root = 0.0, gnd_lawn = 0.0;
-    bool  gnd_h_on = t < 24.0 && !water_only;
+    bool  gnd_h_on = t < kSsdmReach && !water_only;
     if (gnd_h_on) {
         gnd_lawn = grassEligibility(pos.xz, pos.y);
         // (not under a lawn: the blades stand on the surface and hide it)
@@ -585,12 +585,11 @@
     // ---- ... and with the snow on it: the height the displacement pass gets ----
     if (GND_SSDM && gnd_h_on) {
         float h = mix(gnd_h, snow_h, snow_cov);
-        // (never more than a twelfth of the way to the eye: a bank the camera leans against came
-        //  out in front of the weapon in the hands)
-        h = min(h, 0.08 * t);
         // (never quite 0 within reach: every ground pixel there is on the displacement's grid,
         //  moved or not - a grid with holes where the height happens to be 0 came out stippled)
-        g_gnd_ssdm_h = max(min(h, kGndSsdmMax) * (1.0 - smoothstep(16.0, 24.0, t)), 0.006 * kGndSsdmMax);
+        // (no fade here: the displacement pass fades it over the last quarter of its reach, as the
+        //  reference game's does - its terrain shader writes the material's height as it is)
+        g_gnd_ssdm_h = max(min(h, kGndSsdmMax), 0.006 * kGndSsdmMax);
     }
 #endif /* RM_PART == 1 */
 #if RM_PART == 3

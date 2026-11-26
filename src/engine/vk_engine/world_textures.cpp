@@ -777,6 +777,19 @@ void VulkanEngine::load_foliage_textures() {
             std::vector<unsigned char> nrm(lum.size() * 4);
             auto Hh = [&](int x, int y) { return lum[size_t((y + h) % h) * size_t(w) + size_t((x + w) % w)]; };
             const float st = ot[k].strength;
+            // The height in the alpha, for the screen-space displacement (ssdm_height.frag): the
+            // station's surfaces stretched so their joints are 0 and their tops 1 (5th and 98th
+            // percentile), as the reference game's height maps are made; the others as they are.
+            float h_lo = 0.0f, h_sc = 1.0f;
+            if (k >= 8 && !lum.empty()) {
+                std::vector<float> s;
+                s.reserve(lum.size() / 16 + 1);
+                for (size_t i = 0; i < lum.size(); i += 16) s.push_back(lum[i]);
+                std::sort(s.begin(), s.end());
+                h_lo = s[size_t(0.05f * float(s.size() - 1))];
+                const float hi = s[size_t(0.98f * float(s.size() - 1))];
+                h_sc = hi > h_lo + 0.02f ? 1.0f / (hi - h_lo) : 1.0f;
+            }
             for (int y = 0; y < h; ++y)
                 for (int x = 0; x < w; ++x) {
                     // (over two texels: the generator's finest grain is noise, not relief)
@@ -786,7 +799,7 @@ void VulkanEngine::load_foliage_textures() {
                     o[0] = static_cast<unsigned char>(std::clamp((-dx * il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
                     o[1] = static_cast<unsigned char>(std::clamp((dy * il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
                     o[2] = static_cast<unsigned char>(std::clamp((il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
-                    o[3] = static_cast<unsigned char>(std::clamp(Hh(x, y) * 255.0f, 0.0f, 255.0f));
+                    o[3] = static_cast<unsigned char>(std::clamp((Hh(x, y) - h_lo) * h_sc * 255.0f, 0.0f, 255.0f));
                 }
             put(normal_textures_[slot], nrm.data(), w, h, VK_FORMAT_R8G8B8A8_UNORM, "office/normal");
             stbi_image_free(px);
