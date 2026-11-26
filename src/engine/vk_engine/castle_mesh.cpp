@@ -50,7 +50,7 @@ VulkanEngine::CastleMeshGpu VulkanEngine::make_mesh_part(const game::LevelMesh& 
         // texture (cube.frag height_idx_for_albedo: 1 castle walls, 4 keep walls) - the same
         // ~20 cm at relief 1 the parallax relief shows.
         g.ssdm = lm.ssdm > 0.0f ? lm.ssdm
-               : ((lm.tex_albedo == 1 || lm.tex_albedo == 4) && !lm.triplanar) ? 0.28f * glm::clamp(lm.relief, 0.0f, 1.0f) : 0.0f;
+               : ((lm.tex_albedo == 1 || lm.tex_albedo == 4) && !lm.triplanar) ? 0.16f * glm::clamp(lm.relief, 0.0f, 1.0f) : 0.0f;      // (0.28 before: capped at the full 0.2 m - a little less, the user asked)
         // The service station's surfaces carry their height in the normal map's alpha
         // (world_textures.cpp): displaced too, as the reference game does every object with a
         // height texture. How far each stands out (m): brick, asphalt, checker tile, cladding,

@@ -494,6 +494,18 @@
                         float x = 0.02 * float(k);
                         shade = max(shade, smoothstep(0.0, 0.008, (dC - foot_depth(pos.xz + sdir * x)) * 0.45 - x * rise));
                     }
+        // Limestone: the scan's cobbles are mostly dark field stones; the castle road's are pale
+        // limestone - cream to light grey, a few a shade warmer. The scan's own light and dark
+        // (each stone's grain, its edges, the joints) is kept, measured against the scan's mean.
+        {
+            const vec3 kLum = vec3(0.2126, 0.7152, 0.0722);
+            float lm = max(dot(textureLod(u_albedo[kRmMatRoad], rm_road_uv, 12.0).rgb * kRmAlbedoScale, kLum), 0.01);
+            float detail = clamp(dot(cob, kLum) / lm, 0.35, 1.7);
+            float tone = tile_noise2(pos.xz, 3.1, vec2(23.0));                                   // (stone to stone: cream, grey, a warmer one)
+            vec3 lime = mix(vec3(0.46, 0.43, 0.36), vec3(0.42, 0.42, 0.40), smoothstep(0.35, 0.65, tone));
+            lime = mix(lime, vec3(0.48, 0.40, 0.29), smoothstep(0.82, 0.95, tone));
+            cob = mix(cob, lime * mix(1.0, detail, 0.65), 0.88);
+        }
                 }
                 sand *= mix(1.0, 0.80, smoothstep(0.0, 0.05, dC)) * mix(1.0, 0.55, shade);
             }

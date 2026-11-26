@@ -83,7 +83,7 @@ constexpr float kGndSsdmMax = 0.20f;
 float brush_ssdm_amplitude(const game::Brush& b) {
     const float thin = std::min({ b.size.x, b.size.y, b.size.z });
     if (b.tex_albedo == 1 || b.tex_albedo == 4)
-        return 0.8f * std::min(std::clamp(0.05f / std::max(b.uv_scale, 0.01f), 0.06f, 0.3f), 0.3f * thin);
+        return 0.55f * std::min(std::clamp(0.05f / std::max(b.uv_scale, 0.01f), 0.06f, 0.3f), 0.3f * thin);     // (0.8 before: a little less, the user asked)
     if (b.tex_albedo == 5 || b.tex_albedo == 6) return std::min(0.03f, 0.3f * thin);
     return 0.0f;
 }

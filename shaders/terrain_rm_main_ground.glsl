@@ -500,7 +500,7 @@
         // The loose stones (terrain_rm_pebbles.glsl; the normal looked them up): with the march
         // they were part of the marched surface, with the patches they are raised here.
         if (peb0_h > 0.0) h = max(h, min(peb0_h, 0.10) * (1.0 - smoothstep(10.0, 20.0, t)) * (1.0 - plateauWeight(pos.xz)));
-        // The paved road, worn: the stones stand 9 cm out of their joints; along the two wheel
+        // The paved road, worn: the stones stand 6.5 cm out of their joints; along the two wheel
         // lines (a cart's, 1.5 m apart) and where the bed has settled they are pressed down - the
         // road's height is a FACTOR on what is there, as the reference game's road decal does it
         // (it multiplies the ground's height, so a track can only press the ground down). The
@@ -513,7 +513,7 @@
             float settled = smoothstep(0.56, 0.80, tile_noise2(pos.xz, 0.55, vec2(77.0)));
             float press = (1.0 - 0.45 * line) * (1.0 - 0.35 * settled);
             h *= 1.0 - 0.55 * rm_road.y;
-            h = mix(max(h, 0.020 * rm_road.x), 0.09 * rm_cob_lvl * press, rm_road_wx);     // (the castle road's cobbles: 9 cm from joint to top - 16 stretched them along the view at a slant)
+            h = mix(max(h, 0.020 * rm_road.x), 0.065 * rm_cob_lvl * press, rm_road_wx);     // (the castle road's cobbles: 6.5 cm from joint to top - 16 stretched them along the view, 9 was still a little much)
         }
         // Sand: a sheet a few centimetres thick with its ripples (the ones the normal is made
         // from), its lumps, and the prints pressed into it. Stones that stand higher than it

@@ -939,15 +939,15 @@ bool append_church(Level& lv, glm::vec3 base) {
         LevelMesh m;
         float tile = 1.0f;
         const std::string nm(name);
-        if (nm == "floor")        { m.tex_albedo = 5; m.tex_normal = 5; m.tint = glm::vec3(0.72f, 0.70f, 0.66f); m.fallback = glm::vec3(0.45f, 0.42f, 0.38f); tile = 2.0f; }
+        if (nm == "floor")        { m.tex_albedo = 5; m.tex_normal = 5; m.tint = glm::vec3(0.72f, 0.70f, 0.66f); m.fallback = glm::vec3(0.45f, 0.42f, 0.38f); tile = 2.0f; m.relief = 0.30f; }   // (flags worn level by feet: their height map has deep joints - make_ssdm_heights.py)
         else if (nm == "wax")     { m.tint = glm::vec3(0.86f, 0.80f, 0.62f); m.fallback = m.tint; }
         else if (nm == "flame")   { m.tint = glm::vec3(1.0f, 0.72f, 0.30f); m.fallback = m.tint; m.emissive = glm::vec3(4.0f, 2.2f, 0.7f); m.full_emissive = true; }
         // Leaded stained glass: self-lit, so it glows from inside and out.
         else if (nm == "stained") { m.tex_albedo = 21; m.tex_normal = 21; m.tint = glm::vec3(1.5f); m.fallback = glm::vec3(0.3f, 0.2f, 0.4f); m.full_emissive = true; tile = 1.0f; }
         else if (nm == "stone" || nm == "trim" || nm == "altar") {
-            // Walls: shallower relief than the castle (they are half as thick).
+            // Walls: the castle's stone, a little shallower relief (they are half as thick).
             // Trim (steps, plinth, buttresses): small parts, nearly flat.
-            m.relief = nm == "stone" ? 0.40f : 0.10f; m.tex_albedo = kBrick; m.tex_normal = kBrick; m.tint = glm::vec3(0.80f, 0.84f, 0.90f); m.fallback = glm::vec3(0.5f, 0.47f, 0.42f); tile = 1.0f / 0.33f; }   // smaller, greyer stones than the castle
+            m.relief = nm == "stone" ? 0.75f : 0.10f; m.tex_albedo = kBrick; m.tex_normal = kBrick; m.tint = glm::vec3(0.95f, 0.92f, 0.86f); m.fallback = glm::vec3(0.55f, 0.50f, 0.42f); tile = 1.0f / 0.22f; }   // the castle's own stone: its tint, its 55 cm stones (castle_tint, wall_uv)
         // The boarding under the tiles (seen where a tile is missing, and from below the eaves).
         else if (nm == "roof")  { m.tex_albedo = kWood;  m.tex_normal = kWood;  m.tint = glm::vec3(0.22f, 0.17f, 0.13f); m.fallback = glm::vec3(0.12f, 0.09f, 0.07f); tile = 0.55f; }
         // Roof tiles: individually modelled, in three tones of weathered clay (lichen from the texture).
