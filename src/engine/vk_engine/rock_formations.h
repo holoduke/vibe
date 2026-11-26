@@ -50,7 +50,7 @@ struct Inst {
     float     yaw = 0.0f;                   // its front (+z) points along (sin yaw, 0, cos yaw)
     float     scale = 1.0f;
     glm::vec3 lo{0.0f}, hi{0.0f};           // its box in the world
-    int       why = 0;                      // 0 a cut beside the road, 1 the foot of a slope, 2 beside the road, 3 a gate, 4 a cliff, 5 the test row, 6 the sea cliff, 7 a crag band
+    int       why = 0;                      // 0 a cut beside the road, 1 the foot of a slope, 2 beside the road, 3 a gate, 4 a cliff, 5 the test row, 6 the sea cliff, 7 a crag band, 8 in the water, 9 a river boulder (place_river_boulders)
     int       look = 0;                     // 0 the landscape's dark rock, 1 white chalk (rock_form.glsl)
     float     reach = 1.0f;                 // its levels of detail are held this many times further out (tall pieces)
 };

@@ -954,6 +954,16 @@ float raymarch_ground_relief(float x, float z, float h, float water_level) {
         hw_keep = t * t * (3.0f - 2.0f * t);
         if (hw_keep <= 0.0f) return 0.0f;
     }
+    // (none under the service station's paving and its way in: terrain_rm_heightfield.glsl
+    //  rm_ground_detail - keep the same)
+    {
+        const float st = std::max(std::max(1585.0f - x, x - (std::abs(z - 545.0f) < 17.0f ? 1662.0f : 1643.6f)), std::max(507.5f - z, z - 582.5f));
+        if (st < 1.0f) {
+            const float k = std::clamp(st, 0.0f, 1.0f);
+            hw_keep *= k * k * (3.0f - 2.0f * k);
+            if (hw_keep <= 0.0f) return 0.0f;
+        }
+    }
     // Mirror of terrain_raymarch.frag rm_ground_detail() (keep in sync).
     // (scene_ubo.glsl tile_noise2: value noise that repeats once a tile - the same wherever the
     // engine has re-centred)

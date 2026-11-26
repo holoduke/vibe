@@ -97,7 +97,8 @@ void VulkanEngine::rockf_poll() {
         // The rocks in the water part the current (water_fx.cpp river_piers: the water shader's
         // pillow, wake and eddies round each, and the CPU's flow).
         for (const rockf::Inst& in : rockf::instances())
-            if (in.why == 8) river_pier_add(glm::vec2(in.pos.x, in.pos.z), 0.75f * 0.5f * std::max(in.hi.x - in.lo.x, in.hi.z - in.lo.z));
+            if (in.why == 8 || (in.why == 9 && in.lo.y < rt_.water_level - 0.05f)) river_pier_add(      // (a boulder at the edge with its feet in the river too)
+                glm::vec2(in.pos.x, in.pos.z), 0.75f * 0.5f * std::max(in.hi.x - in.lo.x, in.hi.z - in.lo.z));
     }
     const std::vector<rockf::Inst>& I = rockf::instances();
     if (I.empty()) return;
@@ -151,7 +152,7 @@ void VulkanEngine::rockf_poll() {
             const uint32_t h = uint32_t(i) * 2654435761u;
             const float t0 = float(h & 255u) / 255.0f, t1 = float((h >> 8) & 255u) / 255.0f;
             g.tint = glm::mix(glm::vec3(1.04f, 1.0f, 0.94f), glm::vec3(0.96f, 0.99f, 1.03f), t0) * glm::mix(0.90f, 1.08f, t1);
-            if (in.why >= 6) g.tint = glm::vec3(1.0f);                      // (the pieces of a run are one rock)
+            if (in.why >= 6 && in.why != 9) g.tint = glm::vec3(1.0f);       // (the pieces of a run are one rock; boulders keep their own shade)
             R.draw.push_back(g);
             R.tris += L.tris;
         }

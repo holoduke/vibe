@@ -389,6 +389,43 @@ KIT = [("arch", 11, blockout_arch), ("cleft", 23, blockout_cleft), ("overhang", 
 # blocks are added after the relief of the face, so they keep their shape); the turf of the
 # top hanging over the lip, slumped behind it.
 FACE_W, FACE_H = 30.0, 45.0
+# ---------------------------------------------------------------- river boulders ---
+# Single water-worn stones for the river's banks (rock_formations.cpp place_river_boulders):
+# four small (0.6 - 1.1 m across), four medium (1.6 - 2.4 m), four large (3.4 - 5.2 m). A
+# boulder is one chopped ball - few chops, so it is round with a flat or two, as a stone the
+# water has rolled - squashed a little, its middle at 55 % of its height so a root goes into
+# the ground; the large ones lean on a second stone. Little of the bedding and jointing the
+# outcrops get (amp 0.12): a boulder is one block, worn smooth.
+def boulder(radii, chops, extra=None, lods=(10000, 2600, 650)):
+    def fn(rng, seed):
+        bm = bmesh.new()
+        rx, ry, rz = radii
+        lump(bm, rng, (0.0, 0.0, 0.55 * rz), (rx, ry, rz), chops=chops, sub=5 if rx > 1.0 else 4,
+             r=(rng.uniform(-0.12, 0.12), rng.uniform(-0.12, 0.12), rng.uniform(-3.14, 3.14)))
+        if extra:
+            ex, ey, er = extra
+            lump(bm, rng, (ex, ey, 0.5 * er), (er, er * 0.85, er * 0.75), chops=chops, sub=4)
+        return bm, [], dict(bed=max(0.9 * rz, 0.3), joint=max(1.6 * rx, 0.6), amp=0.12, missing=0.0, warp=0.25, lods=lods)
+    return fn
+
+
+_S, _M, _L = (5000, 1400, 350), (10000, 2600, 650), (18000, 4500, 1100)
+BOULDERS = [      # (added after the whole kit, cliff faces included, in main(): every older piece keeps its number)
+    ("boulder_s1", 201, boulder((0.45, 0.38, 0.30), 4, lods=_S)),
+    ("boulder_s2", 203, boulder((0.38, 0.33, 0.30), 3, lods=_S)),
+    ("boulder_s3", 205, boulder((0.55, 0.40, 0.28), 5, lods=_S)),
+    ("boulder_s4", 207, boulder((0.42, 0.42, 0.36), 4, lods=_S)),
+    ("boulder_m1", 211, boulder((0.95, 0.75, 0.60), 4, lods=_M)),
+    ("boulder_m2", 213, boulder((1.10, 0.80, 0.55), 5, lods=_M)),
+    ("boulder_m3", 215, boulder((0.85, 0.80, 0.70), 3, lods=_M)),
+    ("boulder_m4", 217, boulder((1.20, 0.90, 0.75), 4, lods=_M)),
+    ("boulder_l1", 221, boulder((1.90, 1.50, 1.20), 5, lods=_L)),
+    ("boulder_l2", 223, boulder((2.30, 1.60, 1.10), 4, extra=(1.9, 0.9, 0.9), lods=_L)),
+    ("boulder_l3", 225, boulder((1.70, 1.60, 1.40), 4, lods=_L)),
+    ("boulder_l4", 227, boulder((2.60, 1.90, 1.30), 5, extra=(-2.2, -0.6, 1.0), lods=_L)),
+]
+
+
 
 
 def face_base(bm, x0=-15.2, x1=15.2):
@@ -764,7 +801,7 @@ def make(name, seed, blockout):
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     if PREVIEW: os.makedirs(PREVIEW, exist_ok=True)
-    kit = [k for k in KIT if ONLY is None or k[0] in ONLY]
+    kit = [k for k in KIT + BOULDERS if ONLY is None or k[0] in ONLY]
     blob = bytearray()
     blob += b"RKF1" + struct.pack("<I", len(kit))
     for name, seed, fn in kit:

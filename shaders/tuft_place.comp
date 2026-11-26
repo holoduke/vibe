@@ -242,6 +242,7 @@ void main() {
     int   dkind = -1;                  // the debris' kind (P_CAP.w 3): 0 twig .. 7 stones (scatter_debris_meshes.inl)
     float surf_y = -1e9;               // litter on a raised slab: the slab's top (P_FIELD(2))
     if (P_CAP.w > 2.5) {
+    bool  flat_under = false;          // debris on cleared ground (road, paving, forecourt): the drawn ground has no close relief there
         // SMALL DEBRIS, by rule (the reference game's placement groups do this with authored
         // masks; ours from what the ground already knows). One die per candidate picks among
         // what may lie here:
@@ -298,6 +299,7 @@ void main() {
         float foot = smoothstep(0.7, 1.2, above) * (1.0 - smoothstep(0.35, 0.6, length(gr)));
         bool conifer = shade.y > 0.35 * max(trees, 0.05);
         if (litter > 0.0 && r < 0.09 * litter)                 dkind = 5;
+        flat_under = clear < 0.5 || litter > 0.5;
         else if (clear < 0.5) { if (open3 > 0.5 && r < 0.45) dkind = 6; else return; }       // (a cut verge: grit spilt from the road)
         else if (near_clear < 0.5 && r < 0.55)                  dkind = 6;
         else if (foot > 0.0 && r < 0.5 * foot)                  dkind = 7;
@@ -405,7 +407,9 @@ void main() {
     // (the game's placed grass has none: its fade byte is always 255, it shrinks away - step 2)
     float band  = P_SHAPE.w * range;
     float fbyte = band > 0.0 ? floor(255.0 * (1.0 - clamp((d3 - (range - band)) / band, 0.0, 1.0)) + 0.5) : 255.0;
-    float lift  = pc.misc.y > 0.5 ? clamp(floor(ground_relief(xz, h) / 0.004 + 0.5), 0.0, 120.0) : 0.0;
+    // (no lift where the ground is cleared: the terrain draws no close relief under paving, so
+    //  a can or the road's grit stood a hand above it - ground_relief knows nothing of that)
+    float lift  = (pc.misc.y > 0.5 && !flat_under) ? clamp(floor(ground_relief(xz, h) / 0.004 + 0.5), 0.0, 120.0) : 0.0;
     if (dkind >= 0) {
         // the debris' colours (scatter.frag shades them by kind): bark, the season's leaves,
         // stone greys, dry needles, a cone, a can's paint, grit
