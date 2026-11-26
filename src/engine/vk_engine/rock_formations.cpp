@@ -681,49 +681,27 @@ void place(const Env& env) {
     }
 }
 
-void boxes(const Inst& in, const Ground& ground, std::vector<collision::AABB>& out) {
-    const Piece& P = g_kit[size_t(in.piece)];
-    if (P.solid.empty()) return;
-    const float cw = std::max(P.cell * in.scale, 0.35f);
-    const float cy = std::cos(in.yaw), sy = std::sin(in.yaw);
-    const glm::vec3 lo = in.lo;
-    const int nx = int(std::ceil((in.hi.x - lo.x) / cw)), ny = int(std::ceil((in.hi.y - lo.y) / cw)), nz = int(std::ceil((in.hi.z - lo.z) / cw));
-    auto solid = [&](int ix, int iy, int iz) {
-        const glm::vec3 w = lo + (glm::vec3(float(ix), float(iy), float(iz)) + 0.5f) * cw - in.pos;
-        // (the turn undone: local = R^T w / size)
-        const glm::vec3 l = glm::vec3(cy * w.x - sy * w.z, w.y, sy * w.x + cy * w.z) / in.scale;
-        const glm::ivec3 c = glm::ivec3(glm::floor((l - P.org) / P.cell));
-        if (c.x < 0 || c.y < 0 || c.z < 0 || c.x >= P.n.x || c.y >= P.n.y || c.z >= P.n.z) return false;
-        return P.solid[size_t(c.x) + size_t(P.n.x) * (size_t(c.y) + size_t(P.n.y) * size_t(c.z))] != 0;
-    };
-    struct Run { int x0, x1; size_t box; };
-    std::vector<Run> prev, cur;
-    for (int iz = 0; iz < nz; ++iz) {
-        prev.clear();
-        for (int iy = 0; iy < ny; ++iy) {
-            cur.clear();
-            const float y0 = lo.y + float(iy) * cw;
-            for (int ix = 0; ix < nx;) {
-                auto here = [&](int x) {
-                    if (!solid(x, iy, iz)) return false;
-                    return y0 + cw > ground(lo.x + (float(x) + 0.5f) * cw, lo.z + (float(iz) + 0.5f) * cw) - 0.2f;      // (not what lies under the ground)
-                };
-                if (!here(ix)) { ++ix; continue; }
-                int jx = ix; while (jx < nx && here(jx)) ++jx;
-                // (the same run one level down: that box grows upward)
-                size_t box = SIZE_MAX;
-                for (const Run& p : prev) if (p.x0 == ix && p.x1 == jx) { box = p.box; break; }
-                if (box != SIZE_MAX) out[box].max.y = y0 + cw;
-                else {
-                    box = out.size();
-                    out.push_back({ glm::vec3(lo.x + float(ix) * cw, y0, lo.z + float(iz) * cw), glm::vec3(lo.x + float(jx) * cw, y0 + cw, lo.z + float(iz + 1) * cw) });
-                }
-                cur.push_back({ ix, jx, box });
-                ix = jx;
-            }
-            prev.swap(cur);
-        }
-    }
+// The triangles a piece collides with: its middle level of detail (a few centimetres from the
+// drawn one near by), in the piece's own axes, three corners each.
+void collision_triangles(int piece, std::vector<glm::vec3>& out) {
+    out.clear();
+    if (piece < 0 || size_t(piece) >= g_kit.size()) return;
+    const game::LevelMesh& m = g_kit[size_t(piece)].lod[kCollisionLevel];
+    out.reserve(m.idx.size());
+    for (size_t k = 0; k + 2 < m.idx.size(); k += 3)
+        for (int c = 0; c < 3; ++c) out.push_back(m.verts[m.idx[k + size_t(c)]].p);
+}
+
+void collision_mesh(const Inst& in, tricol::Mesh& out) {
+    out = tricol::Mesh{};
+    if (in.piece < 0 || size_t(in.piece) >= g_kit.size()) return;
+    const game::LevelMesh& m = g_kit[size_t(in.piece)].lod[kCollisionLevel];
+    const glm::mat4 M = transform(in);
+    std::vector<glm::vec3> w(m.verts.size());
+    for (size_t i = 0; i < m.verts.size(); ++i) w[i] = glm::vec3(M * glm::vec4(m.verts[i].p, 1.0f));
+    out.v.reserve(m.idx.size()); out.n.reserve(m.idx.size() / 3);
+    for (size_t k = 0; k + 2 < m.idx.size(); k += 3) out.add(w[m.idx[k]], w[m.idx[k + 1]], w[m.idx[k + 2]]);
+    out.build(2.0f);
 }
 
 }  // namespace vibe::rockf

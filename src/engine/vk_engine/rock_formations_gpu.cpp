@@ -29,7 +29,8 @@ namespace {
 constexpr float kIn[3]  = { 55.0f, 170.0f, 900.0f };     // a level is taken within this distance ...
 constexpr float kOut[3] = { 66.0f, 195.0f, 1000.0f };    // ... and kept to this
 constexpr uint32_t kIdleFrames = 900;                    // an unused level is given back after this
-constexpr float kColReach = 45.0f;                       // formations this near the player have boxes
+constexpr float kBodyReach = 70.0f;                      // formations this near the player stand in the physics world
+constexpr float kWalkReach = 14.0f;                      // ... and this near, the walker's triangles
 
 // (k: the formation's reach - tall pieces hold their levels further out; never past the far plane)
 int level_for(float d, const float* lim, float k) { return d < lim[0] * k ? 0 : (d < lim[1] * k ? 1 : (d < std::min(lim[2] * k, lim[2] + 480.0f) ? 2 : -1)); }
@@ -50,7 +51,7 @@ void VulkanEngine::rockf_poll() {
     RockfState& R = *rockf_;
     if (!globe::current().home) {
         if (!R.draw.empty()) { R.draw.clear(); R.tris = 0; std::fill(R.level.begin(), R.level.end(), int8_t(-1)); ++hw_gen_; }
-        if (!R.cols.empty()) { R.cols.clear(); ++R.cols_gen; R.cols_at = glm::vec3(1e9f); }
+        rockf_drop_colliders();
         return;
     }
     if (!R.tried) {
@@ -60,6 +61,13 @@ void VulkanEngine::rockf_poll() {
         R.kit.resize(rockf::kit().size());
     }
     if (!R.ok) return;
+    // The physics world's rock meshes: one per piece, built once on a worker thread.
+    if (!R.phys_requested && physics_) {
+        R.phys_requested = true;
+        std::vector<std::vector<glm::vec3>> pieces(rockf::kit().size());
+        for (size_t p = 0; p < pieces.size(); ++p) rockf::collision_triangles(int(p), pieces[p]);
+        physics_->mesh_pieces_build_async(std::move(pieces));
+    }
     const rockf::Ground ground = [this](float x, float z) {
         return (std::abs(x) < 1020.0f && std::abs(z) < 1020.0f) ? sample_terrain_height(x, z) : world_ground_height(x, z, rt_.water_level, 9);
     };
@@ -151,23 +159,73 @@ void VulkanEngine::rockf_poll() {
         static const bool verbose = std::getenv("VIBE_LOG_ROCKS") != nullptr;
         if (verbose) log::infof("[rocks] drawn: %zu formations, %u triangles", R.draw.size(), R.tris);
     }
-    // Colliders: the boxes of what stands near the player, made again when the player has moved on.
+    // VIBE_TEST_ROCK_DROP=1: once, the player is dropped 3 m above the middle of the nearest
+    // formation (the log's per-second position then shows where they come to rest).
+    static bool dropped = std::getenv("VIBE_TEST_ROCK_DROP") == nullptr;
+    if (!dropped && !I.empty()) {
+        dropped = true;
+        size_t best = 0; float bd = 1e30f;
+        for (size_t i = 0; i < I.size(); ++i) {
+            const float d = glm::distance(glm::vec2(0.5f * (I[i].lo.x + I[i].hi.x), 0.5f * (I[i].lo.z + I[i].hi.z)), glm::vec2(player_.position.x, player_.position.z));
+            if (d < bd) { bd = d; best = i; }
+        }
+        const rockf::Inst& in = I[best];
+        const glm::vec3 c = 0.5f * (in.lo + in.hi);
+        player_.position = glm::vec3(c.x, in.hi.y + 3.0f, c.z);
+        player_.velocity = glm::vec3(0.0f);
+        R.cols_at = glm::vec3(1e9f);
+        log::infof("[rocks] test drop onto %s at (%.1f, %.1f, %.1f): its top %.1f, the ground there %.1f",
+                   rockf::kit()[size_t(in.piece)].name.c_str(), double(c.x), double(player_.position.y), double(c.z), double(in.hi.y),
+                   double(sample_terrain_height(c.x, c.z)));
+    }
+    // Colliders: the rock's own surface for what stands near the player, looked at again when
+    // the player has moved a few metres (or a piece's physics mesh has come in).
     const glm::vec3 pp = player_.position;
-    if (glm::distance(glm::vec2(pp.x, pp.z), glm::vec2(R.cols_at.x, R.cols_at.z)) > 8.0f) {
+    bool pending = false;
+    for (const auto& kv : R.bodies) if (kv.second == 0) { pending = true; break; }
+    if (pending || glm::distance(glm::vec2(pp.x, pp.z), glm::vec2(R.cols_at.x, R.cols_at.z)) > 4.0f) {
         R.cols_at = pp;
-        const size_t before = R.cols.size();
-        R.cols.clear();
+        R.walk_near.clear();
         for (size_t i = 0; i < I.size(); ++i) {
             const rockf::Inst& in = I[i];
             const float dx = std::max(std::max(in.lo.x - pp.x, pp.x - in.hi.x), 0.0f), dz = std::max(std::max(in.lo.z - pp.z, pp.z - in.hi.z), 0.0f);
             const float d = std::sqrt(dx * dx + dz * dz);
-            auto it = R.boxes.find(int(i));
-            if (d > kColReach) { if (it != R.boxes.end() && d > 3.0f * kColReach) R.boxes.erase(it); continue; }
-            if (it == R.boxes.end()) { it = R.boxes.emplace(int(i), std::vector<collision::AABB>{}).first; rockf::boxes(in, ground, it->second); }
-            R.cols.insert(R.cols.end(), it->second.begin(), it->second.end());
+            const int key = int(i);
+            // physics bodies (the car, crates): within kBodyReach, given back beyond 1.5 x
+            if (physics_) {
+                auto b = R.bodies.find(key);
+                if (d < kBodyReach) {
+                    if (b == R.bodies.end()) b = R.bodies.emplace(key, 0u).first;
+                    if (b->second == 0) b->second = physics_->add_mesh_instance(in.piece, in.pos, in.yaw, in.scale);
+                } else if (b != R.bodies.end() && d > 1.5f * kBodyReach) {
+                    if (b->second) physics_->remove_mesh_instance(b->second);
+                    R.bodies.erase(b);
+                }
+            }
+            // the walker's triangles: within kWalkReach, freed beyond 2 x
+            auto w = R.walk.find(key);
+            if (d < kWalkReach) {
+                if (w == R.walk.end()) {
+                    w = R.walk.emplace(key, std::make_unique<tricol::Mesh>()).first;
+                    rockf::collision_mesh(in, *w->second);
+                }
+                R.walk_near.push_back(w->second.get());
+            } else if (w != R.walk.end() && d > 2.0f * kWalkReach) {
+                R.walk.erase(w);
+            }
         }
-        if (R.cols.size() != before || !R.cols.empty()) ++R.cols_gen;
     }
+}
+
+// All the rock colliders given back (left home, or shutting down).
+void VulkanEngine::rockf_drop_colliders() {
+    if (!rockf_) return;
+    RockfState& R = *rockf_;
+    if (physics_) for (const auto& kv : R.bodies) if (kv.second) physics_->remove_mesh_instance(kv.second);
+    R.bodies.clear();
+    R.walk.clear();
+    R.walk_near.clear();
+    R.cols_at = glm::vec3(1e9f);
 }
 
 // The parts to draw and trace this frame (castle_mesh.cpp mesh_parts_now).
@@ -176,16 +234,15 @@ void VulkanEngine::rockf_parts(std::vector<const CastleMeshGpu*>& out) const {
     for (const CastleMeshGpu& g : rockf_->draw) out.push_back(&g);
 }
 
-// The boxes of the formations near the player (for a walker: props.cpp; for a car: jeep.cpp),
-// and a number that changes when they do.
-const std::vector<collision::AABB>& VulkanEngine::rockf_colliders(uint32_t* gen) const {
-    static const std::vector<collision::AABB> none;
-    if (gen) *gen = rockf_ ? rockf_->cols_gen : 0u;
-    return rockf_ ? rockf_->cols : none;
+// The triangles of the formations near the player, for the walker (game_loop.cpp).
+const std::vector<const tricol::Mesh*>& VulkanEngine::rockf_walk_meshes() const {
+    static const std::vector<const tricol::Mesh*> none;
+    return rockf_ ? rockf_->walk_near : none;
 }
 
 void VulkanEngine::rockf_destroy() {
     if (!rockf_) return;
+    rockf_drop_colliders();
     for (auto& r : rockf_->retired) destroy_mesh_parts(r.second);
     for (auto& piece : rockf_->kit)
         for (RockfState::Level& L : piece)

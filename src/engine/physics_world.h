@@ -60,6 +60,18 @@ public:
     // shoot-to-destroy; the player uses the same boxes via game::collision.
     void set_voxel_collision(const StaticBox* boxes, size_t count);
 
+    // Triangle-mesh colliders shared by many placements (the rock formations:
+    // rock_formations_gpu.cpp). mesh_pieces_build_async() makes one Jolt MeshShape per piece
+    // from its triangles (three corners each, in the piece's own axes) on a worker thread;
+    // mesh_piece_ready() says when a piece's shape is there. add_mesh_instance() stands a
+    // static body of that shape at a place, turned about the vertical and scaled (0 = not
+    // ready / failed); remove_mesh_instance() takes it away. Everything collides with these:
+    // the car's body and wheels, crates, debris.
+    void mesh_pieces_build_async(std::vector<std::vector<glm::vec3>> pieces);
+    bool mesh_piece_ready(int piece) const;
+    uint32_t add_mesh_instance(int piece, glm::vec3 pos, float yaw, float scale);
+    void remove_mesh_instance(uint32_t id);
+
     // Add a procedural heightmap as a single Jolt HeightFieldShape static
     // body. `dim` is the cell count per side; `samples` must be of size
     // (dim+1) * (dim+1) and laid out row-major (x outer, z inner — matching

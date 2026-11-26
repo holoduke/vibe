@@ -13,6 +13,7 @@
 #include "engine/vk_engine/state/sun_shadow.h"
 #include "engine/frame_pacer.h"
 #include "engine/voxel/voxel_world.h"
+#include "game/tri_collision.h"
 #include "engine/audio.h"
 #include "engine/frustum.h"
 #include "engine/gltf_loader.h"
@@ -783,6 +784,34 @@ void VulkanEngine::loop_simulate(InputFrame& in, float frame_dt) {
                     player_.position.y = h0 + kHalfHeight;
                     player_.velocity.y = 0.0f;
                     player_.on_ground = true;
+                }
+            }
+            // Rock formations: their own surface (game/tri_collision.h), not boxes. The body is a
+            // capsule pushed out of the rock's triangles: a face one can stand on is ground (lifted
+            // straight onto it), a steep face is a wall that is slid down, an overhang a ceiling.
+            // Walking down the rock the walker is kept on it as on the terrain (the sticky snap).
+            if (!fly_mode_) {
+                const std::vector<const tricol::Mesh*>& rocks = rockf_walk_meshes();
+                if (!rocks.empty()) {
+                    constexpr float kR = 0.3f, kWalkN = 0.55f, kStepDown = 0.45f;
+                    const float half = game::Player::kHalfExtents.y;
+                    glm::vec3 a = player_.position - glm::vec3(0.0f, half - kR, 0.0f);
+                    glm::vec3 b = player_.position + glm::vec3(0.0f, half - kR, 0.0f);
+                    const tricol::Contact c = tricol::resolve_capsule(rocks, a, b, kR, player_.velocity, kWalkN);
+                    if (c.touched) player_.position = 0.5f * (a + b);
+                    bool ground = c.ground;
+                    if (!ground && player_.velocity.y <= 0.5f) {
+                        // resting on the rock (no push this tick), or walking down it
+                        const float feet = player_.position.y - half;
+                        const float reach = (was_on_ground && !player_swimming_) ? kStepDown : 0.06f;
+                        float fy = 0.0f; glm::vec3 fn(0.0f, 1.0f, 0.0f);
+                        if (tricol::floor_below(rocks, player_.position.x, player_.position.z, feet + 0.05f, feet - reach, kWalkN, fy, fn)) {
+                            player_.position.y = fy + half;
+                            if (player_.velocity.y < 0.0f) player_.velocity.y = 0.0f;
+                            ground = true;
+                        }
+                    }
+                    if (ground) { player_.on_ground = true; player_.air_jumps_left = game::Player::kAirJumps; }
                 }
             }
             // Audio triggers from the player tick. Land sound used to

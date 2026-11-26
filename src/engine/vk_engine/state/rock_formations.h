@@ -8,6 +8,7 @@
 #include "engine/vk_engine/rock_formations.h"
 
 #include <array>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -25,11 +26,15 @@ struct VulkanEngine::RockfState {
     std::vector<CastleMeshGpu> draw;
     uint32_t tris = 0;                          // triangles in `draw`
     std::vector<std::pair<int, std::vector<CastleMeshGpu>>> retired;      // kit levels given back, waiting out the frames in flight
-    // Collision: the boxes of the formations near the player.
-    std::vector<collision::AABB> cols;
-    std::unordered_map<int, std::vector<collision::AABB>> boxes;          // per formation, made when the player comes near
+    // Collision is the rock's own surface (rockf::collision_triangles). The physics world holds
+    // one mesh per piece (built once on a worker) and a static body per formation near the
+    // player - the car, crates and debris touch the rock itself; the walker has the world-space
+    // triangles of the formations very near (game/tri_collision.h).
+    bool phys_requested = false;
+    std::unordered_map<int, uint32_t> bodies;                             // formation -> PhysicsWorld::add_mesh_instance
+    std::unordered_map<int, std::unique_ptr<tricol::Mesh>> walk;          // formation -> its triangles in the world
+    std::vector<const tricol::Mesh*> walk_near;                           // those near the player now
     glm::vec3 cols_at{1e9f};
-    uint32_t  cols_gen = 0;
 };
 
 } // namespace vibe

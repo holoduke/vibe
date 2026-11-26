@@ -23,6 +23,9 @@
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/ScaledShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Vehicle/VehicleConstraint.h>
 #include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
@@ -42,6 +45,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdarg>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -258,6 +262,13 @@ struct PhysicsWorld::Impl {
     // — store the full GetIndex() which is the broadphase-stable key).
     std::unordered_map<uint32_t, uint32_t> id_by_body_index;
     uint32_t next_id = 1;
+    // Triangle-mesh pieces (mesh_pieces_build_async) and the bodies standing them about.
+    std::vector<JPH::RefConst<JPH::Shape>> mesh_pieces;
+    std::vector<uint8_t> mesh_ready;
+    mutable std::mutex mesh_mutex;
+    std::thread mesh_thread;
+    std::unordered_map<uint32_t, JPH::BodyID> mesh_bodies;
+    uint32_t next_mesh = 1;
 };
 
 PhysicsWorld::PhysicsWorld() {
@@ -284,6 +295,7 @@ PhysicsWorld::PhysicsWorld() {
 }
 
 PhysicsWorld::~PhysicsWorld() {
+    if (impl_ && impl_->mesh_thread.joinable()) impl_->mesh_thread.join();
     vehicle_remove();
     impl_.reset();
     global_shutdown_if_last();
@@ -299,6 +311,68 @@ void PhysicsWorld::add_static_heightfield_async(std::vector<float> samples, int 
 
 void PhysicsWorld::finish_async() {
     if (impl_ && impl_->hf_thread.joinable()) impl_->hf_thread.join();
+}
+
+// Triangle-mesh pieces (physics_world.h): built on a worker thread, one MeshShape each.
+void PhysicsWorld::mesh_pieces_build_async(std::vector<std::vector<glm::vec3>> pieces) {
+    if (impl_->mesh_thread.joinable()) impl_->mesh_thread.join();
+    {
+        std::lock_guard<std::mutex> lk(impl_->mesh_mutex);
+        impl_->mesh_pieces.assign(pieces.size(), nullptr);
+        impl_->mesh_ready.assign(pieces.size(), 0);
+    }
+    impl_->mesh_thread = std::thread([this, P = std::move(pieces)]() {
+        for (size_t i = 0; i < P.size(); ++i) {
+            const std::vector<glm::vec3>& t = P[i];
+            if (t.size() < 3) continue;
+            JPH::TriangleList tl;
+            tl.reserve(t.size() / 3);
+            for (size_t k = 0; k + 2 < t.size(); k += 3)
+                tl.push_back(JPH::Triangle(JPH::Float3(t[k].x, t[k].y, t[k].z), JPH::Float3(t[k + 1].x, t[k + 1].y, t[k + 1].z),
+                                           JPH::Float3(t[k + 2].x, t[k + 2].y, t[k + 2].z)));
+            JPH::MeshShapeSettings ms(tl);
+            ms.mActiveEdgeCosThresholdAngle = 0.996195f;      // (5 degrees: no snagging on the seams of a smooth rock)
+            JPH::ShapeSettings::ShapeResult sr = ms.Create();
+            if (sr.HasError()) { log::errorf("[jolt] mesh piece %zu: %s", i, sr.GetError().c_str()); continue; }
+            std::lock_guard<std::mutex> lk(impl_->mesh_mutex);
+            impl_->mesh_pieces[i] = sr.Get();
+            impl_->mesh_ready[i] = 1;
+        }
+    });
+}
+
+bool PhysicsWorld::mesh_piece_ready(int piece) const {
+    std::lock_guard<std::mutex> lk(impl_->mesh_mutex);
+    return piece >= 0 && size_t(piece) < impl_->mesh_ready.size() && impl_->mesh_ready[size_t(piece)] != 0;
+}
+
+uint32_t PhysicsWorld::add_mesh_instance(int piece, glm::vec3 pos, float yaw, float scale) {
+    JPH::RefConst<JPH::Shape> base;
+    {
+        std::lock_guard<std::mutex> lk(impl_->mesh_mutex);
+        if (piece < 0 || size_t(piece) >= impl_->mesh_ready.size() || !impl_->mesh_ready[size_t(piece)]) return 0;
+        base = impl_->mesh_pieces[size_t(piece)];
+    }
+    JPH::RefConst<JPH::Shape> shape = base;
+    if (std::abs(scale - 1.0f) > 1e-4f) shape = new JPH::ScaledShape(base, JPH::Vec3::sReplicate(scale));
+    JPH::BodyCreationSettings bcs(shape, JPH::RVec3(pos.x, pos.y, pos.z), JPH::Quat::sRotation(JPH::Vec3::sAxisY(), yaw),
+                                  JPH::EMotionType::Static, Layers::NON_MOVING);
+    bcs.mFriction = 0.8f;          // (rough rock)
+    bcs.mRestitution = 0.05f;
+    const JPH::BodyID id = impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+    if (id.IsInvalid()) return 0;
+    const uint32_t h = impl_->next_mesh++;
+    impl_->mesh_bodies[h] = id;
+    return h;
+}
+
+void PhysicsWorld::remove_mesh_instance(uint32_t h) {
+    auto it = impl_->mesh_bodies.find(h);
+    if (it == impl_->mesh_bodies.end()) return;
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    bi.RemoveBody(it->second);
+    bi.DestroyBody(it->second);
+    impl_->mesh_bodies.erase(it);
 }
 
 void PhysicsWorld::step(float dt) {

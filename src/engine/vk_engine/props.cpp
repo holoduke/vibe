@@ -1455,8 +1455,7 @@ void VulkanEngine::rebuild_tick_aabbs() {
     if (globe::current().home)                   // the castle lane's stones near the player
         for (const collision::AABB& a : lane_rock_cols_)
             if (std::abs(0.5f * (a.min.x + a.max.x) - player_.position.x) < 12.0f && std::abs(0.5f * (a.min.z + a.max.z) - player_.position.z) < 12.0f) tick_aabbs_.push_back(a);
-    for (const collision::AABB& a : rockf_colliders())      // the rock formations near the player (rock_formations_gpu.cpp)
-        if (a.max.x > player_.position.x - 6.0f && a.min.x < player_.position.x + 6.0f && a.max.z > player_.position.z - 6.0f && a.min.z < player_.position.z + 6.0f) tick_aabbs_.push_back(a);
+    // (the rock formations are not boxes: the walker meets their surface - game_loop.cpp rock_walk)
     water_boulder_colliders(player_.position, 6.0f, tick_aabbs_);      // the boulders in the stream and the river's shallows (water_fx.cpp)
 }
 

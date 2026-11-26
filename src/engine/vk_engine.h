@@ -48,6 +48,7 @@
 struct ImFont;      // Dear ImGui (HUD fonts)
 
 namespace vibe {
+namespace tricol { struct Mesh; }   // (game/tri_collision.h)
 struct GlobeChartRef { globe::Chart c; };
 
 // Running totals of validation-layer warnings / errors observed during this
@@ -2188,7 +2189,8 @@ private:
     void      rockf_poll();
     void      rockf_destroy();
     void      rockf_parts(std::vector<const CastleMeshGpu*>& out) const;
-    const std::vector<collision::AABB>& rockf_colliders(uint32_t* gen = nullptr) const;
+    const std::vector<const tricol::Mesh*>& rockf_walk_meshes() const;     // the rock formations' surfaces near the player (the walker)
+    void      rockf_drop_colliders();
     void      hw_rail_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const;     // the guard rail near a place, for physics
     // The jeep (jeep.cpp): a vehicle to drive.
     struct JeepState;

@@ -542,9 +542,7 @@ void VulkanEngine::jeep_feed_world() {
         }
     }
     // -- what stands near --
-    uint32_t rockf_gen = 0;
-    const std::vector<collision::AABB>& rockf_boxes = rockf_colliders(&rockf_gen);      // (rock formations near the player)
-    const size_t sig = wv_cols_.size() * 31u + world_.aabbs.size() + lane_rock_cols_.size() * 7u + size_t(rockf_gen) * 1013u;
+    const size_t sig = wv_cols_.size() * 31u + world_.aabbs.size() + lane_rock_cols_.size() * 7u;
     if (glm::distance(p2, J.obst_centre) > 22.0f || sig != J.obst_sig) {
         J.obst_centre = p2; J.obst_sig = sig;
         std::vector<PhysicsWorld::OrientedBox> ob;
@@ -559,9 +557,7 @@ void VulkanEngine::jeep_feed_world() {
         for (const auto& a : wv_cols_) take(a);
         for (const auto& a : world_.aabbs) take(a);
         hw_rail_boxes(pos, reach, ob);
-        // (rock formations: what of them a car can run into - within 35 m, not far over its roof)
-        for (const auto& a : rockf_boxes)
-            if (a.min.y < pos.y + 4.0f && a.max.x > pos.x - 35.0f && a.min.x < pos.x + 35.0f && a.max.z > pos.z - 35.0f && a.min.z < pos.z + 35.0f) take(a);
+        // (the rock formations are in the physics world as their own surface: rock_formations_gpu.cpp)
         if (ob.size() > 900) ob.resize(900);
         physics_->vehicle_set_obstacles(ob.data(), ob.size());
     }

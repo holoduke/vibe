@@ -295,6 +295,7 @@ add_library(vibe_core STATIC
     src/engine/region_tile.cpp
     src/game/physics.cpp
     src/game/collision.cpp
+    src/game/tri_collision.cpp
     src/game/level.cpp
     src/game/player.cpp
     src/engine/frustum.cpp

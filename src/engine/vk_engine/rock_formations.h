@@ -7,7 +7,7 @@
 //
 // THE KIT is made in Blender by tools/rocks/make_formations.py (assets/rocks/formations.rockf):
 // every piece at three levels of detail, with ambient occlusion and curvature per vertex and
-// a coarse grid of its solid cells for collision.
+// a coarse grid of its solid cells (collision is the mesh itself: collision_triangles).
 //
 // WHERE they stand is a list made once from the ground and the roads (place()): along every
 // narrow road (the castle lane) and on the steepest cliffs of the home tile. A formation is
@@ -20,6 +20,7 @@
 
 #include "game/level.h"
 #include "game/collision.h"
+#include "game/tri_collision.h"
 
 #include <glm/glm.hpp>
 
@@ -74,7 +75,12 @@ bool placed();
 const std::vector<Inst>& instances();
 
 glm::mat4 transform(const Inst& in);
-// The formation's solid cells as boxes in the world (cells under the ground are left out).
-void boxes(const Inst& in, const Ground& ground, std::vector<collision::AABB>& out);
+// Collision is the rock's own surface: the triangles of its middle level of detail.
+constexpr int kCollisionLevel = 1;
+// A piece's collision triangles in its own axes, three corners each (the physics world's
+// shared mesh: PhysicsWorld::mesh_pieces_build_async).
+void collision_triangles(int piece, std::vector<glm::vec3>& out);
+// A formation's collision triangles in the world, with their grid (the walker: tri_collision.h).
+void collision_mesh(const Inst& in, tricol::Mesh& out);
 
 }  // namespace vibe::rockf
