@@ -43,6 +43,7 @@ assets/**/*.tres
 assets/**/*.mtlx
 assets/**/MorningSkyHDRI002B.png
 assets/tex/**/*.png
+!assets/tex/**/*_SSDM.png
 
 
 # debug screenshots

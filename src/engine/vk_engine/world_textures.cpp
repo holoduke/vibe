@@ -160,9 +160,9 @@ const WorldTexSpec kWorldTexSpecs[] = {
       "Tiles074/Tiles074_8K-JPG_NormalGL.jpg" },
 };
 const char* kWorldSpomPaths[] = {
-    "Bricks078/Bricks078_8K-JPG_Displacement.jpg",
+    "Bricks078/Bricks078_SSDM.png",                  // (tools/textures/make_ssdm_heights.py: joint 0, stone top 1)
     "PaintedBricks001/PaintedBricks001_8K-JPG_Displacement.jpg",
-    "Tiles130/Tiles130_8K-JPG_Displacement.jpg",
+    "Tiles130/Tiles130_SSDM.png",                    // (the same)
     "Tiles074/Tiles074_8K-JPG_Displacement.jpg",
 };
 }  // namespace
@@ -943,6 +943,9 @@ void VulkanEngine::load_terrain_pbr_overrides() {
         std::string p_alb  = resolve(base + "Color.jpg");
         std::string p_nrm  = resolve(base + "NormalGL.jpg");
         std::string p_disp = resolve(base + "Displacement.jpg");
+        // (a height map made for the screen-space displacement - joint 0, stone top 1 - in place
+        //  of the scan's: tools/textures/make_ssdm_heights.py)
+        if (std::string p_ssdm = resolve(std::string(set.name) + "/" + set.name + "_SSDM.png"); !p_ssdm.empty()) p_disp = p_ssdm;
         std::string p_ao   = resolve(base + "AmbientOcclusion.jpg");
         if (p_alb.empty() || p_nrm.empty()) {
             log::warnf("[terrain pbr] %s incomplete - keeping procedural slot %d",

@@ -99,11 +99,12 @@ void main() {
     if (hix == 0 || hix == 2) muv.x *= 0.5;                    // 2:1 masonry (as cube.frag)
     // (the game samples its height map with the sampler's own level of detail)
     float h = texture(u_height[hix], muv).r;
-    // Our height maps are photo scans with the joints at mid grey (the reference game's are made
-    // for this pass: joint 0, stone top 1). Each is stretched to that: its 5th percentile (the
-    // joints) to 0, its 98th (the tops) to 1 - measured from the files (2026-11-26):
-    //   Bricks078 85..204, PaintedBricks001 105..223, Tiles130 108..226, Tiles074 60..224 (of 255).
-    const vec2 kLevels[4] = vec2[4](vec2(85.0, 204.0), vec2(105.0, 223.0), vec2(108.0, 226.0), vec2(60.0, 224.0));
+    // The height maps as the reference game's are made for this pass: joint 0, stone top 1. The
+    // castle wall's and the courtyard's are built so (tools/textures/make_ssdm_heights.py); the
+    // other two are photo scans with their joints at mid grey, stretched here from their 5th to
+    // their 98th percentile - measured from the files (2026-11-26): PaintedBricks001 105..223,
+    // Tiles074 60..224 (of 255).
+    const vec2 kLevels[4] = vec2[4](vec2(0.0, 255.0), vec2(105.0, 223.0), vec2(0.0, 255.0), vec2(60.0, 224.0));
     const vec2 lv = kLevels[hix] / 255.0;
     h = clamp((h - lv.x) / (lv.y - lv.x), 0.0, 1.0);
     if (dot(n, scene.camera_pos.xyz - vWorldPos) < 0.0) n = -n;     // (the side that is seen)
