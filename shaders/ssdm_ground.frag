@@ -30,8 +30,8 @@ layout(push_constant) uniform SsdmPC {      // (ssdm_common.glsl; not included: 
 } pc;
 
 layout(set = 0, binding = 1) uniform sampler2D u_depth;
-layout(set = 0, binding = 4) uniform sampler2D u_g0;
-layout(set = 0, binding = 5) uniform sampler2D u_g1;
+layout(set = 0, binding = 3) uniform sampler2D u_g0;
+layout(set = 0, binding = 4) uniform sampler2D u_g1;
 
 layout(location = 0) out vec4 outHeight;
 

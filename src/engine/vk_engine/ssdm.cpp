@@ -109,9 +109,11 @@ bool VulkanEngine::ssdm_active() const {
 // material's height into the G-buffer and leaves its own parallax out: scene constant
 // rm_perf bit 64, descriptors.cpp.) Only with the terrain at full resolution: the
 // low-resolution terrain's compose pass carries no height. VIBE_NO_GROUND_DETAIL=1 off.
+// (Before the pass is first built its ground pipeline does not exist yet: the ground still counts,
+//  so that the ground alone switches it on - it used to wait for a castle wall to come in view.)
 bool VulkanEngine::ground_ssdm_active() const {
     static const bool off = std::getenv("VIBE_NO_GROUND_DETAIL") != nullptr;
-    return !off && ssdm_active() && ssdm_ && ssdm_->ground_pipeline && rt_.terrain_raymarch_enabled && !tr_use_lowres() && rt_.textures_enabled;
+    return !off && ssdm_active() && ssdm_ && (!ssdm_ready_ || ssdm_->ground_pipeline) && rt_.terrain_raymarch_enabled && !tr_use_lowres() && rt_.textures_enabled;
 }
 
 void VulkanEngine::destroy_ssdm_targets() {
