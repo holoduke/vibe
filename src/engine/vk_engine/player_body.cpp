@@ -11,8 +11,11 @@
 #include "engine/vk_engine.h"
 #include "engine/vk_engine/internal.h"
 #include "engine/vk_engine/state/multiplayer.h"
+#include "engine/vk_engine/state/people.h"
+#include "npc/npc.h"
 #include "engine/cpu_prof.h"
 #include "engine/log.h"
+#include "game/tri_collision.h"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -149,6 +152,7 @@ void VulkanEngine::init_player_body() {
     load_skin_mesh("soldier_head_lod1.qchar", head_lod_[1], false);
     load_skin_mesh("soldier_head_lod2.qchar", head_lod_[2], false, true);
     init_body_rt();
+    init_people();
     log::infof("[body] triangles by level of detail: body %u / %u / %u, head %u / %u / %u (0 = file missing: the level before is drawn)",
                body_lod_[0].index_count / 3, body_lod_[1].index_count / 3, body_lod_[2].index_count / 3,
                head_lod_[0].index_count / 3, head_lod_[1].index_count / 3, head_lod_[2].index_count / 3);
@@ -235,6 +239,8 @@ void VulkanEngine::apply_anim_tuning(anim::AnimTuning& t) const {
 
 void VulkanEngine::destroy_player_body() {
     destroy_body_rt();
+    destroy_people();
+    destroy_skin_blur();
     for (SkinMesh* set : { body_lod_, head_lod_ })
         for (int i = 0; i < kBodyLods; ++i) {
             destroy_mesh(allocator_, set[i].rest);
@@ -254,6 +260,13 @@ float VulkanEngine::anim_ground_height(float x, float z, float feet_y) const {
         if (x < a.min.x || x > a.max.x || z < a.min.z || z > a.max.z) continue;
         if (a.max.y > feet_y + 0.6f) continue;               // above the knees: a wall, not a floor
         g = std::max(g, a.max.y);
+    }
+    // (a boulder's round top: the walker stands on the stone, not on its box - tri_collision.h)
+    for (const collision::AABB& a : near_round_) {
+        if (x < a.min.x || x > a.max.x || z < a.min.z || z > a.max.z) continue;
+        const std::vector<tricol::Round> one{ tricol::round_in_box(a.min, a.max) };
+        float y = 0.0f; glm::vec3 n;
+        if (tricol::floor_below_rounds(one, x, z, feet_y + 0.6f, g, 0.5f, y, n)) g = std::max(g, y);
     }
     return g;
 }
@@ -402,6 +415,8 @@ void VulkanEngine::update_player_body(float dt) {
     in.shot_seq = body_shot_seq_;
     in.reload_seq = body_reload_seq_;
     in.aiming = body_aim_;
+    // VIBE_BODY_CARRY=1 (with VIBE_BODY_FRONT): the rifle carried low, as somebody else running with it is seen (net_anim.h)
+    if (static const bool kCarry = std::getenv("VIBE_BODY_CARRY") != nullptr; kCarry) { in.carry = 1.0f; in.aiming = false; }
     {   // (VIBE_TEST_RAGDOLL: the 23 frames before it the body buckles, as a killed player's does)
         static const int kRagAt = int(env_float("VIBE_TEST_RAGDOLL", -1.0f));
         const int to_go = kRagAt - int(frame_number_);
@@ -637,7 +652,20 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     const SkinMesh* body = level(body_lod_);
     // The head: on everybody but the player himself (who looks out of it).
     const SkinMesh* head = (mp_->draw || body_front_ || body_seated_) ? level(head_lod_) : nullptr;      // (and on the driver, seen from behind the car)
+    // PEOPLE (below): somebody of the NPC world is somebody - an outfit, a face, hair, headgear.
+    const bool person = mp_->draw && mp_->draw->person != 0 && people_ && people_->ok;
+    const PersonLook look = person ? people_look(mp_->draw->person, mp_->draw->dress) : people_soldier_look();
+    const SkinMesh* extra[2] = { nullptr, nullptr };
+    if (person) {
+        if (look.outfit > 0) if (const SkinMesh* b = level(people_->bodies[look.outfit])) body = b;
+        if (const SkinMesh* h = level(people_->heads[look.head])) head = h;
+        if (look.hair) extra[0] = level(people_->hair[look.head]);
+        if (look.gear == 1) extra[1] = level(people_->helmet);
+        else if (look.gear == 2) extra[1] = level(people_->cap);
+    }
     if (!body) return;
+    // the look block: six rows after the bones in this character's region (shaders/people.glsl)
+    if (body_palette_map_) std::memcpy(body_palette_map_ + size_t(palette) + kLookRow, look.row, sizeof(look.row));
     auto draw_mesh = [&](const SkinMesh& m) {
         const VkBuffer streams[2] = { m.rest.vertex_buffer, m.skin.vertex_buffer };
         const VkDeviceSize offs[2] = { 0, 0 };
@@ -646,7 +674,9 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
         vkCmdDrawIndexed(cmd, m.index_count, 1, 0, 0, 0);
     };
     PushConstants pc{};
-    const glm::mat4 bm = mp_->draw ? mp_->draw->model : body_model_;
+    // (somebody taller or broader than the soldier: the whole body, from the feet)
+    const glm::mat4 build = glm::scale(glm::mat4(1.0f), glm::vec3(look.width, look.height, look.width));
+    const glm::mat4 bm = (mp_->draw ? mp_->draw->model : body_model_) * build;
     // `vp` is relative to `cam` (draw_viewmodel): so is the matrix it multiplies; the lighting keeps the world one.
     glm::mat4 bm_rel = bm;
     bm_rel[3] = glm::vec4(glm::vec3(bm[3]) - cam, 1.0f);
@@ -655,7 +685,7 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     pc.prev_mvp = pc.mvp;                  // rides on the camera: no motion vectors
     if (mp_->draw) {
         // Another player: a real object in the world, with real motion.
-        if (prev_view_proj_valid_) pc.prev_mvp = prev_view_proj_ * mp_->draw->prev_model;
+        if (prev_view_proj_valid_) pc.prev_mvp = prev_view_proj_ * mp_->draw->prev_model * build;
     } else if (rt_.fsr2_enabled) {
         glm::mat4 J(1.0f);
         const glm::vec2 dj = current_frame_view_.jitter - prev_jitter_;
@@ -666,12 +696,14 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
     pc.color = glm::vec4(1.0f);
     pc.emissive = glm::vec4(0.0f);
     // albedo = the soldier atlas, sampled with the mesh UVs (marker -8, cube.frag)
-    pc.tex_params = glm::vec4(float(kTexSoldier), -8.0f, 1.0f, 0.0f);
+    // (.z: this character's first palette row - the fragment finds its look block there)
+    pc.tex_params = glm::vec4(float(kTexSoldier), -8.0f, float(palette), 0.0f);
     // .y: first palette row; .z: 1 + last frame's (cube_skin.vert: the limbs' own motion)
     pc.grass_params = glm::vec4(0.0f, float(palette), palette_prev >= 0 ? float(palette_prev + 1) : 0.0f, 0.0f);
     vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
     draw_mesh(*body);
     if (head) draw_mesh(*head);
+    for (const SkinMesh* x : extra) if (x) draw_mesh(*x);
     // Test hook: VIBE_BODY_CROWD=<n> draws the local body n more times in a block ahead
     // (the same pose): what n skinned characters cost the GPU (gpu-passes: w_viewmodel).
     static const int kCrowd = std::getenv("VIBE_BODY_CROWD") ? std::atoi(std::getenv("VIBE_BODY_CROWD")) : 0;
@@ -691,6 +723,165 @@ VkCommandBuffer cmd, const glm::mat4& vp, const glm::vec3& cam) {
         }
     }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());      // (the caller goes on with rigid parts)
+}
+
+// =====================================================================================
+// PEOPLE. Everybody the NPC engine shows is somebody: an outfit, a face, a skin, hair, a beard,
+// eyes, colours - all from the person's number (the same on every machine) and how the NPC
+// engine has them dressed (npc::Dress). The meshes share the soldier's skeleton and atlas
+// (tools/character/make_people.py); the colours are a block of six rows after the bones in the
+// character's region of the bone palette (shaders/people.glsl). docs/ARCHITECTURE.md
+// "People who look like people".
+// =====================================================================================
+namespace {
+
+struct Rnd {
+    uint64_t s;
+    explicit Rnd(uint32_t seed) : s(uint64_t(seed) * 0x9E3779B97F4A7C15ull + 0x632BE59BD9B4E019ull) {}
+    uint32_t next() { s += 0x9E3779B97F4A7C15ull; uint64_t z = s; z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull; z = (z ^ (z >> 27)) * 0x94D049BB133111EBull; return uint32_t((z ^ (z >> 31)) >> 32); }
+    float uni() { return float(next() >> 8) * (1.0f / 16777216.0f); }
+    float range(float a, float b) { return a + (b - a) * uni(); }
+    int   pick(int n) { return int(next() % uint32_t(n)); }
+    bool  chance(float p) { return uni() < p; }
+};
+
+// The faces (make_people.py FACES; 0 is the soldier's own) and how much melanin their origin has
+// as a range: the skin is chosen in it, the hair and the eyes follow from it.
+struct FaceDef { float m0, m1; bool old_skin; bool cards; float age; };
+constexpr FaceDef kFaces[kPeopleHeads] = {
+    { 0.00f, 0.20f, false, false, 0.3f },    // 0 the soldier (fair, young)
+    { 0.70f, 0.98f, false, false, 0.3f },    // 1 of African origin
+    { 0.02f, 0.25f, false, true,  0.6f },    // 2 forties, heavier
+    { 0.18f, 0.38f, false, true,  0.25f },   // 3 of East Asian origin
+    { 0.00f, 0.22f, true,  false, 1.0f },    // 4 near sixty
+    { 0.35f, 0.65f, false, true,  0.45f },   // 5 of mixed origin
+    { 0.00f, 0.18f, false, false, 0.1f },    // 6 very young
+    { 0.30f, 0.62f, false, true,  0.55f },   // 7 South Asian / Middle Eastern
+};
+
+glm::vec3 skin_tone(float m, Rnd& r) {
+    // linear albedo along the range of real skin, from very fair to very dark, a little warmer
+    // or cooler from one person to the next
+    const glm::vec3 fair(0.80f, 0.60f, 0.49f), mid(0.45f, 0.28f, 0.17f), dark(0.12f, 0.065f, 0.042f);
+    glm::vec3 c = m < 0.5f ? glm::mix(fair, mid, m * 2.0f) : glm::mix(mid, dark, (m - 0.5f) * 2.0f);
+    const float warm = r.range(-0.04f, 0.05f);
+    c *= glm::vec3(1.0f + warm, 1.0f, 1.0f - warm * 1.5f);
+    return c;
+}
+
+}  // namespace
+
+PersonLook people_soldier_look() {
+    PersonLook L;
+    L.row[0] = glm::vec4(0.8769f, 0.6614f, 0.5376f, 0.0f);     // the young skin texture's own mean (make_people.py log)
+    L.row[1] = glm::vec4(0.035f, 0.022f, 0.014f, 0.5f);        // dark brown, cropped
+    L.row[2] = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
+    L.row[3] = glm::vec4(0.11f, 0.12f, 0.06f, 0.0f);
+    L.row[4] = glm::vec4(0.06f, 0.06f, 0.05f, 0.25f);
+    L.row[5] = glm::vec4(0.10f, 0.16f, 0.26f, 0.0f);
+    return L;
+}
+
+PersonLook people_look(uint32_t person, uint8_t dress) {
+    Rnd r(person * 2654435761u ^ 0x5bd1e995u);
+    PersonLook L;
+    // ---- the face, the skin
+    L.head = r.pick(kPeopleHeads);
+    const FaceDef& f = kFaces[L.head];
+    const float m = r.range(f.m0, f.m1);
+    const glm::vec3 skin = skin_tone(m, r);
+    const bool old = f.old_skin || (f.age > 0.5f && r.chance(0.4f));
+    L.row[0] = glm::vec4(skin, old ? 1.0f : 0.0f);
+    // ---- the hair: dark where the skin is dark; any natural colour on the fair; grey with age
+    static const glm::vec3 kHair[6] = { { 0.012f, 0.010f, 0.009f }, { 0.035f, 0.022f, 0.014f }, { 0.09f, 0.055f, 0.03f },
+                                        { 0.30f, 0.21f, 0.11f }, { 0.20f, 0.065f, 0.028f }, { 0.24f, 0.235f, 0.225f } };
+    glm::vec3 hair = m > 0.45f ? kHair[r.chance(0.8f) ? 0 : 1] : kHair[r.pick(100) < 25 ? 1 : r.pick(100) < 40 ? 2 : r.pick(100) < 55 ? 0 : r.chance(0.7f) ? 3 : 4];
+    if (f.age > 0.9f || (f.age > 0.5f && r.chance(0.3f))) hair = glm::mix(hair, kHair[5], f.age > 0.9f ? 0.85f : 0.45f);
+    const npc::Dress d = npc::Dress(dress);
+    const bool military = d == npc::Dress::Soldier || d == npc::Dress::Garrison || (d == npc::Dress::Technician && r.chance(0.3f));
+    // scalp: soldiers shaved, buzzed or cropped; civilians fuller (or cards, below)
+    float scalp = military ? (r.chance(0.25f) ? 0.0f : r.chance(0.5f) ? 0.5f : 0.85f) : r.range(0.85f, 1.0f);
+    if (f.age > 0.9f && r.chance(0.5f)) scalp = 0.0f;            // (the older man is bald or close to it)
+    L.row[1] = glm::vec4(hair, scalp);
+    // ---- the beard: soldiers at most stubble; others now and then a beard or a moustache
+    float beard = 0.0f, mous = 0.0f, stubble = r.range(0.0f, 0.7f);
+    if (!military) {
+        const int b = r.pick(100);
+        if (b < 22) beard = 1.0f; else if (b < 34) mous = 1.0f;
+    }
+    // ---- the outfit and the colours
+    static const glm::vec3 kTops[10] = { { 0.70f, 0.70f, 0.68f }, { 0.25f, 0.25f, 0.25f }, { 0.03f, 0.05f, 0.12f }, { 0.35f, 0.04f, 0.04f },
+                                         { 0.08f, 0.15f, 0.06f }, { 0.02f, 0.02f, 0.02f }, { 0.30f, 0.45f, 0.60f }, { 0.45f, 0.37f, 0.25f },
+                                         { 0.45f, 0.30f, 0.05f }, { 0.12f, 0.20f, 0.30f } };
+    static const glm::vec3 kJeans[5] = { { 0.06f, 0.09f, 0.18f }, { 0.12f, 0.17f, 0.28f }, { 0.03f, 0.04f, 0.07f }, { 0.02f, 0.02f, 0.02f }, { 0.30f, 0.25f, 0.15f } };
+    static const glm::vec3 kMil[3] = { { 0.11f, 0.12f, 0.06f }, { 0.25f, 0.19f, 0.12f }, { 0.03f, 0.03f, 0.03f } };
+    static const glm::vec3 kWork[4] = { { 0.05f, 0.10f, 0.25f }, { 0.60f, 0.20f, 0.02f }, { 0.12f, 0.13f, 0.07f }, { 0.20f, 0.20f, 0.21f } };
+    static const glm::vec3 kJacket[5] = { { 0.03f, 0.04f, 0.09f }, { 0.18f, 0.18f, 0.18f }, { 0.40f, 0.33f, 0.22f }, { 0.12f, 0.13f, 0.07f }, { 0.02f, 0.02f, 0.02f } };
+    static const glm::vec3 kTrousers[4] = { { 0.18f, 0.18f, 0.19f }, { 0.30f, 0.26f, 0.17f }, { 0.04f, 0.05f, 0.10f }, { 0.02f, 0.02f, 0.02f } };
+    glm::vec3 top = kTops[r.pick(10)], bottom = kJeans[r.pick(5)];
+    switch (d) {
+    case npc::Dress::Soldier: L.outfit = 0; L.gear = 1; break;
+    case npc::Dress::Garrison: L.outfit = r.chance(0.55f) ? 1 : 2; L.gear = r.chance(0.45f) ? 2 : 0; top = kMil[r.pick(3)]; break;
+    case npc::Dress::Technician: L.outfit = r.chance(0.7f) ? 4 : 1; L.gear = r.chance(0.3f) ? 2 : 0; bottom = kWork[r.pick(4)]; break;
+    case npc::Dress::Office: { const int o = r.pick(4); L.outfit = o < 2 ? 5 : o == 2 ? 3 : 2; if (L.outfit == 2) top = kMil[r.pick(3)]; break; }
+    default: L.outfit = r.chance(0.6f) ? 3 : 5; break;
+    }
+    if (L.outfit == 5) { top = kJacket[r.pick(5)]; bottom = kTrousers[r.pick(4)]; }
+    // the unit's shade: woodland as painted, a little faded or darker from one issue to the next
+    const float fade = r.range(-0.08f, 0.12f);
+    L.row[2] = glm::vec4(glm::vec3(1.0f + fade, 1.0f + fade * 0.9f, 1.0f + fade * 0.6f), beard);
+    L.row[3] = glm::vec4(top * r.range(0.85f, 1.15f), mous);
+    L.row[4] = glm::vec4(bottom * r.range(0.85f, 1.15f), stubble);
+    // ---- the eyes: brown where the skin is dark; blue, green, grey, hazel or brown on the fair
+    static const glm::vec3 kEyes[5] = { { 0.10f, 0.05f, 0.025f }, { 0.10f, 0.17f, 0.32f }, { 0.10f, 0.16f, 0.07f }, { 0.18f, 0.20f, 0.22f }, { 0.16f, 0.11f, 0.04f } };
+    const glm::vec3 eye = (m > 0.35f || r.chance(0.35f)) ? kEyes[0] : kEyes[r.pick(5)];
+    L.row[5] = glm::vec4(eye, r.uni());
+    // hair cards only where there is no headgear and the hair is not cropped
+    L.hair = f.cards && L.gear == 0 && !military;
+    L.height = r.range(0.965f, 1.035f);
+    L.width = L.height * r.range(0.97f, 1.05f);
+    return L;
+}
+
+void VulkanEngine::init_people() {
+    destroy_people();
+    people_ = new PeopleState();
+    PeopleState& P = *people_;
+    static const char* kOutfit[kPeopleOutfits] = { "", "fatigues", "tee", "civil", "work", "jacket" };
+    static const char* kLod[kBodyLods] = { "", "_lod1", "_lod2" };
+    int files = 0;
+    size_t bytes = 0;
+    auto load = [&](const std::string& name, SkinMesh& m) {
+        if (!load_skin_mesh((name + ".qchar").c_str(), m, false)) return false;
+        ++files; bytes += size_t(m.vertex_count) * 2 * sizeof(Vertex) + size_t(m.index_count) * 4;
+        return true;
+    };
+    for (int o = 1; o < kPeopleOutfits; ++o)
+        for (int l = 0; l < kBodyLods; ++l) load(std::string("people_body_") + kOutfit[o] + kLod[l], P.bodies[o][l]);
+    for (int h = 0; h < kPeopleHeads; ++h)
+        for (int l = 0; l < kBodyLods; ++l) {
+            load("people_head_" + std::to_string(h) + kLod[l], P.heads[h][l]);
+            if (l < 2) load("people_hair_" + std::to_string(h) + kLod[l], P.hair[h][l]);
+        }
+    for (int l = 0; l < 2; ++l) load(std::string("people_helmet") + kLod[l], P.helmet[l]);
+    load("people_cap", P.cap[0]);
+    P.ok = P.heads[0][0].index_count > 0;
+    if (body_bones_.size() > size_t(kLookRow / 3)) { log::warnf("[people] %zu bones: no room for the look block - everybody is the soldier", body_bones_.size()); P.ok = false; }
+    log::infof("[people] %d meshes (%.1f MB on the GPU)%s", files, double(bytes) / 1048576.0,
+               P.ok ? "" : " - not all there: everybody is the soldier (blender -b soldier.blend --python tools/character/make_people.py)");
+}
+
+void VulkanEngine::destroy_people() {
+    if (!people_) return;
+    PeopleState& P = *people_;
+    auto kill = [&](SkinMesh& m) { destroy_mesh(allocator_, m.rest); destroy_mesh(allocator_, m.skin); m = SkinMesh{}; };
+    for (auto& o : P.bodies) for (SkinMesh& m : o) kill(m);
+    for (auto& o : P.heads) for (SkinMesh& m : o) kill(m);
+    for (auto& o : P.hair) for (SkinMesh& m : o) kill(m);
+    for (SkinMesh& m : P.helmet) kill(m);
+    for (SkinMesh& m : P.cap) kill(m);
+    delete people_;
+    people_ = nullptr;
 }
 
 }  // namespace vibe

@@ -75,8 +75,9 @@ struct RfMat {
     float h;        // the scan's height 0..1
 };
 // wp: the point; N: the mesh's normal there (unit); dpx / dpy: the point's change across one
-// pixel; dist: metres from the eye.
-RfMat rf_material(vec3 wp, vec3 N, vec3 dpx, vec3 dpy, float dist) {
+// pixel; dist: metres from the eye. bump_out: what the scan's relief adds to the normal (the
+// caller may lay it on another base normal - a piece's baked one - and scale it).
+RfMat rf_material_b(vec3 wp, vec3 N, vec3 dpx, vec3 dpy, float dist, out vec3 bump_out) {
     vec3 w = abs(N);
     w *= w; w *= w;
     w /= (w.x + w.y + w.z);
@@ -117,8 +118,13 @@ RfMat rf_material(vec3 wp, vec3 N, vec3 dpx, vec3 dpy, float dist) {
     m.alb = alb / ws;
     m.h   = hs / ws;
     // (the scan's normal is stored 0..1: twice (xy - 0.5); 1.35 as on the cliff, a little flatter far off)
-    m.nrm = normalize(N + bump / ws * (2.0 * mix(1.35, 0.95, smoothstep(80.0, 600.0, dist))));
+    bump_out = bump / ws * (2.0 * mix(1.35, 0.95, smoothstep(80.0, 600.0, dist)));
+    m.nrm = normalize(N + bump_out);
     return m;
+}
+RfMat rf_material(vec3 wp, vec3 N, vec3 dpx, vec3 dpy, float dist) {
+    vec3 b;
+    return rf_material_b(wp, N, dpx, dpy, dist, b);
 }
 
 #ifndef RF_HEIGHT_ONLY
@@ -155,7 +161,7 @@ vec3 rf_colour(vec3 wp, vec3 Ng, vec3 Nd, RfMat m, float ao, float curv) {
     c = mix(c, vec3(0.070, 0.105, 0.038) * mix(0.8, 1.25, n2), clamp(moss, 0.0, 1.0) * 0.72);
     // (the ground's own snow line - terrain_rm_shading_helpers.glsl getMaterial: 70 - 90 m, lower
     //  on a north face, higher on a south one, on what is not steep; keep the two in step)
-    float snow = smoothstep(70.0, 90.0, wp.y - clamp(Nd.z * 30.0, -16.0, 16.0)) * smoothstep(0.3, 0.7, Nd.y);
+    float snow = smoothstep(70.0, 90.0, wp.y - clamp(Nd.z * 30.0, -16.0, 16.0)) * smoothstep(0.3, 0.7, Nd.y) * (wp.y > 60.0 ? stream_snow_clear(wp.xz) : 1.0);
     return mix(c, vec3(0.62, 0.65, 0.70), clamp(snow * (0.85 + 0.15 * n2), 0.0, 1.0));
 }
 #endif
@@ -213,7 +219,7 @@ vec3 rf_chalk_colour(vec3 wp, vec3 Ng, vec3 Nd, RfMat m, float ao, float curv, f
     float turf = smoothstep(0.62, 0.86, Nd.y) * smoothstep(3.5, 6.0, hgt) * (1.0 - smoothstep(0.3, 0.7, occ));
     vec3  green = mix(vec3(0.060, 0.105, 0.030), vec3(0.105, 0.135, 0.045), n3) * mix(0.8, 1.2, n1);
     c = mix(c, green, turf * 0.92);
-    float snow = smoothstep(70.0, 90.0, wp.y - clamp(Nd.z * 30.0, -16.0, 16.0)) * smoothstep(0.3, 0.7, Nd.y);
+    float snow = smoothstep(70.0, 90.0, wp.y - clamp(Nd.z * 30.0, -16.0, 16.0)) * smoothstep(0.3, 0.7, Nd.y) * (wp.y > 60.0 ? stream_snow_clear(wp.xz) : 1.0);
     return mix(c, vec3(0.62, 0.65, 0.70), clamp(snow, 0.0, 1.0));
 }
 #endif

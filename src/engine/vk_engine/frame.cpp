@@ -119,6 +119,8 @@ void VulkanEngine::draw(uint32_t img_index) {
     if (serial_frames) wait_gpu_frames_idle();
     begin_frame_uploads();
     post_fx_prepare();   // (post_fx.cpp: resize, enclosure rays - before anything binds its sets)
+    terrain_water_pass_prepare();   // (terrain_water_pass.cpp: the water hit picture's size)
+    water_grid_prepare();   // (water_grid.cpp: the sea grid's depth picture size, this frame's on / off - before anything binds the scene set)
     hitch_draw_[0] = dz_mark();
 
     // The frame's camera and every soldier's pose: the TLAS build skins their ray-tracing copies.
@@ -448,6 +450,8 @@ void VulkanEngine::record_shadow_passes(FrameData& frame) {
     prof_mark(frame.command_buffer, "water_sim");
     water_solver_update(frame.command_buffer);  // the local shallow-water solver round the camera (water_solver.cpp)
     prof_mark(frame.command_buffer, "water_solver");
+    render_water_grid(frame.command_buffer);    // the open sea's projected grid, its depth picture - before any terrain pass reads it (water_grid.cpp)
+    prof_mark(frame.command_buffer, "water_grid");
     render_clutter_shadow(frame.command_buffer);
     prof_mark(frame.command_buffer, "clutter_shadow");
 
@@ -680,6 +684,8 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
             // (the projection's offset j shows, at uv, the scene at uv + j / 2)
             tr_->lr_jit = 0.5f * current_frame_view_.jitter * (stretch - 1.0f);
         }
+        // (the terrain's hit pass at this size, before its pass: terrain_water_pass.cpp)
+        render_terrain_hit(frame.command_buffer, true);
         const VkImage     lr_ci = tr_->lr_color_image;
         const VkImageView lr_cv = tr_->lr_color_view;
         const VkImage     lr_di = tr_->lr_depth_image;
@@ -848,6 +854,11 @@ void VulkanEngine::record_terrain_and_world(FrameData& frame) {
         prof_mark(c, "terrain_rate");
     }
 
+    // ---------- Pass 0.7: the terrain's hit (terrain_water_pass.cpp; read by the ground and water draws in the world pass) ----------
+    if (rt_.terrain_raymarch_enabled && !tr_use_lowres()) {
+        render_terrain_hit(frame.command_buffer, false);
+        prof_mark(frame.command_buffer, "terrain_hit");
+    }
     auto color_att = vkinit::color_attachment_info(scene_color_view_,
                                                    &clear_color,
                                                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1042,6 +1053,8 @@ void VulkanEngine::record_lighting_and_upscale(FrameData& frame) {
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
+    // Light under the skin of whoever is near (skin_blur.cpp): two passes over the skin's pixels.
+    if (deferred_lighting_active_) render_skin_blur(frame.command_buffer);
 
     // ---------- Pass 1.5: SVGF deep denoise (4a-deep) ----------
     // Updates the per-pixel luminance moments (binding 22/23) by

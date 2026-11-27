@@ -269,6 +269,7 @@ void VulkanEngine::render_clutter_shadow(VkCommandBuffer cmd) {
             vkCmdBindVertexBuffers(cmd, 0, 2, b, offs);
             vkCmdBindIndexBuffer(cmd, scatter_.rock_mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
             scatter_draw_cells(cmd, scatter_.rock_mesh.index_count, scatter_.rock_cells, in_box);
+            scree_draw(cmd, in_box);           // (the streamed scree: scree_stream.cpp)
         }
         if (scatter_.plant_buffer) {
             pc.p.y = 1.0f;

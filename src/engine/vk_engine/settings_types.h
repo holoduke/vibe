@@ -24,29 +24,29 @@ struct RtSettings {
         // flare brightness uniformly. Does NOT touch scene.sun_color so
         // direct lighting + shadows are unaffected. 0 = no procedural
         // disc/halo (sky tex alone), 1 = engine default brightness.
-        float sun_glare_strength = 0.4f;
+        float sun_glare_strength = 0.565f;
         // SVGF GI denoiser (Session 2 of docs/svgf_plan.md). Default
         // OFF — when on, cube.frag EMA-blends the GI signal with a
         // reprojected history sample, cutting noise dramatically on
         // static scenes. Mild ghosting on movement (bounded by M-cap
         // ≤ 8) until Session 3 adds the à-trous spatial filter.
         bool  svgf_enabled = false;
-        float sun_intensity = 2.6f;
-        glm::vec3 sun_color  = glm::vec3(1.00f, 0.96f, 0.86f);
+        float sun_intensity = 1.839f;
+        glm::vec3 sun_color  = glm::vec3(1.0f, 0.9345f, 0.86f);
         glm::vec3 sky_color  = glm::vec3(0.55f, 0.72f, 0.95f);
         glm::vec3 ground_ambient = glm::vec3(0.18f, 0.20f, 0.24f);
-        float ambient_strength = 1.0f;
+        float ambient_strength = 0.36f;
         float shadow_strength  = 1.0f;
         bool  shadow_enabled = true;
         // 40 stratified samples + slope-scale bias + the TAA/à-trous denoiser
         // gives a cinema-clean soft shadow.
         int   shadow_samples = 40;
-        float shadow_softness = 0.016f;
+        float shadow_softness = 0.008f;
         // PCSS curve: 0 = linear (penumbra ∝ blocker distance, our default),
         //             1 = cubic (sharp on contact, much softer at distance).
-        float shadow_curve = 0.5f;
-        int   ao_samples = 0;         // 0 = off; 1/4/8/16
-        float ao_radius  = 1.5f;
+        float shadow_curve = 0.374f;
+        int   ao_samples = 8;         // 0 = off; 1/4/8/16
+        float ao_radius  = 0.1f;
 
         // Path-traced GI: each "sample" follows a path of up to gi_bounces
         // segments, picking up tinted color along the way.
@@ -74,17 +74,17 @@ struct RtSettings {
         // 50%; 1.0 = AO has no effect. 0.30 keeps clear contact AO at
         // simple edges while preventing the "triple-darkness corner"
         // artifact.
-        float ao_floor = 0.30f;
+        float ao_floor = 0.335f;
         // Auto-exposure: scales pre-tonemap HDR by a target/scene-avg
         // ratio so dark interiors lift while bright outdoor pixels seen
         // through a doorway over-expose into bloom. Strength 0 = off,
         // 1 = full eye-adaptation, ~0.5 = stylised (the default).
-        float auto_exposure_strength = 0.5f;
+        float auto_exposure_strength = 0.0f;
         // Physical sky (Hillaire 2020): 1 = atmosphere LUT sky + aerial
         // perspective, 0 = HDRI panorama. intensity scales sky radiance,
         // aerial_scale stretches haze distances (game scale vs real km).
         int   sky_mode = 1;
-        float atmosphere_intensity = 5.0f;   // calibrated vs the old HDRI sky brightness
+        float atmosphere_intensity = 3.45f;   // calibrated vs the old HDRI sky brightness
         int   tonemap_mode = 0;   // 0 ACES fitted (tuned look), 1 AgX (Sobotka), 2 Khronos PBR Neutral
         // HDR10 output (BT.2020 + PQ swapchain). Used only when the surface
         // offers A2B10G10R10 + HDR10_ST2084; falls back to SDR otherwise.
@@ -94,41 +94,41 @@ struct RtSettings {
         float hdr_paper_nits = 200.0f;   // SDR-white / UI brightness
         float hdr_peak_nits  = 1000.0f;  // display peak (tonemap shoulder)
         float aerial_scale = 6.0f;
-        float aerial_max_km = 8.0f;
+        float aerial_max_km = 5.6f;
         // Day / night + weather (environment.cpp). The clock moves the sun
         // (and the moon at night); the weather wanders between clear sky and
         // thunderstorm. Both DRIVE the sun / sky / cloud / fog settings.
         bool  day_night_enabled = true;
         float time_of_day = 10.0f;           // hours, 0..24
-        float day_length_minutes = 24.0f;    // real minutes per 24 h day; 0 = clock stopped
+        float day_length_minutes = 60.4f;    // real minutes per 24 h day; 0 = clock stopped
         bool  weather_enabled = true;
-        float weather_bad_chance = 0.35f;    // 0 = always fair, 1 = always rain / storm
+        float weather_bad_chance = 0.44f;    // 0 = always fair, 1 = always rain / storm
         float weather_change_minutes = 4.0f; // average real minutes between weather changes
         float weather_manual = -1.0f;        // < 0 = random; 0..1 = forced (0 clear .. 1 thunderstorm)
         int   season = 1;                    // 0 spring, 1 summer, 2 autumn, 3 winter (the look of the land; environment.cpp)
         float weather_transition_s = 10.0f;  // seconds a change of weather type or season takes (1 .. 300)
         int   weather_preset = -1;           // >= 0: hold this weather type (VulkanEngine::kWxPresets); wins over weather_manual
-        float moon_brightness = 1.0f;        // 0 = moonless nights (starlight only) .. 1 = full moon
-        float moon_phase = 0.5f;             // 0 new .. 0.25 first quarter .. 0.5 full .. 0.75 last quarter
+        float moon_brightness = 0.0f;        // 0 = moonless nights (starlight only) .. 1 = full moon
+        float moon_phase = 0.48f;             // 0 new .. 0.25 first quarter .. 0.5 full .. 0.75 last quarter
         bool  moon_phases = false;           // the phase advances (8-day cycle) while the clock runs
-        float star_brightness = 1.0f;        // 0 = no stars .. 2
+        float star_brightness = 0.72f;        // 0 = no stars .. 2
         // Volumetric clouds (physical sky only).
         int   clouds_enabled = 1;
-        float cloud_coverage = 0.45f;
-        float cloud_density  = 1.0f;
-        float cloud_speed    = 8.0f;   // wind, m/s
-        float cloud_scale    = 1.0f;   // size of the cloud shapes (1 = default)
-        float cloud_base_m   = 1500.0f; // altitude of the cloud base
-        float cloud_tower_m  = 4200.0f; // how tall the tallest clouds grow above the base
-        float cloud_softness = 0.13f;  // edge softness (0 = hard, crisp .. 0.6 = smoky)
-        float cloud_erosion  = 0.45f;  // how much the fine detail eats into the edges
+        float cloud_coverage = 0.15f;
+        float cloud_density  = 1.09f;
+        float cloud_speed    = 28.6f;   // wind, m/s
+        float cloud_scale    = 1.27f;   // size of the cloud shapes (1 = default)
+        float cloud_base_m   = 1397.0f; // altitude of the cloud base
+        float cloud_tower_m  = 6984.0f; // how tall the tallest clouds grow above the base
+        float cloud_softness = 0.07f;  // edge softness (0 = hard, crisp .. 0.6 = smoky)
+        float cloud_erosion  = 0.54f;  // how much the fine detail eats into the edges
         // Froxel volumetric fog (RT-shadowed sun shafts).
         int   fog_volumetric = 1;
-        float fog_density = 0.005f;        // 1/m at the reference height
-        float fog_height_falloff = 0.035f; // 1/m
+        float fog_density = 0.0007f;        // 1/m at the reference height
+        float fog_height_falloff = 0.057f; // 1/m
         float fog_anisotropy = 0.7f;       // HG g (forward scattering)
-        float lake_mist = 1.0f;            // mist lying on the water (0 = off); strongest at dawn / dusk
-        float fog_max_dist = 300.0f;       // m
+        float lake_mist = 0.05f;            // mist lying on the water (0 = off); strongest at dawn / dusk
+        float fog_max_dist = 600.0f;       // m
         // Static-castle BLAS merging: true = one BLAS for all 151 brushes
         // (the merged path baked at level load), false = per-brush TLAS
         // instance pointing at the shared cube BLAS (the original path).
@@ -140,30 +140,30 @@ struct RtSettings {
         // ---- Terrain shader knobs (cube.frag, raster tex_params.w==2) ----
         // Atmospheric perspective fog: distant terrain blends toward
         // the view-direction sky tint. 0=off, 1=full.
-        float terrain_fog_strength = 1.0f;
+        float terrain_fog_strength = 1.5f;
         // Half-Lambert wrap: 0 = hard Lambert (back-of-ridge can go
         // pure black with shadow), 1 = full wrap (back gets ~half
         // light from the half-Lambert formula).
-        float terrain_wrap_strength = 1.0f;
+        float terrain_wrap_strength = 0.529f;
         // Multiplies the triplanar Ground054 detail × layer-base in the
         // terrain shading branch. >1 punches up texture detail; ~1 is
         // neutral; <1 fades the detail and reads more uniform.
-        float terrain_detail_strength = 1.6f;
+        float terrain_detail_strength = 1.447f;
         // Multiplies the global shadow_softness for terrain pixels only.
         // Lower = tighter shadow cone = less PCSS dither at the cost
         // of harder shadow edges. Useful when shadow_samples is modest
         // and the terrain looks noisy.
-        float terrain_shadow_softness_scale = 0.5f;
+        float terrain_shadow_softness_scale = 1.035f;
         // Layer transition heights (smoothstep edges). Tweak per-level
         // if height_scale changes; defaults match the 140m mountains.
-        float terrain_h_sand_grass_start = 4.0f;
-        float terrain_h_sand_grass_end   = 12.0f;
-        float terrain_h_grass_dirt_start = 28.0f;
-        float terrain_h_grass_dirt_end   = 42.0f;
-        float terrain_h_dirt_rock_start  = 58.0f;
-        float terrain_h_dirt_rock_end    = 80.0f;
-        float terrain_h_rock_snow_start  = 95.0f;
-        float terrain_h_rock_snow_end    = 120.0f;
+        float terrain_h_sand_grass_start = 8.813f;
+        float terrain_h_sand_grass_end   = 14.991f;
+        float terrain_h_grass_dirt_start = 37.414f;
+        float terrain_h_grass_dirt_end   = 40.561f;
+        float terrain_h_dirt_rock_start  = 60.615f;
+        float terrain_h_dirt_rock_end    = 82.222f;
+        float terrain_h_rock_snow_start  = 72.0f;
+        float terrain_h_rock_snow_end    = 92.0f;
 
         // ---- Grass ----
         bool  grass_enabled        = true;
@@ -172,34 +172,34 @@ struct RtSettings {
         // shadertoy.com/view/dd2cWh — SDF blades on a domain-repeated
         // grid. Heavier per-pixel cost but no instance-buffer rebuild
         // and looks volumetric/3D rather than flat-billboarded.
-        bool  grass_raymarch_enabled = false;
+        bool  grass_raymarch_enabled = true;
         // Max ray distance for the raymarched grass (metres). Cuts the
         // per-pixel step budget; beyond this, grass fades to sky.
-        float grass_raymarch_distance = 150.0f;
+        float grass_raymarch_distance = 350.0f;
         // Max blade-render distance in metres. Beyond this, blades
         // collapse to NaN clip space (no fragment work).
-        float grass_distance       = 80.0f;
+        float grass_distance       = 140.0f;
         // Peak per-blade tip wind sway in metres. The sway is per-blade
         // sin/cos so neighbours move out of phase.
-        float grass_wind           = 0.04f;
+        float grass_wind           = 0.29f;
         // Density: fraction of placed blades to actually draw (0..1).
         // Drives instance count in vkCmdDrawIndexed — cheap perf knob.
-        float grass_density        = 0.7f;
-        float grass_near_boost     = 0.8f;   // extra blades per cell right at the camera (fades by ~16 m)
+        float grass_density        = 1.5f;
+        float grass_near_boost     = 1.5f;   // extra blades per cell right at the camera (fades by ~16 m)
         float grass_edge_softness  = 0.6f;   // 0 = hard patch border, 1 = long thinning fringe
         // Placement densities (applied when the world is built: restart).
-        float forest_density       = 1.0f;
-        float bush_density         = 1.0f;
-        float flower_density       = 1.0f;
+        float forest_density       = 1.8f;
+        float bush_density         = 1.6f;
+        float flower_density       = 2.0f;
         // Draw distances (m) of the small-plant groups (live).
-        float flower_draw_distance = 50.0f;    // ferns + flowers
-        float ground_draw_distance = 35.0f;    // clover, weeds, nettles, fungi
-        float reed_draw_distance   = 120.0f;   // shore reeds (tall: seen from afar)
-        float ground_density       = 1.0f;   // ground cover: clover, weeds, nettles, fungi (0..3, restart)
+        float flower_draw_distance = 140.0f;    // ferns + flowers
+        float ground_draw_distance = 120.0f;    // clover, weeds, nettles, fungi
+        float reed_draw_distance   = 300.0f;   // shore reeds (tall: seen from afar)
+        float ground_density       = 2.2f;   // ground cover: clover, weeds, nettles, fungi (0..3, restart)
         // Vegetation LOD bias: >1 keeps higher LODs further out.
-        float veg_lod_bias         = 1.0f;    // fuller crowns at medium range (UI: tree / bush detail)
+        float veg_lod_bias         = 1.5f;    // fuller crowns at medium range (UI: tree / bush detail)
         // Per-blade Y multiplier (0.3..2.0). 1.0 = built-in 0.55 m blades.
-        float grass_height_scale   = 1.0f;
+        float grass_height_scale   = 1.3f;
         // Far-distance opacity drop for the raymarched grass.
         //   0.0 = far blades stay fully opaque (alpha = 1)
         //   1.0 = far blades go fully transparent (alpha = 0)
@@ -207,7 +207,7 @@ struct RtSettings {
         // always alpha = 1 regardless. Also affects the rasterized
         // grass.frag's side-taper threshold (legacy use of the same
         // slider).
-        float grass_alpha_cutoff   = 0.4f;
+        float grass_alpha_cutoff   = 1.0f;
         // Distance at which the user's `grass_alpha_cutoff` value
         // applies in the raymarched grass shader. Inside this radius
         // the slider value is used as-is (soft-edge dither). Past
@@ -215,43 +215,43 @@ struct RtSettings {
         // ray reaches `grass_raymarch_distance`, so far blades
         // discard more aggressively and thin out into the terrain
         // tint instead of reading as a uniform green far-mat.
-        float grass_cutoff_soft_dist = 30.0f;
+        float grass_cutoff_soft_dist = 5.0f;
         // Slope cutoff: blades whose stored heightmap-normal Y is
         // below this fade their height to 0 (smoothstep window).
         // 1.0 = only perfectly flat ground; 0.55 = up to ~57° slope.
         // 0.85 (default) ≈ 32° max slope.
-        float grass_slope_n_min    = 0.85f;
+        float grass_slope_n_min    = 0.76f;
         // Distance-based density falloff (0 = uniform density, 1 = far
         // grass thinned to ~40% of near density). Implemented per-
         // blade in grass.vert via a deterministic rank vs distance-
         // driven threshold with a wide smoothstep so blades don't
         // flicker as the player walks.
-        float grass_distance_density = 0.6f;
+        float grass_distance_density = 1.0f;
         // Altitude band: blades fade to 0 height outside [alt_min,
         // alt_max]. Placement covers a generous superset (-10..200m)
         // so the slider can reshape the band live without rebake.
-        float grass_alt_min = -2.0f;
-        float grass_alt_max = 35.0f;
+        float grass_alt_min = 31.207f;
+        float grass_alt_max = -15.575f;
         // Grass colour palette (linear RGB). Exposed via UI sliders.
-        glm::vec3 grass_color_top         = { 0.40f, 0.55f, 0.18f };  // blade tip
-        glm::vec3 grass_color_bottom      = { 0.18f, 0.22f, 0.08f };  // blade base
-        glm::vec3 grass_color_ground      = { 0.18f, 0.30f, 0.09f };  // close terrain tint
-        glm::vec3 grass_color_ground_far  = { 0.13f, 0.22f, 0.06f };  // far terrain tint
+        glm::vec3 grass_color_top         = { 0.0895296f, 0.149194f, 0.0631666f };  // blade tip
+        glm::vec3 grass_color_bottom      = { 0.0739888f, 0.100806f, 0.0678818f };  // blade base
+        glm::vec3 grass_color_ground      = { 0.185858f, 0.28629f, 0.0854253f };  // close terrain tint
+        glm::vec3 grass_color_ground_far  = { 0.16526f, 0.189516f, 0.0955222f };  // far terrain tint
         // Distance (m) at which `grass_color_ground_far` fully takes
         // over from `grass_color_ground`. Near ramp scales as 15 % of
         // this so the transition stays smooth at any far-anchor.
         // Used by both grass_raymarch.frag and terrain_raymarch.frag
         // (delivered via the otherwise-unused grass_color_ground_far.w).
-        float grass_ground_tint_far_distance = 200.0f;
+        float grass_ground_tint_far_distance = 129.0f;
         // Fake grass-cast shadows on the raymarched terrain.
         // Fake mask-based grass-cast-shadow on raymarched terrain.
         // Disabled by default: it walks the grass mask along the sun
         // XZ at the terrain pixel and darkens — looks like a flat
         // patch tint, not real per-blade shadow. Slider stays so a
         // user who wants the cheap effect can re-enable it.
-        float grass_shadow_strength = 0.0f;    // 0 = off
+        float grass_shadow_strength = 0.58f;    // 0 = off
         int   grass_shadow_samples  = 6;       // 0..8 sample taps along sun XZ
-        float grass_shadow_max_dist = 3.0f;    // metres of reach along sun direction
+        float grass_shadow_max_dist = 1.2f;    // metres of reach along sun direction
         // Grass-cast shadow on the RASTERISED terrain (cube.frag is_terrain
         // path). Walks the grass eligibility mask (binding 13) along the
         // sun XZ direction with a few short steps, accumulating occlusion
@@ -260,7 +260,7 @@ struct RtSettings {
         // grass_shadow_strength which only affects the raymarched terrain.
         bool  grass_shadow_on_terrain        = true;   // master toggle
         float grass_shadow_on_terrain_strength = 0.45f; // 0=off, 1=full dark
-        int   grass_shadow_on_terrain_samples  = 5;     // 1..8 mask taps
+        int   grass_shadow_on_terrain_samples  = 8;     // 1..8 mask taps
         float grass_shadow_on_terrain_dist     = 1.6f;  // metres along sun XZ
         // Side-lit grass shading. Adds a wrap-Lambert directional term to
         // the grass blades (sunward side brighter, away-side darker).
@@ -270,10 +270,10 @@ struct RtSettings {
         bool  grass_side_lit_enabled  = true;
         float grass_side_lit_strength = 0.45f;
         // Strength of the terrain green tint (0..1).
-        float grass_ground_tint_strength = 0.85f;
+        float grass_ground_tint_strength = 0.44f;
         // Raymarched-grass base AO floor at the blade base. Lower = darker
         // base / more contrast top-to-bottom; higher = flatter / fuller.
-        float grass_base_ao_floor = 0.35f;
+        float grass_base_ao_floor = 0.38f;
 
         // Sun shadow map (binding 7). Two knobs:
         //   shadow_map_resolution: square texture side. Snapped at apply
@@ -283,8 +283,8 @@ struct RtSettings {
         //   shadow_map_world_half: half-width of the ortho frustum in
         //     world metres. Bigger = far-off ridges still cast on grass
         //     under your feet, but per-texel coverage gets coarser.
-        int   shadow_map_resolution  = 1024;
-        float shadow_map_world_half  = 120.0f;
+        int   shadow_map_resolution  = 4096;
+        float shadow_map_world_half  = 90.593f;
         // Debug overlay: draws a wireframe of the shadow ortho frustum
         // and the bake/shadow-map cross-fade boundary on top of the
         // world. Useful for tuning shadow_map_world_half and seeing
@@ -304,7 +304,7 @@ struct RtSettings {
         // subdivision range. range[level] = clod_range0 * 2^level; a
         // bigger value keeps high-density rings further from the camera
         // (more triangles, more detail).
-        float terrain_clod_range0 = 50.0f;     // metres, leaf ring
+        float terrain_clod_range0 = 44.0f;     // metres, leaf ring
         // Debug: draw terrain as wireframe so the triangle/mesh density
         // is directly visible.
         bool  terrain_wireframe = false;
@@ -312,24 +312,24 @@ struct RtSettings {
         // tessellation's visual role):
         //   amp  = 0..1 m peak metres of displacement
         //   smooth_mip = 0 = LOD0 crisp, +N = blur by N mip levels
-        float terrain_disp_amp        = 0.40f;
-        float terrain_disp_smooth_mip = 0.0f;
+        float terrain_disp_amp        = 0.16f;
+        float terrain_disp_smooth_mip = 3.8f;
         // Per-pixel SPOM/POM far-fade distance (cube.frag is_terrain).
         // Bumps stop being raymarched past this distance; far terrain
         // uses just the splat normal. Was hardcoded 220 m.
-        float terrain_pom_far_m       = 220.0f;
+        float terrain_pom_far_m       = 400.0f;
         // Per-pixel parallax-occlusion on terrain (rocky/eroded depth).
         // Carried to cube.frag via the terrain colour draw's
         // pc.tex_params.x (terrain path ignores that slot otherwise).
         // Gated to rocky/snow pixels + ramped to 0 by ~45 m (built-in
         // per-pixel LOD). 0 = off.
-        float terrain_pom_strength   = 0.6f;   // 0..1
+        float terrain_pom_strength   = 1.0f;   // 0..1
         // Shore-following contour ripple scales (cube.frag terrain, via
         // the terrain draw's pc.grass_params.xy). Phase = height above
         // water so the lines parallel the coast. Independent:
         //   sand_ripple_scale : beach ripple frequency
         //   grass_line_scale  : grass contour-row frequency (0 = off)
-        float terrain_sand_ripple_scale = 9.0f;   // 1..40
+        float terrain_sand_ripple_scale = 1.0f;   // 1..40
         float terrain_grass_line_scale  = 0.0f;   // 0 = off, else 1..40
         // Procedural ground material splatting (cube.frag is_terrain).
         // Fed to cube.frag via the free slots of scene.spom_params.yzw
@@ -343,9 +343,9 @@ struct RtSettings {
         //             finer detail, more obvious tiling).
         //   normal:   detail normal-map strength (0 = flat shading,
         //             1 = full baked relief).
-        float ground_mat_strength = 0.85f;  // 0..1
-        float ground_mat_tile_m   = 2.5f;   // 0.5..12 m
-        float ground_mat_normal   = 0.80f;  // 0..1
+        float ground_mat_strength = 1.0f;  // 0..1
+        float ground_mat_tile_m   = 1.71f;   // 0.5..12 m
+        float ground_mat_normal   = 0.51f;  // 0..1
         // Anti-tile sampling: blend a SECOND albedo/normal sample at a
         // per-pixel rotated UV with the standard sample, weighted by a
         // low-frequency noise field. Breaks up the obvious grid repeat
@@ -359,7 +359,7 @@ struct RtSettings {
         // Strength of the rotated/offset sample in the blend. 0 = the
         // standard single-sample look, 1 = max anti-tile (and slightly
         // softer micro-detail because the two samples partially average).
-        float terrain_antitile_strength = 0.55f;
+        float terrain_antitile_strength = 0.44f;
         // Supersample factor for the heightmap shadow bake. 1 = native
         // (1 texel per 1m heightmap cell). 2 = 4x more texels (sub-
         // metre shadow precision). 4 = 16x more texels (sharpest
@@ -371,7 +371,7 @@ struct RtSettings {
         // the lit→shadow transition (grazing slopes go darker faster);
         // <1 softens. Visible difference between e.g. 2.0 and 4.0 on
         // mountain slopes.
-        float terrain_shading_contrast = 1.0f;
+        float terrain_shading_contrast = 0.5f;
         // SPOM (silhouette parallax occlusion mapping) bump-depth
         // multiplier. Affects the cube.frag SPOM path on castle walls
         // (and any future SPOM-eligible materials). 1.0 = engine
@@ -386,31 +386,31 @@ struct RtSettings {
         //   2 = SSDM - same march, recessed depth written to gl_FragDepth
         //       (no ray query; inward-only relief)
         //   3 = POM with curved silhouette
-        int spom_mode = 1;
+        int spom_mode = 2;
         // Heightmap resolution multiplier (per-axis). 1 = baseline
         // 2048×2048 cells at 1m. 2 = 4096×4096 at 0.5m (16× more
         // samples total, ~600MB extra mesh memory). 4 = 8192×8192
         // at 0.25m (256× more samples, NOT recommended — pushes past
         // ~2GB of GPU memory on the chunk meshes alone). Applied at
         // level load — change requires a restart.
-        int terrain_heightmap_scale = 1;
+        int terrain_heightmap_scale = 2;
         // Selectable terrain renderer. false = chunked rasterised mesh
         // (default, matches the gameplay heightmap). true = fullscreen
         // procedural FBM ray-marched terrain (terrain_raymarch.frag,
         // visual-only — physics still uses the rasterised heightmap so
         // castle / cubes won't sit on the procedural surface). The
         // shader is toggled at draw time, no rebuild needed.
-        bool terrain_raymarch_enabled = false;
+        bool terrain_raymarch_enabled = true;
         // Raymarch FPS knobs. Larger = better quality, slower. Defaults
         // are the values the reference document recommends; on weaker
         // GPUs drop both to ~120 / ~32 for a meaningful FPS bump.
         int  terrain_raymarch_max_steps    = 200;   // 60–300
-        int  terrain_raymarch_shadow_steps = 64;    // 16–96
+        int  terrain_raymarch_shadow_steps = 37;    // 16–96
         // FBM octaves used by the per-march sampling (terrainM). 9 is
         // the document default; 5–6 is noticeably faster and visually
         // close because each higher octave adds half the previous
         // amplitude (last 3 of 9 contribute ~1.5 % of total).
-        int  terrain_raymarch_octaves        = 9;   // 4–24
+        int  terrain_raymarch_octaves        = 18;   // 4–24
         // FBM octaves for normal sampling (terrainH). Called 3× per
         // hit pixel for finite-difference normals — biggest single
         // perf knob. 16 is the doc default; 8 is barely-distinguishable.
@@ -420,67 +420,67 @@ struct RtSettings {
         // ridges). 0.6–0.8 finishes the same march in ~half the
         // iterations at the cost of a tiny chance of skipping over a
         // thin spike.
-        float terrain_raymarch_step_factor   = 0.4f;
+        float terrain_raymarch_step_factor   = 0.55f;
         // Distance-LOD knobs. At ray distance < lod_near_m the FBM uses
         // the full octave count (terrain_raymarch_octaves for march,
         // terrain_raymarch_normal_octaves for normals). Past lod_far_m
         // it falls to lod_min_octaves. Smoothstep ramp in between. Saves
         // big at typical horizon views — sub-pixel FBM detail past
         // ~500 m is below Nyquist anyway.
-        float terrain_raymarch_lod_near_m    = 120.0f;  // 20..400
-        float terrain_raymarch_lod_far_m     = 600.0f;  // 200..2000
-        int   terrain_raymarch_lod_min_octaves = 3;     // 2..8
+        float terrain_raymarch_lod_near_m    = 136.0f;  // 20..400
+        float terrain_raymarch_lod_far_m     = 2000.0f;  // 200..2000
+        int   terrain_raymarch_lod_min_octaves = 5;     // 2..8
         // Render-scale for the procedural raymarch ONLY. 1.0 = native
         // (current behaviour). 0.5 = half-res raymarch + bilinear
         // upscale composite (~4× fewer FBM evaluations per frame).
         // Cubes / castle / dyn-props always rasterise at native res.
-        float terrain_raymarch_scale         = 1.0f;
+        float terrain_raymarch_scale         = 0.75f;
         // Trace the PCSS sun shadow at half resolution + bilateral
         // upsample instead of inline per-pixel (big perf win). OFF =
         // the proven inline path, byte-identical.
-        bool  half_rate_shadows              = false;
+        bool  half_rate_shadows              = true;
         // Post-upscale sharpen strength applied during the compose
         // pass. Cheap CAS-style 4-neighbour adaptive sharpen — only
         // boosts contrast around real edges, ignores flat / noisy
         // regions. 0 = off, 0.5 = subtle, 1.0 = aggressive.
-        float terrain_raymarch_sharpen       = 0.6f;
+        float terrain_raymarch_sharpen       = 1.0f;
         // Volumetric ground fog scale (0 = off, 1 = doc baseline,
         // 2 = thick valley fog). Multiplies both density and the
         // sun-scatter contribution so the slider behaves linearly:
         // half = half as visible at every distance.
-        float terrain_raymarch_fog_strength  = 0.6f;
+        float terrain_raymarch_fog_strength  = 1.06f;
         // Phase 6 — relaxation cone-stepping. When true, march step
         // grows with distance (`step *= max(t*0.02, 1.0)`) so we
         // cover the same range in ~half the iterations at the cost
         // of a tiny chance of skipping thin spikes. Doc-recommended
         // for distance-heavy scenes.
-        bool  terrain_raymarch_relaxation    = false;
+        bool  terrain_raymarch_relaxation    = true;
         // Phase 7 — volumetric fog self-shadow. When true, each fog
         // step fires N tiny rays toward the sun + accumulates optical
         // depth so terrain / castle shadow the fog itself, giving a
         // god-ray look. Cheap (4 short rays per fog step), but multi
         // ALU + branches so off by default.
-        bool  terrain_raymarch_fog_godrays   = false;
+        bool  terrain_raymarch_fog_godrays   = true;
         // Fog band — density is non-zero between [fog_y_start, fog_y_top]
         // and falls off above/below with a soft transition. Combined
         // with a low-frequency noise so the layer isn't a perfect
         // sheet (real ground fog is wispy).
-        float terrain_raymarch_fog_y_start   = 0.0f;
-        float terrain_raymarch_fog_y_top     = 18.0f;
+        float terrain_raymarch_fog_y_start   = 21.3f;
+        float terrain_raymarch_fog_y_top     = 19.4f;
         float terrain_raymarch_fog_noise     = 0.7f;   // 0 = uniform sheet, 1 = strong wisps
 
         // Ocean / water plane. Rendered inside the terrain raymarch
         // (fullscreen tri) so it composites with rasterised geometry
         // via gl_FragDepth — same as the terrain itself.
-        bool      water_enabled        = false;
-        float     water_level          = 2.0f;     // world Y of the calm sea level
-        float     water_wave_strength  = 0.06f;    // amplitude of normal perturbation
+        bool      water_enabled        = true;
+        float     water_level          = 20.9f;     // world Y of the calm sea level
+        float     water_wave_strength  = 0.41f;    // amplitude of normal perturbation
         // Wave frequency multiplier — multiplies the base scrolling
         // sin/cos frequencies. 1.0 = baseline (~30 m wavelengths).
         // 2.0 = half the wavelength (more, smaller ripples). 0.5 =
         // double the wavelength (bigger sweeping waves).
-        float     water_wave_scale     = 1.0f;
-        glm::vec3 water_color          = glm::vec3(0.04f, 0.18f, 0.22f);
+        float     water_wave_scale     = 0.18f;
+        glm::vec3 water_color          = glm::vec3(0.1f, 0.13f, 0.07f);
         // RT reflections on water: when true, the water surface
         // ray-marches the FBM terrain along the reflection vector
         // and uses the shaded hit point (lambert + sky tint) as the
@@ -494,20 +494,20 @@ struct RtSettings {
         bool      water_tlas_reflections = true;
         // Shore tinting — colour the water lighter where it's shallow.
         // Depth = water_level − terrain_height_at(xz) (in metres).
-        glm::vec3 water_color_shallow  = glm::vec3(0.45f, 0.62f, 0.65f);
+        glm::vec3 water_color_shallow  = glm::vec3(0.3f, 0.32f, 0.2f);
         // How many metres of water depth the shallow→deep blend
         // covers. 4 m = noticeable beach band; 0.5 m = razor-sharp.
-        float     water_shore_blend    = 4.0f;
+        float     water_shore_blend    = 2.0f;
         // Noise on the shore band so the line isn't a perfect contour.
         // 0 = clean, 1 = strongly broken.
-        float     water_shore_noise    = 0.4f;
+        float     water_shore_noise    = 0.55f;
         // Shore-foam highlight band: a thin lighter tint right at the
         // water/land boundary. Fades exponentially with the noise-FREE
         // depth so the line follows the shoreline geometry exactly.
         // strength 0 = disabled.
-        glm::vec3 water_foam_color     = glm::vec3(0.88f, 0.94f, 0.96f);
-        float     water_foam_strength  = 0.55f;
-        float     water_foam_width     = 0.6f;     // metres of depth
+        glm::vec3 water_foam_color     = glm::vec3(1.0f, 1.0f, 1.0f);
+        float     water_foam_strength  = 0.44f;
+        float     water_foam_width     = 1.18f;     // metres of depth
         // Water shading style — picks which normal+foam generator the
         // terrain raymarch's water branch uses.
         //   0 = default (directional sum-of-sines, lake-style)
@@ -516,19 +516,19 @@ struct RtSettings {
         //       Flow direction comes from the terrain gradient at the
         //       water plane so the surface reads as if the water is
         //       flowing downhill across the level.)
-        int       water_style = 0;
+        int       water_style = 2;
         // River-style knobs (only consumed when water_style >= 1):
         //   speed       multiplies the flow vector derived from the
         //               terrain gradient. 0.3..3.0 typical.
         //   normal_str  scales the river-style normal's XZ component.
         //               Higher = more bumpy surface.
-        float     water_river_speed       = 1.0f;
-        float     water_river_normal_str  = 1.2f;
+        float     water_river_speed       = 0.83f;
+        float     water_river_normal_str  = 0.36f;
         // More river-style knobs (see SceneUBO::water_river_extra).
-        float     water_river_flow_angle  = 0.0f;   // degrees; 0 = +X
-        float     water_river_time_speed  = 1.0f;
-        float     water_river_detail      = 1.0f;   // UV-scale multiplier on 20×
-        float     water_river_foam_amount = 1.0f;
+        float     water_river_flow_angle  = -1.0f;   // degrees; 0 = +X
+        float     water_river_time_speed  = 0.0f;
+        float     water_river_detail      = 1.6f;   // UV-scale multiplier on 20×
+        float     water_river_foam_amount = 0.66f;
         // Underwater extinction colour & density (river style only).
         glm::vec3 water_river_extinct_color  = glm::vec3(0.5f, 0.4f, 0.1f);
         float     water_river_extinct_density = 1.0f;
@@ -536,22 +536,22 @@ struct RtSettings {
         // The defining trick is bumps fade with distance — near
         // surface keeps ripples, far surface goes mirror-flat. That's
         // the visual that reads as "lake".
-        float water_lake_bump_strength = 0.5f;     // 0..1.5
-        float water_lake_time_speed    = 0.4f;     // animation rate
-        float water_lake_uv_scale      = 0.6f;     // UV multiplier
-        float water_lake_bump_dist     = 60.0f;    // metres where bumps fade out
+        float water_lake_bump_strength = 0.12f;     // 0..1.5
+        float water_lake_time_speed    = 0.03f;     // animation rate
+        float water_lake_uv_scale      = 0.93f;     // UV multiplier
+        float water_lake_bump_dist     = 140.0f;    // metres where bumps fade out
         // Shoreline grass tint — blades within `grass_shore_distance`
         // metres above water level fade toward `grass_shore_color`.
         // Strength 0 disables. Cheap (~13 ALU/pixel in
         // grass_raymarch.frag, no extra texture taps).
-        glm::vec3 grass_shore_color    = glm::vec3(0.40f, 0.30f, 0.16f);
-        float     grass_shore_strength = 0.65f;
-        float     grass_shore_distance = 3.5f;     // metres above water
+        glm::vec3 grass_shore_color    = glm::vec3(0.055411f, 0.193548f, 0.0765772f);
+        float     grass_shore_strength = 0.31f;
+        float     grass_shore_distance = 3.2f;     // metres above water
         // Shoreline TERRAIN tint — same shape, applied to bare ground
         // in terrain_raymarch.frag's getMaterial(). Mixed on top of the
         // existing snow/sand/grass tint pass so the beach reads as a
         // user-tunable colour band instead of relying on slope alone.
-        glm::vec3 terrain_shore_color    = glm::vec3(0.55f, 0.46f, 0.30f);
+        glm::vec3 terrain_shore_color    = glm::vec3(0.39604f, 0.330634f, 0.214358f);
         float     terrain_shore_strength = 0.55f;
         float     terrain_shore_distance = 3.0f;
         // Distance fog — standard exp² atmospheric fog. Disabled by
@@ -565,20 +565,20 @@ struct RtSettings {
         // the layer off the mountain peaks. Tunable per scene via the
         // sliders in the menu (Quality > Fog).
         glm::vec3 distance_fog_color    = glm::vec3(0.62f, 0.70f, 0.78f);
-        float     distance_fog_strength = 0.85f;    // master on
-        float     distance_fog_density  = 0.0015f;  // per metre (exp^2 falloff)
-        float     distance_fog_start    = 80.0f;    // metres before fog kicks in
-        float     distance_fog_height   = 220.0f;   // height-falloff top (0 = uniform fog)
-        float     distance_fog_max      = 0.92f;    // clamp on mix weight
+        float     distance_fog_strength = 0.0f;    // master on
+        float     distance_fog_density  = 0.005f;  // per metre (exp^2 falloff)
+        float     distance_fog_start    = 50.0f;    // metres before fog kicks in
+        float     distance_fog_height   = 80.0f;   // height-falloff top (0 = uniform fog)
+        float     distance_fog_max      = 0.95f;    // clamp on mix weight
         // GENERAL terrain shore tint — applied to BARE terrain near
         // water (no grass). Companion to terrain_shore_* (grass-area).
-        glm::vec3 terrain_shore_general_color    = glm::vec3(0.50f, 0.42f, 0.30f);
-        float     terrain_shore_general_strength = 0.55f;
-        float     terrain_shore_general_distance = 3.0f;
+        glm::vec3 terrain_shore_general_color    = glm::vec3(0.560484f, 0.551298f, 0.519804f);
+        float     terrain_shore_general_strength = 0.12f;
+        float     terrain_shore_general_distance = 3.1f;
         // Bare-shore SAND base colour — the underlying material that
         // the slope-driven beachMask reveals near water level on the
         // raymarched terrain. Was hardcoded; now slider-tunable.
-        glm::vec3 terrain_sand_color = glm::vec3(0.50f, 0.45f, 0.35f);
+        glm::vec3 terrain_sand_color = glm::vec3(0.471947f, 0.415355f, 0.302171f);
         // Raymarched terrain ground palette (was hard-coded brown).
         glm::vec3 rm_ground_dry   = glm::vec3(0.10f, 0.08f, 0.04f);    // dry / bare earth
         glm::vec3 rm_ground_green = glm::vec3(0.055f, 0.105f, 0.022f); // green ground
@@ -595,12 +595,12 @@ struct RtSettings {
         // 0 = fully opaque (water_color is the colour you see), 1 =
         // shallow water shows the underwater terrain through it
         // (linearly attenuated by depth so deep water still hides).
-        float     water_transparency    = 0.6f;
+        float     water_transparency    = 0.92f;
         // Depth (m) at which water becomes ~opaque. Decoupled from
         // transparency: small = only very shallow water is see-through
         // (deep stays opaque), large = clear far down. Fed to water.frag
         // via the water-plane draw's pc.color.y (no UBO-layout change).
-        float     water_clarity_depth   = 2.5f;
+        float     water_clarity_depth   = 3.1f;
         // Underwater view (camera below the surface): how murky the water
         // is. 1 = clear lake (red gone in ~4 m, ~25 m visibility), higher
         // = murkier.
@@ -610,11 +610,11 @@ struct RtSettings {
         // wet-sand → water transition (and hides the heightmap-vs-
         // rasterised waterline jitter). Fed via the water draw's
         // pc.color.z.
-        float     water_shore_softness  = 0.6f;
+        float     water_shore_softness  = 0.82f;
         // Foam opacity vs the (see-through) water it sits on. 0 = foam
         // is as transparent as clear shallow water, 1 = foam fully
         // opaque. Fed via the water draw's pc.color.w.
-        float     water_foam_opacity    = 0.45f;
+        float     water_foam_opacity    = 1.0f;
         // Multiplier on the RT shadow ray count for fragments within
         // rt_lod.x (close to the camera). 1 = unchanged, higher = more
         // rays close-by for smoother penumbras under boxes / castle.
@@ -622,14 +622,14 @@ struct RtSettings {
         // continues to drop samples toward 1 ray past rt_lod.y.
         float shadow_near_mult = 1.0f;
 
-        float gi_strength = 1.0f;
-        float gi_radius   = 60.0f;
+        float gi_strength = 0.3f;
+        float gi_radius   = 24.0f;
         // Spatial smoothing factor on the raymarched-terrain sky-bounce GI.
         // 0 = raw per-pixel GI from the sample loop (noisiest, most accurate).
         // 1 = collapse the GI estimate to the smooth sky-at-normal sample
         //     (no per-pixel noise but loses occluder-aware GI variation).
         // Useful when gi_samples is too low to converge on its own.
-        float gi_softener = 0.5f;
+        float gi_softener = 0.081f;
         // Debug viz: when true, the raymarched-terrain shader replaces its
         // final colour with the gi_indirect term only (scaled up so it's
         // clearly visible). Lets you confirm the path-traced GI loop is
@@ -640,15 +640,15 @@ struct RtSettings {
         // faster than linear). < 1 flattens. Modulates BOTH the analytical
         // ambient term AND the GI smooth fallback so cavities go genuinely
         // dark without depending solely on the ao_floor knob.
-        float terrain_ao_punch = 1.5f;
+        float terrain_ao_punch = 0.954f;
         // Per-pixel RT caps for the raymarched terrain shader. Lower
         // them when the GPU TDRs; raise for visual fidelity. Defaults
         // chosen to keep total per-frame RT work under the Windows TDR
         // threshold even with the heaviest scene (kMaxDynProps=60).
-        int   terrain_pcss_samples_cap   = 4;     // max PCSS rays per pixel
+        int   terrain_pcss_samples_cap   = 8;     // max PCSS rays per pixel
         int   terrain_gi_samples_cap     = 4;     // max GI primary rays per pixel
-        int   terrain_gi_bounces_cap     = 1;     // max GI bounces per ray
-        float terrain_ao_final_strength  = 0.45f; // 0=no final-colour AO, 1=full
+        int   terrain_gi_bounces_cap     = 2;     // max GI bounces per ray
+        float terrain_ao_final_strength  = 0.55f; // 0=no final-colour AO, 1=full
         float terrain_rm_contrast        = 1.25f; // raymarched terrain: 1 = neutral
         // Raymarched terrain, speed (Graphics > terrain; shaders: scene.rm_perf).
         // The patch terrain (vk_engine/terrain_patches.cpp): the visible ground from a rasterised
@@ -667,13 +667,13 @@ struct RtSettings {
         bool  ground_debris              = true;   // VIBE_NO_GROUND_DEBRIS=1
         bool  terrain_rm_prepass         = true;  // march at low resolution first; the full pass starts from it
         int   terrain_rm_prepass_div     = 2;     // that march's pixel: 2, 3 or 4 full pixels wide
-        float terrain_rm_converge        = 0.8f;  // fast final approach to the ground (0 = off, the old small steps)
-        float terrain_rm_normal_px       = 1.5f;  // normal: drop detail finer than this many pixels (0 = keep all)
-        bool  terrain_rm_relief_lite     = true;  // under dense grass the normal reads the main rills only
+        float terrain_rm_converge        = 1.0f;  // fast final approach to the ground (0 = off, the old small steps)
+        float terrain_rm_normal_px       = 0.0f;  // normal: drop detail finer than this many pixels (0 = keep all)
+        bool  terrain_rm_relief_lite     = false;  // under dense grass the normal reads the main rills only
         // Strategies to try (Graphics > terrain):
         bool  terrain_rm_start_at_hit    = false; // the low-resolution march goes on to the ground itself; each pixel starts just short of that hit (needs the march first)
-        bool  terrain_rm_lr_full_jitter  = true;  // with "Raymarch scale" below 100 % under DLSS / FSR / TAA: the low-resolution picture's sub-pixel offset covers its own whole pixel, so the upscaler can average its blocks away (frame.cpp)
-        bool  terrain_rm_temporal        = false; // with "Raymarch scale" below 100 %: the terrain's own temporal upscaler - the low-resolution picture is moved inside its pixel from frame to frame and put together in a kept picture of twice the render size (terrain_rm_resolve.frag)
+        bool  terrain_rm_lr_full_jitter  = false;  // with "Raymarch scale" below 100 % under DLSS / FSR / TAA: the low-resolution picture's sub-pixel offset covers its own whole pixel, so the upscaler can average its blocks away (frame.cpp)
+        bool  terrain_rm_temporal        = true; // with "Raymarch scale" below 100 %: the terrain's own temporal upscaler - the low-resolution picture is moved inside its pixel from frame to frame and put together in a kept picture of twice the render size (terrain_rm_resolve.frag)
         bool  terrain_rm_shade_lo        = false; // the sun's shadows on the ground once per block of the low-resolution march, not per pixel. Off: measured, it costs as much in that pass as it saves in the main one (a loss on a Radeon)
         // Shading rate of the raymarched ground toward the edges of the screen (VRS; needs a GPU
         // that keeps it with shader depth writes): 0 = every pixel everywhere, 1 = one shade
@@ -681,10 +681,10 @@ struct RtSettings {
         int   terrain_vrs                = 0;
         // Specular reflection on flagged surfaces (the pedestal).
         bool  reflections_enabled = true;
-        float reflection_strength = 0.5f;
+        float reflection_strength = 0.6f;
 
         // Temporal + spatial denoiser.
-        float taa_history_blend = 0.3f;   // 0 = no temporal, 1 = full history
+        float taa_history_blend = 0.306f;   // 0 = no temporal, 1 = full history
         // Lowered from 0.95: with TAA jitter off (taa_jitter_enabled=0) the
         // history gives no AA benefit, only RT-noise smoothing when still -
         // and a heavy blend smears every moving feature, worst on the
@@ -729,15 +729,15 @@ struct RtSettings {
         // leaf texture on every card it crosses (exact, very slow in a forest), 1 = only the
         // sun's shadow near the camera does; bounce light, ambient occlusion, the blocker
         // search and far shadows take a card as solid, 2 = all rays do.
-        int   foliage_ray_mode = 1;
-        bool  gi_leaf_lite = true;     // leaves take one bounce-light ray and no second-bounce ray (deferred_lighting.frag gi_leaf1)
+        int   foliage_ray_mode = 0;
+        bool  gi_leaf_lite = false;     // leaves take one bounce-light ray and no second-bounce ray (deferred_lighting.frag gi_leaf1)
         // The lighting ports (light_port.cpp, docs/ARCHITECTURE.md "Lighting ports"); each has an
         // environment override VIBE_LP_<NAME>=0/1 (light_port.cpp).
         bool  lp_contact_shadows = true;   // screen-space contact shadow toward the sun (contact_shadow.glsl)
-        bool  lp_far_ao = false;           // AO radius that grows with distance + the bent cone for sky light / specular
+        bool  lp_far_ao = true;           // AO radius that grows with distance + the bent cone for sky light / specular
         bool  lp_leaf_tint = true;         // sun through leaf cards: part passes, tinted by the leaf
         bool  lp_sky_rescale = true;       // a sudden drop of the sky's light scales the bounce-light caches down at once
-        bool  lp_bounce_albedo = false;    // bounce / reflection hits take the hit's own colour (materials table) and normal
+        bool  lp_bounce_albedo = true;    // bounce / reflection hits take the hit's own colour (materials table) and normal
         bool  lp_lamp_pick = true;         // all lamps in one list, one picked per pixel (+ the nearest few looped)
         bool  lp_screen_march = false;     // a short depth-buffer march before the reflection / bounce ray
         // FSR3 Frame Generation. Only meaningful when fsr_backend == 1.
@@ -753,13 +753,13 @@ struct RtSettings {
         // (NVIDIA: DLSS / DLSS-G, AMD / Intel: FSR 3.1 / FSR FG).
         bool  upscaler_auto      = true;
         bool  anti_lag           = true;   // AMD Anti-Lag 2 (AMD GPUs)
-        float taa_spatial_strength = 0.7f;  // 0 = no à-trous, 1 = fully filtered
+        float taa_spatial_strength = 0.0f;  // 0 = no à-trous, 1 = fully filtered
 
         // Bloom (single-pass spiral-tap inside the compose shader).
         bool  bloom_enabled = true;
-        float bloom_strength = 0.6f;
-        float bloom_threshold = 1.05f;  // luminance above which a pixel "blooms"
-        float bloom_radius = 24.0f;     // largest tap offset in pixels
+        float bloom_strength = 0.223f;
+        float bloom_threshold = 1.076f;  // luminance above which a pixel "blooms"
+        float bloom_radius = 32.0f;     // largest tap offset in pixels
 
         // Spark-trail emissive multiplier — applied per-trail-segment in
         // draw_spark_trails. The sparks already feed bloom because they're
@@ -767,7 +767,7 @@ struct RtSettings {
         // contribution which directly drives a bigger bloom halo. Direct
         // brightness clips to ~white under ACES, so the visible difference
         // is mostly in the bloom halo width/intensity. 1.0 = current look.
-        float spark_bloom = 1.0f;       // 0..5 sane range
+        float spark_bloom = 4.323f;       // 0..5 sane range
 
         // Screen-space lens flare (Chapman 2017): reflects bright sources
         // around the screen center, samples ghosts along the light axis,
@@ -780,7 +780,7 @@ struct RtSettings {
         float lens_flare_threshold  = 1.4f;   // HDR luminance cutoff
         float lens_flare_dispersal  = 0.30f;  // ghost spacing along axis
         float lens_flare_halo_width = 0.40f;  // halo offset toward center
-        int   lens_flare_ghosts     = 3;      // 1..8 (3 = cinematic default)
+        int   lens_flare_ghosts     = 5;      // 1..8 (3 = cinematic default)
         float lens_flare_aberration = 0.005f; // chromatic-fringe offset
 
         // Master textures on/off. When disabled, all texture lookups in the
@@ -796,18 +796,18 @@ struct RtSettings {
         // hide. Toggle on if you want the smoother-edge supersampled look
         // and accept some shimmer in exchange.
         bool  taa_jitter_enabled = false;
-        float taa_jitter_strength = 0.5f;
+        float taa_jitter_strength = 0.0f;
 
         // Post-TAA unsharp mask in compose.frag. Counteracts the soft look
         // taa.frag's à-trous spatial filter introduces. 0 disables; 0.55 is
         // a reasonable default that recovers most lost detail without
         // ringing on edges. >1 looks deliberately punchy / over-sharpened.
-        float compose_sharpen_strength = 0.55f;
+        float compose_sharpen_strength = 0.916f;
         // The view: vertical field of view (degrees; 80 = the value it always had, about 112
         // across on a 16:9 screen) and the mouse's speed as a multiple of the built-in one.
         // Trees: below this size on screen (bounding radius, pixels) a tree is drawn as its
         // baked card instead of its mesh (veg_impostor.cpp). 7 = the old hand-over point.
-        float tree_impostor_px = 40.0f;
+        float tree_impostor_px = 24.0f;
         // How far trees and bushes are drawn (m). The view distance still caps it; 3800 = as far as that goes.
         float tree_draw_distance = 3800.0f;
         bool  site_labels = true;        // the sites' names on screen when seen from high up (sites.cpp)
@@ -823,26 +823,26 @@ struct RtSettings {
         // produces visible god-rays whenever geometry silhouettes the
         // sun direction. 0 = off; 0.6 = subtle default; 1.5 = heavy.
         // Cheap (24 fetches per pixel, sky-gated early-out per tap).
-        float sun_shaft_intensity = 0.6f;
+        float sun_shaft_intensity = 0.611f;
         // Final-image contrast applied in compose.frag right after the
         // ACES tonemap, before sRGB encode. 1.0 = neutral, > 1 punches
         // up midtones, < 1 flattens them. Sane range 0.5..2.0.
         float image_contrast = 1.0f;
         // Final-image brightness multiplier (post-tonemap, pre-sRGB).
         // 1.0 = neutral; range 0.3..2.5.
-        float image_brightness = 1.0f;
+        float image_brightness = 0.993f;
         // Output gamma curve (post-tonemap, pre-sRGB encode). 1.0 =
         // pass-through. > 1 lifts midtones (lighter look); < 1
         // darkens. Range 0.4..2.5.
-        float image_gamma = 1.0f;
+        float image_gamma = 0.982f;
         bool  voxel_tower_enabled = false;   // destructible tower beside the castle (restart)
         // Colour grading (compose.frag, after the tonemap).
-        float grade_temperature = 0.06f;   // -1 cool .. +1 warm
-        float grade_saturation  = 1.16f;   // 0 grey .. 2
-        float grade_vibrance    = 0.50f;   // boosts muted colours only
-        float grade_split_tone  = 0.25f;   // teal shadows / warm highlights
-        float film_grain        = 0.12f;
-        float vignette_strength = 0.30f;
+        float grade_temperature = 0.003f;   // -1 cool .. +1 warm
+        float grade_saturation  = 1.005f;   // 0 grey .. 2
+        float grade_vibrance    = 0.931f;   // boosts muted colours only
+        float grade_split_tone  = 0.333f;   // teal shadows / warm highlights
+        float film_grain        = 0.166f;
+        float vignette_strength = 0.346f;
         // Post-processing after the reference game (post_fx.cpp; docs/ARCHITECTURE.md "Post
         // effects"). Each has an environment override VIBE_PFX_<KEY in capitals>.
         int   agx_look = 1;                // AgX path: day saturation / shadow gain, the night look
@@ -854,7 +854,7 @@ struct RtSettings {
         float glare_strength = 1.0f;       // star / streak sprites on very bright pixels, 0 = off
         float motion_blur = 0.5f;          // translation / object motion blur strength, 0 = off
         bool  motion_blur_camera = false;  // also blur the camera's own turning
-        float dof_strength = 1.0f;         // depth of field while aiming down sights, 0 = off
+        float dof_strength = 0.0f;         // depth of field while aiming down sights, 0 = off (the default: the target stays sharp; key "aim_dof")
         int   colorblind_mode = 0;         // 0 off, 1 protan, 2 deutan, 3 tritan (a simulation view)
         bool  particle_fog_light = true;   // smoke / dust lit and fogged from the froxel volume
         bool  snow_tracks = true;          // wheel ruts and NPC tracks with raised rims in snow / sand
@@ -862,7 +862,7 @@ struct RtSettings {
         // Effect fades smoothly from `* 0.6` to this value, then turns
         // off entirely past it. 250 m default keeps gameplay-range
         // pixels fully RT-shaded; lower if you need perf headroom.
-        float terrain_rt_lod_distance = 250.0f;
+        float terrain_rt_lod_distance = 154.576f;
 
         // Render resolution scale: 0.5 = render at half-res then upscale,
         // 1.0 = native, 2.0 = render at 2× then downscale (SSAA). The scene
@@ -886,7 +886,9 @@ struct RtSettings {
         // apply_foliage_quality / apply_shadow_quality; -1 = set by hand):
         // Graphics quality (gfx_quality.cpp): the level each row was last set to (-1: never),
         // and the level of "everything" (-1: rows differ).
-        int gfx[32] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+        // (the owner's levels: every row insane but the terrain's resolution and precision, high; the
+        //  render resolution row is left unset - it belongs to the machine)
+        int gfx[32] = { -1, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, -1, -1, -1, -1, -1, -1 };
         int gfx_all = -1;
         // Sections of the terrain shader left out for speed (the RMDBG bits of
         // terrain_rm_noise_road.glsl): 128 = no close relief in the march, 1024 = none at all,
@@ -894,12 +896,12 @@ struct RtSettings {
         int terrain_rm_skip = 0;
         int foliage_quality = -1;   // 0 low, 1 medium, 2 high, 3 ultra, 4 insane
         int shadow_quality = -1;    // 0 low, 1 medium, 2 high
-        int quality_preset = 2;  // High — matches existing defaults
+        int quality_preset = -1;  // custom: the defaults are the owner's own values, not a preset
 
         // AO mode. 0 = off, 1 = GTAO (screen-space, fast), 2 = RTAO (true
         // ray-traced, slower but handles off-screen occluders). GTAO is the
         // production default; RTAO is the "high-quality" preset choice.
-        int ao_mode = 1;
+        int ao_mode = 2;
 
         // Member-wise equality, ignoring padding bytes — required because
         // memcmp on this struct caught uninitialised padding as "changes" and
@@ -912,27 +914,27 @@ struct RtSettings {
 struct GameSettings {
         // Gravity in m/s² (downward). Default = 25 (~2.5 G, game-feel).
         // Slider in the menu goes up to 50× that for absurd-fall experiments.
-        float gravity = 25.0f;
+        float gravity = 34.1f;
         // Continuous box spawner rate. Engine converts to seconds-per-spawn.
-        int   cubes_per_minute = 150;
+        int   cubes_per_minute = 37;
         // Bullet mass in kg. Higher = more impulse delivered to boxes on hit.
         // 10 kg @ 220 m/s = 2200 kg·m/s, ~17 m/s push on a 125 kg box.
-        float bullet_mass = 10.0f;
+        float bullet_mass = 200.0f;
         // Auto-fire rate while LMB is held, in rounds per second. 0 = single
         // shot per click (legacy hitscan behaviour).
-        float fire_rate_rps = 6.0f;
+        float fire_rate_rps = 11.9f;
         // Bullet exit velocity in m/s. Higher = more impulse delivered on
         // impact (since projectile mass × velocity = momentum), but Jolt's
         // LinearCast CCD has practical limits — anything above ~600 m/s with
         // 1cm-class targets starts to behave weirdly.
-        float bullet_speed = 220.0f;
+        float bullet_speed = 3000.0f;
         // Scales spark count + initial speed at spawn. 1.0 = default. Use
         // smaller values for subtle effects, larger for explosions.
-        float spark_scale   = 1.0f;
+        float spark_scale   = 1.63f;
         // What is going on in the world. Off = a quiet landscape.
         bool  aircraft_enabled = true;    // enemy jets fly sorties over the map
-        bool  aircraft_bombs   = true;    // ... and drop bombs (off: fly-overs only)
-        bool  aa_enabled       = true;    // anti-aircraft guns and missile launchers fire
+        bool  aircraft_bombs   = false;    // ... and drop bombs (off: fly-overs only)
+        bool  aa_enabled       = false;    // anti-aircraft guns and missile launchers fire
         bool  player_body      = true;    // you see your own body, arms and legs
         bool  weapons_enabled  = true;    // the player can shoot / call airstrikes
 

@@ -56,6 +56,19 @@ Contact resolve_capsule(const std::vector<const Mesh*>& meshes, glm::vec3& a, gl
 bool floor_below(const std::vector<const Mesh*>& meshes, float x, float z, float y_hi, float y_lo,
                  float walk_ny, float& y, glm::vec3& normal);
 
+// ROUND OBSTACLES (boulders, tree trunks): an upright capsule - the segment a..b (a under b,
+// same x / z) grown by r. A boulder's or a trunk's collision box is a square; walking round it
+// caught on its corners and stopped dead. The walker meets the round body inside the box instead
+// (round_in_box: the radius is half the box's width, the top is the box's top).
+struct Round { glm::vec3 a{ 0.0f }, b{ 0.0f }; float r = 0.0f; };
+Round round_in_box(const glm::vec3& lo, const glm::vec3& hi);
+// As resolve_capsule, against round obstacles (adds to `out`).
+void resolve_capsule_rounds(const std::vector<Round>& rounds, glm::vec3& a, glm::vec3& b, float r,
+                            glm::vec3& vel, float walk_ny, Contact& out, int iters = 3);
+// As floor_below, on the tops of round obstacles.
+bool floor_below_rounds(const std::vector<Round>& rounds, float x, float z, float y_hi, float y_lo,
+                        float walk_ny, float& y, glm::vec3& normal);
+
 // The nearest point on triangle (a, b, c) to p.
 glm::vec3 closest_on_triangle(const glm::vec3& p, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c);
 // The nearest points between segment p0..p1 and triangle (a, b, c): on the segment (s) and

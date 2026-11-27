@@ -11,9 +11,16 @@
 //   - other sky pixels far brighter than the sky round them can be (the glow drawn for a far lamp
 //     or a car's lights against the night sky): T = 60 L + 2, never within 25 degrees of the sun;
 //   - anything else (plain diffuse surfaces, plants, the ground): never.
-// One thread per 8x8 block of the output: of 16 taps, the one furthest over its own threshold;
-// a soft threshold (T .. 1.6T) and a per-block temporal hold (rises at once, fades over a few
-// frames) so a light that sits near the threshold does not flicker. Up to 1000 sprites.
+//
+// One workgroup per 8x8 block of the output, one thread per pixel: EVERY pixel is looked at
+// (2026-11-27: it used to be 16 taps of the 64, so a light of one or two pixels was seen in one
+// frame and missed in the next as it moved - the blinking stars), each weighted softly over its
+// own threshold (T .. 3T). The block's sprite sits at the energy-weighted centre of what is over
+// (it slides with the light instead of jumping between taps) and its brightness is that energy:
+// a light moving from one block into the next hands its energy over, so the total does not
+// blink. No temporal hold any more: the hold was per screen block, so when the camera turned it
+// left a trail of fading stars where the lights had been (the "motion fade"); the picture this
+// reads is already the upscaler's stable output. Up to 1000 sprites.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D u_src;
@@ -25,7 +32,7 @@ layout(std430, set = 0, binding = 3) buffer Sprites {
     uint vertex_count, instance_count, first_vertex, first_instance;   // the indirect draw
     Sprite s[];
 } spr;
-layout(set = 0, binding = 4, r16f) uniform image2D u_hold;
+layout(set = 0, binding = 4, r16f) uniform image2D u_hold;   // (the block's weight, for debugging views)
 layout(set = 0, binding = 5) uniform sampler2D u_gbuf0;   // albedo, a: material id (render resolution, point)
 layout(set = 0, binding = 6) uniform sampler2D u_gbuf1;   // normal, b: roughness, a: flags (metal 0.5 .. 0.83)
 
@@ -33,6 +40,8 @@ layout(push_constant) uniform PC { vec4 p; } pc;   // xy: blocks, zw: output siz
 
 const uint kMaxSprites = 1000u;
 
+// (set by source_threshold: the pixel is the sun's disc)
+bool g_sun = false;
 // The threshold for the source at uv (1e9: not a light source).
 float source_threshold(vec2 uv, float L) {
     float dz = textureLod(u_depth, uv, 0.0).r;
@@ -41,7 +50,7 @@ float source_threshold(vec2 uv, float L) {
     float sun_c = dot(dir, pfx.d.sun_d.xyz);
     if (dz >= 0.99999) {
         if (pfx.d.sun_d.w > 0.5) {
-            if (sun_c > 0.99995) return 4.0 * L + 1.0;          // the sun's disc (about its radius)
+            if (sun_c > 0.99995) { g_sun = true; return 4.0 * L + 1.0; }          // the sun's disc (about its radius)
             if (sun_c > 0.906) return 1e9;                       // (the bright sky round the sun)
         }
         return 60.0 * L + 2.0;
@@ -59,34 +68,62 @@ float source_threshold(vec2 uv, float L) {
     return 1e9;
 }
 
+// Per pixel: energy over threshold (e), its colour (rgb), its position x e, and e / T (to
+// size the sprite by how far over its own threshold the source is).
+shared vec4 s_col[64];     // rgb: colour x weight, a: e
+shared vec4 s_pos[64];     // xy: pixel in the block x e, z: e / T, w: weight of sun pixels
+shared float s_r2[64];     // |pixel in the block|^2 x e (the spread: a point or a strip / a panel)
 void main() {
-    ivec2 b = ivec2(gl_GlobalInvocationID.xy);
-    if (b.x >= int(pc.p.x) || b.y >= int(pc.p.y)) return;
-    vec2 inv = 1.0 / pc.p.zw;
-    float L = max(pfx.d.avg, 1e-4);
-    float best_r = 0.0, best = 0.0, bT = 1e9;
-    vec2 buv = vec2(0.0);
-    vec3 bc = vec3(0.0);
-    for (int y = 0; y < 4; ++y)
-        for (int x = 0; x < 4; ++x) {
-            vec2 uv = (vec2(b * 8) + vec2(x, y) * 2.0 + 1.0) * inv;
-            vec3 c = textureLod(u_src, uv, 0.0).rgb;
-            float v = c.r + c.g + c.b;
-            if (!(v == v)) continue;
+    ivec2 b = ivec2(gl_WorkGroupID.xy);
+    uint li = gl_LocalInvocationIndex;
+    bool inside = b.x < int(pc.p.x) && b.y < int(pc.p.y);
+    ivec2 ip = b * 8 + ivec2(gl_LocalInvocationID.xy);
+    vec4 col = vec4(0.0), pos = vec4(0.0);
+    float r2 = 0.0;
+    if (inside && ip.x < int(pc.p.z) && ip.y < int(pc.p.w)) {
+        vec2 uv = (vec2(ip) + 0.5) / pc.p.zw;
+        vec3 c = textureLod(u_src, uv, 0.0).rgb;
+        float v = c.r + c.g + c.b;
+        if (v == v && v > 1.0) {      // (nothing under 1 is over any threshold: skip the G-buffer reads)
+            float L = max(pfx.d.avg, 1e-4);
             float T = source_threshold(uv, L) * pfx.d.glare.y;
-            float r = v / T;
-            if (r > best_r) { best_r = r; best = v; buv = uv; bc = c; bT = T; }
+            if (T < 1e8) {
+                float w = smoothstep(T, 3.0 * T, v);
+                float e = v * w;
+                col = vec4(c * w, e);
+                vec2 lp = vec2(gl_LocalInvocationID.xy) + 0.5;
+                pos = vec4(lp * e, e / T, g_sun ? w : 0.0);
+                r2 = dot(lp, lp) * e;
+            }
         }
-    float w = (bT < 1e8) ? smoothstep(bT, 1.6 * bT, best) : 0.0;
-    float h = imageLoad(u_hold, b).r;
-    h = (w > h) ? w : mix(h, w, 0.3);
-    imageStore(u_hold, b, vec4(h));
-    if (h < 0.02 || bT > 1e8) return;
+    }
+    s_col[li] = col; s_pos[li] = pos; s_r2[li] = r2;
+    barrier();
+    for (uint st = 32u; st > 0u; st >>= 1u) {
+        if (li < st) { s_col[li] += s_col[li + st]; s_pos[li] += s_pos[li + st]; s_r2[li] += s_r2[li + st]; }
+        barrier();
+    }
+    if (li != 0u || !inside) return;
+    float E = s_col[0].a;
+    imageStore(u_hold, b, vec4(min(E, 60000.0)));         // (the block's energy, for debugging views)
+    if (E < 1e-3) return;
+    // Brightness: the energy over the threshold of about four pixels' worth (a lamp head a few
+    // pixels across shines as one bright pixel did before), capped at six thresholds of the
+    // brightest part (a lit window filling the block is not a searchlight).
+    float Tm = E / max(s_pos[0].z, 1e-6);                 // (the energy-weighted threshold)
+    float B = min(0.25 * E, 6.0 * Tm);
+    // Stars belong to points of light. The spread of the energy in the block (its variance, px^2):
+    // a lamp a few pixels across stays under 2; a lit strip or panel crossing the block reaches
+    // 5 - 10, and a star in every block along it made a fringe of spikes (the station's canopy edge
+    // at night). Those fade out; their glow is the bloom's.
+    vec2 cen = s_pos[0].xy / E;
+    float var = max(s_r2[0] / E - dot(cen, cen), 0.0);
+    if (s_pos[0].w <= 0.0) B *= 1.0 - smoothstep(2.0, 6.0, var);   // (the sun's disc keeps its star)
+    if (B < 0.05 * Tm) return;
     uint i = atomicAdd(spr.instance_count, 1u);
     if (i >= kMaxSprites) return;
-    float size = clamp(0.6 * sqrt(best / bT), 1.0, 4.0);      // further over its threshold: bigger
+    float size = clamp(0.6 * sqrt(B / Tm), 1.0, 4.0);      // further over its threshold: bigger
     float rad = min(pfx.d.glare.z, 40.0 * size) * (pc.p.w / 1080.0);
-    spr.s[i].pos = vec4(buv * pc.p.zw, rad, h);
-    // (brightness capped at six thresholds: a glint of the sun is not a searchlight)
-    spr.s[i].col = vec4(bc / max(best, 1e-4), clamp(best, 2.0 * bT, 6.0 * bT));   // (at least two thresholds: a source just over it still shows)
+    spr.s[i].pos = vec4(vec2(b * 8) + cen, rad, 1.0);
+    spr.s[i].col = vec4(s_col[0].rgb / E, B);              // (rgb x w over e: the chroma, R+G+B = 1)
 }

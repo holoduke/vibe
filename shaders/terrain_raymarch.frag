@@ -6,6 +6,8 @@
 //     the pass-specific parts are the VIBE_WATER blocks below.
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_ray_query : require
+#extension GL_EXT_control_flow_attributes : require   // ([[dont_unroll]]: loops that keep one copy of a large function in the code)
+#define RM_ONE_COPY [[dont_unroll]]
 
 // Procedural FBM heightfield ray-marched terrain — selectable alternate
 // to the chunked rasterised terrain. Implements the technique from
@@ -107,6 +109,19 @@ layout(set = 0, binding = 27) uniform sampler2D u_prepass_depth;
 layout(set = 0, binding = 34) uniform sampler2D u_march_lo;
 // ... and the sun-shadow terms at those blocks' hits (binding 35, RGBA16F; see outShadeLo).
 layout(set = 0, binding = 35) uniform sampler2D u_shade_lo;
+#if defined(VIBE_GROUND) || defined(VIBE_WATER_PASS) || defined(VIBE_HIT)
+// The surface's hit, handed from the hit pass (VIBE_HIT) to the ground pass (VIBE_GROUND) and the
+// water pass (VIBE_WATER_PASS) - binding 64, RGBA32F, written for every pixel by the hit pass;
+// vk_engine/terrain_water_pass.cpp. y = 0: no surface (sky, or an object in front); y = 3: the
+// ground, x = its distance; y = 1 (lake, river, sea) or 2 (the stream): the water, x = the distance
+// to its surface, z = the swell's scale there (wt_sw_k), w = the distance to the coast (wt_shore_d).
+layout(set = 0, binding = 64, rgba32f) uniform image2D u_water_hit;
+#endif
+#ifdef VIBE_HIT
+#define RM_NO_SURFACE { imageStore(u_water_hit, ivec2(gl_FragCoord.xy), vec4(0.0)); return; }
+#else
+#define RM_NO_SURFACE discard
+#endif
 #ifndef VIBE_WATER
 // The patch renderer's depth picture (binding 11, the low-resolution terrain's depth target, which
 // is free while the patches are drawn): terrain_rm_heightfield.glsl rm_patch_hit.
@@ -385,7 +400,7 @@ layout(set = 0, binding = 30) uniform sampler2D u_skyview;
 
 // Material texture arrays (same set-0 slots as cube.frag): only the castle
 // road cobbles are sampled here - the rest of this terrain is procedural.
-const int kRmTextureCount = 43;   // = cube.frag kTextureCount
+const int kRmTextureCount = 48;   // = cube.frag kTextureCount
 const int kRmMatRoad = 14;        // = cube.frag kMatRoad (PavingStones131)
 const int kRmMatAsphalt = 32;     // the highway's asphalt (Asphalt031)
 const int kRmMatGravel  = 33;     // its verge (Gravel040)
@@ -644,6 +659,7 @@ vec3 sample_sky(vec3 dir) {
 #include "terrain_rm_heightfield.glsl"   // Terrain height (FBM + ground relief) and the ray march against it
 #include "terrain_rm_shading_helpers.glsl"   // Normal, terrain / grass shadows, road weights, ground material, reflection marches
 #include "terrain_rm_water.glsl"   // Water: flow, normals, foam pattern, ripples
+#include "water_level.glsl"   // the water's level: the datum, the sea 1 m under it, the river falling between (wl_at)
 // The water's simulation (vk_engine/water_sim.cpp): the wind sea's FFT cascades, the ripple field.
 layout(set = 0, binding = 51) uniform sampler2DArray u_ww_grad;
 layout(set = 0, binding = 52) uniform sampler2DArray u_ww_disp;
@@ -656,9 +672,74 @@ layout(set = 0, binding = 53) uniform sampler2D u_ww_rip;
 layout(set = 0, binding = 54) uniform sampler2D u_ws_r;
 #define WS_TEX u_ws_r
 #include "water_solver.glsl"
+#include "water_relief.glsl"         // the stream's surface in relief: humps over stones, standing waves, pillows (wr_stream_surface)
+#define SW_TERRAIN
+#include "shore_wet.glsl"          // materials at the water: the wet band, wet albedo, growth, the bed's tint (water_wet.cpp)
+#include "water_bed.glsl"          // the bed under the water from scanned sets (slots 43..46)
+// The froxel fog volume's injected light (post_fx.cpp; as fx_fog.glsl reads it - last frame's,
+// its view-projection pfx_trk.d.fog_vp): the light INSIDE clear water, terrain_rm_main_water.glsl.
+layout(set = 0, binding = 57) uniform sampler3D u_wfx_inj0;
+layout(set = 0, binding = 58) uniform sampler3D u_wfx_inj1;
+// The sun's visibility at p (the fog's own shadow rays: trees, buildings, piers, the cloud shadow)
+// and the local lights' light there (lamps, car beams; engine units). vis = 1, local = 0 where the
+// volume has nothing.
+float wfx_light(vec3 p, out vec3 local) {
+    local = vec3(0.0);
+    if (pfx_trk.d.fog2.w < 0.5) return 1.0;
+    vec4 c = pfx_trk.d.fog_vp * vec4(p, 1.0);
+    if (c.w < 1e-4) return 1.0;
+    vec2 uv = clamp(c.xy / c.w * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+    float far_d = max(pfx_trk.d.fog1.w, 1.0);
+    float dist = distance(p, pfx_trk.d.fog2.xyz);
+    if (dist > far_d * 0.95) return 1.0;
+    vec3 fc = vec3(uv, sqrt(clamp(dist / far_d, 0.0, 1.0)));
+    vec4 v = (textureLod(u_wfx_inj0, fc, 0.0) + textureLod(u_wfx_inj1, fc, 0.0)) * 0.5;
+    if (!(v.a > 1e-6)) return 1.0;
+    vec3 X = v.rgb / v.a;
+    float g = pfx_trk.d.fog0.w;
+    float cs = dot(normalize(p - pfx_trk.d.fog2.xyz), normalize(scene.sun_direction.xyz));
+    float ph = (1.0 - g * g) / (12.566371 * pow(max(1.0 + g * g - 2.0 * g * cs, 1e-4), 1.5));
+    vec3 Sp = pfx_trk.d.fog0.rgb * ph;
+    vec3 A = pfx_trk.d.fog1.rgb * (4.0 / 12.566371);
+    const vec3 kL = vec3(0.2126, 0.7152, 0.0722);
+    float vis = clamp(dot(X - A, kL) / max(dot(Sp, kL), 1e-6), 0.0, 1.0);
+    local = max(X - A - Sp * vis, vec3(0.0)) * 4.0;
+    return vis;
+}
+// The open sea's projected grid (water_grid.cpp; water_grid.vert): its depth picture - reversed,
+// depth = kWgNear / distance along the view axis, 0 = no sea. The sea's hit along this pixel's ray
+// (m), or -1. The picture is at the render size; this pass may run at a lower one, so the place is
+// found by projecting the ray (pc.mvp: this frame's view-projection, as the grid's).
+layout(set = 0, binding = 62) uniform sampler2D u_sea_grid;
+const float kWgNear = 0.05;
+float wg_hit(vec3 ro, vec3 rd) {
+    vec4 c = pc.mvp * vec4(ro + rd, 1.0);
+    if (c.w <= 1e-5) return -1.0;
+    vec2 uv = c.xy / c.w * 0.5 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return -1.0;
+    ivec2 sz = textureSize(u_sea_grid, 0);
+    float zg = texelFetch(u_sea_grid, clamp(ivec2(uv * vec2(sz)), ivec2(0), sz - 1), 0).r;
+    if (zg <= 0.0) return -1.0;
+    return (kWgNear / zg) / max(dot(vec3(pc.mvp[0][3], pc.mvp[1][3], pc.mvp[2][3]), rd), 1e-4);
+}
+// The foam's lift on the open sea (m, for the cascades' weight 1): up to water_grid.y where the
+// two long cascades fold over (whitecaps), as water_grid.vert lifts the grid.
+float wt_foam_lift(vec2 p, float foot) {
+    if (scene.water_grid.y <= 0.0) return 0.0;
+    float fold = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        float L = scene.water_fft_L[i];
+        float k = 1.0 - smoothstep(0.03, 0.12, foot / L);
+        if (k > 0.001) fold += k * textureLod(u_ww_grad, vec3(p / L, float(i)), 0.0).z;
+    }
+    float f = clamp(fold, 0.0, 1.0);
+    f *= f;
+    return scene.water_grid.y * f * f;
+}
 #include "terrain_rm_bake.glsl"   // The baked ground texture: its pictures and the read of them
 #include "ground_fx.glsl"         // the ground effects' block (ground_fx.cpp)
 #include "ground_lsd.glsl"        // the far ground's colour of placed objects (terrain_rm_main_light.glsl)
+#include "rock_breaker.glsl"      // the breaker pattern and the colour strip of steep rock, shared with the rock formations (terrain_rm_main_ground.glsl)
 // ---- The sun's shadow on the ground, as two functions ----
 // They are called for every pixel by the full pass, or - settings: 'sun shadows at low
 // resolution' - once per block of pixels by the low-resolution build, whose results the full
@@ -927,8 +1008,22 @@ void main() {
 #ifndef VIBE_WATER
     float t_water_plane = -1.0;
     if (water_on && abs(rd.y) > 1e-4) {
+        // (the level is not one number: the open sea stands 1 m under the datum and the river falls
+        //  to it down its course - water_level.glsl. From the level at the eye, three steps of the
+        //  fixed point t = (level(P(t)) - y) / rd.y: the level changes by a metre over kilometres)
+        float wy0 = water_y;
+        if (SW_ON(8192)) {
+            float lv = wl_at(ro.xz);
+            for (int i = 0; i < 3; ++i) {
+                float tw = (lv - ro.y) / rd.y;
+                if (tw <= 0.0) break;
+                lv = wl_at(ro.xz + rd.xz * min(tw, 3.0e4));
+            }
+            water_y = lv;
+        }
         float tw = (water_y - ro.y) / rd.y;
         if (tw > 0.0) t_water_plane = tw;
+        else water_y = wy0;
     }
     // From high up (flying out): the water plane is the local lake, not an ocean to
     // the horizon - beyond the landscape the planet itself is drawn (compose.frag).
@@ -1042,6 +1137,49 @@ void main() {
     // In water-only mode the FBM terrain itself is never SHADED (the
     // mesh owns the ground); terrain-hit pixels are discarded below so
     // the rasterised mesh shows through.
+#if defined(VIBE_WATER_PASS) || defined(VIBE_GROUND)
+    // THE GROUND PASS AND THE WATER PASS (vk_engine/terrain_water_pass.cpp): the hit pass before them
+    // (VIBE_HIT) found this pixel's surface and left it at binding 64. Everything the shading takes
+    // from the search is rebuilt from it here, with the same expressions the search used.
+    vec4  wrec = imageLoad(u_water_hit, ivec2(gl_FragCoord.xy));
+#ifdef VIBE_GROUND
+    if (wrec.y < 2.5) discard;                       // (sky, an object in front, or water: not the ground's)
+#else
+    if (wrec.y < 0.5 || wrec.y > 2.5) discard;       // (not water)
+#endif
+    bool  air = !water_only && ro.y > terrainMaxHeight() + 60.0;
+    bool  patch_mode = pc.tex_params.x < 0.0 && !water_only && !air;
+    g_bake_t0 = patch_mode ? pc.grass_params.y : 0.0;
+    g_bake_lmin = floor(g_bake_t0 / 8.0);
+    g_bake_t0 -= 8.0 * g_bake_lmin;
+#ifdef VIBE_GROUND
+    float t = wrec.x;                                // (the ground's hit)
+    float t_water = -1.0;
+    if (SW_ON(2048) && wrec.z > 0.5) {
+        // VIBE_DEBUG_STREAM_EDGE=1: the rule that left this ground dry beside the stream (the hit
+        // pass's wt_dbg_r): blue beyond the reach, green ground above the surface, cyan the same in
+        // the sinking margin, yellow the walk back began under water, magenta an edge crossing;
+        // darker on odd segments.
+        int rr = int(wrec.z + 0.5);
+        vec3 dc = rr == 1 ? vec3(0.1, 0.2, 1.0) : rr == 2 ? vec3(0.1, 0.8, 0.1) : rr == 3 ? vec3(0.0, 0.9, 0.9) : rr == 4 ? vec3(1.0, 0.9, 0.0) : vec3(1.0, 0.0, 1.0);
+        dc *= (int(wrec.w - 1.0) & 1) != 0 ? 0.55 : 1.0;
+        vec4 cd = pc.mvp * vec4(ro + rd * t, 1.0);
+        gl_FragDepth = min(cd.z / max(cd.w, 1e-4), 0.999989);
+        outColor = vec4(dc * 0.3, 1.0);
+        outMotion = vec2(0.0);
+        outGBuffer0 = vec4(dc * 0.3, 8.0 / 255.0);
+        outGBuffer1 = vec4(0.5, 0.5, 0.7, 0.0);
+        return;
+    }
+#else
+    float t = -1.0;                                  // (the ground behind: not used by the water's shading)
+    float t_water = wrec.x;
+    float wt_stream_y = wrec.y > 1.5 ? wrec.z : -1e9;      // (the stream's surface as the hit found it: z holds it for the stream)
+    float wt_sw_k = wrec.y > 1.5 ? 0.0 : wrec.z;
+    vec2  wt_sw_g = wt_sw_k > 1e-4 ? wt_sw_k * wt_swell((ro + rd * t_water).xz, scene.water_params.w).yz : vec2(0.0);
+    float wt_shore_d = wrec.w;
+#endif
+#else
 #ifndef VIBE_WATER
     // Stop at the nearest pre-pass surface (full-resolution pass only: the
     // depth copy matches this target pixel for pixel). The depth test
@@ -1067,7 +1205,7 @@ void main() {
                 if (all(lessThan(abs(ro.xz - pc.color.xy), e)) && all(lessThan(abs(Po.xz - pc.color.xy), e)) &&
                     ro.y > pc.color.w + 0.02 && Po.y > pc.color.w + 0.02 &&
                     sampleHeightDelta(Po.xz) < 0.015 && sampleHeightDelta(0.5 * (Po.xz + ro.xz)) < 0.015)
-                    discard;
+                    RM_NO_SURFACE;
             }
             if (t_water_plane < 0.0 || t_obj < t_water_plane) { t_stop = t_obj; obj_stop = true; }
         }
@@ -1129,15 +1267,15 @@ void main() {
     float t = water_only ? raymarchMesh(ro, rd, t_water_plane)
                          : (air ? -1.0 : patch_mode ? rm_patch_hit(ro, rd, t_stop)
                                 : (t_start > 1e8 ? -1.0 : raymarch(ro, rd, t_stop, t_start)));
-    if (!air && obj_stop && t < 0.0) discard;      // an object owns this pixel
+    if (!air && obj_stop && t < 0.0) RM_NO_SURFACE;      // an object owns this pixel
     // From the air (above 1 km): the landscape beyond the normal march's reach.
     if (t < 0.0 && !water_only && (air || !obj_stop)) {
         float fl = rm_far_limit(ro.y);
         t = raymarch_far(ro, rd, (t_stop > 0.0) ? min(fl, t_stop) : fl, air);     // (t_stop: the water plane or an object in front)
-        if (obj_stop && t < 0.0) discard;
+        if (obj_stop && t < 0.0) RM_NO_SURFACE;
     }
 
-#if !defined(VIBE_WATER) && !defined(VIBE_LITE)
+#if !defined(VIBE_WATER) && !defined(VIBE_LITE) && !defined(VIBE_HIT)
     if (RMDBG(64)) {
         // Profiling (VIBE_RM_SKIP bit 64): the march alone. Nothing is shaded; the picture
         // shows how many steps each pixel's march took (black 0 .. white 64, red beyond).
@@ -1163,18 +1301,18 @@ void main() {
     // the surface from underneath (Snell's window: cam_under, water_swell.x being the stream's
     // surface at the eye - water_fx.cpp water_surface_y).
     float wt_under_t = -1.0, wt_under_y = -1e9;
-    if (scene.stream_info.x > 1.5 && wc_stream_surface(ro.xz) > ro.y) {
+    if (scene.stream_info.x > 1.5 && wr_stream_surface(ro.xz) > ro.y) {
         float te = t > 0.0 ? t : 60.0;
         vec3  Pe = ro + rd * te;
-        if (Pe.y > wc_stream_surface(Pe.xz)) {
+        if (Pe.y > wr_stream_surface(Pe.xz)) {
             float ta = 0.0, tb = te;
             for (int i = 0; i < 14; ++i) {
                 float tm = 0.5 * (ta + tb);
                 vec3  Pm = ro + rd * tm;
-                if (Pm.y > wc_stream_surface(Pm.xz)) tb = tm; else ta = tm;
+                if (Pm.y > wr_stream_surface(Pm.xz)) tb = tm; else ta = tm;
             }
             vec3  Pc = ro + rd * tb;
-            float Sc = wc_stream_surface(Pc.xz);
+            float Sc = wr_stream_surface(Pc.xz);
             if (abs(Pc.y - Sc) < 0.08) { wt_under_t = tb; wt_under_y = Sc; t_water = tb; }
         }
     }
@@ -1199,7 +1337,7 @@ void main() {
         // Ray never crosses the water plane (degenerate / looking away)
         // — nothing to shade. Plane geometry rarely produces these.
 #endif /* VIBE_WATER */
-        discard;
+        RM_NO_SURFACE;
     }
 
     // The sea's swell (terrain_rm_water.glsl wt_swell): the surface has real height. The ray is
@@ -1223,23 +1361,34 @@ void main() {
     if (wt_under_y > -1e8) { t_water = wt_under_t; wt_stream_y = wt_under_y; }      // (the eye under the stream's surface: found above, before the sky's pixels were let go)
     else if (t_wend > 0.0 && scene.stream_info.x > 1.5) {
         vec3 Pb = ro + rd * t_wend;
-        float Sb = wc_stream_surface(Pb.xz);
+        float Sb = wr_stream_surface(Pb.xz);
         // (the eye need not be above THIS point's surface - looking up at a fall from its foot,
         //  the face stands above the eye; the walk back below starts above the water, or no water)
         if (Sb > Pb.y + 0.002) {
             float ta = max(0.0, t_wend - (Sb - Pb.y + 2.0) / max(-rd.y, 0.04)), tb = t_wend;
+            float ta0 = ta;
             vec3  Pa = ro + rd * ta;
-            if (Pa.y > wc_stream_surface(Pa.xz)) {
+            if (Pa.y > wr_stream_surface(Pa.xz)) {
                 for (int i = 0; i < 10; ++i) {
                     float tm = 0.5 * (ta + tb);
                     vec3  Pm = ro + rd * tm;
-                    if (Pm.y > wc_stream_surface(Pm.xz)) ta = tm; else tb = tm;
+                    if (Pm.y > wr_stream_surface(Pm.xz)) ta = tm; else tb = tm;
                 }
                 // (a crossing at the edge of the stream's water - where its surface stops - is no
                 //  surface: the ray came in from the side under a bank. No water drawn there.)
                 vec3  Pc = ro + rd * tb;
-                float Sc = wc_stream_surface(Pc.xz);
+                float Sc = wr_stream_surface(Pc.xz);
                 if (abs(Pc.y - Sc) < 0.08) { t_water = tb; wt_stream_y = Sc; }
+                else {
+                    // (2026-11-27, the owner's straight edge by the rapid: VIBE_DEBUG_STREAM_EDGE painted these
+                    //  pixels magenta - the bed lies under the water, but the search ended on a JUMP in the
+                    //  surface (where the segment holding a point changes, the reach's sinking margin differs
+                    //  between them) and the water was dropped: a cut edge along the seam. Now the water is
+                    //  drawn at the bed's own surface height Sb, where the ray crosses it: the edge is where
+                    //  the ground rises out of that water.)
+                    float tp = t_wend - (Sb - Pb.y) / max(-rd.y, 1e-3);
+                    if (tp > ta0 && tp < t_wend) { t_water = tp; wt_stream_y = Sb; }
+                }
             }
         }
     }
@@ -1256,13 +1405,17 @@ void main() {
         vec3  pw = ro + rd * t_water;
         float sk = wt_sea_k(pw.xz);
         if (sk > 0.0) {
-            float bed0 = water_only ? meshHeight(pw.xz) : terrainM_lod(pw.xz, t_water);
-            float dep = water_y - bed0;
+            // (the bed here and two steps aside, in one loop: one copy of the ground's height in the code)
+            const float e = 2.0;
+            float bed0 = 0.0, bx = 0.0, bz = 0.0, dep = 0.0;
+            RM_ONE_COPY for (int i = 0; i < 3; ++i) {
+                vec2 q = pw.xz + (i == 1 ? vec2(e, 0.0) : i == 2 ? vec2(0.0, e) : vec2(0.0));
+                float b = water_only ? meshHeight(q) : terrainM_lod(q, t_water);
+                if (i == 0) { bed0 = b; dep = water_y - bed0; if (!(scene.water_flags.z > 0.5 && dep < 60.0)) break; }
+                else if (i == 1) bx = b; else bz = b;
+            }
             float dk = 1.0;
             if (scene.water_flags.z > 0.5 && dep < 60.0) {
-                const float e = 2.0;
-                float bx = water_only ? meshHeight(pw.xz + vec2(e, 0.0)) : terrainM_lod(pw.xz + vec2(e, 0.0), t_water);
-                float bz = water_only ? meshHeight(pw.xz + vec2(0.0, e)) : terrainM_lod(pw.xz + vec2(0.0, e), t_water);
                 wt_shore_d = ww_shore_dist(max(dep, 0.0), vec2(bx - bed0, bz - bed0) / e);
                 dk = smoothstep(0.0, 1.0, wt_shore_d / 150.0);      // (the swell and the wind sea die out over the last 150 m)
             }
@@ -1272,9 +1425,22 @@ void main() {
 #ifndef VIBE_WATER
         // (the sea's height along the ray: the swell and the cascades - each cascade faded where a
         //  pixel is wider than its waves)
-        #define WT_SEA_H(tt) (wt_sw_k * wt_swell(ro.xz + rd.xz * (tt), tw_t).x + (wt_fft_k > 1e-4 ? wt_fft_k * ww_fft_height(ro.xz + rd.xz * (tt), max(tt, 1.0) * 0.0025 / max(abs(rd.y), 0.12), vec4(1.0)) : 0.0))
-        if ((wt_sw_k > 1e-4 || wt_fft_k > 1e-4) && ro.y > water_y + scene.water_swell.x && rd.y < -1e-4) {
-            float hi = 0.70 * 32.5 * wt_sw_k + wt_fft_k * scene.water_fft.z, lo = 0.44 * 32.5 * wt_sw_k + wt_fft_k * scene.water_fft.z;
+        //  + the foam's lift: where the cascades fold over the surface stands up to water_grid.y m
+        //  higher - a whitecap is a body of foam, for the hit as for the colour)
+        #define WT_SEA_H(tt) (wt_sw_k * wt_swell(ro.xz + rd.xz * (tt), tw_t).x + (wt_fft_k > 1e-4 ? wt_fft_k * (ww_fft_height(ro.xz + rd.xz * (tt), max(tt, 1.0) * 0.0025 / max(abs(rd.y), 0.12), vec4(1.0)) + wt_foam_lift(ro.xz + rd.xz * (tt), max(tt, 1.0) * 0.0025 / max(abs(rd.y), 0.12))) : 0.0))
+        // THE SEA'S PROJECTED GRID (water_grid.cpp, water_grid.vert): the surface - swell, the
+        // cascades with their horizontal displacement, the foam's lift - rasterised into a depth
+        // picture of its own; the hit is read there instead of searched for along the ray.
+        bool wt_grid_done = false;
+        if (scene.water_grid.x > 0.5 && (wt_sw_k > 1e-4 || wt_fft_k > 1e-4) && ro.y > water_y + scene.water_swell.x && rd.y < 0.05) {
+            float tg = wg_hit(ro, rd);
+            if (tg > 0.0) {
+                wt_grid_done = true;
+                t_water = (t > 0.0 && tg > t) ? -1.0 : tg;      // (ground in front of the sea: the ground)
+            }
+        }
+        if (!wt_grid_done && (wt_sw_k > 1e-4 || wt_fft_k > 1e-4) && ro.y > water_y + scene.water_swell.x && rd.y < -1e-4) {
+            float hi = 0.70 * 32.5 * wt_sw_k + wt_fft_k * (scene.water_fft.z + scene.water_grid.y), lo = 0.44 * 32.5 * wt_sw_k + wt_fft_k * scene.water_fft.z;
             float ta = max((water_y + hi - ro.y) / rd.y, 0.0);
             float tb = min((water_y - lo - ro.y) / rd.y, t_water * 3.0 + 300.0);
             float t0 = ta;
@@ -1304,9 +1470,45 @@ void main() {
         if (wt_sw_k > 1e-4 && t_water > 0.0) wt_sw_g = wt_sw_k * wt_swell((ro + rd * t_water).xz, tw_t).yz;
     }
 #endif /* ! VIBE_LITE */
+#ifdef VIBE_HIT
+    // VIBE_DEBUG_STREAM_EDGE=1 (water_wet bit 2048): for a ground pixel near the stream, WHICH RULE
+    // left it dry, into z (the ground pass paints it): 1 beyond the wet reach + 1.5 m, 2 the ground
+    // stands above the surface inside the reach, 3 the same in the sinking 1.5 m past the reach,
+    // 4 the surface stands over the ground but the walk back started under the water, 5 the
+    // crossing was found at the water's edge (|y - surface| >= 8 cm). w = the holding segment.
+    float wt_dbg_r = 0.0, wt_dbg_s = 0.0;
+    if (SW_ON(2048) && t_water <= 0.0 && t > 0.0 && scene.stream_info.x > 1.5) {
+        vec3 Pd = ro + rd * t;
+        WcAt Ad = wc_stream_at(Pd.xz);
+        if (Ad.on) {
+            float over = Ad.dist - wc_wet_reach(Ad);
+            wt_dbg_s = Ad.seg + 1.0;
+            if (over >= 1.5) wt_dbg_r = 1.0;
+            else {
+                float Sd = wr_stream_surface(Pd.xz);      // (with its relief, as the search sees it)
+                if (Sd <= Pd.y + 0.002) wt_dbg_r = over > 0.0 ? 3.0 : 2.0;
+                else {
+                    float ta = max(0.0, t - (Sd - Pd.y + 2.0) / max(-rd.y, 0.04));
+                    vec3 Pa = ro + rd * ta;
+                    wt_dbg_r = Pa.y > wr_stream_surface(Pa.xz) ? 5.0 : 4.0;
+                }
+            }
+        }
+    }
+    // The hit pass's result (binding 64): the water's hit, or the ground's (y = 3).
+    if (t_water > 0.0) imageStore(u_water_hit, ivec2(gl_FragCoord.xy), vec4(t_water, wt_stream_y > -1e8 ? 2.0 : 1.0, wt_stream_y > -1e8 ? wt_stream_y : wt_sw_k, wt_shore_d));
+    else               imageStore(u_water_hit, ivec2(gl_FragCoord.xy), vec4(t, 3.0, wt_dbg_r, wt_dbg_s));
+    return;
+#endif
+#endif /* ! VIBE_WATER_PASS && ! VIBE_GROUND */
 
+#ifndef VIBE_HIT
 #include "terrain_rm_main_water.glsl"   // main(), continued: the water surface: waves, refraction, reflection, foam, the bed seen through it
+#endif /* ! VIBE_HIT */
 #endif /* ! VIBE_BAKE */
+#if defined(VIBE_WATER_PASS) || defined(VIBE_HIT)
+    discard;     // (a record without water cannot happen: the water's shading above returns)
+#else
 
 // The ground's material and its lighting are two files, each in two parts that are included
 // in this order (RM_PART): the material's normal and heights (ground, 1), its colour (light, 2) -
@@ -1323,7 +1525,10 @@ void main() {
         bool use = nor.y > 0.6 && !(water_on && pos.y < water_y + 0.05) && !(abs(pos.x) < 11.3 && abs(pos.z) < 11.3);
         outColor = vec4(sqrt(clamp(mate, vec3(0.0), vec3(1.0))), clamp(g_gnd_ssdm_h / kGndSsdmMax, 0.0, 1.0));
         outMotion = nor.xz * 0.5 + 0.5;
-        outGBuffer0 = vec4(hw_pave, sand_cov, hw_gloss, use ? 1.0 : 0.0);
+        // (ground under the water: 0.5 - not for the ground pass, but the bed seen through the water
+        //  reads it, so the bed under the shallows is the same material as the bank beside it)
+        bool use_bed = !use && nor.y > 0.6 && water_on && pos.y < water_y + 0.05 && !(abs(pos.x) < 11.3 && abs(pos.z) < 11.3);
+        outGBuffer0 = vec4(hw_pave, sand_cov, hw_gloss, use ? 1.0 : (use_bed ? 0.5 : 0.0));
         outGBuffer1 = vec4(0.0);
     }
 #else
@@ -1410,4 +1615,5 @@ void main() {
         }
     }
 #endif /* ! VIBE_BAKE */
+#endif /* ! VIBE_WATER_PASS && ! VIBE_HIT */
 }

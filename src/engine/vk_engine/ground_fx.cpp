@@ -115,6 +115,7 @@ void VulkanEngine::init_ground_fx() {
         w[1].dstBinding = 61; w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[1].pImageInfo = &ii;
         vkUpdateDescriptorSets(device_, 2, w, 0, nullptr);
     }
+    init_rock_bake();               // (scene binding 63: the rock kit's bake and the breaker pattern - rock_bake.cpp)
     ground_fx_bind_deferred();
     log::infof("[ground_fx] ready: paste %d, far capture %d, decals %d", int(rt_.ground_paste), int(rt_.ground_lsd), int(rt_.ground_decals));
 }
@@ -130,6 +131,7 @@ void VulkanEngine::ground_fx_bind_deferred() {
 }
 
 void VulkanEngine::destroy_ground_fx() {
+    destroy_rock_bake();
     if (!gfx_) return;
     GroundFxState& G = *gfx_;
     if (G.lsd_pipeline) vkDestroyPipeline(device_, G.lsd_pipeline, nullptr);
@@ -197,6 +199,7 @@ void VulkanEngine::ground_fx_frame(VkCommandBuffer cmd) {
     gfx_decals_frame();
     const uint32_t nd = uint32_t(std::min<size_t>(G.frame_list.size(), GroundFxState::kMaxDecals));
     h.dec = glm::vec4(float(nd), float(G.tiles_x), float(G.tiles_y), (rt_.ground_decals && nd > 0) ? 1.0f : 0.0f);
+    h.rock = rock_bake_block();
 
     // (what the frame before read is done before this is written: a barrier, then the copies)
     VkMemoryBarrier mb{ VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT };

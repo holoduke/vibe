@@ -160,6 +160,10 @@ bool leaf_card_hit(rayQueryEXT rq) {
 // and g_rq_T keeps the product of what all the leaves on the way let through. Below 3 % the
 // ray counts as blocked. Solid geometry stops it as always.
 bool g_rq_leaf_tint = false;
+// Distance to what blocks the sun (the blocker search of the sun shadow; 1e9 = none found).
+// A near blocker over a leaf is its own crown / a canopy (less sky too); a far one is a hill or
+// a building - open-sky shade, the leaf / grass keeps the sky light the ground beside it gets.
+float g_sun_blocker_t = 1e9;
 vec3 g_rq_T = vec3(1.0);
 bool leaf_tint_candidate(rayQueryEXT rq) {      // true: confirm (the ray is blocked)
     vec4 s = leaf_card_sample(rq);
@@ -225,7 +229,7 @@ layout(set = 0, binding = 25, std430) readonly buffer LpMaterials { LpMaterial l
 // candle) and (x = its slot in scene.lamp_lights or -1) - nearest the eye first, from entry
 // scene.lp_flags.w (two regions, one a frame in flight).
 layout(set = 0, binding = 26, std430) readonly buffer LpLamps { vec4 lp_lamps[]; };
-#define LP_TEX_COUNT 43
+#define LP_TEX_COUNT 48
 layout(set = 0, binding = 27) uniform sampler2D u_lp_albedo[LP_TEX_COUNT];
 // What the last closest hit was (closest_hit_once): its instance slot, primitive and - with
 // position fetch - the world normal of the triangle, turned toward the ray's origin.
@@ -640,7 +644,7 @@ void main() {
     // alpha=1/255 for some interpolated cases), and the lighting block
     // multiplies by zero albedo and emits true black. Treat near-zero
     // albedo as "no real gbuffer write here" and pass scene_color.
-    if (material_id >= 5 || material_id == 0 ||
+    if ((material_id >= 5 && material_id != 9) || material_id == 0 ||          // (9: hair, lit here - people.glsl)
         dot(g0.rgb, vec3(1.0)) < 1e-4) {
         // alpha 0 = geometry: carries exact sky COVERAGE through DLSS
         // (sky pixels keep 1, FX multiply it down to transmittance).
@@ -816,6 +820,7 @@ void main() {
                 ++hits;
             }
         }
+        if (hits > 0) g_sun_blocker_t = sum_t / float(hits);
         // Always sample shadow rays — even if the 2-tap blocker search
         // missed. Prior versions left shadow=0 in that case (treating
         // "no blocker = no shadow") but in tight interiors the blocker
@@ -1926,7 +1931,12 @@ void main() {
         float fwd   = pow(clamp(dot(-Vv, L), 0.0, 1.0), 3.0) * clamp(1.25 - abs(ndl_raw), 0.0, 1.0);
         float thin  = mix(0.08, 1.0, lit);
         // Leaves / flowers in shadow sit under a canopy: less sky reaches them.
-        ambient_term *= mix(0.45, 1.0, lit);
+        // (Only when the blocker is near - a crown within a few metres. In a hill's shadow the
+        // grass was darkened to dusk while the ground beside it kept its sky light.
+        // VIBE_LEAF_SHADE_OLD=1 -> scene.lp_flags bit 1024: the old rule, in any shadow.)
+        float canopy = (scene.lp_flags.x & 1024) != 0 ? 1.0
+                     : 1.0 - smoothstep(4.0, 12.0, g_sun_blocker_t);
+        ambient_term *= mix(mix(1.0, 0.45, canopy), 1.0, lit);
         vec3  spec_keep = sun_term - diff_albedo * sun_rad;          // specular part computed above
         // (a leaf card is not a glossy sheet: seen toward the sun its highlight turned whole
         // sprays of needles white)
@@ -1945,6 +1955,40 @@ void main() {
             sun_term = max(spec_keep, vec3(0.0)) * 0.15 + sunE * lit * diff_albedo * (nw * 0.9 + trans);
         }
     }
+    // PEOPLE (people.glsl writes them): SKIN (material 4) and HAIR (9).
+    //  * Skin: the oil on it is two lobes - most of the highlight a little sharper than the
+    //    surface's roughness, a sixth of it broad (F0 0.028); the diffuse light reaches past the
+    //    terminator, red furthest (light that went under the skin; the screen-space blur of
+    //    skin_blur.frag does the rest, over the lit picture).
+    //  * Hair: strands, not a surface - a highlight across them (Kajiya-Kay with the two shifted
+    //    lobes: a white one and a second, coloured by the hair, further down the strand); the
+    //    strands are taken to run down the head (the tangent: down, in the surface).
+    if (material_id == 4 || material_id == 9) {
+        vec3  sunE = scene.sun_color.rgb * scene.sun_color.a * sun_gate * sun_tint;
+        float lit  = 1.0 - shadow;
+        vec3  Hs   = normalize(L + Vv);
+        float NoHs = clamp(dot(N, Hs), 0.0, 1.0), VoHs = clamp(dot(Vv, Hs), 0.0, 1.0);
+        if (material_id == 4) {
+            float a0 = max(roughness * roughness * 0.56, 0.002), a1 = max(roughness * roughness * 1.69, 0.002);
+            float Fs = f_schlick(vec3(0.028), VoHs).x;
+            float nl = max(ndl, 1e-4);
+            float lobe = 0.85 * d_ggx(NoHs, a0) * v_smith_ggx_correlated(NoV, nl, a0) +
+                         0.15 * d_ggx(NoHs, a1) * v_smith_ggx_correlated(NoV, nl, a1);
+            vec3  wk   = vec3(0.32, 0.15, 0.10);
+            vec3  wrap = clamp((vec3(ndl_raw) + wk) / (1.0 + wk), 0.0, 1.0);
+            sun_term = sunE * lit * (diff_albedo * (1.0 - Fs) * wrap +
+                                     vec3(lobe * Fs * kPI * ndl * term_fade));
+        } else {
+            vec3  T  = vec3(0.0, -1.0, 0.0) - N * (-N.y);
+            T = dot(T, T) > 1e-4 ? normalize(T) : normalize(cross(N, vec3(1.0, 0.0, 0.0)));
+            vec3  T1 = normalize(T + N * 0.10), T2 = normalize(T - N * 0.15);
+            float s1 = pow(sqrt(max(1.0 - dot(T1, Hs) * dot(T1, Hs), 0.0)), 90.0);
+            float s2 = pow(sqrt(max(1.0 - dot(T2, Hs) * dot(T2, Hs), 0.0)), 22.0);
+            float facing = smoothstep(-0.1, 0.25, ndl_raw);
+            sun_term = sunE * lit * (diff_albedo * clamp(0.75 * ndl_raw + 0.25, 0.0, 1.0) +
+                                     (vec3(0.22 * s1) + 0.30 * s2 * diff_albedo / max(dot(diff_albedo, vec3(0.333)), 0.05) * 0.5) * facing);
+        }
+    }
     // Light thrown up by the water onto what stands over it and faces it (refl_caustic above).
     {
         vec3 rc = leafy ? vec3(0.0) : refl_caustic(world_pos, N, L);
@@ -1960,15 +2004,12 @@ void main() {
     //   2 (wood)    — no change (default Lambert reads right)
     //   3 (terrain) — boosted ambient to match the open-sky shading
     //                 cube.frag does on terrain pixels
-    //   4 (grass)   — extra wrap-around fill so shadowed blades don't
-    //                 read pitch-black
+    //   4 (a person's skin since 2026-11-27: see PEOPLE above; was grass, unused)
     //   5 (emissive) — pass albedo through unchanged (brushes already
     //                  baked emissive colour into albedo)
     if (material_id == 3) {
         ambient_term *= 1.3;
         sky_fill     *= 1.2;
-    } else if (material_id == 4) {
-        ambient_term *= 1.4;
     } else if (material_id == 5) {
         sun_term     += albedo;       // emissive pass-through
     }

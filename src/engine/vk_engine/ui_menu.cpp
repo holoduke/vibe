@@ -753,7 +753,7 @@ void VulkanEngine::build_menu_ui() {
         ImGui::SliderFloat("glare on bright lights", &rt_.glare_strength, 0.0f, 4.0f);
         ImGui::SliderFloat("motion blur", &rt_.motion_blur, 0.0f, 2.0f);
         ImGui::Checkbox("motion blur also when turning the camera", &rt_.motion_blur_camera);
-        ImGui::SliderFloat("depth of field when aiming", &rt_.dof_strength, 0.0f, 2.0f);
+        ImGui::SliderFloat("depth of field when aiming (0 = off)", &rt_.dof_strength, 0.0f, 2.0f);
         ImGui::Checkbox("smoke lit and fogged by the fog volume", &rt_.particle_fog_light);
         ImGui::Checkbox("tracks in snow and sand", &rt_.snow_tracks);
         {

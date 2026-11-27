@@ -64,8 +64,8 @@ through a formula.
 | Water | Sea, lake and river surface with waves, flow, foam, a visible bed and an underwater view |
 | Volumetric clouds | Marched in a compute shader, grown from a 2D weather map |
 | Atmosphere | Physically based sky from look-up tables (Hillaire 2020): transmittance, multiple scattering, sky view and an aerial-perspective volume |
-| Volumetric fog | 160 x 90 x 64 camera-aligned froxels (Wronski 2014, Frostbite 2015), with mist that lies on the lake |
-| Stonework | Screen-space displacement mapping: walls are drawn flat, then a per-pixel grid moves every pixel out by the height of its stone, with real outlines and the stones shading each other (the method of Crimson Desert); parallax relief as the fallback |
+| Volumetric fog | 160 x 90 x 64 camera-aligned froxels (Wronski 2014, Hillaire 2015), with mist that lies on the lake |
+| Stonework | Screen-space displacement mapping: walls are drawn flat, then a per-pixel grid moves every pixel out by the height of its stone, with real outlines and the stones shading each other (after a published game's method); parallax relief as the fallback |
 | Explosions | Fireballs and smoke columns as marched noise volumes with a blackbody colour ramp |
 | Voxels | A destructible tower traversed per pixel with a brick DDA |
 
@@ -198,7 +198,7 @@ Visual Studio 2022 and the Vulkan SDK 1.3. Other dependencies are fetched by CMa
   [leoawen/volumetric_cloud_atmosphere_scattering](https://github.com/leoawen/volumetric_cloud_atmosphere_scattering) (MIT).
 - Procedural trees: a C++ port of [dgreenheck/ez-tree](https://github.com/dgreenheck/ez-tree) (MIT).
 - Sea waves: after "Seascape" by Alexander Alekseev (TDM), [shadertoy.com/view/Ms2SD1](https://www.shadertoy.com/view/Ms2SD1) (CC BY-NC-SA 3.0).
-- Screen-space displacement mapping: the method of Crimson Desert (Pearl Abyss), written after reading the shaders of the game; a first attempt was after
+- Screen-space displacement mapping: a published game's method, written after studying how it renders; a first attempt was after
   [TechArtAlex](https://www.patreon.com/TechArtAlex/posts/screen-space-171617266).
 - Car engine sound: recorded from [ange-yaghi/engine-sim](https://github.com/ange-yaghi/engine-sim) (MIT).
 - Action and death clips: made with Tencent HY-Motion 1.0 (text to motion), under its community licence, which excludes the EU, the UK and South Korea.

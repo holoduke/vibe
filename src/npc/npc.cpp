@@ -42,8 +42,21 @@ struct Place { std::string kind; glm::vec3 p; float yaw = 0.0f; int user = -1; i
 enum Role : uint8_t { Cashier, Cook, Server, Local, Traveller, Runner,
                       // the people of an added site (THE ADDED SITES, below)
                       Desk, Floater, Visitor, Crew };
+// What a person of a role wears (npc.h Dress, in bits 4..6 of `look`; the rest of `look` as drawn).
+static uint8_t dressed(uint8_t look, Role role) {
+    const uint32_t h = (uint32_t(look) * 2654435761u) >> 24;          // (0 .. 255, of the person's own byte)
+    Dress d = Dress::Civilian;
+    switch (role) {
+    case Runner: d = Dress::Soldier; break;
+    case Crew: d = h < 190 ? Dress::Technician : Dress::Garrison; break;
+    case Desk: case Floater: d = h < 150 ? Dress::Office : Dress::Garrison; break;
+    case Local: case Traveller: d = h < 50 ? Dress::Garrison : Dress::Civilian; break;
+    default: d = Dress::Civilian; break;
+    }
+    return uint8_t((look & 0x8F) | (uint8_t(d) << 4));
+}
 enum TaskType : uint8_t { GoNode, GoPoint, Sit, Stand, EnterCar, DoAct };
-struct Task { TaskType type; int a = -1; glm::vec3 p{0.0f}; float yaw = 0.0f; float time = 0.0f; Pose pose = Pose::Stand; uint8_t style = 0; glm::vec3 aim{0.0f}; bool has_aim = false; };
+struct Task { TaskType type; int a = -1; glm::vec3 p{0.0f}; float yaw = 0.0f; float time = 0.0f; Pose pose = Pose::Stand; uint8_t style = 0; glm::vec3 aim{0.0f}; bool has_aim = false; uint8_t step = 0; };
 
 enum CarState : uint8_t { Cruise, Approach, OnPath, Waiting, Parked };
 enum Cls : uint8_t { Slow, Normal, Fast, Speeder, Police };      // the kinds of driver (make_driver)
@@ -52,6 +65,7 @@ struct Agent {
     Kind kind = Kind::Person; Pose pose = Pose::Stand; uint8_t look = 0; bool hidden = false;
     glm::vec3 pos{0.0f}; float yaw = 0.0f; float speed = 0.0f;
     uint8_t style = 0;                   // View::style
+    uint8_t item = 0, placed = 0;        // what it carries, and what it has set down where it is (npc.h Item, WHAT PEOPLE CARRY)
     float gone = 0.0f;                   // > 0: out of the world (shot, or a car taken) for so many seconds more
     float run_s = 0.0f; int run_dir = 1; float run_side = 0.0f, run_lat = 0.0f;      // a runner: metres along the run, which way, and how far beside its line
     // ---- a person
@@ -131,9 +145,9 @@ std::vector<glm::vec3> smooth(std::vector<glm::vec3> p) {
 }
 
 #pragma pack(push, 1)
-struct Wire { uint8_t id; uint8_t bits; uint8_t look; uint8_t car; float x, y, z; int16_t yaw; int8_t speed; uint8_t act; uint8_t act_t; int16_t aim[3]; };
+struct Wire { uint8_t id; uint8_t bits; uint8_t look; uint8_t car; float x, y, z; int16_t yaw; int8_t speed; uint8_t act; uint8_t act_t; int16_t aim[3]; uint8_t item; };
 #pragma pack(pop)
-static_assert(sizeof(Wire) == 27, "an agent on the wire is 27 bytes");
+static_assert(sizeof(Wire) == 28, "an agent on the wire is 28 bytes");
 
 }  // namespace
 
@@ -423,6 +437,14 @@ struct World::Impl {
         release(a);
         a.tasks.clear(); a.route.clear(); a.act = 0; a.act_t = 0.0f; a.hidden = false; a.asleep = false; a.gone = 0.0f;
         a.speed = a.walk_v = 0.0f; a.stall_t = 0.0f; a.stall_d = 1e9f; a.style = 0; a.pose = Pose::Stand; a.from = glm::vec3(0.0f);
+        {   // (what they go about with: the crew a toolbox or a tablet, those on the way a clipboard, a tablet, a coffee or a phone, some visitors a phone)
+            const uint32_t h = (uint32_t(a.look) * 2246822519u + uint32_t(me) * 3266489917u) >> 24;
+            a.placed = 0;
+            a.item = a.role == Crew ? uint8_t(h < 150 ? Item::Toolbox : Item::Tablet)
+                   : a.role == Floater ? uint8_t(h < 70 ? Item::Clipboard : h < 130 ? Item::Tablet : h < 190 ? Item::Cup : Item::Phone)
+                   : a.role == Visitor ? uint8_t(h < 90 ? Item::Phone : Item::None)
+                   : a.role == Desk ? uint8_t(h < 40 ? Item::Clipboard : Item::None) : uint8_t(Item::None);
+        }
         if (a.home_seat >= 0 && seats[size_t(a.home_seat)].user < 0) {
             const Place& s = seats[size_t(a.home_seat)];
             seats[size_t(a.home_seat)].user = me; a.seat = a.home_seat;
@@ -473,6 +495,24 @@ struct World::Impl {
         if (i < 0) return false;
         spots[size_t(i)].user = int(&a - agents.data()); a.spot = i; return true;
     }
+    // WHAT PEOPLE CARRY. Where a seat's sitter sets a thing down (npc.h item_place: the same rule the
+    // renderer draws it by), and what somebody takes along from a place it stood at: a coffee from
+    // the pavilion's kitchen, a bag or a coffee from the shop's till or shelves.
+    glm::vec3 seat_place(int idx, glm::vec3 p, float yaw) const {
+        if (idx < 0) return item_place(p, yaw, 3);
+        const std::string& k = seats[size_t(idx)].kind;
+        if (k == "desk") return item_place(p, yaw, 2, seats[size_t(idx)].aim);
+        if (k == "booth" || k == "chair" || k == "picnic" || k == "stool" || k == "meet") return item_place(p, yaw, 1);
+        return item_place(p, yaw, 3);
+    }
+    void fetched(Agent& a, const Task& t) {
+        if (a.item || t.a < 0 || size_t(t.a) >= spots.size() || t.type != Stand) return;
+        const std::string& k = spots[size_t(t.a)].kind;
+        Rng& R = a.zone ? zrng : rng;
+        if (k == "coffee" && (a.role == Desk || a.role == Floater || a.role == Visitor) && R.chance(0.8f)) a.item = uint8_t(Item::Cup);
+        else if ((k == "pay" || k == "browse") && a.role == Traveller) { const float r = R.uni(); a.item = uint8_t(r < 0.55f ? Item::Bag : r < 0.75f ? Item::Cup : r < 0.85f ? Item::Box : Item::None); }
+        else if (k == "browse" && a.role == Local && R.chance(0.35f)) a.item = uint8_t(Item::Cup);
+    }
     // What a person does next, once it has nothing to do.
     void think(Agent& a) {
         std::vector<Task> plan;
@@ -519,6 +559,12 @@ struct World::Impl {
             const Agent& c = agents[size_t(a.car)];
             const int n = c.stop >= 0 ? stops[size_t(c.stop)].node : c.bay >= 0 ? bays[size_t(c.bay)].node : nearest_node(c.pos);
             Task go; go.type = GoNode; go.a = n; plan.push_back(go);
+            if (a.item) {
+                // (what it bought goes into the boot: behind the car, facing it)
+                const glm::vec3 cf(std::sin(c.yaw), 0.0f, -std::cos(c.yaw));
+                Task bt; bt.type = GoPoint; bt.p = c.pos - cf * 2.75f; plan.push_back(bt);
+                Task pd; pd.type = DoAct; pd.a = int(Act::PutDown); pd.p = c.pos - cf * 2.15f + glm::vec3(0.0f, 0.72f, 0.0f); pd.yaw = c.yaw; plan.push_back(pd);
+            }
             Task ap; ap.type = GoPoint; ap.p = c.pos + glm::vec3(std::cos(c.yaw), 0.0f, std::sin(c.yaw)) * -1.2f; plan.push_back(ap);
             { Task da; da.type = DoAct; da.a = int(Act::CarEnter); da.p = c.pos; da.yaw = c.yaw; plan.push_back(da); }
             Task en; en.type = EnterCar; plan.push_back(en);
@@ -710,6 +756,7 @@ struct World::Impl {
         const bool speeder = k == Kind::Car && a.cls == Speeder;    // (... and its one who is far too fast)
         a = Agent();
         a.kind = k; a.look = look;
+        if (k == Kind::Person) a.look = dressed(look, Local);
         if (k == Kind::Person) {
             a.role = Local;
             if (home_nodes > 0) { const int nd = rng.pick(home_nodes); a.pos = nodes[size_t(nd)].p; a.at_node = nd; }
@@ -730,7 +777,7 @@ struct World::Impl {
         if (a.asleep) return;                  // (of an added site nobody is near: not there)
         if (a.zone && a.gone > 0.0f) {         // (shot: after a while somebody new is at that place)
             a.gone -= dt;
-            if (a.gone <= 0.0f) { a.look = uint8_t(zrng.pick(256)); a.pos.y += 20000.0f; zone_start(a); }
+            if (a.gone <= 0.0f) { a.look = dressed(uint8_t(zrng.pick(256)), a.role); a.pos.y += 20000.0f; zone_start(a); }
             return;
         }
         if (a.gone > 0.0f) { a.gone -= dt; if (a.gone <= 0.0f) respawn(a); return; }
@@ -768,10 +815,17 @@ struct World::Impl {
             // renderer plays it: it stands where it stood and the body goes back and down on
             // to the seat), then it sits. Getting up: the act of standing up, back at the place
             // it sat down from.
-            if (a.pose != Pose::Sit && a.act != uint8_t(Act::StandUp)) {
+            if (a.pose != Pose::Sit && a.act != uint8_t(Act::StandUp) && a.act != uint8_t(Act::PickUp)) {
                 a.walk_v = 0.0f; a.speed = 0.0f; a.pose = Pose::Stand;
-                if (a.act == 0) {
-                    if (!turn_to(a, t.yaw, dt)) break;
+                if (a.act == 0 || a.act == uint8_t(Act::PutDown)) {
+                    if (a.act == 0 && !turn_to(a, t.yaw, dt)) break;
+                    // (what it carries first goes on the table, the desk or the bench beside it)
+                    if (a.act == 0 && a.item) { a.act = uint8_t(Act::PutDown); a.act_t = 0.0f; a.aim = seat_place(t.a, t.p, t.yaw); }
+                    if (a.act == uint8_t(Act::PutDown)) {
+                        a.yaw = t.yaw; a.act_t += dt;
+                        if (a.act_t < kActTime[int(Act::PutDown)]) break;
+                        a.placed = a.item; a.item = 0;
+                    }
                     a.act = uint8_t(Act::SitDown); a.act_t = 0.0f; a.from = a.pos; a.aim = t.p;
                 }
                 a.yaw = t.yaw;
@@ -787,11 +841,24 @@ struct World::Impl {
                 // (at a desk: where its keyboard is - the renderer puts the hands there)
                 if (a.act == 0 && seats[size_t(t.a)].has_aim) a.aim = seats[size_t(t.a)].aim;
             }
+            if (a.act == uint8_t(Act::PickUp)) {                   // (up, and what it set down taken again)
+                a.pose = Pose::Stand; a.pos = a.from; a.yaw = t.yaw; a.speed = 0.0f;
+                a.act_t += dt;
+                if (a.act_t < kActTime[int(Act::PickUp)]) break;
+                a.act = 0; a.act_t = 0.0f; a.item = a.placed; a.placed = 0;
+                if (a.seat >= 0 && seats[size_t(a.seat)].user == int(&a - agents.data())) seats[size_t(a.seat)].user = -1;
+                a.seat = -1;
+                a.tasks.pop_back();
+                if (a.tasks.empty()) release(a);
+                break;
+            }
             if (a.act == uint8_t(Act::StandUp)) {
                 a.pose = Pose::Stand; a.pos = a.from; a.yaw = t.yaw; a.speed = 0.0f;
                 a.act_t += dt;
                 if (a.act_t < kActTime[int(Act::StandUp)]) break;
                 a.act = 0; a.act_t = 0.0f;
+                if (a.placed && (a.zone ? zrng : rng).chance(0.75f)) { a.act = uint8_t(Act::PickUp); a.act_t = 0.0f; a.aim = seat_place(t.a, t.p, t.yaw); break; }
+                a.placed = 0;
                 if (a.seat >= 0 && seats[size_t(a.seat)].user == int(&a - agents.data())) seats[size_t(a.seat)].user = -1;
                 a.seat = -1;
                 a.tasks.pop_back();
@@ -815,22 +882,38 @@ struct World::Impl {
             if (a.act != uint8_t(t.a)) { a.act = uint8_t(t.a); a.act_t = 0.0f; a.aim = t.p; }
             a.pose = Pose::Stand; a.walk_v = 0.0f; a.speed = 0.0f; a.yaw = t.yaw;
             a.act_t += dt;
-            if (a.act_t >= kActTime[t.a]) { a.act = 0; a.act_t = 0.0f; a.tasks.pop_back(); }
+            if (a.act_t >= kActTime[t.a]) { if (t.a == int(Act::PutDown)) a.item = 0; a.act = 0; a.act_t = 0.0f; a.tasks.pop_back(); }
             break; }
         case Stand: {
+            // WHAT PEOPLE CARRY (npc.h Item): somebody busy at a machine sets the toolbox down
+            // beside it first and takes it up again when done (the acts; the renderer plays them).
+            if (a.act == uint8_t(Act::PutDown) || a.act == uint8_t(Act::PickUp)) {
+                a.pose = Pose::Stand; a.speed = a.walk_v = 0.0f;
+                a.act_t += dt;
+                if (a.act_t < kActTime[a.act]) break;
+                if (a.act == uint8_t(Act::PutDown)) { a.placed = a.item; a.item = 0; a.act = 0; a.act_t = 0.0f; t.step = 1; }
+                else { a.item = a.placed; a.placed = 0; a.act = 0; a.act_t = 0.0f; a.tasks.pop_back(); if (a.tasks.empty()) release(a); break; }
+            }
+            if (t.step == 0 && t.pose == Pose::Work && (a.item == uint8_t(Item::Toolbox) || a.item == uint8_t(Item::Box))) {
+                if (!turn_to(a, t.yaw, dt)) { a.pose = Pose::Stand; a.speed = a.walk_v = 0.0f; break; }
+                a.act = uint8_t(Act::PutDown); a.act_t = 0.0f; a.aim = item_place(a.pos, t.yaw, 0); t.step = 1;
+                a.pose = Pose::Stand; break;
+            }
             a.pose = t.pose; a.style = t.style;
             if (t.has_aim) a.aim = t.aim;      // (what is pointed or looked at from here)
             turn_to(a, t.yaw, dt);
             a.walk_v = 0.0f; a.speed = 0.0f;
             t.time -= dt;
             if (t.time <= 0.0f) {
+                if (a.placed && t.pose == Pose::Work) { a.act = uint8_t(Act::PickUp); a.act_t = 0.0f; a.aim = item_place(a.pos, t.yaw, 0); a.pose = Pose::Stand; break; }
+                fetched(a, t);
                 a.tasks.pop_back();
                 if (a.tasks.empty()) release(a);
             }
             break; }
         case EnterCar: {
             a.tasks.pop_back();
-            if (a.car >= 0) { a.hidden = true; a.pose = Pose::Stand; a.speed = 0.0f; release(a); --agents[size_t(a.car)].out; }
+            if (a.car >= 0) { a.hidden = true; a.pose = Pose::Stand; a.speed = 0.0f; a.item = a.placed = 0; release(a); --agents[size_t(a.car)].out; }
             break; }
         }
     }
@@ -1513,6 +1596,7 @@ struct World::Impl {
             v.pos = a.pos; v.yaw = a.yaw; v.speed = a.speed;
             v.car = (a.kind == Kind::Person && a.car >= 0) ? uint8_t(a.car) : uint8_t(255); v.seat = uint8_t(a.car_seat);
             v.act = Act(a.act); v.act_t = a.act_t; v.aim = a.aim; v.style = a.style;
+            v.item = uint8_t((a.item & 15) | (a.placed << 4));
             if (a.kind == Kind::Car) v.style = uint8_t((a.cls == Police ? kCarPolice : 0) | (a.siren ? kCarSiren : 0) | (a.ov ? kCarOvertaking : 0));
         }
     }
@@ -1575,7 +1659,7 @@ void World::populate(uint32_t seed, int traffic) {
     for (auto* v : { &w.seats, &w.spots, &w.bays, &w.stops }) for (Place& p : *v) p.user = -1;
     auto person = [&](Role role) -> Agent* {
         if (int(w.agents.size()) >= kMaxAgents) return nullptr;
-        Agent a; a.kind = Kind::Person; a.role = role; a.look = uint8_t(w.rng.pick(256));
+        Agent a; a.kind = Kind::Person; a.role = role; a.look = dressed(uint8_t(w.rng.pick(256)), role);
         w.agents.push_back(a); return &w.agents.back();
     };
     if (w.site) {
@@ -1674,7 +1758,7 @@ void World::populate(uint32_t seed, int traffic) {
         };
         auto add = [&](Role role, int seat, int spot) {
             if (int(w.agents.size()) >= kMaxAgents) return;
-            Agent a; a.kind = Kind::Person; a.role = role; a.look = uint8_t(w.zrng.pick(256));
+            Agent a; a.kind = Kind::Person; a.role = role; a.look = dressed(uint8_t(w.zrng.pick(256)), role);
             a.zone = zone; a.home_seat = seat; a.home_spot = spot; a.hidden = true; a.asleep = true;
             a.pos = w.zones[zi].centre;
             w.agents.push_back(a);
@@ -1836,7 +1920,7 @@ void World::views(std::vector<View>& out) const {
 void World::serialize(std::vector<uint8_t>& out) const {
     const Impl& w = *d_;
     out.resize(4 + w.cur.size() * sizeof(Wire));
-    out[0] = 'N'; out[1] = 'P'; out[2] = 5; out[3] = uint8_t(w.cur.size());
+    out[0] = 'N'; out[1] = 'P'; out[2] = 6;      // (wire format 6: + what a person carries) out[3] = uint8_t(w.cur.size());
     for (size_t i = 0; i < w.cur.size(); ++i) {
         const View& v = w.cur[i];
         Wire r;
@@ -1844,6 +1928,7 @@ void World::serialize(std::vector<uint8_t>& out) const {
         r.act = uint8_t(uint8_t(v.act) | (v.style << 3)); r.act_t = uint8_t(std::clamp(std::lround(v.act_t * 20.0f), 0L, 255L));
         for (int k = 0; k < 3; ++k) r.aim[k] = int16_t(std::clamp(std::lround((v.aim[k] - v.pos[k]) * 100.0f), -32000L, 32000L));      // (centimetres from where it stands)
         r.x = v.pos.x; r.y = v.pos.y; r.z = v.pos.z;
+        r.item = v.item;
         r.yaw = int16_t(std::lround(wrap_pi(v.yaw) * 10000.0f));
         r.speed = int8_t(std::clamp(std::lround(v.speed * 2.0f), -127L, 127L));      // (halves of a m/s: to 63 m/s - a speeder passing drives 47)
         std::memcpy(out.data() + 4 + i * sizeof(Wire), &r, sizeof(Wire));
@@ -1852,7 +1937,7 @@ void World::serialize(std::vector<uint8_t>& out) const {
 
 bool World::apply(const uint8_t* data, size_t size) {
     Impl& w = *d_;
-    if (!data || size < 4 || data[0] != 'N' || data[1] != 'P' || data[2] != 5) return false;
+    if (!data || size < 4 || data[0] != 'N' || data[1] != 'P' || data[2] != 6) return false;
     const size_t n = data[3];
     if (n > size_t(kMaxAgents) || size != 4 + n * sizeof(Wire)) return false;
     std::vector<View> in(n);
@@ -1860,7 +1945,7 @@ bool World::apply(const uint8_t* data, size_t size) {
         Wire r; std::memcpy(&r, data + 4 + i * sizeof(Wire), sizeof(Wire));
         View& v = in[i];
         v.id = r.id; v.kind = Kind(r.bits & 1); v.pose = Pose((r.bits >> 1) & 7); v.hidden = (r.bits & 0x80) != 0; v.look = r.look; v.car = r.car; v.seat = uint8_t((r.bits >> 4) & 3);
-        v.act = Act((r.act & 7) <= uint8_t(Act::CarExit) ? (r.act & 7) : 0); v.style = uint8_t(r.act >> 3); v.act_t = float(r.act_t) * 0.05f;
+        v.act = Act((r.act & 7) <= uint8_t(Act::PickUp) ? (r.act & 7) : 0); v.item = r.item; v.style = uint8_t(r.act >> 3); v.act_t = float(r.act_t) * 0.05f;
         v.pos = glm::vec3(r.x, r.y, r.z); v.yaw = float(r.yaw) * 0.0001f; v.speed = float(r.speed) * 0.5f;
         v.aim = v.pos + glm::vec3(float(r.aim[0]), float(r.aim[1]), float(r.aim[2])) * 0.01f;
         if (!std::isfinite(v.pos.x) || !std::isfinite(v.pos.y) || !std::isfinite(v.pos.z) || uint8_t(v.pose) > uint8_t(Pose::Run)) return false;

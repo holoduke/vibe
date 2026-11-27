@@ -95,3 +95,25 @@ TEST_CASE("floor_below finds the highest walkable face under a point, not a stee
     REQUIRE(y == Approx(1.0f));
     REQUIRE_FALSE(floor_below({ &m }, 0.0f, 0.0f, 0.5f, 0.0f, 0.55f, y, n));
 }
+
+TEST_CASE("a walker glides round a boulder's round body and stands on its top") {
+    // a boulder: the box 2 m wide, 1 m high over the ground at 0 (world_props add_rock_ex)
+    const Round o = round_in_box(glm::vec3(-1, -1, -1), glm::vec3(1, 1, 1));
+    REQUIRE(o.r == Approx(1.0f));
+    REQUIRE(o.b.y == Approx(0.0f));
+    const std::vector<Round> rs{ o };
+    // walking +x into it a little to the side of its middle: pushed out sideways, not stopped
+    const float r = 0.3f;
+    glm::vec3 a(-1.05f, 0.3f, 0.5f), b(-1.05f, 1.5f, 0.5f), vel(3, 0, 0);
+    Contact c;
+    resolve_capsule_rounds(rs, a, b, r, vel, 0.55f, c);
+    REQUIRE(c.touched);
+    REQUIRE_FALSE(c.ground);
+    REQUIRE(vel.z != Approx(0.0f));                  // (it turns along the stone)
+    REQUIRE(glm::length(glm::vec2(a.x, a.z)) > 1.2f);
+    // its top: walkable near the middle, not at the side
+    float y = 0.0f; glm::vec3 n;
+    REQUIRE(floor_below_rounds(rs, 0.1f, 0.0f, 2.0f, 0.0f, 0.55f, y, n));
+    REQUIRE(y == Approx(std::sqrt(1.0f - 0.01f)).margin(1e-4));
+    REQUIRE_FALSE(floor_below_rounds(rs, 0.95f, 0.0f, 2.0f, 0.0f, 0.55f, y, n));
+}

@@ -523,7 +523,30 @@ void VulkanEngine::glass_tick(float dt) {
         sh.vel *= std::max(0.0f, 1.0f - 0.5f * dt);
         sh.pos += sh.vel * dt;
         sh.ang += sh.spin * dt;
-        const float fy = sh.floor_y[glm::dot(sh.pos - sh.pane_o, sh.pane_n) > 0.0f ? 1 : 0];
+        // The floor under the piece where it IS (2026-11-27: "broken glass not always falls on the
+        // ground but somewhere stuck in the air"). It was measured once, half a metre either side
+        // of the pane's middle, at burst: a piece that flew further came to rest at that height -
+        // over a lower lawn, beyond a sill or a step, off a balcony - in the air. Now: the
+        // terrain or whatever the physics world holds (floors, steps, rocks, a car) straight
+        // under it, measured again every 25 cm of travel (a ray each: a burst's 180 pieces cost
+        // a few hundred rays over their fall). VIBE_GLASS_FLOOR_OLD=1: the old way.
+        static const bool kFloorOld = std::getenv("VIBE_GLASS_FLOOR_OLD") != nullptr;
+        float fy = sh.floor_y[glm::dot(sh.pos - sh.pane_o, sh.pane_n) > 0.0f ? 1 : 0];
+        if (!kFloorOld) {
+            const glm::vec2 xz(sh.pos.x, sh.pos.z);
+            if (glm::distance(xz, sh.fy_at) > 0.25f) {
+                float f = sample_terrain_height(sh.pos.x, sh.pos.z);
+                if (physics_) {
+                    // (from just above the piece: what it is falling onto, not a roof over it)
+                    const glm::vec3 from(sh.pos.x, sh.pos.y + 0.05f, sh.pos.z);
+                    const auto rh = physics_->raycast(from, glm::vec3(0.0f, -1.0f, 0.0f), std::max(from.y - f + 0.5f, 0.5f));
+                    if (rh.hit && rh.distance > 1e-3f) f = std::max(f, rh.position.y);
+                }
+                sh.fy = f;
+                sh.fy_at = xz;
+            }
+            fy = sh.fy;
+        }
         if (sh.pos.y <= fy + 0.025f && sh.vel.y < 0.0f) {
             sh.pos.y = fy + 0.025f;
             if (!sh.bounced && sh.vel.y < -3.5f) {
@@ -533,6 +556,12 @@ void VulkanEngine::glass_tick(float dt) {
             } else {
                 sh.rest = true;
                 sh.pos.y = fy + 0.022f + 0.006f * (sh.lie / 6.28f);       // (clear of the floor's finish: boards, a rug)
+                static int rest_logs = 0;
+                if (G.log && rest_logs < 12) {
+                    ++rest_logs;
+                    log::infof("[glass] a piece rests at (%.2f, %.2f, %.2f): the floor under it %.2f (at burst it was taken as %.2f), the terrain %.2f",
+                               sh.pos.x, sh.pos.y, sh.pos.z, fy, sh.floor_y[glm::dot(sh.pos - sh.pane_o, sh.pane_n) > 0.0f ? 1 : 0], sample_terrain_height(sh.pos.x, sh.pos.z));
+                }
             }
         }
     }
@@ -615,6 +644,7 @@ void VulkanEngine::glass_draw_part(VkCommandBuffer cmd, const CastleMeshGpu* gp,
     pc.prev_mvp = vp;
     pc.color = glm::vec4(P.tint, 1.0f);
     pc.emissive = glm::vec4(0.0f);
+    pc.grass_params = glm::vec4(G.indoor, 0.0f, 0.0f, 0.0f);       // (glass.frag: the eye indoors)
     vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
     if (P.damaged == 0) {
         vkCmdDrawIndexed(cmd, P.mesh.index_count, 1, 0, 0, 0);
@@ -642,7 +672,7 @@ void VulkanEngine::glass_draw_part(VkCommandBuffer cmd, const CastleMeshGpu* gp,
         pp.uaxis_h = glm::vec4(S.u, p.hi.y - p.lo.y);
         pp.vaxis_s = glm::vec4(S.v, p.seed);
         pp.tint_n = glm::vec4(P.tint, float(p.n_hits));
-        pp.misc = glm::vec4(float(p.state), p.burst_t, p.toughened ? 1.0f : 0.0f, 0.0f);
+        pp.misc = glm::vec4(float(p.state), p.burst_t, p.toughened ? 1.0f : 0.0f, G.indoor);
         for (int h = 0; h < p.n_hits && h < 7; ++h) pp.hits[h] = glm::vec4(p.hits[h].uv, p.hits[h].fall, p.hits[h].seed);
         vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PanePush), &pp);
         vkCmdDrawIndexed(cmd, 6, 1, uint32_t(i) * 6, 0, 0);

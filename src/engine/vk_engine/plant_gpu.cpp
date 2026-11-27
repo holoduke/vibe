@@ -104,8 +104,8 @@ void VulkanEngine::init_plant_gpu() {
     pg_->inst_buf = pg_buffer(allocator_, VkDeviceSize(total) * sizeof(ScatterInstance), ssbo | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false, pg_->inst_alloc, nullptr);
     pg_->inst_gen = 0;
 
-    VkDescriptorSetLayoutBinding b[10]{};
-    for (uint32_t i = 0; i < 10; ++i) {          // (9: how much vegetation stands over the ground - the debris under trees, tuft_place.comp)
+    VkDescriptorSetLayoutBinding b[11]{};       // (10: the rock formations' tops from above - rock_formations_gpu.cpp)
+    for (uint32_t i = 0; i < 11; ++i) {          // (9: how much vegetation stands over the ground - the debris under trees, tuft_place.comp)
         b[i].binding = i;
         b[i].descriptorType = i >= 4 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[i].descriptorCount = 1;
@@ -113,9 +113,9 @@ void VulkanEngine::init_plant_gpu() {
     }
     VkDescriptorSetLayoutCreateInfo lci{};
     lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    lci.bindingCount = 10; lci.pBindings = b;
+    lci.bindingCount = 11; lci.pBindings = b;
     vk_check(vkCreateDescriptorSetLayout(device_, &lci, nullptr, &pg_->set_layout), "plant gpu set layout");
-    VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 }, { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6 } };
+    VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 }, { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 7 } };
     VkDescriptorPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pci.maxSets = 1; pci.poolSizeCount = 2; pci.pPoolSizes = ps;
@@ -210,6 +210,20 @@ void VulkanEngine::write_tuft_ground_bindings() {
     const VkImageView near_v = normal_textures_[kTexVegShade].view ? normal_textures_[kTexVegShade].view : grass_mask_.view;
     // (9: how much vegetation stands over the ground, the home tile - the debris under trees; ground_fx)
     const VkImageView shade_v = albedo_textures_[kTexVegShade].view ? albedo_textures_[kTexVegShade].view : grass_mask_.view;
+    // (10: the rock formations' tops from above - rock_formations_gpu.cpp rockf_tops_poll; until it exists the lawn's mask stands in: its texel 1 does not carry the mark)
+    {
+        const VkImageView tops_v = rock_tops_view() ? rock_tops_view() : grass_mask_.view;
+        if (pg_->tops_view != tops_v) {
+            VkDescriptorImageInfo ti{ rock_tops_view() ? rock_tops_sampler() : terrain_height_full_sampler_, tops_v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            VkWriteDescriptorSet tw{};
+            tw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            tw.dstSet = pg_->set; tw.dstBinding = 10; tw.descriptorCount = 1;
+            tw.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            tw.pImageInfo = &ti;
+            vkUpdateDescriptorSets(device_, 1, &tw, 0, nullptr);
+            pg_->tops_view = tops_v;
+        }
+    }
     if (pg_->ground_view == terrain_height_full_view_ && pg_->lawn_view == grass_mask_.view && pg_->near_view == near_v && pg_->shade_view == shade_v) return;
     VkDescriptorImageInfo ii[5] = {
         { pg_->tuft_sampler, pg_->tuft_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
@@ -381,6 +395,31 @@ void VulkanEngine::cull_plants(VkCommandBuffer cmd) {
                 for (const DrivePad& d : drive_pads_) if (std::abs(d.x0 - kCastlePark[0]) < 0.01f && std::abs(d.z0 - kCastlePark[1]) < 0.01f) park_top = d.h0;
                 P[11] = glm::vec4(0.0f, park_top, 0.0f, 0.0f);
                 P[12] = glm::vec4(0.0f);
+                // The service station's paving (2026-11-27, "outside the fuel station much debris is
+                // floating a bit in the air"): the forecourt and the walk along the shops are mesh
+                // slabs (gasstation.col pad lines -> drive_pads_) at their own heights, and the
+                // ground's height under them (what the debris stood on) is now over, now under
+                // them by centimetres - floating grit, or litter hidden under the asphalt. On them
+                // now: litter only, on the slab's top. (P_COL1 / P_COL2: the debris' colours are
+                // its own - tuft_place.comp - so these carry this instead.) P[7] = (x where the
+                // eastern slab begins, its top, the western slab's top, 1), P[8] = both together.
+                {
+                    const DrivePad* east = nullptr; const DrivePad* west = nullptr;
+                    for (const DrivePad& d : drive_pads_) {
+                        if (std::abs(d.h0 - d.h1) > 1e-3f) continue;                    // (a ramp)
+                        if (d.x0 < kStationRect[0] - 4.0f || d.x1 > kStationRect[2] + 4.0f || d.z0 < kStationRect[1] - 4.0f || d.z1 > kStationRect[3] + 4.0f) continue;
+                        if (!east || d.x0 > east->x0) east = &d;
+                        if (!west || d.x0 < west->x0) west = &d;
+                    }
+                    static const bool old_debris = std::getenv("VIBE_DEBRIS_OLD") != nullptr;
+                    if (east && !old_debris) {
+                        const DrivePad& w = west ? *west : *east;
+                        P[7] = glm::vec4(east->x0, east->h0, w.h0, 1.0f);
+                        P[8] = glm::vec4(std::min(w.x0, east->x0), std::min(w.z0, east->z0), std::max(w.x1, east->x1), std::max(w.z1, east->z1));
+                    } else {
+                        P[7] = glm::vec4(0.0f); P[8] = glm::vec4(0.0f);
+                    }
+                }
             }
             // (.z: winter's snow cover - short grass is under it; .w: autumn, how much of the leaves are down - the debris)
             P[13] = glm::vec4(K.fade0, K.fade1, glm::clamp(env_->snow, 0.0f, 1.0f), season_w_[2]);

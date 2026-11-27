@@ -101,6 +101,12 @@ void main() {
     // Capped tighter than grass: a 0.5 m rock at 120 m is a 2-px dark
     // dot — pepper, not detail.
     float reach = max_d * clamp(scale * 2.2 + 0.22, 0.22, 0.85);
+    // Scree (scatter.cpp: two whole turns added to its rotation): seen to the full range, and
+    // larger with distance while fewer are left - the reference's rule for its loose rocks.
+    if (pc.grass_params.y < 0.5 && rot > 12.5) {
+        reach = max_d * 0.85;
+        scale *= 1.0 + 0.5 * clamp(dist / max_d, 0.0, 1.0);
+    }
     float fade = 1.0 - smoothstep(reach * 0.75, reach, dist);
     // Plants thin out with distance instead of all vanishing at the range
     // limit: from 35 % of the reach a growing share (up to 70 %) shrinks
@@ -132,7 +138,12 @@ void main() {
     vRotSeed = vec2(rot, tuft ? dissolve : fract(sin(dot(base.xz, vec2(41.3, 17.9))) * 951.135) * 40.0);
     vec3 squash = vec3(1.0);
     vec3 stone_n = vec3(0.0, 1.0, 0.0);
-    if (pc.grass_params.y < 0.5) {
+    if (pc.grass_params.y < 0.5 && rot > 25.0) {
+        // Streamed scree (four whole turns: scatter.cpp scree_place): an angular mesh of its
+        // own with flat faces, drawn as it is.
+        lpos = inPos;
+        stone_n = normalize(inNormal);
+    } else if (pc.grass_params.y < 0.5) {
         float seed = vRotSeed.y;
         float sv = fract(seed * 0.618);
         vec3 d = normalize(inPos);

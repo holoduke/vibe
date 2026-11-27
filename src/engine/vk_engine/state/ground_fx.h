@@ -18,6 +18,7 @@ struct GroundFxGpuHead {
     glm::vec4 lsd;        // x on, yz window corner (world x, z), w window size (m)
     glm::vec4 lsd_fade;   // x fade in from, y full by (m), z VIBE_TEST_DEBRIS, w VIBE_TEST_LSD
     glm::vec4 dec;        // x decals, y tiles across, z tiles down, w on
+    glm::vec4 rock;       // the rock kit's bake: x pieces, y switches, z the breaker's first layer, w size (rock_bake.cpp rock_bake_block)
 };
 
 struct VulkanEngine::GroundFxState {

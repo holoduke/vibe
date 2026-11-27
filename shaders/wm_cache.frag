@@ -22,7 +22,7 @@ layout(push_constant) uniform PC {
     vec4 grass_params;
 } pc;
 
-const int kRmTextureCount = 43;   // = cube.frag kTextureCount
+const int kRmTextureCount = 48;   // = cube.frag kTextureCount
 layout(set = 0, binding = 4) uniform sampler2D u_normal[kRmTextureCount];
 
 #define WM_CACHE_BAKE

@@ -32,7 +32,7 @@ layout(push_constant) uniform PC {
 
 layout(set = 0, binding = 8)  uniform sampler2D u_terrain_height;
 layout(set = 0, binding = 17) uniform sampler2D u_terrain_height_full;
-const int kRmTextureCount = 43;         // = terrain_raymarch.frag
+const int kRmTextureCount = 48;         // = terrain_raymarch.frag
 layout(set = 0, binding = 3) uniform sampler2D u_albedo[kRmTextureCount];
 layout(set = 0, binding = 4) uniform sampler2D u_normal[kRmTextureCount];
 

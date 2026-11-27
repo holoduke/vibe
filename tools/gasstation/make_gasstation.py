@@ -770,6 +770,23 @@ def diner():
 
 
 # ------------------------------------------------------------------ the food mart
+# THE GOODS are not modelled here any more: every shelf records where its goods stand
+# (SHELVES -> gasstation.shelf) and the engine fills it from the goods kit (tools/shop/
+# make_goods.py, src/engine/vk_engine/shop_goods.cpp). The old placeholder boxes are still
+# "made" by gbox / gcyl / gobox, which draw nothing - so the seeded RNG is called exactly as
+# before and the rest of the station's small disorder stays where it was.
+SHELVES = []    # (kind, (ax, ay, az), (bx, by, bz), (ox, oy), depth, height): front edge a -> b, facing o
+
+
+def gbox(*a, **k): pass
+def gcyl(*a, **k): pass
+def gobox(*a, **k): pass
+
+
+def shelf(kind, a, b, o, depth, height):
+    SHELVES.append((kind, a, b, o, depth, height))
+
+
 def gondola(y, x0, x1):
     """A shelving run along X at y: a base, a spine, four shelves each side, full of goods."""
     box('g_steel', (x0, y - 0.45, FL), (x1, y + 0.45, FL + 0.14)); box(WHITE, (x0, y - 0.03, FL + 0.14), (x1, y + 0.03, FL + 1.62))
@@ -782,6 +799,8 @@ def gondola(y, x0, x1):
             d = 0.42 - 0.04 * lvl
             box(WHITE, (x0 + 0.03, y + s * 0.03, z - 0.02), (x1 - 0.03, y + s * d, z))
             box(YELLOW if lvl == 1 else WHITE, (x0 + 0.03, y + s * d, z - 0.035), (x1 - 0.03, y + s * (d + 0.006), z + 0.005))     # the price strip
+            aisle = {-18.4: 'snacks', -14.8: 'grocery', -11.2: 'auto'}.get(round(y, 1), 'grocery')
+            shelf(aisle, (x0 + 0.06, y + s * (d - 0.005), z), (x1 - 0.06, y + s * (d - 0.005), z), (0.0, s), d - 0.06, 0.33 if lvl < 3 else 0.36)
             x = x0 + 0.06
             while x < x1 - 0.2:
                 w = RNG.uniform(0.09, 0.2); h = RNG.uniform(0.12, 0.3); g = RNG.choice(PRODUCTS)
@@ -789,8 +808,8 @@ def gondola(y, x0, x1):
                 for k in range(n):
                     if x + w > x1 - 0.05: break
                     if RNG.random() < 0.93:
-                        if RNG.random() < 0.3: cyl(g, (x + w * 0.5, y + s * (d - 0.09), z), (x + w * 0.5, y + s * (d - 0.09), z + h), w * 0.42, 6)
-                        else: box(g, (x, y + s * (d - 0.17), z), (x + w - 0.012, y + s * (d - 0.03), z + h))
+                        if RNG.random() < 0.3: gcyl(g, (x + w * 0.5, y + s * (d - 0.09), z), (x + w * 0.5, y + s * (d - 0.09), z + h), w * 0.42, 6)
+                        else: gbox(g, (x, y + s * (d - 0.17), z), (x + w - 0.012, y + s * (d - 0.03), z + h))
                     x += w
                 x += RNG.uniform(0.0, 0.03)
 
@@ -806,11 +825,12 @@ def fridge(y0, y1):
     for lvl in range(5):
         z = FL + 0.16 + 0.37 * lvl
         box('g_chrome', (W + 0.08, y0 + 0.05, z - 0.012), (W + 0.68, y1 - 0.05, z))
+        shelf('fridge', (W + 0.69, y0 + 0.07, z), (W + 0.69, y1 - 0.07, z), (1.0, 0.0), 0.58, 0.33 if lvl < 4 else 0.36)
         g = PRODUCTS[(lvl + int(y0 * 3)) % 7]
         y = y0 + 0.13
         while y < y1 - 0.1:
             for dx in (0.56, 0.42):
-                cyl(g, (W + dx, y, z), (W + dx, y, z + 0.2), 0.034, 6); cyl(WHITE if lvl % 2 else g, (W + dx, y, z + 0.2), (W + dx, y, z + 0.27), 0.014, 5)
+                gcyl(g, (W + dx, y, z), (W + dx, y, z + 0.2), 0.034, 6); gcyl(WHITE if lvl % 2 else g, (W + dx, y, z + 0.2), (W + dx, y, z + 0.27), 0.014, 5)
             y += 0.085
             if RNG.random() < 0.15: g = RNG.choice(PRODUCTS)
     collide((W, y0, FL), (W + 0.75, y1, FL + 2.2))
@@ -831,19 +851,21 @@ def mart():
     box(GLASS, (-11.85, -4.9, FL + 1.04), (-11.4, -3.5, FL + 1.38))                                                                                              # a glass case of pastries
     for k in range(8): cyl('g_bun', (-11.7 + 0.13 * (k % 2), -4.75 + 0.17 * (k // 2) * 2, FL + 1.05), (-11.7 + 0.13 * (k % 2), -4.75 + 0.17 * (k // 2) * 2, FL + 1.1), 0.05, 8)
     for k in range(10):                             # sweets on the counter front, in a rack
-        box(PRODUCTS[k % 7], (-12.08, -7.9 + 0.36 * k, FL + 0.3 + 0.0), (-12.0, -7.6 + 0.36 * k, FL + 0.42)); box(PRODUCTS[(k + 3) % 7], (-12.08, -7.9 + 0.36 * k, FL + 0.5), (-12.0, -7.6 + 0.36 * k, FL + 0.62))
+        gbox(PRODUCTS[k % 7], (-12.08, -7.9 + 0.36 * k, FL + 0.3 + 0.0), (-12.0, -7.6 + 0.36 * k, FL + 0.42)); gbox(PRODUCTS[(k + 3) % 7], (-12.08, -7.9 + 0.36 * k, FL + 0.5), (-12.0, -7.6 + 0.36 * k, FL + 0.62))
     box('g_steel', (-12.09, -8.0, FL + 0.26), (-12.07, -4.3, FL + 0.66))
+    for zz in (FL + 0.3, FL + 0.5): shelf('rack', (-12.1, -7.95, zz), (-12.1, -4.35, zz), (-1.0, 0.0), 0.06, 0.15)
     # the wall of small things behind the counter
     box('g_steel', (-11.0, PARTY - 0.5, FL), (-8.6, PARTY - 0.12, FL + 2.4), col=True)
     for lvl in range(6):
         z = FL + 1.05 + 0.22 * lvl
+        shelf('wall', (-10.92, PARTY - 0.57, z), (-8.68, PARTY - 0.57, z), (0.0, -1.0), 0.07, 0.2)
         box(WHITE, (-10.95, PARTY - 0.52, z - 0.01), (-8.65, PARTY - 0.5, z))
         x = -10.9
         while x < -8.7:
             g = RNG.choice(PRODUCTS)
             for k in range(RNG.randrange(2, 6)):
                 if x > -8.75: break
-                box(g, (x, PARTY - 0.56, z), (x + 0.058, PARTY - 0.5, z + 0.1)); x += 0.062
+                gbox(g, (x, PARTY - 0.56, z), (x + 0.058, PARTY - 0.5, z + 0.1)); x += 0.062
             x += 0.01
     text(RED, 'PAY HERE', 0.22, (-10.0, PARTY - 0.53, FL + 2.48), 'S', depth=0.012)
     # ---- the coffee bar on the south wall
@@ -866,7 +888,8 @@ def mart():
     box('g_p_blue', (E - 0.75, -20.6, FL), (E - 0.1, -19.8, FL + 1.75), col=True); box('g_lcd', (E - 0.76, -20.45, FL + 1.05), (E - 0.75, -19.95, FL + 1.4)); box('g_chrome', (E - 0.78, -20.4, FL + 0.82), (E - 0.75, -20.0, FL + 0.98))
     text(WHITE, 'ATM', 0.16, (E - 0.755, -20.2, FL + 1.5), 'W', depth=0.006)
     box(WHITE, (E - 1.3, -18.8, FL), (E - 0.15, -17.0, FL + 0.85), col=True); quad2(GLASS, (E - 1.28, -18.75, FL + 0.86), (E - 0.17, -18.75, FL + 0.86), (E - 0.17, -17.05, FL + 0.86), (E - 1.28, -17.05, FL + 0.86))
-    for k in range(18): box(PRODUCTS[k % 7], (E - 1.2 + 0.26 * (k % 4), -18.65 + 0.33 * (k // 4), FL + 0.6), (E - 1.0 + 0.26 * (k % 4), -18.4 + 0.33 * (k // 4), FL + 0.72))
+    for k in range(18): gbox(PRODUCTS[k % 7], (E - 1.2 + 0.26 * (k % 4), -18.65 + 0.33 * (k // 4), FL + 0.6), (E - 1.0 + 0.26 * (k % 4), -18.4 + 0.33 * (k // 4), FL + 0.72))
+    shelf('chest', (E - 1.25, -18.72, FL + 0.6), (E - 0.2, -18.72, FL + 0.6), (0.0, -1.0), 1.6, 0.22)
     for k in range(4):                              # newspapers, in a wire rack inside the door
         box('g_steel', (E - 0.5, -9.6 + 0.0, FL + 0.2 + 0.32 * k), (E - 0.12, -8.6, FL + 0.22 + 0.32 * k)); box(WHITE, (E - 0.48, -9.55, FL + 0.22 + 0.32 * k), (E - 0.14, -8.65, FL + 0.3 + 0.32 * k))
         box(BLACK, (E - 0.47, -9.5, FL + 0.3 + 0.32 * k), (E - 0.3, -8.7, FL + 0.302 + 0.32 * k))
@@ -907,7 +930,8 @@ def mart():
                     if lvl == 3 and RNG.random() < 0.45: continue
                     g = ga if (i + j + lvl) % 2 == 0 else gb
                     x0 = px - 0.58 + 0.39 * i; y0 = py - 0.48 + 0.48 * j; z0 = FL + 0.125 + 0.26 * lvl
-                    box(g, (x0, y0, z0), (x0 + 0.37, y0 + 0.45, z0 + 0.25)); box(WHITE, (x0 + 0.06, y0 - 0.002, z0 + 0.07), (x0 + 0.31, y0, z0 + 0.18))
+                    gbox(g, (x0, y0, z0), (x0 + 0.37, y0 + 0.45, z0 + 0.25)); gbox(WHITE, (x0 + 0.06, y0 - 0.002, z0 + 0.07), (x0 + 0.31, y0, z0 + 0.18))
+        shelf('pallet', (px - 0.58, py - 0.48, FL + 0.125), (px + 0.58, py - 0.48, FL + 0.125), (0.0, -1.0), 0.94, 1.05)
         cyl('g_steel', (px + 0.62, py + 0.5, FL), (px + 0.62, py + 0.5, FL + 1.75), 0.012, 5); box(YELLOW, (px + 0.3, py + 0.49, FL + 1.4), (px + 0.94, py + 0.51, FL + 1.8))
         text(RED, '2 FOR 5', 0.13, (px + 0.62, py + 0.488, FL + 1.53), 'S', depth=0.006)
         collide((px - 0.6, py - 0.5, FL), (px + 0.6, py + 0.46, FL + 1.2))
@@ -917,9 +941,10 @@ def mart():
         box(WHITE, (x, y - 0.44, FL + 0.14), (x + 0.04, y + 0.44, FL + 1.62))
         for lvl in range(4):
             z = FL + 0.2 + 0.36 * lvl
+            shelf('endcap', (x + 0.3, y - 0.41, z), (x + 0.3, y + 0.41, z), (1.0, 0.0), 0.24, 0.32)
             box(WHITE, (x + 0.04, y - 0.42, z - 0.02), (x + 0.3, y + 0.42, z))
             g = PRODUCTS[(k * 2 + lvl) % 7]
-            for j in range(6): box(g, (x + 0.06, y - 0.4 + 0.135 * j, z), (x + 0.26, y - 0.29 + 0.135 * j, z + RNG.uniform(0.18, 0.28)))
+            for j in range(6): gbox(g, (x + 0.06, y - 0.4 + 0.135 * j, z), (x + 0.26, y - 0.29 + 0.135 * j, z + RNG.uniform(0.18, 0.28)))
         collide((x, y - 0.44, FL), (x + 0.3, y + 0.44, FL + 1.62))
     # ---- a door mat, a wet-floor sign, a stand of crisps by the counter
     box(BLACK, (E - 1.9, -13.1, FL), (E - 0.3, -10.9, FL + 0.012))
@@ -928,8 +953,16 @@ def mart():
     for lvl in range(5):
         for k in range(6):
             a = TAU * k / 6 + 0.3 * lvl
-            obox(PRODUCTS[(k + lvl) % 7], -12.4 + 0.16 * math.cos(a), -6.6 + 0.16 * math.sin(a), a + math.pi / 2, (-0.07, -0.02, FL + 0.3 + 0.27 * lvl), (0.07, 0.02, FL + 0.5 + 0.27 * lvl))
+            gobox(PRODUCTS[(k + lvl) % 7], -12.4 + 0.16 * math.cos(a), -6.6 + 0.16 * math.sin(a), a + math.pi / 2, (-0.07, -0.02, FL + 0.3 + 0.27 * lvl), (0.07, 0.02, FL + 0.5 + 0.27 * lvl))
     collide((-12.6, -6.8, FL), (-12.2, -6.4, FL + 1.6))
+    for lvl in range(5):
+        for k in range(6):
+            a = TAU * k / 6 + 0.3 * lvl; c, s_ = math.cos(a), math.sin(a)
+            shelf('clip', (-12.4 + 0.19 * c + 0.07 * s_, -6.6 + 0.19 * s_ - 0.07 * c, FL + 0.3 + 0.27 * lvl), (-12.4 + 0.19 * c - 0.07 * s_, -6.6 + 0.19 * s_ + 0.07 * c, FL + 0.3 + 0.27 * lvl), (c, s_), 0.04, 0.24)
+    # ---- back stock by the service door: stacks of cartons on the floor
+    for (sy0, sy1) in ((-7.0, -4.9), (-4.6, -2.6)):
+        shelf('stack', (-24.0, sy0, FL), (-24.0, sy1, FL), (1.0, 0.0), 1.55, 1.6)
+        collide((-25.7, sy0, FL), (-24.0, sy1, FL + 1.3))
     # ceiling lights and signs over the aisles
     for x in (-22.5, -19.0, -15.5, -12.0):
         for y in (-19.8, -16.6, -13.0, -9.4, -5.6): ceiling_panel(x, y)
@@ -1224,6 +1257,11 @@ with open(os.path.join(OUT, 'gasstation.col'), 'w') as f:
         f.write('nograss %.3f %.3f %.3f %.3f\n' % (x0, -y1, x1, -y0))
     for (x0, y0, x1, y1, h0, h1) in PADS:
         f.write('pad %.3f %.3f %.3f %.3f %.3f %.3f\n' % (x0, -y1, x1, -y0, h0, h1))
+with open(os.path.join(OUT, 'gasstation.shelf'), 'w') as f:
+    f.write('# gasstation: where the mart\'s goods stand (src/engine/vk_engine/shop_goods.cpp fills them from assets/shop/goods.kit) - game space (x east, y up, z south), from its origin\n')
+    f.write('# shelf <kind> <front edge a: x y z> <front edge b: x y z> <facing: x z> <depth> <clear height>\n')
+    for (k, a, b, o, d, h) in SHELVES:
+        f.write('shelf %s %.3f %.3f %.3f %.3f %.3f %.3f %.4f %.4f %.3f %.3f\n' % (k, a[0], a[2], -a[1], b[0], b[2], -b[1], o[0], -o[1], d, h))
 def yaw(fx, fy): return math.atan2(fx, fy)        # the game's yaw of a way of facing (0 = north, toward -z)
 with open(os.path.join(OUT, 'gasstation.nav'), 'w') as f:
     f.write('# gasstation: where people sit, stand and walk and where cars park, stop and drive - game space (x east, y up, z south), from its origin\n')

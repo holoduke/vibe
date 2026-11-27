@@ -837,6 +837,35 @@ void VulkanEngine::load_foliage_textures() {
         if (px) stbi_image_free(px);
         if (hx) stbi_image_free(hx);
     }
+    // The mart's goods (tools/shop/make_goods.py): every product's print in one atlas, read by
+    // the goods' own uv (shop_goods.cpp); the normal map from goods_h.png (paper grain, creases,
+    // crimped seals), its height in the alpha.
+    {
+        const std::string p = resolve("../shop/goods.png"), ph = resolve("../shop/goods_h.png");
+        int w = 0, h = 0, c = 0, hw = 0, hh = 0, hc = 0;
+        unsigned char* px = p.empty() ? nullptr : ::stbi_load(p.c_str(), &w, &h, &c, 4);
+        unsigned char* hx = ph.empty() ? nullptr : ::stbi_load(ph.c_str(), &hw, &hh, &hc, 1);
+        if (px) {
+            put(albedo_textures_[kTexGoods], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "shop/albedo");
+            std::vector<unsigned char> nrm(size_t(w) * size_t(h) * 4, 128);
+            const bool hok = hx && hw == w && hh == h;
+            auto Hh = [&](int x, int y) { return hok ? float(hx[size_t(std::clamp(y, 0, h - 1)) * size_t(w) + size_t(std::clamp(x, 0, w - 1))]) / 255.0f : 0.5f; };
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x) {
+                    const float dx = (Hh(x + 1, y) - Hh(x - 1, y)) * 2.0f, dy = (Hh(x, y + 1) - Hh(x, y - 1)) * 2.0f;
+                    const float il = 1.0f / std::sqrt(dx * dx + dy * dy + 1.0f);
+                    unsigned char* o = &nrm[(size_t(y) * size_t(w) + size_t(x)) * 4];
+                    o[0] = static_cast<unsigned char>(std::clamp((-dx * il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
+                    o[1] = static_cast<unsigned char>(std::clamp((dy * il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
+                    o[2] = static_cast<unsigned char>(std::clamp((il * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f));
+                    o[3] = static_cast<unsigned char>(std::clamp(Hh(x, y) * 255.0f, 0.0f, 255.0f));
+                }
+            put(normal_textures_[kTexGoods], nrm.data(), w, h, VK_FORMAT_R8G8B8A8_UNORM, "shop/normal");
+            ++loaded;
+        }
+        if (px) stbi_image_free(px);
+        if (hx) stbi_image_free(hx);
+    }
     if (std::string p = resolve("plant_atlas.png"); !p.empty()) {
         int w = 0, h = 0, c = 0;
         if (unsigned char* px = stbi_load(p.c_str(), &w, &h, &c, 4)) {
@@ -848,6 +877,15 @@ void VulkanEngine::load_foliage_textures() {
     if (std::string p = resolve("../character/soldier_atlas.jpg"); !p.empty()) {
         int w = 0, h = 0, c = 0;
         if (unsigned char* px = stbi_load(p.c_str(), &w, &h, &c, 4)) {
+            // Its alpha (hair cards, brows: coverage; the eye: where the iris is) is a picture of
+            // its own: tools/character/make_people.py, shaders/people.glsl.
+            if (std::string pa = resolve("../character/soldier_atlas_alpha.png"); !pa.empty()) {
+                int aw = 0, ah = 0, ac = 0;
+                if (unsigned char* a = ::stbi_load(pa.c_str(), &aw, &ah, &ac, 1)) {
+                    if (aw == w && ah == h) for (size_t i = 0; i < size_t(w) * size_t(h); ++i) px[i * 4 + 3] = a[i];
+                    stbi_image_free(a);
+                }
+            }
             put(albedo_textures_[kTexSoldier], px, w, h, VK_FORMAT_R8G8B8A8_SRGB, "character/soldier_atlas");
             stbi_image_free(px);
             ++loaded;
@@ -896,7 +934,7 @@ void VulkanEngine::load_foliage_textures() {
 
 void VulkanEngine::load_terrain_pbr_overrides() {
 
-    struct PbrSet { int slot; const char* name; };
+    struct PbrSet { int slot; const char* name; const char* res = "2K"; bool rough_in_alpha = false; };
     const PbrSet sets[] = {
         { kTexRock,  "Rock035"   },
         { kTexGrass, "Grass004"  },
@@ -908,6 +946,12 @@ void VulkanEngine::load_terrain_pbr_overrides() {
         { kTexBark,  "Bark012" },
         { kTexAsphalt, "Asphalt031" },
         { kTexGravel,  "Gravel040" },
+        // the water's bed (shaders/water_bed.glsl): river stones, silt, steep rock, growth - 1K, the
+        // roughness in the colour's alpha (assets/terrain_pbr/LICENSE.md)
+        { kTexBed + 0, "Rocks024S", "1K", true },
+        { kTexBed + 1, "Ground083", "1K", true },
+        { kTexBed + 2, "Rock046S",  "1K", true },
+        { kTexBed + 3, "Moss001",   "1K", true },
     };
     auto resolve = [](const std::string& tail) -> std::string {
         const std::string roots[] = {
@@ -939,7 +983,7 @@ void VulkanEngine::load_terrain_pbr_overrides() {
     auto prepare = [&](int si) {
         const PbrSet& set = sets[si];
         CpuSet& out = cpu[si];
-        std::string base = std::string(set.name) + "/" + set.name + "_2K-JPG_";
+        std::string base = std::string(set.name) + "/" + set.name + "_" + set.res + "-JPG_";
         std::string p_alb  = resolve(base + "Color.jpg");
         std::string p_nrm  = resolve(base + "NormalGL.jpg");
         std::string p_disp = resolve(base + "Displacement.jpg");
@@ -1021,6 +1065,18 @@ void VulkanEngine::load_terrain_pbr_overrides() {
                 }
                 log::infof("[terrain pbr] %s albedo lifted: mean %.3f -> %.2f linear",
                            set.name, mean, kFloor);
+            }
+        }
+        // (the water's bed sets: the scan's roughness into the colour's alpha)
+        if (set.rough_in_alpha) {
+            if (std::string p_r = resolve(base + "Roughness.jpg"); !p_r.empty()) {
+                int rw = 0, rh = 0, rc = 0;
+                if (unsigned char* rg = stbi_load(p_r.c_str(), &rw, &rh, &rc, 4)) {
+                    for (int y = 0; y < ah; ++y)
+                        for (int x = 0; x < aw; ++x)
+                            alb[(y * aw + x) * 4 + 3] = rg[((y * rh / ah) * rw + (x * rw / aw)) * 4];
+                    stbi_image_free(rg);
+                }
             }
         }
         out.alb = alb; out.aw = aw; out.ah = ah;
@@ -1420,6 +1476,11 @@ void VulkanEngine::bake_terrain_materials() {
         { TM_ROCK,  kTexStation + 3, "station/placeholder" },
         { TM_ROCK,  kTexStation + 4, "station/placeholder" },
         { TM_ROCK,  kTexStation + 5, "station/placeholder" },
+        // (the water's bed: replaced by the ambientCG sets in load_terrain_pbr_overrides())
+        { TM_ROCK,  kTexBed + 0, "bed/stones_placeholder" },
+        { TM_SAND,  kTexBed + 1, "bed/silt_placeholder" },
+        { TM_ROCK,  kTexBed + 2, "bed/rock_placeholder" },
+        { TM_GRASS, kTexBed + 3, "bed/growth_placeholder" },
     };
     // CPU generation of all materials in parallel (pure functions of
     // kind + size); uploads stay on this thread (queue owner).

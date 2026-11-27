@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <future>
 #include <string>
 #include <vector>
 
@@ -80,6 +81,42 @@ struct GraphicsPipelineConfig {
 };
 
 VkPipeline build_graphics_pipeline(VkDevice device, const GraphicsPipelineConfig& cfg);
+
+// The same on a thread of its own, for the very large shaders (the terrain march, its
+// variants, the ground bake, the mesh-terrain water) that the game starts without and takes
+// over when they are ready. The builds run lowest `priority` first, then in the order they were
+// asked for, at most compile_jobs() at once: a first-start compile of one of them takes the
+// driver's compiler 3-5 GB of memory, and all five side by side took the game to 15 GB in use,
+// 21 GB committed. VIBE_PIPELINE_COMPILE_JOBS=<n> sets the number (default 1).
+std::future<VkPipeline> build_graphics_pipeline_async(VkDevice device, const GraphicsPipelineConfig& cfg, int priority = 0);
+int compile_jobs();
+// At shutdown: the builds still waiting for their turn are not started (their futures give
+// VK_NULL_HANDLE); a build already running is finished.
+void cancel_queued_builds();
+// While held, no queued build starts (so builds asked for together start by priority, not by
+// who asked first).
+void hold_queued_builds(bool hold);
+
+// What the background builds are doing, for the on-screen notice (loader_screen.cpp
+// draw_compile_notice) - read straight from the queue above, so it follows whatever pipelines
+// are queued (no list of them anywhere). A "batch" is everything queued since the queue was
+// last empty. Estimates come from each build's last real compile time on this machine, kept in
+// vibe_pipeline_times.txt next to vibe_pipeline.cache ("<key> <seconds>" a line; only builds
+// that took 2 s or more are recorded - a quick one came from the cache and says nothing); a
+// build never timed is guessed from its SPIR-V size (12.5 s per MB, at least 2 s: the full
+// terrain shader, 10 MB, took 124 s on the RTX 4080).
+struct CompileStatus {
+    int total = 0;             // builds in this batch
+    int done = 0;              // of them finished (or dropped at shutdown)
+    int running = 0;
+    std::string current;       // the running build's name (the first, if several), in plain words
+    double current_elapsed = 0.0, current_estimate = 0.0;   // (s)
+    double remaining = 0.0;    // estimated seconds until the whole batch is done
+    double fraction = 0.0;     // 0 .. 1, by estimated time
+    double batch_elapsed = 0.0;
+    bool active = false;       // something is waiting or running
+};
+CompileStatus compile_status();
 
 // Optional persistent pipeline cache. When set via set_pipeline_cache(), every
 // build_graphics_pipeline() call after that hands the cache to Vulkan, so

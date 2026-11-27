@@ -142,26 +142,37 @@ inline float ranges(glm::vec2 mk) {
 // The river (shaders/world_map.glsl wm_river: keep in step).
 const glm::vec2 kRiv[26] = { {62.0f, 36.0f}, {86.0f, 70.0f}, {100.0f, 112.0f}, {96.0f, 170.0f}, {74.0f, 228.0f}, {56.0f, 290.0f}, {22.0f, 350.0f}, {48.0f, 406.0f}, {150.0f, 412.0f}, {248.0f, 470.0f}, {344.0f, 536.0f}, {410.0f, 628.0f}, {504.0f, 634.0f}, {600.0f, 570.0f}, {696.0f, 536.0f}, {792.0f, 474.0f}, {888.0f, 456.0f}, {984.0f, 456.0f}, {1080.0f, 410.0f}, {1176.0f, 410.0f}, {1272.0f, 486.0f}, {1368.0f, 552.0f}, {1464.0f, 584.0f}, {1600.0f, 604.0f}, {1752.0f, 616.0f}, {1950.0f, 620.0f} };
 const float kRivBox[5][4] = { {-69.0f, -89.0f, 225.0f, 415.0f}, {-103.0f, 165.0f, 469.0f, 661.0f}, {219.0f, 349.0f, 917.0f, 759.0f}, {667.0f, 285.0f, 1397.0f, 611.0f}, {1147.0f, 361.0f, 2075.0f, 745.0f} };
+// (2026-11-27: the river's water falls 1 m to the sea down its course - water_fx.cpp
+//  river_level_profile; the channel is cut that much deeper with it: shaders/world_map.glsl wm_riv_drop)
+const float kRivCum[26] = { 0.0f, 41.6f, 85.9f, 144.0f, 206.1f, 270.6f, 339.6f, 401.3f, 503.5f, 617.4f, 733.9f, 847.1f, 941.3f, 1056.7f, 1158.5f, 1272.8f, 1370.5f, 1466.5f, 1572.9f, 1668.9f, 1791.4f, 1907.9f, 2009.1f, 2146.5f, 2299.0f, 2497.0f };
+inline float river_drop(float s) {
+    const float g = std::clamp((s - 350.0f) / 2050.0f, 0.0f, 1.0f);
+    const float r = sstep(696.0f, 704.0f, s) + sstep(1246.0f, 1254.0f, s) + sstep(1796.0f, 1804.0f, s);
+    return 0.31f * g + 0.23f * r;
+}
 inline float river(float h, glm::vec2 wp, float wl) {
     if (wp.x < -85.0f || wp.x > 2095.0f || wp.y < -110.0f || wp.y > 780.0f) return h;
-    const float bed = wl - 2.4f;
-    if (h <= bed - 4.0f) return h;
+    float bed = wl - 2.4f;
+    if (h <= bed - 5.0f) return h;
     glm::vec2 q = wp + 12.0f * glm::vec2(std::sin(wp.y * 0.043f + 1.3f), std::sin(wp.x * 0.037f + 0.4f)) +
                        5.0f * glm::vec2(std::sin(wp.y * 0.113f), std::sin(wp.x * 0.097f + 2.0f));
     // (the pool under the stone bridge - as the shader)
     const float pool = 1.0f - sstep(22.0f, 55.0f, glm::distance(wp, glm::vec2(43.4f, 297.4f)));
     q -= pool * 6.0f * glm::vec2(0.719f, 0.695f);
-    float d2 = 1e12f;
+    float d2 = 1e12f, along = 0.0f;
     for (int c = 0; c < 5; ++c) {
         const float* b = kRivBox[c];
         if (q.x < b[0] || q.y < b[1] || q.x > b[2] || q.y > b[3]) continue;
         for (int i = c * 5; i < c * 5 + 5; ++i) {
             glm::vec2 a = kRiv[i], ab = kRiv[i + 1] - a;
-            glm::vec2 dv = q - (a + ab * std::clamp(glm::dot(q - a, ab) / glm::dot(ab, ab), 0.0f, 1.0f));
-            d2 = std::min(d2, glm::dot(dv, dv));
+            const float u = std::clamp(glm::dot(q - a, ab) / glm::dot(ab, ab), 0.0f, 1.0f);
+            glm::vec2 dv = q - (a + ab * u);
+            const float e2 = glm::dot(dv, dv);
+            if (e2 < d2) { d2 = e2; along = kRivCum[i] + u * glm::length(ab); }
         }
     }
     if (d2 > 120.0f * 120.0f) return h;
+    bed -= river_drop(along);
     const float e = std::max(std::sqrt(d2) - (7.0f + 9.0f * sstep(1450.0f, 1900.0f, wp.x) + 4.0f * pool), 0.0f);
     // (one even slope and a 12 m rounding where the valley's side meets the land: shaders/world_map.glsl wm_river)
     const float rim = std::max(e - 70.0f, 0.0f);          // (the cut runs out into the land by 120 m: wm_river)

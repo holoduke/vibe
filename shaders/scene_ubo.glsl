@@ -147,6 +147,11 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     // unit). [1]: x = half its width, y = half its length, z = how far behind it the grass is
     // still coming up (m), w = 1 when there is a car.
     vec4   car_press[4];
+    // Snow on the cars (jeep.cpp jeep_snow_fill; snow_cover below): the eight cars nearest the eye that
+    // have lost some of theirs by driving, two vec4 each. [0]: xy the middle (world xz), zw the way it
+    // faces (unit xz). [1]: x half its width, y half its length, z its floor (world y), w the share of
+    // its snow it still carries. x = 0: no more cars. A car not in the list carries all of it.
+    vec4   car_snow[16];
     // The fields of the flowering meadow (the engine's flower_fields_, as tuft_place.comp gets
     // them): xy = the middle (world x, z), z = radius (0 = none), w = how frayed the edge is (m).
     // The ground inside one takes the field's colour with distance (terrain_rm_main_light.glsl).
@@ -183,8 +188,8 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     // .y = the channel's depth at the spring, .z = at the mouth; stream_box = per 8 segments min x z,
     // max x z (padded by the carve's reach); stream_pts = x, z, water surface, half width.
     vec4   stream_info;
-    vec4   stream_box[8];
-    vec4   stream_pts[64];
+    vec4   stream_box[16];
+    vec4   stream_pts[128];
     // The player's body (not the camera: third person, a car): xyz = its middle (feet 0.9 m lower) -
     // what the water lilies part round (scatter.vert). w unused.
     vec4   water_body;
@@ -201,14 +206,25 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4   water_rip;
     vec4   water_flags;
     // water_sun: x how much of the sun's DISC shows through the cloud deck (1 clear, ~0 under a closed
-    //   overcast): the glint and the caustics are images of the disc, not diffuse light.
+    //   overcast): the glint and the caustics are images of the disc, not diffuse light. z: the open
+    //   sea's wind (m/s; environment.cpp sea_wind - the local wind with a sea breeze as its floor).
     vec4   water_sun;
     // The local shallow-water solver (vk_engine/water_solver.cpp; shaders/water_solver.glsl):
     // water_sw: xy its window's corner (world x z), z its size (m), w 1 = on (VIBE_NO_SOLVER);
     // water_sw2: x 1 = its foam particles are on.
     vec4   water_sw;
     vec4   water_sw2;
+    // Materials at the water and the sea's surface (vk_engine/water_wet.cpp; shaders/shore_wet.glsl):
+    // water_wet: x = bits (1 the wet band, 2 the sea's swash, 4 puddles in the hollows, 8 growth
+    //   under water, 16 the bed's tint by depth, 32 the bed's relief march, 64 no snow in the band),
+    //   y = the growth's rate, z = the band's height W at a lake / the river (m), w = at the stream;
+    // water_grid: x 1 = the open sea from the projected grid's depth picture (scene binding 62),
+    //   y = the foam's lift (m), z 1 = one picked lamp glints on the water, w 1 = the fog volume's
+    //   in-scatter inside the water.
+    vec4   water_wet;
+    vec4   water_grid;
 } scene;
+#define SW_ON(bit) ((int(scene.water_wet.x + 0.5) & (bit)) != 0)
 
 // The "shading test" (Graphics tab; gfx_quality.cpp apply_shade_test): measuring switches.
 // A part that is "flat" is its own colour times one light for the whole picture - no
@@ -310,11 +326,48 @@ float scene_snow() { return 0.0; }       // the no-snow build of a shader: all w
 float scene_snow() { return floor(scene.ripple_info.z) / 255.0; }
 #endif
 // Snow lying on a surface: on what faces up, patchy while it is still thin.
+// On a car that has driven some of its snow off (car_snow): the share it still carries, and the
+// point in the car's own frame (so the patches it loses stay on the car, not in the world).
+// The stream's upper reach (engine/water_course.cpp: it rises at ~106 m, above the summer snow line
+// of 70 - 90 m) runs in a valley the snow has left (2026-11-27, the owner: it ran through snow in
+// summer). 1 = snow may lie here, 0 = within 18 m of the stream's line, all of it again by 55 m.
+// Only the first 48 points (the upper reach), only within their boxes. Used by every summer snow
+// line: the ground (getMaterial), stones (scatter.frag), rock formations (rock_form.glsl), meshes'
+// accumulation (cube_main_surfaces.glsl).
+float stream_snow_clear(vec2 p) {
+    int n = min(int(scene.stream_info.x + 0.5), 48);
+    if (n < 2) return 1.0;
+    float d2 = 1e12;
+    for (int b = 0; b < 6; ++b) {
+        vec4 B = scene.stream_box[b];
+        if (p.x < B.x - 55.0 || p.y < B.y - 55.0 || p.x > B.z + 55.0 || p.y > B.w + 55.0) continue;
+        for (int k = b * 8; k < min(b * 8 + 8, n - 1); ++k) {
+            vec2 a = scene.stream_pts[k].xy, ab = scene.stream_pts[k + 1].xy - a;
+            vec2 dv = p - (a + ab * clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-4), 0.0, 1.0));
+            d2 = min(d2, dot(dv, dv));
+        }
+    }
+    return smoothstep(18.0, 55.0, sqrt(d2));
+}
+float car_snow_at(vec3 wp, out vec2 local) {
+    local = wp.xz;
+    for (int i = 0; i < 8; ++i) {
+        vec4 c = scene.car_snow[2 * i], e = scene.car_snow[2 * i + 1];
+        if (e.x <= 0.0) break;
+        vec2 d = wp.xz - c.xy;
+        float along = dot(d, c.zw), across = dot(d, vec2(-c.w, c.z));
+        if (abs(along) < e.y && abs(across) < e.x && wp.y > e.z + 0.35 && wp.y < e.z + 2.6) { local = vec2(across, along) + vec2(17.0, 31.0); return e.w; }
+    }
+    return 1.0;
+}
 float snow_cover(vec3 n, vec3 wp) {
     float s = scene_snow();
     if (s < 0.004 || scene_sheltered(wp)) return 0.0;
-    float pn = fract(sin(dot(floor(wp.xz * 3.0), vec2(12.9898, 78.233))) * 43758.5453) * 0.25
-             + 0.75 * (0.5 + 0.5 * sin(wp.x * 0.9) * sin(wp.z * 1.1 + 1.3));
+    vec2 sp;
+    s *= car_snow_at(wp, sp);
+    if (s < 0.004) return 0.0;
+    float pn = fract(sin(dot(floor(sp * 3.0), vec2(12.9898, 78.233))) * 43758.5453) * 0.25
+             + 0.75 * (0.5 + 0.5 * sin(sp.x * 0.9) * sin(sp.y * 1.1 + 1.3));
     return smoothstep(0.25, 0.75, n.y) * smoothstep(pn * 0.8, pn * 0.8 + 0.25, s * 1.05);
 }
 
@@ -339,6 +392,32 @@ float flashlight_pattern(float c) {
     return (spill + corona + hot) * rings * edge;
 }
 
+// A car's dipped beam (jeep.cpp jeep_headlights; flash_col.w > 1.5 says the light in the slot is
+// one): not a round cone but what a dipped head lamp throws - a sharp cut-off a little under the
+// level of the lamp (nothing goes higher: it does not dazzle, and it does not light the trees
+// ahead), wide to both sides (some 35 degrees), the brightest part just under the cut, and less
+// and less toward the ground before the car. `ld`: the way from the lamp to the point (unit).
+float car_beam_pattern(vec3 ld) {
+    vec3 f = scene.flash_dir.xyz;
+    vec3 r = cross(f, vec3(0.0, 1.0, 0.0));
+    float rl = length(r);
+    if (rl < 1e-3) return 0.0;
+    r /= rl;
+    vec3 u = cross(r, f);
+    float z = dot(ld, f);
+    if (z <= 0.05) return 0.0;
+    float h = dot(ld, r) / z, v = dot(ld, u) / z;            // (tangents across and up, from the beam's axis)
+    // (the axis is aimed 1.7 degrees down: the cut-off at 1 degree above it is just under level)
+    float cut = mix(0.012, 1.0, 1.0 - smoothstep(0.006, 0.022, v));
+    float hs = h / 0.70, vs = max(-v, 0.0) / 0.30;           // (35 degrees across, 17 down: the road a few metres before the car)
+    float e2 = hs * hs + vs * vs;
+    float edge = 1.0 - smoothstep(0.45, 1.0, e2);
+    float hot = 2.4 * exp(-(hs * hs * 9.0 + vs * vs * 60.0));
+    float corona = 0.9 * exp(-(hs * hs * 2.2 + vs * vs * 7.0));
+    float spill = 0.10;
+    return (spill + corona + hot) * edge * cut;
+}
+
 // Hand flashlight: light arriving at p from the beam, before N.L and the
 // shadow ray (each shader traces its own). A cone with a soft edge and a
 // brighter centre spot, falling off with distance and gone at its range.
@@ -351,7 +430,7 @@ vec3 flashlight_at(vec3 p, out vec3 to_lamp, out float dist) {
     dist = length(to);
     if (dist >= range) return vec3(0.0);
     to_lamp = to / max(dist, 1e-3);
-    float pat = flashlight_pattern(dot(-to_lamp, scene.flash_dir.xyz));
+    float pat = scene.flash_col.w > 1.5 ? car_beam_pattern(-to_lamp) : flashlight_pattern(dot(-to_lamp, scene.flash_dir.xyz));
     if (pat <= 0.0) return vec3(0.0);
     float win = 1.0 - dist / range; win *= win;
     // (a long beam - a car's - thins out as slowly as it reaches far: range 95 m is the old law)
@@ -383,7 +462,7 @@ vec3 flashlight_beam(vec3 ro, vec3 rd, float t_max, float jitter) {
         float d = length(to);
         if (d >= range) break;
         vec3 ld = to / max(d, 1e-3);
-        float pat = flashlight_pattern(dot(ld, scene.flash_dir.xyz));
+        float pat = scene.flash_col.w > 1.5 ? car_beam_pattern(ld) : flashlight_pattern(dot(ld, scene.flash_dir.xyz));
         if (pat <= 0.0) continue;
         float win = 1.0 - d / range; win *= win;
         // Inverse-square, bounded near the lamp, and no scattering right at the lens.

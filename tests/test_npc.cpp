@@ -125,7 +125,7 @@ TEST_CASE("npc: a state goes over the wire and a replica follows it", "[npc]") {
     run(host, 30.0f);
     std::vector<uint8_t> msg;
     host.serialize(msg);
-    REQUIRE(msg.size() == 4 + size_t(host.agent_count()) * 27);
+    REQUIRE(msg.size() == 4 + size_t(host.agent_count()) * 28);
     REQUIRE(peer.apply(msg.data(), msg.size()));
     REQUIRE(peer.replica());
     REQUIRE(peer.agent_count() == host.agent_count());

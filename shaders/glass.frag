@@ -138,7 +138,9 @@ void main() {
         outColor = vec4(col, behind.a);
         return;
     }
-    env += glass_glint(R, 900.0, 60.0, 24.0, 0.12);
+    // (the scene mirrored where it is on the screen; else the room - eye indoors, grass_params.x -
+    //  or the sky, the ground and the sun: glass_common.glsl glass_reflection)
+    env = glass_reflection(vWorld, R, pc.prev_mvp, uv, pc.grass_params.x);
     col = mix(col, env, fres);
     // A window is never spotless: a breath of dust, seen where the light rakes it.
     float dust = fract(sin(dot(floor(vUv * 37.0), vec2(12.9898, 78.233))) * 43758.5453);

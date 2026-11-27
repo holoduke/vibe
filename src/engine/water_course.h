@@ -15,8 +15,8 @@
 
 namespace vibe::wc {
 
-constexpr int   kMaxPts = 64;           // points in the scene block (keep: scene_ubo.glsl stream_pts)
-constexpr int   kSegsPerBox = 8;        // segments per bounding box (stream_box[8])
+constexpr int   kMaxPts = 128;          // points in the scene block (keep: scene_ubo.glsl stream_pts)
+constexpr int   kSegsPerBox = 8;        // segments per bounding box (stream_box[16])
 constexpr float kFallDrop = 0.35f;      // m: a larger drop between two points is a step
 constexpr float kBoxPad = 40.0f;        // m round each box: as far as the carve reaches
 
@@ -29,7 +29,10 @@ struct Course {
 
 // The stream: laid out once by build_stream over the ground the game stands on (world.cpp,
 // after a saved sculpt is loaded), ending at the river's level; empty before that.
-void build_stream(float water_level, const std::function<float(float, float)>& ground);
+// `level`: the water's level at a place (the river falls down its course: water_fx.cpp
+// water_level_off) - the stream ends at the level where it meets the river; empty: water_level.
+void build_stream(float water_level, const std::function<float(float, float)>& ground,
+                  const std::function<float(float, float)>& level = {});
 const Course& stream(float water_level);
 
 struct At {
@@ -68,6 +71,9 @@ glm::vec2 stream_flow(glm::vec2 wp, float water_level);
 // 1D value noise (the GPU twin wc_n1 has the same bits).
 float n1(float x);
 
+// The point `along` metres down the course, `side` metres across it (left of the flow > 0), and
+// the water's surface there (the test hook VIBE_TEST_AT_STREAM). False on an empty course.
+bool point_along(const Course& c, float along, float side, glm::vec2& p, float& surf);
 // Distance (m) from the stream's water edge: negative in the water. 1e9 far away.
 float stream_distance(glm::vec2 wp, float water_level);
 

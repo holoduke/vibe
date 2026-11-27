@@ -107,6 +107,22 @@ bool gp_bake(vec3 wp, float dist, out vec3 alb, out float h, out vec3 n) {
     return true;
 }
 
+// The ground's own material at the point's xz, for a rock's top that wears it (the rock branch
+// of cube_main_surfaces.glsl): the baked ground texture, else the soil scan in an earth tone.
+// n: its normal as on level ground (y up). False: not from the bake.
+bool gp_top_material(vec3 wp, float dist, out vec3 col, out float h, out vec3 n) {
+    if (gp_bake(wp, dist, col, h, n)) return true;
+    vec2  suv = wp.xz * 0.45;
+    vec4  sn = texture(u_normal[9], suv);
+    vec3  sa = texture(u_albedo[9], suv).rgb / max(textureLod(u_albedo[9], suv, 12.0).rgb, vec3(0.02));
+    float gn2 = tnoise(wp.xz * 0.7 + 9.0);
+    vec3  earth = mix(vec3(0.105, 0.086, 0.060), vec3(0.060, 0.082, 0.036), 0.5 + 0.5 * smoothstep(0.35, 0.70, gn2));
+    h = sn.a;
+    col = earth * clamp(sa, vec3(0.5), vec3(1.7)) * mix(0.70, 1.08, smoothstep(0.15, 0.85, sn.a));
+    n = normalize(vec3(sn.x - 0.5, 0.5, sn.y - 0.5));
+    return false;
+}
+
 // The paste. albedo / N: the mesh's, changed in place. Ng: its geometric normal. mh: the mesh
 // material's height 0..1 at the pixel (1 = what stands out). self_rock: the mesh is rock - on
 // steep ground the ground's material IS its own (only the normal and the tone meet). shade:

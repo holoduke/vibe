@@ -27,7 +27,9 @@
 #include <VkBootstrap.h>
 #include "engine/highway.h"
 #include "engine/water_course.h"
+#include "engine/region_tile.h"
 #include "engine/vk_engine/river_stream.h"
+namespace vibe { int world_river_course(const glm::vec2*& pts); }      // (engine/terrain.h: the river's polyline - VIBE_TEST_AT_RIVER)
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -176,6 +178,47 @@ void VulkanEngine::loop_test_input(InputFrame& in, float frame_dt, bool autodemo
                 }
             }
         }
+        // VIBE_LOG_GRASS_ROOT=1: once, round the player (7 x 7 points 2 m apart, centred 6 m ahead),
+        // the height the GPU grass stands its roots on (the home height grid: tuft_place.comp
+        // ground_h) against the drawn ground without its close relief (the formula with the
+        // stream's carve + the grid's delta over its baseline: terrainM_lod), in cm, drawn - root.
+        if (static const bool log_root = std::getenv("VIBE_LOG_GRASS_ROOT") != nullptr; log_root && frame_number_ == 30) {
+            const glm::vec3 e = player_.position;
+            glm::vec3 f = player_.forward(); f.y = 0.0f; f = glm::normalize(f + glm::vec3(1e-4f));
+            const glm::vec3 rgt(-f.z, 0.0f, f.x);
+            const int W = terrain_data_.dim + 1;
+            auto base_at = [&](float x, float z) {
+                if (terrain_baseline_heights_.size() != terrain_data_.heights.size()) return sample_terrain_height(x, z);
+                const float fx = std::clamp((x - terrain_data_.origin_x) / terrain_data_.cell, 0.0f, float(terrain_data_.dim) - 1e-3f);
+                const float fz = std::clamp((z - terrain_data_.origin_z) / terrain_data_.cell, 0.0f, float(terrain_data_.dim) - 1e-3f);
+                const int ix = int(fx), iz = int(fz); const float tx = fx - float(ix), tz = fz - float(iz);
+                auto b = [&](int a, int c) { return terrain_baseline_heights_[size_t(c) * size_t(W) + size_t(a)]; };
+                return (b(ix, iz) * (1.0f - tx) + b(ix + 1, iz) * tx) * (1.0f - tz) + (b(ix, iz + 1) * (1.0f - tx) + b(ix + 1, iz + 1) * tx) * tz;
+            };
+            const int oct = std::clamp(rt_.terrain_raymarch_octaves, 4, 24);
+            log::infof("[grass root] player (%.1f, %.1f, %.1f), grid cell %.2f m, octaves %d", double(e.x), double(e.y), double(e.z), double(terrain_data_.cell), oct);
+            for (int j = 3; j >= -3; --j) {
+                char row[512]; int o = 0;
+                for (int i = -3; i <= 3; ++i) {
+                    const glm::vec3 p = e + f * (6.0f + 2.0f * float(j)) + rgt * (2.0f * float(i));
+                    const float root = sample_terrain_height(p.x, p.z);
+                    const float drawn = world_ground_height(p.x, p.z, rt_.water_level, oct) + (root - region::ground_delta(p.x, p.z) - base_at(p.x, p.z));
+                    o += std::snprintf(row + o, sizeof(row) - size_t(o), " %6.0f", double(drawn - root) * 100.0);
+                }
+                log::infof("[grass root] %+3.0f m ahead, 2 m apart left..right (cm):%s", double(6.0f + 2.0f * float(j)), row);
+                o = 0;
+                for (int i = -3; i <= 3; ++i) {
+                    const glm::vec3 p = e + f * (6.0f + 2.0f * float(j)) + rgt * (2.0f * float(i));
+                    o += std::snprintf(row + o, sizeof(row) - size_t(o), " %5.0f/%-5.0f", double(world_ground_height(p.x, p.z, rt_.water_level, oct) - world_ground_height(p.x, p.z, rt_.water_level, 9)) * 100.0,
+                                       double(world_ground_height(p.x, p.z, rt_.water_level, 9) - region::ground_delta(p.x, p.z) - base_at(p.x, p.z)) * 100.0);
+                }
+                log::infof("[grass root]      (the formula: %d octaves less 9 / 9 octaves less the baseline grid, cm):%s", oct, row);
+            }
+            const glm::vec3 c = e + f * 6.0f;
+            log::infof("[grass root] 6 m ahead (%.1f, %.1f): root %.2f, baseline %.2f, formula+carve %.2f, stream dist %.2f",
+                       double(c.x), double(c.z), double(sample_terrain_height(c.x, c.z)), double(base_at(c.x, c.z)),
+                       double(world_ground_height(c.x, c.z, rt_.water_level, oct)), double(wc::stream_distance(glm::vec2(c.x, c.z), rt_.water_level)));
+        }
         // VIBE_TEST_WALK=1: the forward key held (walk into something; with it the player's
         // place is logged once a second).
         static const bool test_walk = std::getenv("VIBE_TEST_WALK") != nullptr;
@@ -221,6 +264,56 @@ void VulkanEngine::loop_test_input(InputFrame& in, float frame_dt, bool autodemo
                     const float g = sample_terrain_height(hold_pos.x, hold_pos.z);
                     hold_pos.y = std::max(g, rt_.water_level) + 1.7f - 0.75f;   // (position is 0.75 m below the eye)
                     log::infof("[test] ground at (%.0f, %.0f): %.2f m (water %.2f)", hold_pos.x, hold_pos.z, g, rt_.water_level);
+                }
+                // VIBE_TEST_AT_STREAM=<along>,<side>,<up>,<look along>,<look side>: the held camera by the
+                // stream wherever its course now runs (engine/water_course.h point_along): `along` metres
+                // down it, `side` across (left of the flow > 0), the eye `up` over the water or the ground,
+                // looking at the water's surface at the second point.
+                if (const char* e = std::getenv("VIBE_TEST_AT_STREAM")) {
+                    float a = 0.0f, s = 0.0f, u = 2.0f, la = 10.0f, ls = 0.0f;
+                    std::sscanf(e, "%f,%f,%f,%f,%f", &a, &s, &u, &la, &ls);
+                    const wc::Course& st = wc::stream(rt_.water_level);
+                    glm::vec2 p, q; float sp = 0.0f, sq = 0.0f;
+                    if (wc::point_along(st, a, s, p, sp) && wc::point_along(st, la, ls, q, sq)) {
+                        const float eye = std::max(sp, sample_terrain_height(p.x, p.y)) + u;
+                        hold_pos = glm::vec3(p.x, eye - 0.75f, p.y);
+                        const glm::vec3 d = glm::vec3(q.x, sq, q.y) - glm::vec3(p.x, eye, p.y);
+                        player_.yaw = std::atan2(d.x, -d.z);
+                        player_.pitch = std::atan2(d.y, glm::length(glm::vec2(d.x, d.z)));
+                        log::infof("[test] at the stream: eye (%.1f, %.2f, %.1f) yaw %.3f pitch %.3f, looking at (%.1f, %.2f, %.1f)",
+                                   double(p.x), double(eye), double(p.y), double(player_.yaw), double(player_.pitch), double(q.x), double(sq), double(q.y));
+                    }
+                }
+                // VIBE_TEST_AT_RIVER=<along>,<side>,<up>,<look along>,<look side>: the same by the river -
+                // metres down its polyline (terrain.cpp world_river_course; the channel wanders up to ~17 m
+                // off it), the eye `up` over the ground or the water's level there (water_level_off).
+                if (const char* e = std::getenv("VIBE_TEST_AT_RIVER")) {
+                    float a = 0.0f, s = 0.0f, u = 2.0f, la = 10.0f, ls = 0.0f;
+                    std::sscanf(e, "%f,%f,%f,%f,%f", &a, &s, &u, &la, &ls);
+                    const glm::vec2* rp = nullptr;
+                    const int rn = world_river_course(rp);
+                    auto at = [&](float al, float sd) {
+                        float cum = 0.0f;
+                        for (int i = 0; i + 1 < rn; ++i) {
+                            const float L = glm::distance(rp[i], rp[i + 1]);
+                            if (cum + L >= al || i + 2 == rn) {
+                                const glm::vec2 d = (rp[i + 1] - rp[i]) / std::max(L, 1e-3f);
+                                return rp[i] + d * std::clamp(al - cum, 0.0f, L) + glm::vec2(-d.y, d.x) * sd;
+                            }
+                            cum += L;
+                        }
+                        return rp[0];
+                    };
+                    const glm::vec2 p = at(a, s), q = at(la, ls);
+                    const float lp = rt_.water_level + water_level_off(p.x, p.y), lq = rt_.water_level + water_level_off(q.x, q.y);
+                    const float eye = std::max(lp, sample_terrain_height(p.x, p.y)) + u;
+                    const float ty = std::max(lq, sample_terrain_height(q.x, q.y));
+                    hold_pos = glm::vec3(p.x, eye - 0.75f, p.y);
+                    const glm::vec3 d = glm::vec3(q.x, ty, q.y) - glm::vec3(p.x, eye, p.y);
+                    player_.yaw = std::atan2(d.x, -d.z);
+                    player_.pitch = std::atan2(d.y, glm::length(glm::vec2(d.x, d.z)));
+                    log::infof("[test] at the river: eye (%.1f, %.2f, %.1f) level %.2f, yaw %.3f pitch %.3f, looking at (%.1f, %.2f, %.1f) level %.2f",
+                               double(p.x), double(eye), double(p.y), double(lp), double(player_.yaw), double(player_.pitch), double(q.x), double(ty), double(q.y), double(lq));
                 }
             }
             if (globe_moved_player_) { hold_pos = player_.position; globe_moved_player_ = false; }    // (re-anchored on the globe)
@@ -681,9 +774,9 @@ void VulkanEngine::loop_simulate(InputFrame& in, float frame_dt) {
             }
             // Frozen lake: the ice is a floor at the water level.
             if (season_w_[3] > 0.6f && !fly_mode_ && rt_.water_enabled &&
-                player_.position.y - 0.9f < rt_.water_level + 0.02f &&
+                player_.position.y - 0.9f < rt_.water_level + water_level_off(player_.position.x, player_.position.z) + 0.02f &&
                 water_at(player_.position.x, player_.position.z)) {
-                player_.position.y = rt_.water_level + 0.92f;
+                player_.position.y = rt_.water_level + water_level_off(player_.position.x, player_.position.z) + 0.92f;      // (the level here: the river falls, the sea lies 1 m under the datum)
                 if (player_.velocity.y < 0.0f) player_.velocity.y = 0.0f;
                 player_.on_ground = true;
                 player_.air_jumps_left = game::Player::kAirJumps;
@@ -790,7 +883,71 @@ void VulkanEngine::loop_simulate(InputFrame& in, float frame_dt) {
             // capsule pushed out of the rock's triangles: a face one can stand on is ground (lifted
             // straight onto it), a steep face is a wall that is slid down, an overhang a ceiling.
             // Walking down the rock the walker is kept on it as on the terrain (the sticky snap).
-            if (!fly_mode_) {
+            //
+            // (2026-11-27, "moving against a small thing the movement stops; the mesh rocks are
+            // sharp and difficult to move around") The wall test now starts at the STEP height:
+            // the capsule's lower sphere sits kStepUp over the feet, so an edge, a knob or a lip
+            // below that is not a wall but a step - the floor probe (five points: the middle and
+            // four 20 cm out) finds the highest walkable face within the step and lifts the walker
+            // onto it, eased on the screen by step_smooth_offset. Before, the whole body was the
+            // capsule and any edge over 13 cm (where the push turns steeper than the walkable
+            // slope) stopped it. The same for the round obstacles (boulders, trunks, the water's
+            // boulders: AABB::round, tri_collision.h round_in_box) - the walker glides round them
+            // instead of catching on the corners of their boxes. VIBE_WALK_OLD=1: as before;
+            // VIBE_WALK_STEP=<m>: the step (0.40).
+            static const bool kWalkOld = std::getenv("VIBE_WALK_OLD") != nullptr;
+            static const float kStepUp = [] { const char* e = std::getenv("VIBE_WALK_STEP"); return e ? std::clamp(float(std::atof(e)), 0.05f, 0.6f) : 0.40f; }();
+            static std::vector<tricol::Round> rounds;
+            rounds.clear();
+            if (!fly_mode_ && !kWalkOld)
+                for (const collision::AABB& o : tick_rounds_)
+                    if (std::abs(0.5f * (o.min.x + o.max.x) - player_.position.x) < 4.0f + 0.5f * (o.max.x - o.min.x) &&
+                        std::abs(0.5f * (o.min.z + o.max.z) - player_.position.z) < 4.0f + 0.5f * (o.max.z - o.min.z))
+                        rounds.push_back(tricol::round_in_box(o.min, o.max));
+            if (!fly_mode_ && !kWalkOld) {
+                const std::vector<const tricol::Mesh*>& rocks = rockf_walk_meshes();
+                if (!rocks.empty() || !rounds.empty()) {
+                    constexpr float kR = 0.3f, kWalkN = 0.55f, kStepDown = 0.45f;
+                    const float half = game::Player::kHalfExtents.y;
+                    const bool grounded_before = player_.on_ground;
+                    glm::vec3 a(player_.position.x, player_.position.y - half + kStepUp + kR, player_.position.z);
+                    glm::vec3 b = player_.position + glm::vec3(0.0f, half - kR, 0.0f);
+                    tricol::Contact c{};
+                    if (!rocks.empty()) c = tricol::resolve_capsule(rocks, a, b, kR, player_.velocity, kWalkN);
+                    if (!rounds.empty()) tricol::resolve_capsule_rounds(rounds, a, b, kR, player_.velocity, kWalkN, c);
+                    if (c.touched) player_.position = b - glm::vec3(0.0f, half - kR, 0.0f);
+                    bool ground = c.ground;
+                    if (player_.velocity.y <= 0.5f) {
+                        const float feet = player_.position.y - half;
+                        float reach = (was_on_ground && !player_swimming_) ? kStepDown : 0.06f;
+                        if (c.ground) reach = std::max(reach, kStepUp + 0.05f);       // (lifted by a slope: back down onto it)
+                        static const glm::vec2 kProbe[5] = { { 0.0f, 0.0f }, { 0.2f, 0.0f }, { -0.2f, 0.0f }, { 0.0f, 0.2f }, { 0.0f, -0.2f } };
+                        float best = -1e30f; bool found = false;
+                        for (const glm::vec2& p : kProbe) {
+                            float fy = 0.0f; glm::vec3 fn(0.0f, 1.0f, 0.0f);
+                            const float x = player_.position.x + p.x, z = player_.position.z + p.y;
+                            if (!rocks.empty() && tricol::floor_below(rocks, x, z, feet + kStepUp + 0.05f, feet - reach, kWalkN, fy, fn) && fy > best) { best = fy; found = true; }
+                            if (!rounds.empty() && tricol::floor_below_rounds(rounds, x, z, feet + kStepUp + 0.05f, feet - reach, kWalkN, fy, fn) && fy > best) { best = fy; found = true; }
+                        }
+                        // (not pulled down off ground the boxes or the terrain already carry)
+                        if (found && !(grounded_before && best < feet - 0.01f)) {
+                            const float lift = best - feet;
+                            if (lift > 0.02f) player_.step_smooth_offset = std::clamp(player_.step_smooth_offset + lift, -0.6f, 0.6f);
+                            player_.position.y = best + half;
+                            if (player_.velocity.y < 0.0f) player_.velocity.y = 0.0f;
+                            ground = true;
+                        }
+                    }
+                    if (ground) { player_.on_ground = true; player_.air_jumps_left = game::Player::kAirJumps; }
+                    static const bool kLogWalk = std::getenv("VIBE_LOG_WALK") != nullptr;
+                    static int walk_log_n = 0;
+                    if (kLogWalk && c.touched && (++walk_log_n % 30) == 1)
+                        log::infof("[walk] touched rock/round at (%.2f, %.2f, %.2f): push (%.2f, %.2f, %.2f), ground %d, speed %.2f, %zu rounds near",
+                                   player_.position.x, player_.position.y, player_.position.z, c.push.x, c.push.y, c.push.z, int(ground),
+                                   glm::length(glm::vec2(player_.velocity.x, player_.velocity.z)), rounds.size());
+                }
+            }
+            if (!fly_mode_ && kWalkOld) {
                 const std::vector<const tricol::Mesh*>& rocks = rockf_walk_meshes();
                 if (!rocks.empty()) {
                     constexpr float kR = 0.3f, kWalkN = 0.55f, kStepDown = 0.45f;
@@ -920,6 +1077,8 @@ void VulkanEngine::loop_upkeep(InputFrame& in, float frame_dt) {
     hw_poll();
     hw_objects_poll();
     rockf_poll();                            // (rock formations near the player: rock_formations_gpu.cpp)
+    shop_poll();                             // (the mart's goods near the station: shop_goods.cpp)
+    scree_poll();                            // (scree round the camera: scree_stream.cpp)
     river_stream::poll(allocator_, player_.eye_position(), globe::current().home, rt_.water_level, std::clamp(rt_.terrain_raymarch_octaves, 4, 24));   // (the river's plants beyond the home tile)
     if (veg_job_active_ && veg_job_.valid() &&
         veg_job_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {

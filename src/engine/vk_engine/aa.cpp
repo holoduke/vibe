@@ -19,7 +19,15 @@
 namespace vibe {
 
 namespace {
-constexpr float kRoundSpeed = 720.0f;    // m/s
+constexpr float kRoundSpeed = 720.0f;    // m/s at the muzzle
+// The air slows a round: dv/dt = -kDrag v|v| (a 30 mm round keeps about 560 m/s at 1 km). Its
+// tracer burns kTracerBurn s and goes out over the last 0.5 s; the round flies on unseen until
+// kRoundLife (a round that vanished in mid-air at 2.6 s, still bright, read as a fault).
+constexpr float kDrag       = 2.5e-4f;   // 1/m
+constexpr float kTracerBurn = 2.4f;      // s
+constexpr float kRoundLife  = 4.5f;      // s
+// Time of flight to a distance with that drag (no gravity): s = ln(1 + k v0 t) / k.
+float round_tof(float dist) { return (std::exp(kDrag * dist) - 1.0f) / (kDrag * kRoundSpeed); }
 constexpr float kG          = 9.81f;
 constexpr float kRange      = 1150.0f;
 glm::mat4 T(glm::vec3 t) { return glm::translate(glm::mat4(1.0f), t); }
@@ -246,9 +254,11 @@ void VulkanEngine::tick_aa(float dt) {
             // Lead + drop: iterate time of flight twice.
             glm::vec3 vel = tgt->fwd * tgt->speed;
             glm::vec3 aim = tgt->pos;
-            for (int it = 0; it < 3; ++it) {
-                float tof = glm::distance(aim, pivot) / kRoundSpeed;
-                aim = tgt->pos + vel * tof + glm::vec3(0.0f, 0.5f * kG * tof * tof, 0.0f);
+            for (int it = 0; it < 4; ++it) {
+                // (the round slows on its way: the time of flight with the air's drag, and the
+                //  drop over that time - a little more than in a vacuum, as it is slower)
+                const float tof = round_tof(glm::distance(aim, pivot));
+                aim = tgt->pos + vel * tof + glm::vec3(0.0f, 0.5f * kG * tof * tof * 1.08f, 0.0f);
             }
             glm::vec3 d = aim - pivot;
             float wyaw = std::atan2(d.x, d.z);
@@ -272,7 +282,8 @@ void VulkanEngine::tick_aa(float dt) {
         // Test hook: VIBE_TEST_AAFIRE=1 keeps every gun firing, target or not.
         static const bool kTestAaFire = std::getenv("VIBE_TEST_AAFIRE") != nullptr;
         if (kTestAaFire) v.cooldown = 0.0f;
-        const bool on_target = kTestAaFire || (game_.aa_enabled && tgt && std::abs(dy) < 0.035f && std::abs(dp) < 0.035f);
+        // (on target: within 12 mrad - 35 mrad let a gun still slewing fire 30 m wide of a jet at 800 m)
+        const bool on_target = kTestAaFire || (game_.aa_enabled && tgt && std::abs(dy) < 0.012f && std::abs(dp) < 0.012f);
         const float interval = 0.080f;     // 12.5 rds/s (alternating barrels)
         const int   kClipRounds = 12;
         const glm::vec3 snd_pos = glm::vec3(v.pos) + glm::vec3(0.0f, 2.0f, 0.0f);
@@ -286,6 +297,10 @@ void VulkanEngine::tick_aa(float dt) {
             const int first = (v.rounds_left - 1) % kClipRounds + 1;
             v.snd_next = float(first) * interval;
             if (audio_) play_aa_burst_audio(snd_pos, float(kClipRounds - first) * interval);
+            // VIBE_LOG_AA=1: every burst (how far, the lead's time of flight) and every hit.
+            if (static const bool lg = std::getenv("VIBE_LOG_AA") != nullptr; lg && tgt)
+                log::infof("[aa] burst of %d at jet %u, %.0f m, time of flight %.2f s", v.rounds_left, tgt->id,
+                           glm::distance(tgt->pos, pivot), round_tof(glm::distance(tgt->pos, pivot)));
         }
         if (v.rounds_left > 0) {
             v.fire_acc += dt;
@@ -301,11 +316,15 @@ void VulkanEngine::tick_aa(float dt) {
                 int b = v.barrel; v.barrel ^= 1;
                 glm::vec3 mz = glm::vec3(m[2] * glm::vec4(aa_muzzle_[b], 1.0f));
                 glm::vec3 dir = glm::normalize(glm::mat3(m[2]) * glm::vec3(0, 0, 1));
-                // Dispersion ~4 mrad.
+                // Dispersion: a round cone of 5 mrad (radius), denser in the middle - the
+                // gun's barrel whip and the round's own wobble. (Was a square of +-10 mrad.)
                 glm::vec3 rt = glm::normalize(glm::cross(dir, glm::vec3(0, 1, 0)));
                 glm::vec3 up = glm::cross(rt, dir);
-                dir = glm::normalize(dir + rt * frand_range(R, -0.010f, 0.010f) +
-                                     up * frand_range(R, -0.010f, 0.010f));
+                {
+                    const float r = 0.005f * std::sqrt(-std::log(std::max(frand(R), 1e-4f)) * 0.5f);
+                    const float th = frand(R) * 6.2831853f;
+                    dir = glm::normalize(dir + rt * (r * std::cos(th)) + up * (r * std::sin(th)));
+                }
                 AaRound r{};
                 r.pos = mz; r.prev = mz; r.vel = dir * kRoundSpeed;
                 aa_rounds_.push_back(r);
@@ -324,8 +343,9 @@ void VulkanEngine::tick_aa(float dt) {
         r.prev = r.pos;
         r.t += dt;
         r.vel.y -= kG * dt;
+        r.vel -= r.vel * (kDrag * glm::length(r.vel) * dt);      // the air
         r.pos += r.vel * dt;
-        if (r.t > 2.6f) { r.dead = true; continue; }
+        if (r.t > kRoundLife) { r.dead = true; continue; }
         float gh = std::max(sample_terrain_height(r.pos.x, r.pos.z), rt_.water_level);
         if (r.pos.y < gh) { r.dead = true; continue; }
         glm::vec3 seg = r.pos - r.prev;
@@ -338,6 +358,8 @@ void VulkanEngine::tick_aa(float dt) {
             if (glm::distance(q, f.pos) > rad) continue;
             r.dead = true;
             f.hit_flash_t = 0.12f;
+            if (static const bool lg = std::getenv("VIBE_LOG_AA") != nullptr; lg)
+                log::infof("[aa] round hit jet %u after %.2f s at %.0f m/s (%d hits)", f.id, r.t, glm::length(r.vel), f.aa_hits + 1);
             if (++f.aa_hits % 8 == 0) spawn_hit_particles(q, -glm::normalize(seg), glm::normalize(seg));
             if (f.aa_hits >= 32) {          // ~same time-to-kill at 12.5 rds/s
                 f.hp = 0;

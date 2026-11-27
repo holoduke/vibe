@@ -674,12 +674,26 @@
             }
         } else if (is_mesh_draw && pc.grass_params.z > 0.5 && (int(vTexParams.y - 0.5) == -9 || int(vTexParams.y - 0.5) == -10)) {
             // A ROCK FORMATION (vk_engine/rock_formations.h; material: rock_form.glsl). The mesh's
-            // uv is not a texture coordinate: u = ambient occlusion, v = curvature.
+            // uv is the unwrap of the piece's BAKE (rock_breaker.glsl rk_bake; pc.color.a - 2 = the
+            // piece): the sculpt's normal, height, ambient occlusion and the ground's weight on its
+            // tops. The bake carries the FORM; the tiling scan is the fine detail on top of it, its
+            // strength by the piece's size (a small copy is not a shrunken big one).
             vec3  rf_ng = N;
-            RfMat rf = rf_material(vWorldPos, rf_ng, dFdx(vWorldPos), dFdy(vWorldPos), cam_dist);
+            float rf_size = length(pc.model[1].xyz);
+            vec3  rf_bump;
+            RfMat rf = rf_material_b(vWorldPos, rf_ng, dFdx(vWorldPos), dFdy(vWorldPos), cam_dist, rf_bump);
+            RkBake rb = rk_bake(vUv, pc.color.a - 2.0, mat3(pc.model), rf_ng);
             bool  rf_chalk = int(vTexParams.y - 0.5) == -10;      // (the white look of a sea cliff)
-            float rf_hgt = vObjectPos.y * length(pc.model[1].xyz);      // metres above the piece's ground line
-            N = rf.nrm;
+            float rf_hgt = vObjectPos.y * rf_size;                // metres above the piece's ground line
+            vec3  rf_base = RK_ON(RK_BAKE) ? rb.n : rf_ng;
+            float rf_scan_h = rf.h;
+            if (RK_ON(RK_BAKE)) {
+                rf_bump *= clamp(rf_size * 1.4, 0.3, 1.0);
+                rf.h = clamp(rf.h + (rb.h - 0.5) * 0.7, 0.0, 1.0);
+            }
+            float rf_curv = clamp(0.5 + (rb.h - 0.5) * 1.3, 0.0, 1.0);      // (what stands out of the game mesh is an edge, what lies in it a crease)
+            N = normalize(rf_base + rf_bump);
+            rf.nrm = N;
             if (rf_chalk) {
                 // its beds and joints (rf_chalk_h): their slope bends the light, their lines are drawn -
                 // both only while a block is more than a few pixels
@@ -692,14 +706,56 @@
                 float det = dot(dpx, r1);
                 vec3  grad = sign(det) * (dFdx(ch) * r1 + dFdy(ch) * r2);
                 N = normalize(abs(det) * N - 0.06 * fine * clamp(grad, vec3(-4.0 * abs(det)), vec3(4.0 * abs(det))));
-                albedo = rf_chalk_colour(vWorldPos, rf_ng, N, rf, vUv.x, vUv.y, rf_hgt, mix(1.0, ch, fine), fl * (1.0 - smoothstep(0.10, 0.5, px))) * vColor;
+                albedo = rf_chalk_colour(vWorldPos, rf_ng, N, rf, rb.ao, rf_curv, rf_hgt, mix(1.0, ch, fine), fl * (1.0 - smoothstep(0.10, 0.5, px))) * vColor;
             } else {
-                albedo = rf_colour(vWorldPos, rf_ng, rf.nrm, rf, vUv.x, vUv.y) * vColor;
+                // The breaker pattern and the colour strip by altitude, as on the terrain's cliffs
+                // (rock_breaker.glsl): large beds, faults and stains across the face.
+                vec3  rk_g; float rk_bm;
+                vec3  rk_tone = rk_breaker(vWorldPos, rf_ng, cam_dist, 0.5 * (length(dFdx(vWorldPos)) + length(dFdy(vWorldPos))), rk_g, rk_bm);
+                N = normalize(N - rk_g);
+                rf.nrm = N;
+                rf.h = clamp(rf.h + 0.25 * rk_bm * (1.0 - clamp(rf_ng.y, 0.0, 1.0)), 0.0, 1.0);
+                albedo = rk_gradient(vWorldPos, rf_colour(vWorldPos, rf_ng, rf.nrm, rf, rb.ao, rf_curv) * rk_tone, 1.0 - clamp(rf_ng.y, 0.0, 1.0), scene.water_params.y) * vColor;
+            }
+            if (RK_ON(RK_ACCUM)) {
+                // Snow LYING on what faces up, above the ground's snow line: there or not (the
+                // reference's accumulation: binary by slope, its edge broken by the detail normal,
+                // kept out of the raised texels' flanks). And the scan's grain in the gloss, near only.
+                float rate = 0.8 * smoothstep(70.0, 90.0, vWorldPos.y - clamp(N.z * 30.0, -16.0, 16.0)) * (vWorldPos.y > 60.0 ? stream_snow_clear(vWorldPos.xz) : 1.0);      // (none along the stream: scene_ubo.glsl)
+                float dn = rf_bump.x + rf_bump.z;
+                float acc = ceil(clamp(rate - 1.0 + N.y - dn * dn * (1.0 - rf.h), 0.0, 1.0));
+                albedo = mix(albedo, vec3(0.62, 0.65, 0.70), acc);
+                rf.h = min(rf.h + acc * min(rate, 0.05), 1.0);
+                g_rf_rough = mix(1.0, mix(1.20, 0.74, smoothstep(0.2, 0.8, rf_scan_h)), 1.0 - clamp((cam_dist - 3.0) / 10.0, 0.0, 1.0));
+                g_rf_rough = mix(g_rf_rough, 1.3, acc);
+            }
+            // TOPS WEAR THE REAL GROUND (the reference's terrain weight on a rock mesh):
+            //   B = saturate(N.y^2 x saturate((s - 1 + N.y) / s) + W),  s = 0.3
+            // N the normal-mapped normal, W the bake's weight for broad tops and ledges (only on a
+            // piece that stands upright within 10 degrees). The ground's material is the baked
+            // ground texture at the pixel's xz (ground_paste.glsl gp_top_material), blended in BY
+            // HEIGHT with band 0.15 - colour, normal, height and (g_gp_share) roughness: soil lies in
+            // the rock's hollows first, its high texels stand out of it. The rock's tint goes with it.
+            if (RK_ON(RK_TOPS)) {
+                float upr = step(0.9848, pc.model[1].y / max(rf_size, 1e-5));
+                float B = clamp(clamp(N.y * N.y, 0.0, 1.0) * clamp((0.3 - 1.0 + N.y) / 0.3, 0.0, 1.0) + rb.w * upr, 0.0, 1.0);
+                if (B > 0.004) {
+                    vec3  tg_col, tg_n; float tg_h;
+                    gp_top_material(vWorldPos, cam_dist, tg_col, tg_h, tg_n);
+                    float share = gp_height_blend(rf.h, tg_h, B);
+                    albedo = mix(albedo, tg_col, share);
+                    N = normalize(mix(N, normalize(rf_base + vec3(tg_n.x, 0.0, tg_n.z)), share));
+                    rf.h = mix(rf.h, tg_h, share);
+                    g_gp_share = share;
+                }
             }
             // Standing in water (the rocks in the river and the stream: rock_formations.cpp place_water_rocks):
             // dark and wet under the waterline and a hand above it (splashed), moss on the tops just
             // above it. The water there: the sea's level, or the stream's own surface.
-            if (scene.water_params.x > 0.5) {
+            // (2026-11-26: the wet band, growth under water and tint of shore_wet.glsl in cube.frag
+            //  replace this on every mesh - the reference has no moss band above the line; kept for
+            //  VIBE_NO_WET_BAND=1)
+            if (!SW_ON(1) && scene.water_params.x > 0.5) {
                 float wl = max(scene.water_params.y, wc_stream_surface(vWorldPos.xz));
                 float dh = vWorldPos.y - wl;
                 if (dh < 1.2) {
@@ -862,8 +918,8 @@
             { float g01 = clamp(m_ground / 0.7, 0.0, 1.0); g01 = 0.5 * g01 + 0.5 * g01 * g01 * (3.0 - 2.0 * g01);
               albedo *= mix(1.0, mix(0.48, 1.0, g01), m_gfade); }
         } else if (use_albedo && int(vTexParams.y - 0.5) == -8) {
-            // Skinned character: its own UVs into its texture atlas.
-            albedo = texture(u_albedo[clamp(albedo_idx_raw, 0, kTextureCount - 1)], vUv).rgb * vColor;
+            // Skinned character: its own UVs into its texture atlas; the regions and the person's look (people.glsl).
+            albedo = people_surface(u_albedo[clamp(albedo_idx_raw, 0, kTextureCount - 1)], vUv, int(vTexParams.z + 0.5), N) * vColor;
         } else if (use_albedo) {
             int  albedo_idx = clamp(albedo_idx_raw, 0, kTextureCount - 1);
             vec3 tex_albedo = triplanar_sample(u_albedo[albedo_idx],

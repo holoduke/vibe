@@ -29,6 +29,7 @@ void main() {
     float dist = distance(base, pc.cam.xyz);
     float max_d = max(pc.p.z, 10.0);
     float reach = max_d * clamp(s * 2.2 + 0.22, 0.22, 0.85);
+    if (pc.p.y < 0.5 && inRotTint.x > 12.5) reach = max_d * 0.85;      // (scree: seen to the full range, scatter.vert)
     float fade = 1.0 - smoothstep(reach * 0.75, reach, dist);
     if (pc.p.y > 0.5 && pc.p.w > 0.5)   // ground-relief lift (scatter.vert)
         base.y += floor(inRotTint.x / 6.2831853) * 0.004 * (1.0 - smoothstep(10.0, 26.0, dist));
@@ -41,6 +42,7 @@ void main() {
     // Stones (not plants): the unit sphere, centred 0.30 above the base like
     // scatter.vert's shaped stone (close enough for a pebble's shadow).
     vec3 lp = pc.p.y > 0.5 ? inPos : vec3(0.0, 0.30, 0.0) + normalize(inPos);
+    if (pc.p.y < 0.5 && inRotTint.x > 25.0) lp = inPos;                // (an angular scree mesh of its own: drawn as it is)
     vec3 world = R * (lp * s * fade) + base;
     if (pc.p.y > 0.5 && plant_sway > 0.0) {   // plant wind sway (scatter.vert)
         float t = pc.p.x;

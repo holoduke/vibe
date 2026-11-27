@@ -93,21 +93,31 @@ float VulkanEngine::cloud_shadow_at(glm::vec3 wp) const {
 // (1, 0.35), veering slowly by up to about 25 degrees.
 // VIBE_TEST_WATER_WIND=<m/s>[,<deg>]: that speed (and direction, degrees from +x toward +z).
 // (Not VIBE_TEST_WIND: that one stirs a vortex into the wind field, wind_fluid.cpp.)
-static glm::vec4 water_wind_now(bool weather_on, float wind_k, float t) {
+static glm::vec4 water_wind_now(bool weather_on, float wind_k, float t, float* sea_out) {
     float speed = weather_on ? 1.5f + 26.5f * std::pow(glm::clamp(wind_k, 0.0f, 1.0f), 1.3f) : 7.0f;
+    // THE OPEN SEA'S WIND (2026-11-27, the owner's "the ocean has no waves and no elevation"): clear
+    // weather's 2.8 m/s made a fully developed sea of Hs 0.17 m - a mirror. Over open water the wind
+    // is never that still: a sea breeze of 6.5 m/s + 14 x the weather's wind amount (clear 7.9 m/s,
+    // Hs 1.3 m; cloudy 10, 2.1 m; rain 12.8, 3.5 m; a storm 28) is the floor for the sea's waves.
+    // Lakes, the river and the stream keep the local wind (calm water in still air).
+    // VIBE_NO_SEA_BREEZE=1: the sea takes the local wind as before.
+    static const bool no_breeze = [] { const char* e = std::getenv("VIBE_NO_SEA_BREEZE"); return e && *e && *e != '0'; }();
+    float sea = (weather_on && !no_breeze) ? std::max(speed, 6.5f + 14.0f * glm::clamp(wind_k, 0.0f, 1.0f)) : speed;
     float ang = 0.337f + 0.32f * std::sin(t * 0.013f) + 0.12f * std::sin(t * 0.051f + 1.1f);
     static const char* test = std::getenv("VIBE_TEST_WATER_WIND");
     if (test) {
         float s = -1.0f, deg = -1000.0f;
-        if (std::sscanf(test, "%f,%f", &s, &deg) >= 1 && s >= 0.0f) speed = s;
+        if (std::sscanf(test, "%f,%f", &s, &deg) >= 1 && s >= 0.0f) speed = sea = s;
         if (deg > -999.0f) ang = glm::radians(deg);
     }
     // The swell's scale: its five waves (A 13 / 8 / 7 / 2.5 / 2 m, crest 1.3 exp(sin p - 1) - 0.3) have a
     // standard deviation of 6.72 S m, i.e. Hs = 26.9 S. A fully developed sea has Hs = 0.21 U^2 / g
-    // (Pierson-Moskowitz: 0.8 m at 6 m/s, 7 m at 18); the swell carries 90 % of it, the FFT
-    // cascades the rest (water_sim.cpp). (The reference's pow(U / 30, 2.2) gave 8.7 m at 18 m/s
-    // and 27 m at 30.)
-    const float S = std::min(0.9f * 0.21f * speed * speed / 9.81f / 26.9f, 1.0f);
+    // (Pierson-Moskowitz: 0.8 m at 6 m/s, 7 m at 18); the swell carries 60 % of it (was 90 %: nearly
+    // all of the height went into waves 120 - 400 m long, which read as a flat sea), the FFT
+    // cascades 80 % (sqrt(1 - 0.6^2); water_sim.cpp) - waves of 10 - 40 m that are seen to move.
+    // (The reference's pow(U / 30, 2.2) gave 8.7 m at 18 m/s and 27 m at 30.)
+    const float S = std::min(0.6f * 0.21f * sea * sea / 9.81f / 26.9f, 1.0f);
+    if (sea_out) *sea_out = sea;
     return glm::vec4(std::cos(ang), std::sin(ang), speed, S);
 }
 
@@ -144,7 +154,7 @@ void VulkanEngine::apply_environment(float dt) {
     const bool want = rt_.day_night_enabled || rt_.weather_enabled;
     // Back to the user's own values first; everything below derives from them.
     if (env_->applied) { env_swap_base(); env_->applied = false; }
-    env_->water_wind = water_wind_now(rt_.weather_enabled, wx_cur_.wind, anim_time_);
+    env_->water_wind = water_wind_now(rt_.weather_enabled, wx_cur_.wind, anim_time_, &env_->sea_wind);
     // (held with the animation clock by VIBE_TEST_ANIM_TIME: with the clock held and the drift running
     //  on, the water's patterns still moved and two test frames could not be compared)
     static const bool held_clock = std::getenv("VIBE_TEST_ANIM_TIME") != nullptr;
@@ -295,6 +305,9 @@ void VulkanEngine::apply_environment(float dt) {
     // Ground gets wet in ~20 s of rain and takes minutes to dry.
     env_->wet += (rain > 0.02f ? (rain - env_->wet) * dt / 20.0f * (0.5f + rain) : -env_->wet * dt / 150.0f);
     env_->wet = glm::clamp(env_->wet, 0.0f, 1.0f);
+    // (VIBE_TEST_WET=<0..1>: the ground's wetness held - the puddles without waiting for the rain)
+    static const char* test_wet = std::getenv("VIBE_TEST_WET");
+    if (test_wet) env_->wet = glm::clamp(float(std::atof(test_wet)), 0.0f, 1.0f);
 
     // ---------------- clock -> sun / moon ----------------
     float sun_k = 1.0f;       // direct sunlight factor (horizon dimming, night)
@@ -311,7 +324,12 @@ void VulkanEngine::apply_environment(float dt) {
     float sky_e = 0.0f, sky_yaw = 0.0f;
     env_->sun_elev = -1000.0f;
     if (rt_.day_night_enabled) {
-        if (rt_.day_length_minutes > 0.01f)
+        // (VIBE_SHOT_WAIT_FULL: a test copy's clock stands while it waits for the full terrain
+        //  shader - the wait is 30 s .. minutes, at a 60 min day that moved the sun by up to an hour
+        //  and two runs with the same settings came out lit differently)
+        static const bool shot_wait = std::getenv("VIBE_SHOT_WAIT_FULL") != nullptr;
+        const bool waiting = shot_wait && terrain_rm_build_[0].valid();
+        if (rt_.day_length_minutes > 0.01f && !waiting)
             rt_.time_of_day += dt * 24.0f / (rt_.day_length_minutes * 60.0f);
         rt_.time_of_day = std::fmod(std::fmod(rt_.time_of_day, 24.0f) + 24.0f, 24.0f);
         const float H = (rt_.time_of_day - 12.0f) / 24.0f * 6.2831853f;
@@ -530,6 +548,10 @@ void VulkanEngine::apply_environment(float dt) {
     env_->cloud_direct = cloud_direct * glm::mix(1.0f, 0.45f, overcast);
 
     rt_.atmosphere_intensity = base.atmosphere_intensity * sky_k * sky_dim / direct;
+    // VIBE_LOG_ENV=1: what the light is made of, every 60 frames (to find what differs between runs).
+    { static int n = 0; if (std::getenv("VIBE_LOG_ENV") && (n++ % 60) == 0)
+        log::infof("[env] tod %.3f elev %.2f pitch %.2f yaw %.2f sun_k %.3f sky_k %.3f overcast %.3f rain %.3f dark %.3f direct %.3f sun_I %.3f atm %.3f cloud_sh %.3f night %.2f",
+                   rt_.time_of_day, env_->sun_elev, pitch, yaw, sun_k, sky_k, overcast, rain, wx_cur_.dark, direct, rt_.sun_intensity, rt_.atmosphere_intensity, env_->cloud_shadow_k, env_->night); }
     const float sky_lum = glm::dot(base.sky_color, glm::vec3(0.2126f, 0.7152f, 0.0722f));
     rt_.sky_color = glm::mix(base.sky_color, glm::vec3(0.92f, 0.96f, 1.04f) * sky_lum, overcast * 0.85f) * amb_k;
     env_->amb_k = amb_k;

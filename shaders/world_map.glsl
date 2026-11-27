@@ -87,10 +87,20 @@ float wm_ranges(vec2 mk) {
 // (src/engine/terrain.cpp has the same course: keep the two in step.)
 const vec2 wm_riv[26] = vec2[26](vec2(62.0, 36.0), vec2(86.0, 70.0), vec2(100.0, 112.0), vec2(96.0, 170.0), vec2(74.0, 228.0), vec2(56.0, 290.0), vec2(22.0, 350.0), vec2(48.0, 406.0), vec2(150.0, 412.0), vec2(248.0, 470.0), vec2(344.0, 536.0), vec2(410.0, 628.0), vec2(504.0, 634.0), vec2(600.0, 570.0), vec2(696.0, 536.0), vec2(792.0, 474.0), vec2(888.0, 456.0), vec2(984.0, 456.0), vec2(1080.0, 410.0), vec2(1176.0, 410.0), vec2(1272.0, 486.0), vec2(1368.0, 552.0), vec2(1464.0, 584.0), vec2(1600.0, 604.0), vec2(1752.0, 616.0), vec2(1950.0, 620.0));
 const vec4 wm_riv_box[5] = vec4[5](vec4(-69.0, -89.0, 225.0, 415.0), vec4(-103.0, 165.0, 469.0, 661.0), vec4(219.0, 349.0, 917.0, 759.0), vec4(667.0, 285.0, 1397.0, 611.0), vec4(1147.0, 361.0, 2075.0, 745.0));     // (five stretches of five reaches, with the valley's reach around them)
+// (2026-11-27) The river's water falls 1 m from the datum to the sea down its course
+// (water_level.glsl wl_profile, water_fx.cpp river_level_profile - keep the three in step); its
+// channel is cut that much deeper with it, so the lower river keeps its depth. Metres down the
+// course to each point of wm_riv (terrain_rm_water.glsl kRivCum: the same numbers).
+const float wm_riv_cum[26] = float[26](0.0, 41.6, 85.9, 144.0, 206.1, 270.6, 339.6, 401.3, 503.5, 617.4, 733.9, 847.1, 941.3, 1056.7, 1158.5, 1272.8, 1370.5, 1466.5, 1572.9, 1668.9, 1791.4, 1907.9, 2009.1, 2146.5, 2299.0, 2497.0);
+float wm_riv_drop(float s) {
+    float g = clamp((s - 350.0) / 2050.0, 0.0, 1.0);
+    float r = smoothstep(696.0, 704.0, s) + smoothstep(1246.0, 1254.0, s) + smoothstep(1796.0, 1804.0, s);
+    return 0.31 * g + 0.23 * r;
+}
 float wm_river(float h, vec2 wp, float wl) {
     if (wp.x < -85.0 || wp.x > 2095.0 || wp.y < -110.0 || wp.y > 780.0) return h;
     float bed = wl - 2.4;
-    if (h <= bed - 4.0) return h;
+    if (h <= bed - 5.0) return h;
     vec2 q = wp + 12.0 * vec2(sin(wp.y * 0.043 + 1.3), sin(wp.x * 0.037 + 0.4)) + 5.0 * vec2(sin(wp.y * 0.113), sin(wp.x * 0.097 + 2.0));
     // Under the stone bridge the river is a pool: its channel lies 6 m further across (along
     // the bridge), it is 4 m wider each side, and its banks are steep - so the water stands
@@ -98,16 +108,20 @@ float wm_river(float h, vec2 wp, float wl) {
     float pool = 1.0 - smoothstep(22.0, 55.0, distance(wp, vec2(43.4, 297.4)));
     q -= pool * 6.0 * vec2(0.719, 0.695);
     float d2 = 1e12;
+    float along = 0.0;
     for (int c = 0; c < 5; ++c) {
         vec4 b = wm_riv_box[c];
         if (q.x < b.x || q.y < b.y || q.x > b.z || q.y > b.w) continue;
         for (int i = c * 5; i < c * 5 + 5; ++i) {
             vec2 a = wm_riv[i], ab = wm_riv[i + 1] - a;
-            vec2 dv = q - (a + ab * clamp(dot(q - a, ab) / dot(ab, ab), 0.0, 1.0));
-            d2 = min(d2, dot(dv, dv));
+            float u = clamp(dot(q - a, ab) / dot(ab, ab), 0.0, 1.0);
+            vec2 dv = q - (a + ab * u);
+            float e2 = dot(dv, dv);
+            if (e2 < d2) { d2 = e2; along = wm_riv_cum[i] + u * length(ab); }
         }
     }
     if (d2 > 120.0 * 120.0) return h;
+    bed -= wm_riv_drop(along);
     float e = max(sqrt(d2) - (7.0 + 9.0 * smoothstep(1450.0, 1900.0, wp.x) + 4.0 * pool), 0.0);      // (wider toward its mouth)
     // (The valley's sides were 0.8 to 40 m out and 1.3 beyond, met by the land in a 4 m
     //  rounding: where the land is high - at the mouth, along the lower river - that left a

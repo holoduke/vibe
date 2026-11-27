@@ -12,16 +12,182 @@
 #include <glm/gtc/constants.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <random>
 #include <vector>
 
 namespace vibe {
-void river_pier_add(glm::vec2 p, float half_width);      // (vk_engine/water_fx.cpp: the obstacles the current parts round)
+float water_level_off(float x, float z);     // (vk_engine/water_fx.cpp: the water's level under the datum - the river falls to the sea)
+void river_pier_add(glm::vec2 p, float half_width, float top = 1e5f);    // (vk_engine/water_fx.cpp: the obstacles the current parts round)
 void water_boulder_add(glm::vec2 p, float ground, float r);     // (vk_engine/water_fx.cpp: their colliders)
 #include "engine/scatter_plant_meshes.inl"   // mesh builders for the small plants: ferns, flowers, reeds, clover, mushrooms, grass tufts, water lilies, the rock
 #include "engine/scatter_debris_meshes.inl"  // ... and the small debris placed on the GPU (twigs, leaves, pebbles, needles, cones, litter, gravel, stones)
+
+// ---- Scree and boulder fields (2026-11-26; the reference game's placement rule for its loose
+// rocks): candidates on a 5 m grid, five a cell; where the ground is steep rocky ground or lies
+// below a cliff (steeper ground within 14 m uphill); never on ground steeper than 38 degrees (a
+// stone does not lie there); gathered into clumps by a six-octave noise; sunk by a random part of
+// their height; larger further from the cliff's foot (and, in scatter.vert, larger with distance
+// from the eye while they thin out); one rock, the cliff's - no stone families. Streamed round
+// the camera in cells (vk_engine/scree_stream.cpp), not placed at start-up. Marked by four whole
+// turns added to the rotation (scatter.vert / scatter.frag: rot > 8 pi = an angular scree mesh
+// of its own, drawn as it is). out[k]: the rocks of scree mesh k (kScreeMeshes of them).
+int scree_place(const ScatterParams& params, const std::function<float(float, float)>& h_at,
+                int cx0, int cx1, int cz0, int cz1, std::vector<ScatterInstance>* out, int* at_cliff_out) {
+    auto n_y_at = [&](float wx, float wz) {
+        float e = 1.0f;
+        float dx = h_at(wx + e, wz) - h_at(wx - e, wz);
+        float dz = h_at(wx, wz + e) - h_at(wx, wz - e);
+        return 2.0f * e / std::sqrt(dx * dx + dz * dz + 4.0f * e * e);
+    };
+    auto hh = [](int a, int b, int k) {
+        uint32_t h = uint32_t(a) * 0x9E3779B1u ^ (uint32_t(b) + 0x7F4A7C15u) * 0x85EBCA6Bu ^ uint32_t(k) * 0xC2B2AE35u;
+        h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
+        return float(h >> 8) / 16777216.0f;
+    };
+    auto fbm6 = [](glm::vec2 p) {
+        float v = 0.0f, amp = 0.5f;
+        glm::vec2 q = p * 1.5f;
+        for (int o = 0; o < 6; ++o) {
+            v += amp * std::sin(q.x) * std::sin(q.y);
+            q = glm::vec2(0.8f * q.x - 0.6f * q.y, 0.6f * q.x + 0.8f * q.y) * 2.02f;
+            amp *= 0.5f;
+        }
+        return v;
+    };
+    const float cell = kScreeCell;
+    int placed = 0, at_cliff = 0;
+    for (int cz = cz0; cz < cz1; ++cz)
+        for (int cx = cx0; cx < cx1; ++cx) {
+            // (a quick look at the cell's middle: level open ground far from any cliff has none)
+            const float mx = (float(cx) + 0.5f) * cell, mz = (float(cz) + 0.5f) * cell;
+            const float mh = h_at(mx, mz);
+            if (mh < params.water_level + 0.3f) continue;
+            {
+                float steepest = n_y_at(mx, mz);
+                for (int k = 0; k < 4; ++k) steepest = (std::min)(steepest, n_y_at(mx + (k < 2 ? (k == 0 ? -12.0f : 12.0f) : 0.0f), mz + (k >= 2 ? (k == 2 ? -12.0f : 12.0f) : 0.0f)));
+                if (steepest > 0.88f) continue;
+            }
+            for (int k = 0; k < 5; ++k) {
+                // (the R2 sequence, shifted per cell)
+                const float fx = glm::fract(0.7548776f * float(k + 1) + hh(cx, cz, 1)), fz = glm::fract(0.5698403f * float(k + 1) + hh(cx, cz, 2));
+                const float wx = (float(cx) + fx) * cell, wz = (float(cz) + fz) * cell;
+                const float h = h_at(wx, wz);
+                if (h < params.water_level + 0.3f) continue;
+                const float ny = n_y_at(wx, wz);
+                if (90.0f - 90.0f * ny > 38.0f) continue;                      // the slope limit
+                // uphill, and whether a cliff stands there
+                const float e = 1.5f;
+                glm::vec2 up(h_at(wx + e, wz) - h_at(wx - e, wz), h_at(wx, wz + e) - h_at(wx, wz - e));
+                const float ul = glm::length(up);
+                float cliff_d = 1e9f;
+                if (ul > 1e-4f) {
+                    up /= ul;
+                    for (float d = 3.0f; d <= 14.1f; d += 2.75f)
+                        if (n_y_at(wx + up.x * d, wz + up.y * d) < 0.55f) { cliff_d = d; break; }
+                }
+                const float w_steep = 0.55f * (1.0f - glm::smoothstep(0.76f, 0.90f, ny)) * (h > params.rock_band_h - 25.0f ? 1.0f : 0.45f);
+                const float w_cliff = cliff_d < 1e8f ? 1.0f - 0.45f * cliff_d / 14.0f : 0.0f;
+                const float w = (std::max)(w_steep, w_cliff);
+                if (w < 0.04f) continue;
+                const float clump = glm::clamp(0.45f + 2.4f * fbm6(glm::vec2(wx, wz) * 0.045f), 0.03f, 1.0f);
+                if (hh(cx * 5 + k, cz, 3) > w * clump) continue;
+                if (params.blocked(wx, wz)) continue;
+                if (params.road && wx > params.road->bb_min.x && wx < params.road->bb_max.x &&
+                    wz > params.road->bb_min.y && wz < params.road->bb_max.y &&
+                    params.road->distance(wx, wz) < params.road->half_width + params.road->shoulder + 1.2f) continue;
+                const float r1 = hh(cx * 5 + k, cz, 4), r2 = hh(cx * 5 + k, cz, 5), r3 = hh(cx * 5 + k, cz, 6), r4 = hh(cx * 5 + k, cz, 7);
+                float sc = glm::mix(0.07f, 0.55f, r1 * r1 * r1);
+                if (cliff_d < 1e8f) sc *= glm::mix(0.8f, 1.9f, cliff_d / 14.0f * r2);      // the big blocks roll furthest
+                ScatterInstance si{};
+                // Its flat bed lies level and the ground falls away under it (to 38 degrees, and the
+                // stone is drawn up to 1.5 x larger far off: scatter.vert): sunk by the sink drawn
+                // above only, a slab stood up to ~0.6 of its size over the ground on its downhill
+                // side - a grey plate floating over the slope (2026-11-27, at (517, 135)). Now the
+                // bed also goes down to the lowest ground under the stone's outline.
+                const int kind = (std::min)(int(r4 * float(kScreeMeshes)), kScreeMeshes - 1);
+                const ScreeExtent ext = scree_mesh_extent(kind);
+                const float R = 0.8f * ext.radius * sc * 1.25f;
+                float gmin = h;
+                for (int a = 0; a < 8; ++a) {
+                    const float t = float(a) * 0.78539816f;
+                    gmin = (std::min)(gmin, h_at(wx + R * std::cos(t), wz + R * std::sin(t)));
+                }
+                const float y_sink = h - sc * (0.12f + 0.42f * r2);
+                const float y_bed = gmin - ext.bed * sc - 0.03f;            // (bed: the mesh's lowest point, < 0)
+                si.pos_scale = glm::vec4(wx, (std::min)(y_sink, y_bed), wz, sc);
+                const float tint = 0.86f + 0.26f * r3;
+                si.rot_tint = glm::vec4(r3 * glm::two_pi<float>() + 4.0f * glm::two_pi<float>(), tint * 1.02f, tint, tint * 0.95f);
+                out[kind].push_back(si);
+                ++placed;
+                if (cliff_d < 1e8f) ++at_cliff;
+            }
+        }
+    if (at_cliff_out) *at_cliff_out += at_cliff;
+    return placed;
+}
+
+// The angular scree meshes (kScreeMeshes): a block broken along 7 - 11 planes - the points of
+// an icosphere pulled in to the nearest plane - with flat faces (a normal per triangle) and its
+// base 0.3 below the middle, as the lumpy stone's (scatter.vert). Seeded: the same every run.
+void build_scree_mesh_data(int kind, std::vector<Vertex>& verts, std::vector<uint32_t>& idx) {
+    std::mt19937 rng(uint32_t(0x5C7EE + kind * 7919));
+    std::uniform_real_distribution<float> u(0.0f, 1.0f);
+    // planes: normal, distance (a slab-like stone for kind 3)
+    std::vector<glm::vec4> planes;
+    const int np = 7 + int(u(rng) * 5.0f);
+    const glm::vec3 stretch = kind == 3 ? glm::vec3(1.25f, 0.55f, 1.0f) : glm::vec3(1.0f + 0.35f * u(rng), 0.75f + 0.3f * u(rng), 1.0f);
+    for (int i = 0; i < np; ++i) {
+        float z = u(rng) * 2.0f - 1.0f, a = u(rng) * glm::two_pi<float>(), r = std::sqrt(1.0f - z * z);
+        glm::vec3 n(r * std::cos(a), z, r * std::sin(a));
+        if (i == 0) n = glm::vec3(0.0f, -1.0f, 0.0f);            // a flat bed underneath
+        planes.push_back(glm::vec4(n, 0.62f + 0.3f * u(rng)));
+    }
+    // the unit icosphere, subdivided twice
+    std::vector<glm::vec3> P;
+    std::vector<uint32_t> T;
+    { std::vector<Vertex> iv; build_rock_mesh_data(iv, T); for (const Vertex& v : iv) P.push_back(v.position); }
+    for (glm::vec3& p : P) {
+        glm::vec3 d = glm::normalize(p);
+        float r = 1.0f;
+        for (const glm::vec4& pl : planes) {
+            const float c = glm::dot(d, glm::vec3(pl));
+            if (c > 1e-3f) r = (std::min)(r, pl.w / c);
+        }
+        p = d * r * stretch + glm::vec3(0.0f, 0.30f, 0.0f);
+    }
+    verts.clear(); idx.clear();
+    for (size_t t = 0; t + 2 < T.size(); t += 3) {
+        const glm::vec3 a = P[T[t]], b = P[T[t + 1]], c = P[T[t + 2]];
+        glm::vec3 n = glm::cross(b - a, c - a);
+        const float l = glm::length(n);
+        if (l < 1e-9f) continue;
+        n /= l;
+        if (glm::dot(n, a + b + c - glm::vec3(0.0f, 0.9f, 0.0f)) < 0.0f) n = -n;
+        for (const glm::vec3& q : { a, b, c }) {
+            idx.push_back(uint32_t(verts.size()));
+            verts.push_back(Vertex{ q, n, glm::vec2(0.0f) });
+        }
+    }
+}
+
+
+ScreeExtent scree_mesh_extent(int kind) {
+    static const std::array<ScreeExtent, kScreeMeshes> ext = [] {
+        std::array<ScreeExtent, kScreeMeshes> e{};
+        for (int k = 0; k < kScreeMeshes; ++k) {
+            std::vector<Vertex> v; std::vector<uint32_t> ix;
+            build_scree_mesh_data(k, v, ix);
+            float r = 0.0f, lo = 0.0f;
+            for (const Vertex& q : v) { r = (std::max)(r, std::sqrt(q.position.x * q.position.x + q.position.z * q.position.z)); lo = (std::min)(lo, q.position.y); }
+            e[size_t(k)] = ScreeExtent{ (std::max)(r, 0.1f), lo };
+        }
+        return e;
+    }();
+    return ext[size_t(std::clamp(kind, 0, kScreeMeshes - 1))];
+}
 
 ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                          uint32_t queue_family, const Heightmap& hm,
@@ -107,6 +273,8 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                                 tc.x, tc.y, tc.z);
         inst.push_back(si);
     }
+
+    // (scree and boulder fields: streamed round the camera - scree_place below, vk_engine/scree_stream.cpp)
 
     // ---- Boulders in the water: rounded stones 0.4 - 2.5 m (the lumpy rock above, larger), part
     // under water, in clusters: across the lip of each of the stream's steps (the water pours
@@ -398,7 +566,7 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                 const int stations = river_rule::station_count();
                 for (int k = 0; k < stations; ++k) {
                     if (!river_rule::in_home(river_rule::station(k).mid)) continue;
-                    river_rule::plants_at(k, params.water_level, h_at,
+                    river_rule::plants_at(k, params.water_level + water_level_off(river_rule::station(k).mid.x, river_rule::station(k).mid.y), h_at,      // (the level there: the river falls to the sea - water_fx.cpp)
                         [&](float x, float z, bool water) {
                             if (params.blocked(x, z)) return true;
                             // (on a road - the castle's, or a highway's line inside the home tile - and, for what stands in the water, under its bridge)

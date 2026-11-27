@@ -39,6 +39,11 @@ struct VulkanEngine::CarTrafficState {
     std::unordered_map<int, Siren> sirens;
     int   siren_clip = 0;                                // 0 not asked for yet, 1 there, -1 none
     bool  siren_test_placed = false;                     // VIBE_TEST_SIREN=stay: the eye was put by the road
+    // The driven car's tyres squealing (jeep.cpp car_tyre_audio): its source, the clip (0 not asked for,
+    // 1 there, -1 none), the level it sounds at now.
+    uint32_t squeal_src = 0;
+    int      squeal_clip = 0;
+    float    squeal_level = 0.0f;
     uint8_t style_was[100] = {};                         // each NPC car's View::style last frame (VIBE_LOG_TRAFFIC: what changed)
 };
 

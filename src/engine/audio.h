@@ -36,6 +36,9 @@ enum class ClipID : uint8_t {
     GlassCrack1, GlassCrack2,   // a bolt through a pane (assets/sounds/glass_crack_*.wav, synthesised: engine/glass_synth.h)
     GlassShatter,               // a pane coming down (assets/sounds/glass_shatter.wav, synthesised: engine/glass_synth.h)
     River,                      // running water, 8 s that loop (assets/sounds/river_loop.wav, synthesised: engine/river_synth.h)
+    MgShot1, MgShot2, MgShot3,  // the rifle as a machine gun: one round (assets/sounds/mg_shot_v1_*.wav, synthesised: engine/gun_synth.h)
+    MgTail,                     // ... and its tail from the surroundings (mg_tail_v1.wav), played through the spatialiser
+    TyreSqueal,                 // tyres sliding on asphalt, 6 s that loop (assets/sounds/tyre_squeal.wav, synthesised: engine/tyre_synth.h)
     Count
 };
 

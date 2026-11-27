@@ -69,7 +69,7 @@ public:
     // the car's body and wheels, crates, debris.
     void mesh_pieces_build_async(std::vector<std::vector<glm::vec3>> pieces);
     bool mesh_piece_ready(int piece) const;
-    uint32_t add_mesh_instance(int piece, glm::vec3 pos, float yaw, float scale);
+    uint32_t add_mesh_instance(int piece, glm::vec3 pos, float yaw, float scale, float tilt = 0.0f);   // (tilt: then about its own x - rockf::Inst::tilt)
     void remove_mesh_instance(uint32_t id);
 
     // Add a procedural heightmap as a single Jolt HeightFieldShape static
@@ -173,6 +173,17 @@ public:
     void ragdoll_set_velocity(uint32_t id, size_t part, glm::vec3 v);      // (a body that was moving when it became the physics')
     bool ragdoll_active(uint32_t id) const;
     void remove_ragdoll(uint32_t id);
+    // WHAT A FALLEN BODY LIES ON BESIDES THE WORLD (layer CORPSE: only ragdolls meet these; a
+    // walker, a bolt and the driven car do not). Furniture that has no collider of its own (a
+    // chair is sat on, not walked into): boxes turned by `yaw`, made once and kept. And the
+    // cars that have no physics (the NPC cars, the parked ones): keyed bodies moved, not
+    // simulated (kinematic), given anew while a body lies near them - one in the list is made or
+    // moved there over `dt`, one no longer in it is removed.
+    struct CorpseProp { glm::vec3 center{0.0f}, half_extents{0.1f}; float yaw = 0.0f; };
+    void corpse_props_add(const CorpseProp* boxes, size_t n);
+    struct CorpseCar { uint32_t key = 0; glm::mat4 body{1.0f}; const StaticBox* boxes = nullptr; size_t n_boxes = 0; };
+    void corpse_cars_set(const CorpseCar* cars, size_t n, float dt);
+    size_t corpse_cars_count() const;
 
     // Remove and destroy a previously-added dynamic body.
     void remove_body(uint32_t id);
@@ -245,6 +256,11 @@ public:
         // The air: the force pressing the car down and the one holding it back, in newtons per
         // (m/s) squared. (At 60 m/s a downforce of 1.9 is 6.8 kN: half a sports car's weight.)
         float     downforce = 0.0f, drag = 0.6f;
+        // The gravity the car falls at (m/s2; the game's own is 25, for the player's jumps). The
+        // springs and the tyres are sized from it so that the sag and the grip in m/s2 stay what
+        // the numbers above say: more of it is a car that lands sooner and floats less over a
+        // crest, not one that corners harder (docs/ARCHITECTURE.md "Handling, 2026-11-27").
+        float     gravity = 9.81f;
     };
     struct VehicleState {
         glm::mat4 body{1.0f};
@@ -269,6 +285,10 @@ public:
     void     vehicle_teleport(glm::vec3 position, float yaw);
     void     vehicle_shift(glm::vec3 delta);
     void     vehicle_impulse(glm::vec3 impulse, glm::vec3 at);
+    // A burnout (the handbrake and the throttle held together at a standstill): the brake holds
+    // the FRONT wheels only and the rear tyres bite less along, so the rear wheels spin up while
+    // the car stays put. Off again: the brakes and the tyres are as made.
+    void     vehicle_burnout(bool on);
     void     vehicle_set_ground(std::vector<float> samples, int n, glm::vec2 origin, float cell);
     void     vehicle_set_obstacles(const OrientedBox* boxes, size_t count);
     // THE OTHER CARS, as the vehicle meets them: bodies that are moved, not simulated (kinematic) -

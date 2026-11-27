@@ -15,7 +15,8 @@
 //   u_bake_a  rgb = sqrt(albedo), a = the height for the screen-space displacement / kGndSsdmMax
 //   u_bake_n  the normal's x and z (0..1)
 //   u_bake_m  r = highway asphalt share, g = sand cover, b = the asphalt's gloss,
-//             a = 1 where the texel may be used (0: a steep face - a picture laid out from
+//             a = 1 where the texel may be used, 0.5 ground under the water (only the bed seen
+//                 through the water reads it: rm_bake_fetch_a; 0: a steep face - a picture laid out from
 //                 above has too few texels down a wall -, ground at or under the water, the
 //                 castle's floor)
 // The level goes by the DISTANCE (level 0 to g_bake_t0, each further level twice as far, the
@@ -33,7 +34,7 @@ layout(set = 0, binding = 48) uniform sampler2DArray u_bake_m;
 // The material at `pos`, `t` from the eye, from the baked pictures. False: not there (too far,
 // a texel that may not be used, footprints near by - they change from step to step): the
 // caller works it out as before.
-bool rm_bake_fetch(vec3 pos, float t, out vec3 nor, out vec3 mate, out float hw_pave, out float hw_gloss, out float sand_cov) {
+bool rm_bake_fetch_a(vec3 pos, float t, float min_a, out vec3 nor, out vec3 mate, out float hw_pave, out float hw_gloss, out float sand_cov) {
     nor = vec3(0.0, 1.0, 0.0); mate = vec3(0.0); hw_pave = 0.0; hw_gloss = 0.0; sand_cov = 0.0;
     float lf = log2(max(t / g_bake_t0, 1.0));
     if (lf > float(kBakeLevels - 1)) return false;
@@ -52,7 +53,7 @@ bool rm_bake_fetch(vec3 pos, float t, out vec3 nor, out vec3 mate, out float hw_
         a = mix(a, textureLod(u_bake_a, u1, 0.0), f);
         n = mix(n, textureLod(u_bake_n, u1, 0.0).rg, f);
     }
-    if (m.a < 0.995) return false;
+    if (m.a < min_a) return false;
     n = n * 2.0 - 1.0;
     nor = vec3(n.x, sqrt(max(1.0 - dot(n, n), 0.04)), n.y);
     nor = normalize(nor);
@@ -60,6 +61,9 @@ bool rm_bake_fetch(vec3 pos, float t, out vec3 nor, out vec3 mate, out float hw_
     g_gnd_ssdm_h = a.a * kGndSsdmMax;
     hw_pave = m.r; sand_cov = m.g; hw_gloss = m.b;
     return true;
+}
+bool rm_bake_fetch(vec3 pos, float t, out vec3 nor, out vec3 mate, out float hw_pave, out float hw_gloss, out float sand_cov) {
+    return rm_bake_fetch_a(pos, t, 0.995, nor, mate, hw_pave, hw_gloss, sand_cov);
 }
 // How much of the sun the raised ground around leaves the point at `pos` (1 = all): the stones
 // the screen-space displacement lifts shade each other - cobbles, the soil's stones, kerbs. A

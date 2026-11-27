@@ -127,8 +127,9 @@ void VulkanEngine::init_terrain_bake() {
         cfg.cull = VK_CULL_MODE_NONE;
         cfg.depth_test = false;
         cfg.depth_write = false;
-        const VkDevice dev = device_;
-        S.build = std::async(std::launch::async, [dev, cfg]() { return vkpipe::build_graphics_pipeline(dev, cfg); });
+        // (in the queue of the large builds, vk_pipelines.h: first - the smallest, and the ground's
+        // look waits for it)
+        S.build = vkpipe::build_graphics_pipeline_async(device_, cfg, -1);
     }
     log::infof("[terrain] baked ground texture: %d levels of %d x %d texels (3 pictures, %.0f MB), level 0 at %.2f cm a texel",
                TerrainBakeState::kLevels, TerrainBakeState::kSize, TerrainBakeState::kSize,

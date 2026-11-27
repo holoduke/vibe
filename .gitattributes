@@ -16,3 +16,4 @@
 *.dds binary
 *.ktx2 binary
 *.glb binary
+assets/rocks/kit_bake.bin filter=lfs diff=lfs merge=lfs -text

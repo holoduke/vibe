@@ -44,6 +44,9 @@ constexpr float kKey = kRefAtDay / 0.104f;
 // The AgX look's scene luminance L: about 5 at that same view (the reference's day look runs
 // over L 3 .. 10, its night look below 0.6).
 constexpr float kLookLAtDay = 5.0f;
+// The glare sprites' brightness per unit of glare_strength (0.4 until 2026-11-27: the owner found
+// the glow round the station's and the cars' lights too much).
+constexpr float kGlareGain = 0.28f;
 
 // How far the sights are raised (0 .. 1): the depth of field follows it. VIBE_TEST_AIM=1 holds
 // it at 1 for a capture.
@@ -538,7 +541,7 @@ void VulkanEngine::post_fx_upload(VkCommandBuffer cmd) {
     g.ltm2 = glm::vec4(float(rt_.tonemap_mode), 0.0f, 0.0f, 1e-3f);
     {
         const float hk = float(swapchain_extent_.height) / 1080.0f;
-        g.glare = glm::vec4(rt_.glare_strength * 0.4f, 1.0f, 120.0f, float(frame_number_ % 4096u));
+        g.glare = glm::vec4(rt_.glare_strength * kGlareGain, 1.0f, 120.0f, float(frame_number_ % 4096u));
         g.glare2 = glm::vec4(float(swapchain_extent_.width), float(swapchain_extent_.height),
                              1.0f / float(swapchain_extent_.width), 1.0f / float(swapchain_extent_.height));
         // Motion blur: x strength (shutter share of a frame's motion), y longest blur (px),
@@ -843,7 +846,8 @@ void VulkanEngine::post_fx_run(VkCommandBuffer cmd) {
             vkCmdPipelineBarrier2(cmd, &wd);
         }
         const VkExtent2D be = P.glare_hold.ext;
-        pfx_dispatch(cmd, P.p_glare_find, P.s_glare_find[slot], glm::vec4(float(be.width), float(be.height), float(oe.width), float(oe.height)), be.width, be.height);
+        // (one workgroup per 8x8 block: every pixel is looked at)
+        pfx_dispatch(cmd, P.p_glare_find, P.s_glare_find[slot], glm::vec4(float(be.width), float(be.height), float(oe.width), float(oe.height)), be.width * 8, be.height * 8);
         pfx_barrier(cmd);
         VkRenderingAttachmentInfo att{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
         att.imageView = P.post[0].mip[0];
@@ -860,7 +864,7 @@ void VulkanEngine::post_fx_run(VkCommandBuffer cmd) {
         vkCmdSetScissor(cmd, 0, 1, &sc);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, P.glare_draw_pipe);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, P.glare_draw_layout, 0, 1, &P.s_glare_draw, 0, nullptr);
-        const glm::vec4 gpc(float(oe.width), float(oe.height), rt_.glare_strength * 0.4f, 0.0f);
+        const glm::vec4 gpc(float(oe.width), float(oe.height), rt_.glare_strength * kGlareGain, 0.0f);
         vkCmdPushConstants(cmd, P.glare_draw_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(gpc), &gpc);
         vkCmdDrawIndirect(cmd, P.sprite_buf, 0, 1, 16);
         vkCmdEndRendering(cmd);

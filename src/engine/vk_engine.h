@@ -563,6 +563,18 @@ private:
     // meanwhile; 1: wait for the main one; 2: wait for all - before they are destroyed.)
     void finish_terrain_raymarch_pipeline(int mode = 2);
     void destroy_terrain_raymarch_pipeline();
+    void terrain_rm_request_variant(int i);              // (1 summer, 2 low-resolution: compiled when first wanted)
+    void terrain_water_plane_request();                  // (the mesh terrain's water plane: compiled when first wanted)
+    // The terrain's hit pass and water pass (vk_engine/terrain_water_pass.cpp): the hit pass finds
+    // each pixel's surface and leaves it at binding 64; the ground builds (VIBE_GROUND) shade the
+    // ground's pixels from it, the water pass the water's. lr = the low-resolution terrain pass.
+    void init_terrain_water_pass();                      // (from init_terrain_raymarch_pipeline)
+    void destroy_terrain_water_pass();
+    void terrain_water_pass_prepare();                   // (per frame, before recording: the hit picture's size)
+    bool terrain_water_pass_ready(bool lr);              // (hit and water pass built: the ground builds may be drawn)
+    void render_terrain_hit(VkCommandBuffer cmd, bool lr);   // (a pass of its own, before the terrain's draw)
+    void draw_terrain_water_pass(VkCommandBuffer cmd, bool lr);   // (inside the terrain's pass, after the ground)
+    void terrain_rm_push(VkCommandBuffer cmd, bool lr);  // (world_render.cpp: the terrain passes' push constants)
 
     // Rasterised water plane (mesh-terrain mode). A real plane mesh at
     // the water level drawn in the main pass with the verbatim ocean
@@ -726,7 +738,9 @@ private:
     static constexpr int kTexJeep            = 34;    // the jeep's paint, 35 its seat canvas (assets/jeep/tex)
     static constexpr int kTexScreens         = 36;    // what the pavilion's displays show: 8 pictures, 4 x 2 (assets/office/tex/screens.png)
     static constexpr int kTexStation         = 37;    // the service station's six surfaces, 37..42: brick, asphalt, checker tile, cladding, pavers, wall tile (assets/gasstation/tex)
-    static constexpr int kTerrainMatCount    = 36;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
+    static constexpr int kTexBed             = 43;    // the water's bed, 43..46: river stones, silt, steep rock, growth (assets/terrain_pbr; albedo.a = roughness; shaders/water_bed.glsl)
+    static constexpr int kTexGoods           = 47;    // the mart's goods: one atlas of every product's print (assets/shop/goods.png; tools/shop/make_goods.py, shop_goods.cpp)
+    static constexpr int kTerrainMatCount    = 41;    // +ProcGrass, Roof, Road, Leaf atlas, Bark
     static constexpr int kTextureCount       = kFileTextureCount +
                                                kTerrainMatCount;   // 20
     // Albedo/normal-array indices of the baked terrain materials.
@@ -1024,7 +1038,7 @@ private:
     std::vector<Decal> decals_;
     static constexpr int   kMaxDecals = 64;
     static constexpr float kDecalTtl  = 45.0f;
-    void spawn_impact_decal(glm::vec3 hit_pos, glm::vec3 incoming_dir);
+    void spawn_impact_decal(glm::vec3 hit_pos, glm::vec3 incoming_dir, const glm::vec3* surface_n = nullptr);
     void update_decals(float dt);
     void draw_decals(VkCommandBuffer cmd, const glm::mat4& vp, const glm::mat4& inv_vp);
     // Speed range / count are scaled by GameSettings::spark_scale at spawn.
@@ -1114,6 +1128,7 @@ private:
         glm::vec3 target{0.0f};             // waypoint / bomb aim point
         float     orbit_dir   = 1.0f;       // +1 CCW, -1 CW
         float     orbit_r     = 400.0f;
+        glm::vec2 orbit_c{0.0f};             // the orbit's middle (x, z): one of the patrol areas (props.cpp jet_zones)
         float     cruise_alt  = 140.0f;
         float     loop_rate   = 0.0f;       // rad/s pitch during a loop
         float     loop_done   = 0.0f;       // accumulated loop angle
@@ -1280,6 +1295,10 @@ private:
     AimSpreadState* spread_ = nullptr;
     void      spread_tick(float dt);                   // once a frame (combat.cpp)
     glm::vec3 spread_shot_dir(glm::vec3 forward, bool rifle);   // the direction of the local player's next shot; heats the burst
+    // The rifle's report as a machine gun (engine/gun_synth.h; combat.cpp): `local` = the player's own
+    // (at the ear), else somebody else's at `at` (through the spatialiser). The tail always is.
+    void play_rifle_shot(glm::vec3 at, bool local);
+    void tick_rifle_sounds(float dt);
     glm::mat4 body_weapon_offset_{1.0f};               // recoil, reload, equip: what is carried is drawn at view * this
     float     anim_ms_ = 0.0f, skin_ms_ = 0.0f;        // this frame, all characters
     int       anim_lod_count_[4]{};
@@ -1295,6 +1314,18 @@ private:
     static constexpr int kBodyLods = 3;
     SkinMesh      body_lod_[kBodyLods], head_lod_[kBodyLods];
     bool load_skin_mesh(const char* file, SkinMesh& out, bool with_bones, bool rt_part = false);
+    // The other people (player_body.cpp "PEOPLE", state/people.h): outfits, faces, hair, headgear and
+    // what they carry; chosen per person from its number (people_look).
+    struct PeopleState;
+    PeopleState* people_ = nullptr;
+    void init_people();
+    void destroy_people();
+    // Light under the skin: a screen-space blur of the lit skin pixels (skin_blur.cpp, shaders/skin_blur.frag).
+    struct SkinBlurState;
+    SkinBlurState* skin_blur_ = nullptr;
+    bool skin_blur_wanted() const;
+    void render_skin_blur(VkCommandBuffer cmd);
+    void destroy_skin_blur();
     // The soldiers in the ray-traced scene (vk_engine/body_rt.cpp): the nearest few get a copy,
     // skinned by a compute pass and rebuilt into a BLAS every frame, one set per frame in flight.
     static constexpr uint32_t kRtBodies = 6;
@@ -1376,6 +1407,8 @@ private:
         bool          corpse = false;                  // drawn as a body on the ground: head, no weapon
         float         npc_phase = 0.0f;                // seconds into the loop it plays (npc_world.cpp)
         bool          unarmed = false;                 // nothing in the hands (the station's people: npc_world.cpp)
+        uint32_t      person = 0;                      // who this is (0: a player's soldier) and how dressed (npc::Dress): the face, outfit, colours - player_body.cpp people_look
+        uint8_t       dress = 0;
         bool          die = false;                     // killed: the body buckles where it stands, then is a ragdoll (ragdoll.cpp)
         float         dying_t = -1.0f;                 // seconds since the kill while the body still stands (-1: alive)
         net::PlayerState dying_st{};                   // where and how they were then (they themselves respawn elsewhere at once)
@@ -1423,11 +1456,18 @@ private:
         float     t = 0.0f, hand = 1.0f;               // seconds into the clip; when the physics takes over
         glm::vec3 hit_pos{0.0f}, hit_dir{0.0f};
         glm::vec3 parts_prev[kCorpseParts]{};
+        bool      mirror = false;                      // the clip played left for right (the side the shot came from)
+        float     turn = 0.0f;                         // radians the body is turned over the first moments, so it goes down the way the shot pushed
+        glm::mat4 model0{1.0f};                        // where it stood when hit
+        float     knock = 0.0f;                        // how hard the shot pushes the part it hit when the physics takes over
+        int       hit_part = -1;                       // which of the ragdoll's parts the shot struck (found in the first pose)
         bool      fresh = true, have_prev = false;
     };
     std::vector<NpcDying> npc_dying_;
     void npc_dying_pose(float dt);
     void corpses_update(float dt);
+    void corpse_obstacles(float dt);    // (ragdoll.cpp) chairs and the cars without physics, for the bodies that fell
+    bool corpse_props_made_ = false;
     void corpses_destroy();
     void draw_corpses(VkCommandBuffer cmd, const glm::mat4& vp);
     void mp_init();
@@ -1705,6 +1745,9 @@ private:
     size_t    near_static_src_[2] = { SIZE_MAX, SIZE_MAX };
     int       near_static_age_ = 0;
     size_t    tick_static_count_ = 0;   // static prefix length of tick_aabbs_
+    // The round ones (AABB::round: boulders, trunks; and the boulders in the water): left out of
+    // the boxes above, the walker meets the upright capsule in each (game_loop.cpp, tri_collision.h).
+    std::vector<collision::AABB> near_round_, tick_rounds_;
     // Per-dyn-prop AABB cache. Sleeping bodies reuse their last-computed
     // AABB instead of re-running the 8-corner mat-vec each physics tick.
     // At 100 dyn props × 6 ticks/frame × 8 corners that's ~5k mat-vec
@@ -1914,6 +1957,7 @@ private:
     void      destroy_sites();
     bool      site_here() const;                 // the slot's content exists where the engine is now
     void      place_house(game::Level& lv, glm::vec3 hp);    // (rocket.cpp)
+    void      place_house_path(glm::vec3 hp);                // (rocket.cpp) the control house's slab and path
     void      place_office();                    // (rocket.cpp) the pavilion by the launch pad
     void      place_gasstation();                // (rocket.cpp) the service station on the coast highway (tools/gasstation)
     // Shelters: what has a roof - a box on the ground plan and the roof's height. Rain and snow
@@ -1957,6 +2001,7 @@ private:
         float uv_scale = 1.0f;
         float relief = 1.0f;
         float ssdm = 0.0f;            // screen-space displacement: how far its stones stand out (m), 0 = none (ssdm.cpp)
+        int   rock_piece = -1;        // a rock formation: its piece of the kit (the bake's layers: rock_bake.cpp), -1 = not one
         glm::vec4 emissive{0.0f};     // rgb, a = 1 full-emissive
         VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
         VkBuffer blas_buf = VK_NULL_HANDLE;
@@ -2043,6 +2088,12 @@ private:
         bool   saved_fly = false;
         bool   cam_far_side = false;                     // past the planet's far side (the map position wraps there)
         float  los_t = -100.0f;                          // when the picture was lost there
+        // Multiplayer (Event::Rocket): the machine whose button started it tells the others the count
+        // and the flight's own time; theirs follow (the flight is a fixed-step simulation, the same
+        // everywhere: only its clock is sent).
+        bool   net_owner = false;
+        float  net_sync_t = 0.0f;                        // s until the next word to the others
+        uint32_t net_from = 0;                           // whose launch this machine follows (0: its own / none)
     };
     bool prev_cam_key_ = false;
     // The globe (engine/globe.h; vk_engine/rocket.cpp): the player's chart follows them round the planet.
@@ -2186,6 +2237,22 @@ private:
     // which are drawn at which level, their colliders; state in state/rock_formations.h).
     struct RockfState;
     RockfState* rockf_ = nullptr;
+    // The mart's goods (vk_engine/shop_goods.cpp, state/shop_goods.h): its shelves filled from the
+    // goods kit, merged into a few parts per level of detail, made near the station, freed away.
+    struct ShopState;
+    ShopState* shop_ = nullptr;
+    void      shop_poll();
+    void      shop_parts(std::vector<const CastleMeshGpu*>& out) const;
+    bool      shop_owns(const CastleMeshGpu* g) const;
+    void      shop_destroy();
+    // Scree streamed round the camera (vk_engine/scree_stream.cpp, state/scree.h; the rule is
+    // scatter.cpp scree_place): generated in cells near the eye, freed out of sight.
+    struct ScreeState;
+    ScreeState* scree_ = nullptr;
+    void      scree_set_params(const ScatterParams& p);
+    void      scree_poll();
+    void      scree_draw(VkCommandBuffer cmd, const std::function<bool(const ScatterCell&)>& visible);
+    void      scree_destroy();
     void      rockf_poll();
     void      rockf_destroy();
     void      rockf_parts(std::vector<const CastleMeshGpu*>& out) const;
@@ -2216,6 +2283,7 @@ private:
     // Riding beside the driver of a car another player drives (jeep.cpp): which car, -1 = none.
     int       jeep_ride_ = -1;
     void      jeep_player_colliders(std::vector<collision::AABB>& out) const;   // the cars as obstacles for a player on foot (jeep.cpp)
+    void      corpse_car_bodies(glm::vec3 at, float reach, std::vector<PhysicsWorld::CorpseCar>& out) const;   // the cars without physics, for a fallen body (jeep.cpp)
     // The people and cars of the NPC engine (src/npc), as shown here (npc_world.cpp; the cars: jeep.cpp).
     std::unique_ptr<npc::World> npc_;
     std::vector<npc::View>      npc_views_;      // this frame's
@@ -2247,6 +2315,8 @@ private:
     void      npc_car_add(const JeepState& kind); // (jeep.cpp) one more car without physics of that kind in the pool lent to the NPC cars
     void      npc_hit(int agent, glm::vec3 hit, glm::vec3 dir);      // (npc_world.cpp) somebody was shot, by whoever
     void      npc_event(const net::Event& e);     // (npc_world.cpp) from the network
+    void      rocket_net_event(const net::Event& e);   // (rocket.cpp) another player's launch: the count, the flight's time
+    void      rocket_net_send();                       // (rocket.cpp) ours, to the others: on the button, then every 2 s while it counts or flies
     bool      npc_host_take(int agent, uint32_t taker);              // (jeep.cpp) the authority lets the car go and tells everybody
     bool      npc_car_make(const net::NpcCarTaken& t);               // (jeep.cpp) ... and every machine makes it one of the players' cars
     void      npc_taken_tick(float dt);
@@ -2280,6 +2350,13 @@ private:
     void      hw_lamps_near(glm::vec3 eye, float reach, std::vector<glm::vec3>& out) const;      // the road's street lamps (highway_furniture.cpp)
     void      hw_pole_boxes(glm::vec3 at, float reach, std::vector<PhysicsWorld::OrientedBox>& out) const;
     void      jeep_grass_press(glm::vec4 out[4]) const;     // the cars the grass lies down under (scene UBO car_press)
+    void      jeep_snow_fill(glm::vec4 out[16]) const;      // the snow each car still carries (scene UBO car_snow)
+    void      cars_snow_tick(float dt);                     // snow blown off the cars that drive, settling on those that stand
+    float     jeep_fov_extra() const;                       // degrees the driven car's view widens with speed and boost (world_render.cpp)
+    void      car_tyre_audio(float dt);                     // the driven car's tyres squealing
+    float     car_ground(float x, float z) const;           // what a car's wheel stands on at (x, z) (jeep.cpp)
+    glm::mat4 car_on_ground(const JeepState& J, glm::vec3 pos, float yaw, glm::vec2* tilt = nullptr) const;     // a car laid on that ground under its four wheels
+    void      car_settle(JeepState& J, glm::vec3 pos, float yaw);       // a car standing there on its four wheels, not simulated
     // Multiplayer: the cars this machine simulates are told to the others; theirs are drawn from what they tell (jeep.cpp).
     void      jeep_net_send(float dt);
     void      jeep_net_receive(float dt);
@@ -2506,6 +2583,12 @@ private:
     void water_solver_fill(struct SceneUBO& d);
     void water_solver_draw(VkCommandBuffer cmd);
     bool water_solver_drawing() const;
+    // The open sea's camera-projected grid (vk_engine/water_grid.cpp): its depth picture, scene
+    // binding 62, read by the terrain pass for the sea's hit. State private to that file.
+    void init_water_grid();
+    void destroy_water_grid();
+    void water_grid_prepare();                       // (before any recording: size, this frame's on / off)
+    void render_water_grid(VkCommandBuffer cmd);
     glm::vec4 grass_trail_window() const;
 
     // Heightmap raw heights as an R32_SFLOAT texture. Used by the
@@ -2973,6 +3056,20 @@ private:
     GroundFxState* gfx_ = nullptr;
     void init_ground_fx();
     void destroy_ground_fx();
+    // The rock kit's bake and the breaker pattern (vk_engine/rock_bake.cpp; state/rock_bake.h): scene binding 63.
+    struct RockBakeState;
+    RockBakeState* rock_bake_ = nullptr;
+    void init_rock_bake();
+    void destroy_rock_bake();
+    glm::vec4 rock_bake_block() const;                 // what the shaders may read of it (gfx.rock)
+    // The formations' tops from above, round the camera (rock_bake.cpp / rock_formations_gpu.cpp): what the
+    // grass placement stands blades on (tuft_place.comp binding 10).
+    void rock_tops_upload(const float* rg);            // kRockTopsN x kRockTopsN pairs (height, flag); row 0 = the header
+    VkImageView rock_tops_view() const;
+    VkSampler   rock_tops_sampler() const;
+    void rockf_tops_poll();
+    static constexpr int   kRockTopsN = 384;
+    static constexpr float kRockTopsTexel = 0.25f;
     void ground_fx_frame(VkCommandBuffer cmd);         // after the baked ground texture, before the world pass
     void ground_fx_bind_deferred();                    // the block into the deferred lighting set (binding 30)
     void gfx_lsd_capture(VkCommandBuffer cmd);         // the top-down capture: what came into the window / changed
@@ -3150,7 +3247,7 @@ private:
     // prof_mark(cmd, "name") writes a timestamp; the time between mark
     // i-1 and mark i is attributed to "name". Results are EMA-smoothed
     // per name and logged once a second alongside the frame total.
-    static constexpr uint32_t kProfMaxMarks = 48;
+    static constexpr uint32_t kProfMaxMarks = 64;   // (48 were all in use: a pass after the 48th mark went unmeasured)
     VkQueryPool prof_pool_ = VK_NULL_HANDLE;
     const char* prof_names_[2][kProfMaxMarks] = {};
     uint32_t    prof_count_[2] = {0, 0};

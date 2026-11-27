@@ -44,6 +44,7 @@ layout(set = 0, binding = 5) uniform sampler2D u_rules;                         
 layout(set = 0, binding = 6) uniform sampler2D u_height;                           // the home tile's heights (m), 2048 m square
 layout(set = 0, binding = 7) uniform sampler2D u_lawn;                             // the lawn's mask: r = grass, g = slope
 layout(set = 0, binding = 8) uniform sampler2D u_near;                             // beyond the home tile: the ground round the camera (veg_stream.cpp wv_nf_poll)
+layout(set = 0, binding = 10) uniform sampler2D u_tops;                            // the rock formations' tops from above round the camera: r height, g 1 = the ground lies on it / 0.5 = bare rock (rock_formations_gpu.cpp rockf_tops_poll; row 0 = its header)
 layout(set = 0, binding = 9) uniform sampler2D u_shade;                            // the home tile: how much vegetation stands over the ground (r; albedo slot 22) - the debris
 
 layout(push_constant) uniform PC {
@@ -241,8 +242,8 @@ void main() {
     float grows = 0.0, dryness = 0.0;
     int   dkind = -1;                  // the debris' kind (P_CAP.w 3): 0 twig .. 7 stones (scatter_debris_meshes.inl)
     float surf_y = -1e9;               // litter on a raised slab: the slab's top (P_FIELD(2))
-    if (P_CAP.w > 2.5) {
     bool  flat_under = false;          // debris on cleared ground (road, paving, forecourt): the drawn ground has no close relief there
+    if (P_CAP.w > 2.5) {
         // SMALL DEBRIS, by rule (the reference game's placement groups do this with authored
         // masks; ours from what the ground already knows). One die per candidate picks among
         // what may lie here:
@@ -267,6 +268,12 @@ void main() {
             float w = smoothstep(0.0, 1.0, min(m.x, m.y) + 0.6 * crowd_noise(xz * 0.4));
             if (w > litter) { litter = w; float sy = P_FIELD(2)[i]; surf_y = sy > 0.0 ? sy : -1e9; }
         }
+        // The service station's paving slabs (plant_gpu.cpp: P_COL2 their rectangle, P_COL1 = x
+        // where the eastern one begins, its top, the western one's top, 1): drawn as meshes at
+        // their own heights - the ground's height under them is not theirs (debris stood a few
+        // centimetres over the asphalt, or lay hidden under it). Litter only there, on the top.
+        bool paved = P_COL1.w > 0.5 && xz.x > P_COL2.x && xz.y > P_COL2.y && xz.x < P_COL2.z && xz.y < P_COL2.w;
+        if (paved) surf_y = xz.x >= P_COL1.x ? P_COL1.y : P_COL1.z;
         float clear = 1.0, near_clear = 1.0;            // 1 = may lie here; the nearest cleared ground within 1.5 m
         float open3 = 0.0;                              // cleared ground here, open ground within 3 m: a verge (gravel on it)
         if (home && abs(xz.x) < P_CAP.x - 2.0 && abs(xz.y) < P_CAP.x - 2.0) {
@@ -293,13 +300,21 @@ void main() {
         float trees = shade.x;
         // steep ground a few metres uphill: the foot of a cliff
         float h0 = ground_h(xz);
-        vec2  gr = vec2(ground_h(xz + vec2(2.0, 0.0)) - ground_h(xz - vec2(2.0, 0.0)), ground_h(xz + vec2(0.0, 2.0)) - ground_h(xz - vec2(0.0, 2.0))) / 4.0;
+        float hxp = ground_h(xz + vec2(2.0, 0.0)), hxn = ground_h(xz - vec2(2.0, 0.0));
+        float hzp = ground_h(xz + vec2(0.0, 2.0)), hzn = ground_h(xz - vec2(0.0, 2.0));
+        vec2  gr = vec2(hxp - hxn, hzp - hzn) / 4.0;
+        // (a kink in the ground within 2 m - a terrace's rim, the foot of a retaining wall, a
+        //  kerb: the height between the samples is not the drawn one there, and a piece placed
+        //  from it floated. Nothing but litter on such ground.)
+        float kink = max(abs(hxp + hxn - 2.0 * h0), abs(hzp + hzn - 2.0 * h0));
+        bool kinked_ground = kink > 0.35 && P_COL1.w > 0.5;      // (P_COL1.w: off with VIBE_DEBRIS_OLD)
         vec2  up = length(gr) > 1e-4 ? normalize(gr) : vec2(1.0, 0.0);
         float above = (ground_h(xz + up * 6.0) - ground_h(xz + up * 3.0)) / 3.0;           // slope 3 - 6 m uphill
         float foot = smoothstep(0.7, 1.2, above) * (1.0 - smoothstep(0.35, 0.6, length(gr)));
         bool conifer = shade.y > 0.35 * max(trees, 0.05);
+        flat_under = clear < 0.5 || litter > 0.5 || paved;
         if (litter > 0.0 && r < 0.09 * litter)                 dkind = 5;
-        flat_under = clear < 0.5 || litter > 0.5;
+        else if (paved || kinked_ground)                        return;
         else if (clear < 0.5) { if (open3 > 0.5 && r < 0.45) dkind = 6; else return; }       // (a cut verge: grit spilt from the road)
         else if (near_clear < 0.5 && r < 0.55)                  dkind = 6;
         else if (foot > 0.0 && r < 0.5 * foot)                  dkind = 7;
@@ -337,6 +352,23 @@ void main() {
     const float e = 1.0;
     vec3  Nn = normalize(vec3(ground_h(xz - vec2(e, 0.0)) - ground_h(xz + vec2(e, 0.0)), 2.0 * e,
                               ground_h(xz - vec2(0.0, e)) - ground_h(xz + vec2(0.0, e))));
+    // On a rock formation: where the ground lies on its top (the material's rule) the blade
+    // stands on the top; where the rock is bare nothing grows through it.
+    {
+        vec2 th = texelFetch(u_tops, ivec2(1, 0), 0).rg;
+        if (th.g == 77.0) {
+            ivec2 tn = textureSize(u_tops, 0);
+            ivec2 tt = ivec2(floor((xz - texelFetch(u_tops, ivec2(0, 0), 0).rg) / th.r));
+            if (tt.x >= 0 && tt.y >= 1 && tt.x < tn.x && tt.y < tn.y) {
+                vec2 tv = texelFetch(u_tops, tt, 0).rg;
+                if (tv.g > 0.25 && tv.r > h + 0.25) {
+                    if (tv.g < 0.75) return;
+                    h = tv.r;
+                    Nn = vec3(0.0, 1.0, 0.0);
+                }
+            }
+        }
+    }
     vec3  pos = vec3(xz.x, h - 0.02, xz.y);
     if (dkind == 5 && surf_y > -1e8) pos.y = surf_y + 0.005;      // (litter on the car park's slab, not under it)
     float d3 = distance(pos, pc.cam.xyz);

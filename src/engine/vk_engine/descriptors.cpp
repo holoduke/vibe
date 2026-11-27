@@ -57,7 +57,7 @@ void VulkanEngine::init_descriptors() {
         // SVGF GI denoiser storage images: 1 raw gi (binding 19) +
         // 2 history ping-pong (bindings 20, 21) +
         // 2 variance-moments ping-pong (bindings 22, 23 — 4a-deep).
-        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 6 },      // (+1: the water's hit from the ground pass, binding 64 - terrain_water_pass.cpp)
         // +1 for the heightmap shadow texture at binding 6.
         // +1 for the sun shadow map at binding 7 (sampler2DShadow).
         // +1 for the raw heightmap texture at binding 8 (R32_SFLOAT) —
@@ -77,7 +77,7 @@ void VulkanEngine::init_descriptors() {
         // +1 (now 11) for the terrain aux bake (curvature + sky-vis)
         // at binding 26 — AAA terrain Phases 4/5.
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            kTextureCount * 2 + 34 + 4 + 3 + 1 + 1 + kSpomMaterialCount },      // (+1: the shallow-water solver, 54)      // (+1: the ground effects' capture, 61)      // + the water's cascades and ripple field (51..53, water_sim.cpp), the tracks (55), the fog volumes for the FX (56..58), the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
+            kTextureCount * 2 + 34 + 4 + 3 + 1 + 1 + 1 + kSpomMaterialCount },      // (+1: the sea's projected grid, 62)     // (+1: the shallow-water solver, 54)      // (+1: the ground effects' capture, 61)      // + the water's cascades and ripple field (51..53, water_sim.cpp), the tracks (55), the fog volumes for the FX (56..58), the terrain's low-resolution march (34), its second low-resolution picture (36, 37)
     };
     VkDescriptorPoolCreateInfo pci{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -343,7 +343,7 @@ void VulkanEngine::init_descriptors() {
     bindings[33].binding = 33;
     bindings[33].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[33].descriptorCount = 1;
-    bindings[33].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    bindings[33].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;      // (the fragment: a person's look block - shaders/people.glsl)
     // Binding 34: the terrain's low-resolution march (R32F; pipelines_setup.cpp
     // init_terrain_raymarch_lowres) - the full-resolution terrain pass starts from it.
     bindings[34] = bindings[31];
@@ -414,7 +414,7 @@ void VulkanEngine::init_descriptors() {
         x.binding = b;
         x.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         x.descriptorCount = 1;
-        x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT;   // (vertex: the sea's projected grid, water_grid.vert)
         all_bindings.push_back(x);
     }
     // Binding 54 (water_solver.cpp): the local shallow-water solver's render picture - the surface
@@ -428,6 +428,16 @@ void VulkanEngine::init_descriptors() {
         x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         all_bindings.push_back(x);
     }
+    // Binding 62 (water_grid.cpp): the open sea's projected grid, its depth picture (the terrain
+    // pass reads the sea's hit there). Written in init_water_grid.
+    {
+        VkDescriptorSetLayoutBinding x{};
+        x.binding = 62;
+        x.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        x.descriptorCount = 1;
+        x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        all_bindings.push_back(x);
+    }
     // Bindings 60, 61 (ground_fx.cpp; shaders/ground_fx.glsl): the ground effects' block (the
     // paste, the far ground's capture window, the decals) and the capture of placed objects.
     for (uint32_t b = 60; b <= 61; ++b) {
@@ -436,6 +446,26 @@ void VulkanEngine::init_descriptors() {
         x.descriptorType = (b == 60) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         x.descriptorCount = 1;
         x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+        all_bindings.push_back(x);
+    }
+    // Binding 63 (rock_bake.cpp; shaders/rock_breaker.glsl): the rock kit's bake and the breaker
+    // pattern, an array texture. Written in init_rock_bake (from init_ground_fx).
+    {
+        VkDescriptorSetLayoutBinding x{};
+        x.binding = 63;
+        x.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        x.descriptorCount = 1;
+        x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+        all_bindings.push_back(x);
+    }
+    // Binding 64 (terrain_water_pass.cpp): the water's hit, written by the terrain's ground pass and read
+    // by its water pass (a storage image in GENERAL). Written in init_terrain_water_pass.
+    {
+        VkDescriptorSetLayoutBinding x{};
+        x.binding = 64;
+        x.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        x.descriptorCount = 1;
+        x.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         all_bindings.push_back(x);
     }
     VkDescriptorSetLayoutCreateInfo lci{
@@ -1090,11 +1120,12 @@ void VulkanEngine::update_scene_ubo() {
         const bool on = st.ok && globe::current().home && rt_.water_enabled;
         data.stream_info = glm::vec4(on ? float(st.pts.size()) : 0.0f, st.depth0, st.depth1, 0.0f);
         for (int i = 0; i < wc::kMaxPts; ++i) data.stream_pts[i] = (on && size_t(i) < st.pts.size()) ? st.pts[size_t(i)] : glm::vec4(0.0f);
-        for (int i = 0; i < 8; ++i) data.stream_box[i] = (on && size_t(i) < st.box.size()) ? st.box[size_t(i)] : glm::vec4(1e9f, 1e9f, -1e9f, -1e9f);
+        for (int i = 0; i < 16; ++i) data.stream_box[i] = (on && size_t(i) < st.box.size()) ? st.box[size_t(i)] : glm::vec4(1e9f, 1e9f, -1e9f, -1e9f);
     }
     data.water_body = glm::vec4(player_.position, 0.0f);      // (the lilies part round the body, not the camera: scatter.vert)
     water_sim_fill(data);                                    // (water_sim.cpp: the wind sea's cascades, the ripple field, the water's switches)
     water_solver_fill(data);                                 // (water_solver.cpp: the shallow-water solver's window and this frame's steps)
+    water_wet_fill(data);                                    // (water_wet.cpp: materials at the water, the sea's grid and its switches)
     {   // home's flat formula from this chart, where it applies (engine/globe.h Ring)
         const globe::Ring& rg = globe::ring_now();
         data.ring_info = glm::vec4(rg.on ? 1.0f : 0.0f, float(rg.wp0.x), float(rg.wp0.y), float(globe::current().org.y));     // (.w: the chart origin's local z; its x is globe_info.y)
@@ -1196,6 +1227,7 @@ void VulkanEngine::update_scene_ubo() {
             add(mz, 26.0f, glm::vec3(1.0f, 0.62f, 0.30f), 7.0f * glm::clamp(v.flash_t / 0.05f, 0.0f, 1.0f), true);
         }
         for (const auto& r : aa_rounds_) {
+            if (r.t > 2.4f) continue;                         // (its tracer has burnt out: aa.cpp)
             const float radius = 18.0f;
             const float gh = std::max(sample_terrain_height(r.pos.x, r.pos.z), rt_.water_level);
             if (r.pos.y - gh > radius + 12.0f) continue;      // +12: tree crowns, towers

@@ -16,6 +16,8 @@
 #include "engine/vk_pipelines.h"
 #include "engine/window.h"
 
+#include <chrono>
+#include <thread>
 #include <VkBootstrap.h>
 #include <GLFW/glfw3.h>
 
@@ -432,8 +434,12 @@ void VulkanEngine::init_swapchain() {
     }
     swapchain_colorspace_ = want.colorSpace;
 
+    // (built in a loop: right after the frame-generation proxy is torn down the surface can still
+    //  be held by its swapchain for a moment - the build then fails once or twice; the reason is
+    //  logged, since the frame loop's catch only knows the type)
+    auto build_once = [&]() {
     vkb::SwapchainBuilder sb{ physical_device_, device_, surface_ };
-    auto sc_ret = sb
+    return sb
         .set_desired_format(want)
         // VIBE_PRESENT_IMMEDIATE=1: no vsync (benchmarking the GPU/CPU
         // frame cost without the refresh-rate cap). Falls back to FIFO.
@@ -449,7 +455,19 @@ void VulkanEngine::init_swapchain() {
                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
         .build();
-    if (!sc_ret) throw std::runtime_error("swapchain build: " + sc_ret.error().message());
+    };
+    auto sc_ret = build_once();
+    for (int attempt = 1; !sc_ret && attempt <= 40; ++attempt) {
+        log::warnf("[swapchain] build failed (%s, VkResult %d) - attempt %d, trying again", sc_ret.error().message().c_str(),
+                   int(sc_ret.vk_result()), attempt);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        vkDeviceWaitIdle(device_);
+        sc_ret = build_once();
+    }
+    if (!sc_ret) {
+        log::errorf("[swapchain] build failed for good: %s (VkResult %d)", sc_ret.error().message().c_str(), int(sc_ret.vk_result()));
+        throw std::runtime_error("swapchain build: " + sc_ret.error().message());
+    }
 
     auto vkb_sc = sc_ret.value();
     swapchain_ = vkb_sc.swapchain;

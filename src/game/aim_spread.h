@@ -104,4 +104,79 @@ struct AimSpread {
     }
 };
 
+// VIEW RECOIL: what a held trigger does to the view itself. Every shot kicks the muzzle up and a
+// little to one side; the side wanders (a few shots one way, then the other, leaning one way on
+// the whole - a right-handed shooter's rifle pulls up and to the right). The kick is given over
+// a few hundredths of a second (no jump). What the player pulls back against the climb is
+// theirs: it is taken off what is owed, so when firing stops the view only goes back by what
+// the player did NOT counter, eased, after a short pause. Together with the spread above: the
+// cone (where the round goes round the crosshair) and this (where the crosshair itself goes).
+// Angles in degrees.
+struct RecoilDef {
+    float pitch_per_shot;   // up, each shot (the first shots a little less: first_scale)
+    float first_scale;      // the first shot of a burst kicks this share; it grows to 1 over ramp_shots
+    float ramp_shots;
+    float yaw_per_shot;     // the sideways step's size
+    float yaw_bias;         // -1 .. 1: which way the side drifts on the whole (+ right)
+    float aim_scale;        // aimed: this share of all of it (braced in the shoulder)
+    float crouch_scale;     // crouched: this share
+    float kick_tau;         // s: how fast a kick is given
+    float recover_delay;    // s after the last shot before the view goes back
+    float recover_tau;      // s: how fast it goes back (time constant)
+    float recover_share;    // share of what is still owed that is given back (the rest stays: the view drifted)
+};
+// The rifle at 11 rounds a second: ten rounds from the hip climb about 4.5 degrees and drift a
+// degree or so; aimed about 2.9 and 0.6. Back within half a second of letting go.
+inline constexpr RecoilDef kRifleRecoil{
+    .pitch_per_shot = 0.48f, .first_scale = 0.55f, .ramp_shots = 3.0f,
+    .yaw_per_shot = 0.16f, .yaw_bias = 0.35f, .aim_scale = 0.65f, .crouch_scale = 0.8f,
+    .kick_tau = 0.035f, .recover_delay = 0.10f, .recover_tau = 0.16f, .recover_share = 0.85f,
+};
+// The laser gun: hardly any (a light weapon that throws no brass).
+inline constexpr RecoilDef kLaserRecoil{
+    .pitch_per_shot = 0.14f, .first_scale = 0.6f, .ramp_shots = 2.0f,
+    .yaw_per_shot = 0.06f, .yaw_bias = 0.0f, .aim_scale = 0.7f, .crouch_scale = 0.85f,
+    .kick_tau = 0.03f, .recover_delay = 0.08f, .recover_tau = 0.14f, .recover_share = 0.9f,
+};
+
+struct ViewRecoil {
+    float owe_pitch = 0.0f, owe_yaw = 0.0f;     // degrees the view is away from where the player put it (still to be given back)
+    float due_pitch = 0.0f, due_yaw = 0.0f;     // degrees of kick not yet given to the view
+    float since_shot = 1e3f;
+    float shots = 0.0f;                         // in this burst
+    float drift = 0.0f;                         // the side's wander, -1 .. 1
+
+    // A shot. u: a random number 0 .. 1. stance: aim (0..1), crouch (0..1).
+    void on_shot(const RecoilDef& d, float u, float aim, float crouch) {
+        if (since_shot > d.recover_delay + 0.15f) shots = 0.0f;
+        const float ramp = d.first_scale + (1.0f - d.first_scale) * std::clamp(shots / std::max(d.ramp_shots, 1e-3f), 0.0f, 1.0f);
+        const float k = ramp * (1.0f + (d.aim_scale - 1.0f) * std::clamp(aim, 0.0f, 1.0f)) *
+                        (1.0f + (d.crouch_scale - 1.0f) * std::clamp(crouch, 0.0f, 1.0f));
+        drift = std::clamp(drift * 0.8f + (u * 2.0f - 1.0f) * 0.9f, -1.0f, 1.0f);
+        due_pitch += d.pitch_per_shot * k;
+        due_yaw += d.yaw_per_shot * k * std::clamp(drift + d.yaw_bias, -1.0f, 1.0f);
+        shots += 1.0f;
+        since_shot = 0.0f;
+    }
+    // Time passes. `user_pitch`: degrees the PLAYER turned the view (up +) since the last call,
+    // yaw likewise. Returns, in out_pitch / out_yaw, the degrees to add to the view now.
+    void tick(const RecoilDef& d, float dt, float user_pitch, float user_yaw, float& out_pitch, float& out_yaw) {
+        since_shot += dt;
+        // (what the player pulled against the climb is no longer owed)
+        if (owe_pitch > 0.0f && user_pitch < 0.0f) owe_pitch = std::max(0.0f, owe_pitch + user_pitch);
+        if (owe_yaw * user_yaw < 0.0f) owe_yaw = std::abs(user_yaw) >= std::abs(owe_yaw) ? 0.0f : owe_yaw + user_yaw;
+        const float g = 1.0f - std::exp(-dt / std::max(d.kick_tau, 1e-3f));
+        float p = due_pitch * g, y = due_yaw * g;
+        due_pitch -= p; due_yaw -= y;
+        owe_pitch += p; owe_yaw += y;
+        if (since_shot > d.recover_delay) {
+            const float r = 1.0f - std::exp(-dt / std::max(d.recover_tau, 1e-3f));
+            const float bp = owe_pitch * r * d.recover_share, by = owe_yaw * r * d.recover_share;
+            p -= bp; y -= by;
+            owe_pitch -= owe_pitch * r; owe_yaw -= owe_yaw * r;          // (the share not given back is let go)
+        }
+        out_pitch = p; out_yaw = y;
+    }
+};
+
 } // namespace vibe::game

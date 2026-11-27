@@ -814,11 +814,14 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     }
     // Anti-aircraft tracers: red glowing streaks (~15 m) + muzzle flashes.
     for (const auto& r : aa_rounds_) {
+        // (the tracer burns out over its last half second, aa.cpp kTracerBurn; the round flies on unseen)
+        const float burn = 1.0f - glm::smoothstep(1.9f, 2.4f, r.t);
+        if (burn <= 0.0f) continue;
         glm::vec3 d = glm::normalize(r.vel);
         float len = std::min(16.0f, glm::length(r.vel) * 0.022f);
         glm::vec3 tail = r.pos - d * len;
-        glow.strip({ tail, r.pos }, { min_w(tail, 0.10f, 1.3f), min_w(r.pos, 0.16f, 1.8f) },
-                   { 0.15f, 1.4f }, glm::vec3(1.0f, 0.06f, 0.03f));
+        glow.strip({ tail, r.pos }, { min_w(tail, 0.10f, 1.3f), min_w(r.pos, 0.16f * (0.6f + 0.4f * burn), 1.8f) },
+                   { 0.15f * burn, 1.4f * burn }, glm::vec3(1.0f, 0.06f + 0.10f * (1.0f - burn), 0.03f));
     }
     for (const auto& v : aa_) {
         if (v.flash_t <= 0.0f || v.kind == 1) continue;
@@ -1379,6 +1382,20 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
     // The glass, before smoke and light: those lie over it. Farthest part first.
     if (any_glass) {
         const glm::vec3 ge = fv.eye_pos;
+        // The eye indoors (under a shelter's roof): the panes mirror the room (glass.frag).
+        // VIBE_GLASS_INDOOR=0/1 forces it.
+        if (glass_) {
+            static const char* force = std::getenv("VIBE_GLASS_INDOOR");
+            float in = 0.0f;
+            if (force) in = force[0] == '1' ? 1.0f : 0.0f;
+            else {
+                std::vector<Shelter> roofs;
+                shelters_near(ge, 2.0f, roofs, 4);
+                for (const Shelter& s : roofs)
+                    if (ge.x > s.lo.x && ge.x < s.hi.x && ge.z > s.lo.y && ge.z < s.hi.y && ge.y < s.top) { in = 1.0f; break; }
+            }
+            glass_->indoor = in;
+        }
         std::sort(panes.begin(), panes.end(), [&](const CastleMeshGpu* a, const CastleMeshGpu* b) {
             const glm::vec3 ca = 0.5f * (a->bmin + a->bmax) - ge, cb = 0.5f * (b->bmin + b->bmax) - ge;
             return glm::dot(ca, ca) > glm::dot(cb, cb);
@@ -1393,6 +1410,7 @@ void VulkanEngine::render_fx(VkCommandBuffer cmd) {
             pc.model = gp->xf;
             pc.prev_mvp = fv.vp;
             pc.color = glm::vec4(gp->tint, 1.0f);
+            pc.grass_params = glm::vec4(glass_ ? glass_->indoor : 0.0f, 0.0f, 0.0f, 0.0f);     // (glass.frag: the eye indoors)
             vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
             vkCmdBindVertexBuffers(cmd, 0, 1, &gp->mesh.vertex_buffer, &goff);
             vkCmdBindIndexBuffer(cmd, gp->mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);

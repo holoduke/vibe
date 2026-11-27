@@ -253,19 +253,113 @@ void VulkanEngine::init_world() {
             const int DW = hm.dim + 1;
             wc::build_stream(rt_.water_level, [&](float x, float z) {
                 return (std::abs(x) < 1020.0f && std::abs(z) < 1020.0f) ? hm.sample_world(x, z) : world_ground_height_natural(x, z, rt_.water_level, 9);
-            });
+            }, [wl = rt_.water_level](float x, float z) { return wl + water_level_off(x, z); });      // (it ends at the river's level where it meets it: the river falls - water_fx.cpp)
             const wc::Course& st = wc::stream(rt_.water_level);
             const bool base_ok = terrain_baseline_heights_.size() == hm.heights.size();
-            for (const glm::vec4& B : st.box) {
-                const int bx0 = std::clamp(int((B.x - hm.origin_x) / hm.cell), 0, DW - 1), bx1 = std::clamp(int((B.z - hm.origin_x) / hm.cell) + 1, 0, DW - 1);
-                const int bz0 = std::clamp(int((B.y - hm.origin_z) / hm.cell), 0, DW - 1), bz1 = std::clamp(int((B.w - hm.origin_z) / hm.cell) + 1, 0, DW - 1);
+            // VIBE_LOG_CUT=x0,z0,x1,z1: the ground along that line every 2 m - before the stream's
+            // carve, after it, and the stream there (distance, surface) - to find which term of the
+            // ground makes a step (the 2026-11-27 wall in the mountain north of the stream).
+            std::vector<float> pre_stream;
+            if (std::getenv("VIBE_LOG_CUT")) pre_stream = hm.heights;
+            // EVERY CELL ONCE. The carve is not idempotent (the rounding where the bank meets the
+            // land takes a little off each time), and the padded boxes overlap - most where the
+            // course bends back on itself: a cell in three boxes was carved three times, and the
+            // grid (the grass's roots, physics) lay up to 0.9 m under the drawn ground, which the
+            // shader carves once (2026-11-27, the owner's "the grass is inside the terrain").
+            if (!st.box.empty()) {
+                glm::vec4 U(1e9f, 1e9f, -1e9f, -1e9f);
+                for (const glm::vec4& B : st.box) U = glm::vec4(std::min(U.x, B.x), std::min(U.y, B.y), std::max(U.z, B.z), std::max(U.w, B.w));
+                const int bx0 = std::clamp(int((U.x - hm.origin_x) / hm.cell), 0, DW - 1), bx1 = std::clamp(int((U.z - hm.origin_x) / hm.cell) + 1, 0, DW - 1);
+                const int bz0 = std::clamp(int((U.y - hm.origin_z) / hm.cell), 0, DW - 1), bz1 = std::clamp(int((U.w - hm.origin_z) / hm.cell) + 1, 0, DW - 1);
                 for (int z = bz0; z <= bz1; ++z)
                     for (int x = bx0; x <= bx1; ++x) {
-                        const size_t i = size_t(z) * DW + x;
                         const glm::vec2 p(hm.origin_x + float(x) * hm.cell, hm.origin_z + float(z) * hm.cell);
+                        bool in = false;
+                        for (const glm::vec4& B : st.box)
+                            if (p.x >= B.x - hm.cell && p.x <= B.z + hm.cell && p.y >= B.y - hm.cell && p.y <= B.w + hm.cell) { in = true; break; }
+                        if (!in) continue;
+                        const size_t i = size_t(z) * DW + x;
                         hm.heights[i] = wc::carve(st, hm.heights[i], p);
                         if (base_ok) terrain_baseline_heights_[i] = wc::carve(st, terrain_baseline_heights_[i], p);
                     }
+            }
+            if (const char* lc = std::getenv("VIBE_LOG_CUT")) {
+                float x0 = 530.0f, z0 = 40.0f, x1 = 530.0f, z1 = 160.0f;
+                std::sscanf(lc, "%f,%f,%f,%f", &x0, &z0, &x1, &z1);
+                std::swap(hm.heights, pre_stream);
+                std::vector<float> before;
+                const float len = std::hypot(x1 - x0, z1 - z0);
+                for (float s = 0.0f; s <= len; s += 2.0f) { const float u = s / std::max(len, 1e-3f); before.push_back(hm.sample_world(x0 + (x1 - x0) * u, z0 + (z1 - z0) * u)); }
+                // (with a 5th number, a grid step: the ground before the stream over the box x0..x1, z0..z1 too)
+                float gs = 0.0f;
+                if (std::sscanf(lc, "%*f,%*f,%*f,%*f,%f", &gs) == 1 && gs > 0.5f)
+                    for (float z = z0; z <= z1 + 0.1f; z += gs) {
+                        std::string row; char b[16];
+                        for (float x = x0; x <= x1 + 0.1f; x += gs) { std::snprintf(b, sizeof(b), "%6.1f", double(hm.sample_world(x, z))); row += b; }
+                        log::infof("[cut] grid z %5.0f:%s", double(z), row.c_str());
+                    }
+                std::swap(hm.heights, pre_stream);
+                size_t j = 0;
+                for (float s = 0.0f; s <= len; s += 2.0f, ++j) {
+                    const float u = s / std::max(len, 1e-3f);
+                    const glm::vec2 p(x0 + (x1 - x0) * u, z0 + (z1 - z0) * u);
+                    const wc::At A = wc::at(st, p);
+                    log::infof("[cut] (%.0f, %.0f): ground before the stream %.2f, after %.2f, formula %.2f; stream %s dist %.1f surface %.2f",
+                               double(p.x), double(p.y), double(before[j]), double(hm.sample_world(p.x, p.y)), double(world_ground_height_natural(p.x, p.y, rt_.water_level, 9)),
+                               A.on ? "on" : "off", double(A.dist), double(A.surf));
+                }
+                pre_stream.clear();
+            }
+            // VIBE_LOG_STREAM_BANKS=1: walk the course every 2 m and look at both edges of the water's
+            // footprint (wet_reach): the ground there must stand at or above the surface, else the water
+            // ends in the footprint's straight line instead of on a bank. Logs each violation.
+            if (std::getenv("VIBE_LOG_STREAM_BANKS") && st.ok) {
+                int bad = 0, n = 0;
+                for (size_t k = 0; k + 1 < st.pts.size(); ++k) {
+                    const glm::vec2 a(st.pts[k]), b(st.pts[k + 1]);
+                    const float L = glm::distance(a, b);
+                    for (float s = 0.0f; s < L; s += 2.0f) {
+                        const glm::vec2 c = a + (b - a) * (s / std::max(L, 1e-3f));
+                        const wc::At A0 = wc::at(st, c);
+                        if (!A0.on) continue;
+                        const glm::vec2 nrm(-A0.dir.y, A0.dir.x);
+                        for (float side : { -1.0f, 1.0f }) {
+                            const glm::vec2 p = c + nrm * (side * (wc::wet_reach(A0) - 0.05f));
+                            const wc::At A = wc::at(st, p);
+                            if (!A.on || A.dist > wc::wet_reach(A)) continue;
+                            if (std::abs(p.x) >= 1020.0f || std::abs(p.y) >= 1020.0f) continue;
+                            const float g = hm.sample_world(p.x, p.y);
+                            ++n;
+                            if (g < A.surf - 0.01f) {
+                                ++bad;
+                                if (bad <= 40) log::infof("[stream banks] seg %zu at (%.1f, %.1f) side %+.0f: ground %.2f under the surface %.2f by %.2f m (reach %.2f m, dist %.2f; carve of it %.2f; mouth %.2f)",
+                                                          k, double(p.x), double(p.y), double(side), double(g), double(A.surf), double(A.surf - g), double(wc::wet_reach(A)),
+                                                          double(A.dist), double(wc::carve(st, g, p)), double(st.pts.back().z));
+                            }
+                        }
+                    }
+                }
+                log::infof("[stream banks] %d of %d footprint-edge samples have ground under the water", bad, n);
+                // ... and over the ground grid itself: cells in the last 0.3 m of the footprint (the bank rises out of the water 0.35 m before it) with ground
+                // under the surface (an edge that is the footprint's line), and SEAMS - two neighbouring wet
+                // cells whose nearest course segments are not neighbours and whose surfaces differ (a bend's
+                // two arms meeting: the water steps along the line between them).
+                int edge_bad = 0, seam = 0;
+                for (const glm::vec4& B : st.box) {
+                    const int bx0 = std::clamp(int((B.x - hm.origin_x) / hm.cell), 0, DW - 2), bx1 = std::clamp(int((B.z - hm.origin_x) / hm.cell), 0, DW - 2);
+                    const int bz0 = std::clamp(int((B.y - hm.origin_z) / hm.cell), 0, DW - 1), bz1 = std::clamp(int((B.w - hm.origin_z) / hm.cell), 0, DW - 1);
+                    for (int z = bz0; z <= bz1; ++z)
+                        for (int x = bx0; x <= bx1; ++x) {
+                            const glm::vec2 p(hm.origin_x + float(x) * hm.cell, hm.origin_z + float(z) * hm.cell), q = p + glm::vec2(hm.cell, 0.0f);
+                            const wc::At A = wc::at(st, p), Q = wc::at(st, q);
+                            if (!A.on) continue;
+                            const float g = hm.heights[size_t(z) * DW + x], gq = hm.heights[size_t(z) * DW + x + 1];
+                            const bool wet = A.dist < wc::wet_reach(A) && g < A.surf, wetq = Q.on && Q.dist < wc::wet_reach(Q) && gq < Q.surf;
+                            if (wet && A.dist > wc::wet_reach(A) - 0.3f) { if (++edge_bad <= 10) log::infof("[stream banks] footprint edge in the water at (%.1f, %.1f) seg %.1f: ground %.2f surface %.2f", double(p.x), double(p.y), double(A.seg), double(g), double(A.surf)); }
+                            if (wet && wetq && std::abs(A.seg - Q.seg) > 1.5f && std::abs(A.surf - Q.surf) > 0.05f) { if (++seam <= 10) log::infof("[stream banks] seam at (%.1f, %.1f): segs %.1f / %.1f, surfaces %.2f / %.2f", double(p.x), double(p.y), double(A.seg), double(Q.seg), double(A.surf), double(Q.surf)); }
+                        }
+                }
+                log::infof("[stream banks] grid: %d footprint-edge cells in the water, %d seam cells", edge_bad, seam);
             }
         }
         // A road's shelf inside the home tile (the castle lane: engine/highway.h). The tile's
@@ -370,6 +464,41 @@ void VulkanEngine::init_world() {
             log::infof("[lane] the car park's terrace at %.2f m (%.0f..%.0f, %.0f..%.0f); the lane ends at (%.1f, %.1f)", pad, kCastlePark[0], kCastlePark[2], kCastlePark[1], kCastlePark[3], le.x, le.z);
         }
         log::infof("[road] %zu centreline points carved", castle_road_.pts.size());
+        // VIBE_SCAN_CUTS=1: look for walls in the GROUND (not meshes): every 2 m over the home tile
+        // (the baked grid) and every 4 m out to 3 km beyond it (the formula), a step between two
+        // neighbouring samples of more than 5 m (home) / 8 m (beyond) - steeper than about 68 / 63
+        // degrees over more than 5 m. Logged per 50 m square: the largest step, how many, and
+        // whether the stream's carve or the river's reaches there.
+        if (std::getenv("VIBE_SCAN_CUTS")) {
+            struct Bin { float dh = 0.0f; int n = 0; float x = 0.0f, z = 0.0f; };
+            std::vector<std::pair<long long, Bin>> bins;
+            auto add = [&](float x, float z, float dh) {
+                const long long key = (long long)std::floor(x / 50.0f) * 100000LL + (long long)std::floor(z / 50.0f);
+                for (auto& b : bins) if (b.first == key) { ++b.second.n; if (dh > b.second.dh) b.second = Bin{ dh, b.second.n, x, z }; return; }
+                bins.push_back({ key, Bin{ dh, 1, x, z } });
+            };
+            const auto t0 = std::chrono::steady_clock::now();
+            for (float z = -1018.0f; z < 1018.0f; z += 2.0f)
+                for (float x = -1018.0f; x < 1018.0f; x += 2.0f) {
+                    const float h = hm.sample_world(x, z), dx = std::abs(hm.sample_world(x + 2.0f, z) - h), dz = std::abs(hm.sample_world(x, z + 2.0f) - h);
+                    if (std::max(dx, dz) > 5.0f) add(x, z, std::max(dx, dz));
+                }
+            const size_t home_bins = bins.size();
+            for (float z = -4020.0f; z < 4020.0f; z += 4.0f)
+                for (float x = -4020.0f; x < 4020.0f; x += 4.0f) {
+                    if (std::abs(x) < 1024.0f && std::abs(z) < 1024.0f) continue;
+                    const float h = world_ground_height(x, z, rt_.water_level, 9);
+                    const float dx = std::abs(world_ground_height(x + 4.0f, z, rt_.water_level, 9) - h), dz = std::abs(world_ground_height(x, z + 4.0f, rt_.water_level, 9) - h);
+                    if (std::max(dx, dz) > 8.0f) add(x, z, std::max(dx, dz));
+                }
+            log::infof("[cuts] scanned in %.1f s: %zu squares of 50 m with a wall in the ground (%zu on the home tile)", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), bins.size(), home_bins);
+            for (size_t i = 0; i < bins.size() && i < 200; ++i) {
+                const Bin& b = bins[i].second;
+                const wc::At A = wc::at(wc::stream(rt_.water_level), glm::vec2(b.x, b.z));
+                log::infof("[cuts] (%.0f, %.0f): step %.1f m, %d samples; stream %s (dist %.0f), river edge %.0f m", double(b.x), double(b.z), double(b.dh), b.n,
+                           A.on ? "near" : "-", double(A.dist), double(world_river_distance(b.x, b.z)));
+            }
+        }
         // VIBE_DUMP_MAP=<file.ppm>[,x0,z0,x1,z1[,metres per pixel]]: a plan of the land as it is
         // now - heights shaded, 10 m contours, water, the highways' lines (red), the castle road
         // (yellow) - for laying out what is built on it. Default: from the castle to the river's mouth.

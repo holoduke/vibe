@@ -357,7 +357,7 @@ void VulkanEngine::water_sim_fill(SceneUBO& d) {
     // The sun's disc through the cloud deck: a closed overcast hides it (the glint and the caustics are
     // images of the disc - the diffuse light under the deck is the scene's dimmed sun, kept for the rest).
     { const float oc = rt_.weather_enabled ? glm::clamp(wx_cur_.overcast, 0.0f, 1.0f) : 0.0f;
-      d.water_sun = glm::vec4(std::pow(1.0f - oc, 2.0f), oc, 0.0f, 0.0f); }
+      d.water_sun = glm::vec4(std::pow(1.0f - oc, 2.0f), oc, env_ ? env_->sea_wind : 7.0f, 0.0f); }      // (z: the open sea's wind, environment.cpp)
 }
 
 void VulkanEngine::water_sim_update(VkCommandBuffer cmd) {
@@ -379,18 +379,20 @@ void VulkanEngine::water_sim_update(VkCommandBuffer cmd) {
 
     // ---- the spectrum's scale (Cox-Munk) when the wind speed changed
     const glm::vec4 wnd = env_->water_wind;
+    // (the open sea's wind, not the local one: environment.cpp water_wind_now - a sea breeze at least)
+    const float Usea = env_->sea_wind;
     const glm::vec2 wd = glm::normalize(glm::vec2(wnd.x, wnd.y) + glm::vec2(1e-6f, 0.0f));
     for (uint32_t c = 0; c < kCasc; ++c)
         W.band[int(c)] = c == 0 ? 0.0f : std::sqrt((2.0f * kWsPi / kL[c]) * (2.0f * kWsPi * 32.0f / kL[c - 1]));
-    if (std::abs(wnd.z - W.norm_wind) > 0.1f) {
-        W.norm_wind = wnd.z;
+    if (std::abs(Usea - W.norm_wind) > 0.1f) {
+        W.norm_wind = Usea;
         double vs[kCasc] = {}, vh[kCasc] = {};
         for (uint32_t c = 0; c < kCasc; ++c) {
             const float dk = 2.0f * kWsPi / kL[c];
             for (uint32_t m = 0; m < kN; ++m)
                 for (uint32_t n = 0; n < kN; ++n) {
                     const glm::vec2 k = dk * glm::vec2(float(int(n) - 32), float(int(m) - 32));
-                    const double p = double(phillips(k, int(c), wd, wnd.z, W.band)) * double(dk) * double(dk);
+                    const double p = double(phillips(k, int(c), wd, Usea, W.band)) * double(dk) * double(dk);
                     vh[c] += p; vs[c] += p * double(glm::dot(k, k));
                 }
         }
@@ -399,9 +401,9 @@ void VulkanEngine::water_sim_update(VkCommandBuffer cmd) {
         // (environment.cpp water_wind_now) carries 90 % of that height in its long waves, so the
         // cascades carry the rest: sd_h = sqrt(1 - 0.9^2) Hs / 4. Their slope variance is 80 % of
         // Cox-Munk's for the wind (0.003 + 0.00512 U) - the rest is below the finest cascade.
-        const double U = std::max(double(wnd.z), 0.0);
+        const double U = std::max(double(Usea), 0.0);
         const double Hs = 0.21 * U * U / 9.81;
-        const double th = std::pow(std::sqrt(1.0 - 0.81) * Hs / 4.0, 2.0);
+        const double th = std::pow(std::sqrt(1.0 - 0.36) * Hs / 4.0, 2.0);      // (the swell carries 60 % since 2026-11-27: environment.cpp)
         const double ts = 0.8 * (0.003 + 0.00512 * U);
         const double a = vh[0] + vh[1], b = vh[2] + vh[3], c2 = vs[0] + vs[1], d = vs[2] + vs[3];
         const double det = a * d - b * c2;
@@ -428,7 +430,7 @@ void VulkanEngine::water_sim_update(VkCommandBuffer cmd) {
     W.last_t = anim_time_;
 
     Params P{};
-    P.wind = glm::vec4(wd, wnd.z, anim_time_);      // (the clock the water shader uses: scene.water_params.w)
+    P.wind = glm::vec4(wd, Usea, anim_time_);      // (the clock the water shader uses: scene.water_params.w)
     P.L = glm::vec4(kL[0], kL[1], kL[2], kL[3]);
     P.band = W.band;
     static const bool no_fft = env_on("VIBE_NO_FFT"), no_rip = env_on("VIBE_NO_RIPPLE_FIELD");

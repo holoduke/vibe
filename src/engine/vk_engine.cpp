@@ -106,6 +106,14 @@ VulkanEngine::~VulkanEngine() { shutdown(); free_private_state(); }
 
 void VulkanEngine::init() {
     log::info("VulkanEngine::init()");
+    // VIBE_LOG_MEM=1: the process's memory after each start-up step ("[mem] init ...").
+    auto mem_mark = [](const char* step) {
+        static const bool lm = std::getenv("VIBE_LOG_MEM") != nullptr;
+        if (!lm) return;
+        double ws = 0.0, pv = 0.0;
+        process_memory_mb(ws, pv);
+        log::infof("[mem] init %-22s ram %.0f MB in use, %.0f MB committed", step, ws, pv);
+    };
     // VIBE_TEST_SIZE=WxH: window size for profiling at the played resolution.
     uint32_t win_w = 1280, win_h = 720;
     if (const char* ts = std::getenv("VIBE_TEST_SIZE")) {
@@ -179,13 +187,16 @@ void VulkanEngine::init() {
     // available and only the serial graphics-queue uploads remain.
     start_world_texture_decodes();
     jobs::init();        // worker pool (world build, frame jobs)
+    mem_mark("vulkan + cache");
     init_world();
+    mem_mark("world");
     present_loader_frame("Loading skybox",        0.30f);
     texture_upload_batch_begin();
     init_skybox();
     init_textures();
     texture_upload_batch_flush(device_, allocator_, graphics_queue_);
     if (physics_) physics_->finish_async();     // the terrain's collision shape, built during the texture loading
+    mem_mark("textures");
     present_loader_frame("Loading settings",      0.40f);
     load_settings();
     apply_vendor_upscaler_defaults();
@@ -243,6 +254,7 @@ void VulkanEngine::init() {
                                      reservoir_buf_[0]);
         write_depth_copy_binding();   // binding 27 (prepass depth copy)
     }
+    mem_mark("rt + descriptors");
     present_loader_frame("Compiling pipelines",   0.70f);
     init_pipeline();
     init_voxel();
@@ -251,11 +263,16 @@ void VulkanEngine::init() {
     init_cloud_shadow_map();     // likewise (scene set binding 32, deferred 23)
     init_deferred_lighting();
     init_terrain_pipelines();
+    mem_mark("main pipelines");
+    vkpipe::hold_queued_builds(true);    // (the large background builds start by priority once all are asked for: below)
     init_terrain_raymarch_pipeline();
+    mem_mark("terrain rm (started)");
     init_terrain_patches();      // before the low-resolution targets: their size depends on it
     init_terrain_bake();
     init_regions();              // (scene set bindings 49, 50: valid before any terrain shader runs)
+    mem_mark("bake + regions");
     init_terrain_water_pipeline();
+    vkpipe::hold_queued_builds(false);
     init_terrain_raymarch_compose_pipeline();
     init_terrain_raymarch_lowres();
     init_shadow_lr();
@@ -310,11 +327,14 @@ void VulkanEngine::init() {
     // Must run AFTER init_taa() — grass raymarch reuses taa_->vert_module
     // as its fullscreen-triangle vertex shader.
     init_grass_raymarch_pipeline();
+    mem_mark("shadows + post");
     init_wm_cache();              // (after init_taa: the same full-screen triangle)
     init_grass_trail();           // (the same triangle; scene bindings 41, 42)
     init_wind_fluid();            // (scene binding 45)
     init_water_sim();             // (scene bindings 51..53)
     init_water_solver();          // (scene binding 54)
+    init_water_grid();            // (scene binding 62: the sea's projected grid)
+    mem_mark("water");
     init_viewmodel();
     init_spacejet();
     init_fx();
@@ -322,6 +342,7 @@ void VulkanEngine::init() {
     init_vegetation_pipelines();
     init_clutter_shadow();
     init_imgui();
+    mem_mark("veg + ui (init done)");
     // (The terrain shaders go on compiling in the background; the game starts on the lite build:
     // finish_terrain_raymarch_pipeline(0) in the frame takes them over when they are ready.)
     if (!terrain_raymarch_lite_pipeline_) finish_terrain_raymarch_pipeline(1);
@@ -646,16 +667,9 @@ void VulkanEngine::run(const RunOptions& opts) {
             jeep_hud();
             site_labels_hud();                 // the sites' names, from high up (sites.cpp)
             anim_debug_overlay();
-            if (terrain_shaders_compiling()) {
-                // First start: say why the ground looks plain for a minute.
-                ImDrawList* dl = ImGui::GetForegroundDrawList();
-                const ImVec2 disp = ImGui::GetIO().DisplaySize;
-                const char* msg = "Preparing the detailed terrain for your graphics card - first start only";
-                const ImVec2 ts = ImGui::CalcTextSize(msg);
-                const ImVec2 p0((disp.x - ts.x) * 0.5f, disp.y * 0.06f);
-                dl->AddRectFilled(ImVec2(p0.x - 14.0f, p0.y - 8.0f), ImVec2(p0.x + ts.x + 14.0f, p0.y + ts.y + 8.0f), IM_COL32(0, 0, 0, 150), 6.0f);
-                dl->AddText(p0, IM_COL32(255, 255, 255, 230), msg);
-            }
+            // First start after a shader or driver change: what is compiling, how far, how long
+            // (loader_screen.cpp; from the background build queue, vk_pipelines.cpp).
+            draw_compile_notice();
             build_menu_ui();
             // VIBE_TEST_SCALE_UI="300:0.72,600:0.5": the render scale changed at those frames from
             // here, where the menu changes it (in the middle of a frame). With
@@ -787,23 +801,28 @@ void VulkanEngine::run(const RunOptions& opts) {
             auto_scale_tick();
             // VIBE_LOG_MEM=1: every 600 frames, what the game holds - to see whether moving
             // about the world leaves anything behind (it must come back to where it was).
-            if (static const bool lm = std::getenv("VIBE_LOG_MEM") != nullptr; lm && frame_number_ % 600 == 0) {
+            // (VIBE_LOG_MEM=<n>, n >= 30: every n frames instead.)
+            static const int lm_every = [] { const char* e = std::getenv("VIBE_LOG_MEM"); return !e ? 0 : (std::atoi(e) >= 30 ? std::atoi(e) : 600); }();
+            if (lm_every > 0 && frame_number_ % uint64_t(lm_every) == 0) {
                 VmaBudget bud[VK_MAX_MEMORY_HEAPS]{};
                 vmaGetHeapBudgets(allocator_, bud);
                 VkPhysicalDeviceMemoryProperties mp{};
                 vkGetPhysicalDeviceMemoryProperties(physical_device_, &mp);
-                double used = 0.0, ours = 0.0; uint64_t allocs = 0, blocks = 0;
+                double used = 0.0, ours = 0.0, host_used = 0.0, host_ours = 0.0; uint64_t allocs = 0, blocks = 0;
                 for (uint32_t h = 0; h < mp.memoryHeapCount; ++h) {
-                    if (!(mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) continue;
+                    if (!(mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
+                        host_used += double(bud[h].usage); host_ours += double(bud[h].statistics.allocationBytes);
+                        continue;
+                    }
                     used += double(bud[h].usage); ours += double(bud[h].statistics.allocationBytes);
                     allocs += bud[h].statistics.allocationCount; blocks += bud[h].statistics.blockCount;
                 }
                 double ws = 0.0, pv = 0.0;
                 process_memory_mb(ws, pv);
-                log::infof("[mem] frame %llu at (%.0f, %.0f): vram %.0f MB (engine %.0f MB, %llu allocations in %llu blocks), ram %.0f MB in use, %.0f MB committed | road stretches %zu, mesh parts %zu, boxes %zu, frame %.2f ms",
+                log::infof("[mem] frame %llu at (%.0f, %.0f): vram %.0f MB (engine %.0f MB, %llu allocations in %llu blocks), host-visible system memory %.0f MB (engine %.0f MB), ram %.0f MB in use, %.0f MB committed | road stretches %zu, mesh parts %zu, boxes %zu, frame %.2f ms",
                            static_cast<unsigned long long>(frame_number_), double(player_.position.x), double(player_.position.z),
                            used / 1048576.0, ours / 1048576.0, static_cast<unsigned long long>(allocs), static_cast<unsigned long long>(blocks),
-                           ws, pv, hw_chunks_.size(), mesh_parts_now().size(), world_.aabbs.size() + wv_cols_.size(), double(frame_dt) * 1000.0);
+                           host_used / 1048576.0, host_ours / 1048576.0, ws, pv, hw_chunks_.size(), mesh_parts_now().size(), world_.aabbs.size() + wv_cols_.size(), double(frame_dt) * 1000.0);
             }
             // VIBE_SHOT_WAIT_FULL=1: a test copy's frame count and screenshot wait while the full
             // terrain shader is still compiling (the lite build is drawn meanwhile; how long that takes
@@ -832,6 +851,7 @@ void VulkanEngine::run(const RunOptions& opts) {
             log::errorf("[run] frame aborted via std::exception (type=%s) — "
                         "marking device_lost and exiting loop",
                         typeid(e).name());
+            log::errorf("[run] what: %s", e.what());       // (the exception object lives until the end of this handler)
             device_lost_ = true;
             // The device handle is still valid here (spec allows
             // vkGetDeviceFaultInfoEXT after device-lost) — grab the GPU
@@ -873,6 +893,7 @@ void VulkanEngine::run(const RunOptions& opts) {
 
 void VulkanEngine::shutdown() {
     if (!initialized_) return;
+    vkpipe::cancel_queued_builds();   // (large shader builds still waiting their turn: not started)
     // If run() flagged the device as lost, skip vkDeviceWaitIdle — waiting on
     // a hung GPU just stalls shutdown for seconds before returning DEVICE_LOST
     // anyway. Subsequent vkDestroy* calls accept a "device_lost" device.
@@ -969,6 +990,7 @@ void VulkanEngine::shutdown() {
     guarded("destroy_wind_fluid", [&]{ destroy_wind_fluid(); });
     guarded("destroy_water_sim", [&]{ destroy_water_sim(); });
     guarded("destroy_water_solver", [&]{ destroy_water_solver(); });
+    guarded("destroy_water_grid", [&]{ destroy_water_grid(); });
     guarded("destroy_grass_pipeline", [&]{ destroy_grass_pipeline(); });
     guarded("destroy_scatter_pipeline", [&]{ destroy_scatter_pipeline(); });
     guarded("destroy_terrain_height_texture", [&]{ destroy_terrain_height_texture(); });

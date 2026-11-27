@@ -40,6 +40,7 @@ struct VulkanEngine::PlantGpuState {
     uint32_t       tuft_room = 0, turf_room = 0, meadow_room = 0;
     VkImageView    near_view = VK_NULL_HANDLE;      // the ground beyond the home tile, last bound at 8
     VkImageView    shade_view = VK_NULL_HANDLE;     // how much vegetation stands over the ground (albedo slot 22), last bound at 9 (the debris)
+    VkImageView    tops_view = VK_NULL_HANDLE;      // the rock formations' tops from above, last bound at 10 (rock_formations_gpu.cpp)
     uint32_t       debris_room = 0;                 // room in each list of the debris species 19..26 (ground_fx: VIBE_NO_GROUND_DEBRIS)
     uint32_t       tuft_gen = 0;
 };

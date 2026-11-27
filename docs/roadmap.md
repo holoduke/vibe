@@ -42,7 +42,7 @@ Items that need their own session — too big for inline implementation in a sin
 
 **References:**
 - [The Witness lightmapping postmortem](https://medium.com/@bgolus/the-witness-lightmaps-65bb12ce95b6)
-- [Frostbite GI baking talk](https://www.ea.com/frostbite/news/precomputed-global-illumination-in-frostbite)
+- A published talk on precomputed global illumination baking (2018)
 - [PMaterial light/shadow caching in UE](https://docs.unrealengine.com/4.27/en-US/RenderingAndGraphics/LightingAndShadows/StaticLighting/) — workflow reference
 - We could reuse `xatlas` (https://github.com/jpcy/xatlas) for UV unwrapping if we move beyond per-face atlases.
 

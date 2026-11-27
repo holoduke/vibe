@@ -84,7 +84,7 @@ void main() {
     // emissive) store their LIT colour in gbuffer0. Their shading is not
     // noisy ray-traced light; treat them as fully rough diffuse so RR does
     // not hallucinate reflections, with their colour as the albedo guide.
-    if (material_id >= 5 || material_id == 0) {
+    if ((material_id >= 5 && material_id != 9) || material_id == 0) {      // (9: a person's hair - lit, as 1)
         // The ground upscaled from its low-resolution picture (terrain_raymarch_compose.frag
         // marks it: material 8, gbuffer1.b = 0.6). Its colour changes in blocks of several
         // pixels from frame to frame (each low-resolution sample moves with the sub-pixel

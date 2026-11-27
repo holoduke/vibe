@@ -261,6 +261,7 @@
     // across it, level; it is darker in its clefts and paler where it weathers.
     float rm_cliff = 0.0;
     vec3  rm_cliff_alb = vec3(0.0);
+    vec3  rm_cliff_grad = vec3(0.0);        // the breaker pattern's slope on the face (rock_breaker.glsl)
     {
         // The ground sets carry on into the distance. A photo tiled at one size reads as a grid
         // as soon as a dozen repeats are in view, and is gone (averaged out by the mips) a little
@@ -348,12 +349,21 @@
                     vec3  tone = mix(vec3(0.150, 0.140, 0.128), vec3(0.205, 0.188, 0.165), tile_noise2(pos.xz - pos.y * 0.4, 0.011, vec2(1.0)));
                     rm_cliff_alb = tone * clamp(aK, vec3(0.45), vec3(1.9)) * bands * patchy;
                     rm_cliff = steep * dw;
+                    // The breaker pattern and the colour strip by altitude, shared with the rock
+                    // formations (rock_breaker.glsl): a formation and the cliff behind it carry the same beds.
+                    {
+                        float rk_bm;
+                        vec3  rk_tone = rk_breaker(pos, nor, t, fp, rm_cliff_grad, rk_bm);
+                        rm_cliff_alb = rk_gradient(pos, rm_cliff_alb * rk_tone, 1.0 - clamp(nor.y, 0.0, 1.0), scene.water_params.y);
+                        rm_cliff_grad *= rm_cliff;
+                    }
                 }
             }
             vec3 dn = vec3((nD.xy * 2.0 - 1.0) * mix(1.35, 0.95, smoothstep(80.0, 600.0, t)), 1.0);     // (the big far tiles: a little flatter)
             vec3 dT = normalize(vec3(1.0, 0.0, 0.0) - nor * nor.x);
             vec3 dB = cross(nor, dT);
             nor = normalize(mix(nor, normalize(dT * dn.x + dB * dn.y + nor * dn.z), dw));
+            nor = normalize(nor - rm_cliff_grad);
             float cav = mix(0.62, 1.10, smoothstep(0.15, 0.85, nD.a));  // pits darker, bumps a touch brighter
             gnd_det_h = clamp(nD.a, 0.0, 1.0) * dw; gnd_rockw = rockw;
             rm_det_tint = mix(vec3(1.0), clamp(mix(vec3(1.0), aD, 0.55), vec3(0.6), vec3(1.5)) * cav, dw);
@@ -381,8 +391,9 @@
                 if (g_nb_ok) {
                     n_s = g_nrm_plain;
                 } else {
-                    float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
-                    float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
+                    vec4 h4 = rm_h4_cross(pos.xz, se, t, stpl);      // (terrain_rm_heightfield.glsl: one copy of the height in a loop)
+                    float hx0 = h4.x, hx1 = h4.y;
+                    float hz0 = h4.z, hz1 = h4.w;
                     n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
                 }
             }
@@ -531,6 +542,11 @@
     float snow_h = 0.0;                // the snow's own surface, as height above the same base
     float snow_cov = 0.0;
     {
+        // (no snow lies in the wet band: snow x (1 - w'), the reference's rule - g_snow itself, so
+        //  the material's snow colour, getMaterial, follows)
+#ifndef VIBE_SUMMER
+        if (SW_ON(64) && g_snow > 0.01) { float swl, swe; g_snow *= 1.0 - sw_terrain_band(pos, swl, swe); }
+#endif
         float sn = g_snow;
         if (sn > 0.01 && !(scene.water_params.x > 0.5 && pos.y < scene.water_params.y)) {
             float road_w = clamp(rm_road.x, 0.0, 1.0);
@@ -542,8 +558,9 @@
                     if (g_nb_ok) {
                         n_s = g_nrm_plain;
                     } else {
-                        float hx0 = terrainH_lod_pw(pos.xz - vec2(se, 0.0), t, stpl), hx1 = terrainH_lod_pw(pos.xz + vec2(se, 0.0), t, stpl);
-                        float hz0 = terrainH_lod_pw(pos.xz - vec2(0.0, se), t, stpl), hz1 = terrainH_lod_pw(pos.xz + vec2(0.0, se), t, stpl);
+                        vec4 h4 = rm_h4_cross(pos.xz, se, t, stpl);      // (terrain_rm_heightfield.glsl: one copy of the height in a loop)
+                    float hx0 = h4.x, hx1 = h4.y;
+                        float hz0 = h4.z, hz1 = h4.w;
                         n_s = normalize(vec3(hx0 - hx1, 2.0 * se, hz0 - hz1));
                     }
                 }

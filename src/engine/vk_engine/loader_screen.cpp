@@ -40,6 +40,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
@@ -468,5 +469,95 @@ void VulkanEngine::present_loader_frame(const char* label, float progress) {
     ++frame_number_;
 }
 
+// ---------------------------------------------------------------------
+// The notice while the large pipelines compile in the background (vk_pipelines.cpp queue).
+// Shown once a batch has run for over a second (builds that come from the pipeline cache finish
+// long before), kept until the whole batch is done, then "ready" and a fade. Everything it says
+// comes from vkpipe::compile_status(): the queue decides what is listed.
+// VIBE_TEST_COMPILE_NOTICE=1 shows it with made-up numbers (a picture without a cold compile).
+// ---------------------------------------------------------------------
+namespace {
+std::string compile_time_words(double s) {
+    char b[64];
+    if (s < 4.0) return "almost done";
+    if (s < 60.0) { std::snprintf(b, sizeof(b), "about %d s left", int(std::ceil(s / 5.0) * 5.0)); return b; }
+    const int t = int(std::ceil(s / 10.0) * 10.0);
+    if (t % 60 == 0) std::snprintf(b, sizeof(b), "about %d min left", t / 60);
+    else std::snprintf(b, sizeof(b), "about %d min %02d s left", t / 60, t % 60);
+    return b;
+}
+}  // namespace
+
+void draw_compile_notice() {
+    static const bool fake = std::getenv("VIBE_TEST_COMPILE_NOTICE") != nullptr;
+    vkpipe::CompileStatus st = vkpipe::compile_status();
+    if (fake) {
+        st.total = 5; st.done = 1; st.running = 1; st.active = true;
+        st.current = "the landscape"; st.current_elapsed = 41.0; st.current_estimate = 124.0;
+        st.remaining = 97.0; st.fraction = 0.38; st.batch_elapsed = 55.0;
+    }
+    static bool shown = false;
+    static double done_at = -1.0;
+    const double now = ImGui::GetTime();
+    if (st.active) {
+        done_at = -1.0;
+        if (!shown && (st.batch_elapsed > 1.0 || st.current_elapsed > 1.0)) {
+            shown = true;
+            log::infof("[pipeline] notice: preparing shaders, %d of %d, %s", st.done + 1, st.total, compile_time_words(st.remaining).c_str());
+        }
+    } else if (shown && done_at < 0.0) {
+        done_at = now;
+        log::info("[pipeline] notice: shaders ready");
+    }
+    if (!shown) return;
+    float alpha = 1.0f;
+    if (!st.active) {
+        const double t = now - done_at;
+        if (t > 2.5) { shown = false; done_at = -1.0; return; }
+        alpha = t < 1.5 ? 1.0f : float(1.0 - (t - 1.5));       // "ready" for 1.5 s, then a 1 s fade
+    }
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 disp = ImGui::GetIO().DisplaySize;
+    const float fs = ImGui::GetFontSize();
+    auto col = [alpha](int r, int g, int b, float a) { return IM_COL32(r, g, b, int(255.0f * a * alpha)); };
+    const char* title = st.active ? "Preparing shaders for your graphics card" : "Shaders ready";
+    const char* sub = "This happens once after an update or a driver change. You can play meanwhile;\nthe landscape looks simpler until it is done.";
+    char info[256];
+    if (st.active) {
+        const int n = std::min(st.total, st.done + std::max(st.running, 1));
+        std::snprintf(info, sizeof(info), "%d of %d:  %s  -  %s", n, st.total,
+                      st.current.empty() ? "waiting for its turn" : st.current.c_str(), compile_time_words(st.remaining).c_str());
+    } else {
+        std::snprintf(info, sizeof(info), "All %d done in %d s - full detail from now on", st.total, int(st.batch_elapsed + 0.5));
+    }
+    const ImVec2 ts_title = ImGui::CalcTextSize(title), ts_sub = ImGui::CalcTextSize(sub), ts_info = ImGui::CalcTextSize(info);
+    const float pad = fs * 0.9f;
+    const float w = std::max({ ts_title.x, ts_sub.x, ts_info.x, fs * 26.0f }) + pad * 2.0f;
+    const float bar_h = std::max(4.0f, fs * 0.35f);
+    const float h = pad + ts_title.y + fs * 0.35f + ts_sub.y + fs * 0.6f + bar_h + fs * 0.5f + ts_info.y + pad;
+    const ImVec2 p0((disp.x - w) * 0.5f, disp.y * 0.05f);
+    dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + h), col(12, 14, 18, 0.78f), fs * 0.5f);
+    dl->AddRect(p0, ImVec2(p0.x + w, p0.y + h), col(255, 255, 255, 0.10f), fs * 0.5f);
+    float y = p0.y + pad;
+    dl->AddText(ImVec2(p0.x + pad, y), col(255, 255, 255, 0.95f), title);
+    y += ts_title.y + fs * 0.35f;
+    dl->AddText(ImVec2(p0.x + pad, y), col(200, 205, 215, 0.80f), sub);
+    y += ts_sub.y + fs * 0.6f;
+    // The bar: by estimated time (done builds + the running one's share).
+    const float bx0 = p0.x + pad, bx1 = p0.x + w - pad;
+    const float f = float(std::clamp(st.fraction, 0.0, 1.0));
+    dl->AddRectFilled(ImVec2(bx0, y), ImVec2(bx1, y + bar_h), col(255, 255, 255, 0.12f), bar_h * 0.5f);
+    if (f > 0.0f) dl->AddRectFilled(ImVec2(bx0, y), ImVec2(bx0 + (bx1 - bx0) * f, y + bar_h),
+                                    st.active ? col(120, 190, 255, 0.90f) : col(130, 220, 150, 0.90f), bar_h * 0.5f);
+    if (st.active) {
+        // (a soft light running along the filled part: it is working, even while a fraction barely moves)
+        const float ph = float(std::fmod(now * 0.6, 1.0));
+        const float cx = bx0 + (bx1 - bx0) * f * ph;
+        dl->AddRectFilled(ImVec2(std::max(bx0, cx - fs), y), ImVec2(std::min(bx0 + (bx1 - bx0) * f, cx + fs), y + bar_h),
+                          col(255, 255, 255, 0.25f), bar_h * 0.5f);
+    }
+    y += bar_h + fs * 0.5f;
+    dl->AddText(ImVec2(p0.x + pad, y), col(225, 230, 240, 0.90f), info);
+}
 
 } // namespace vibe

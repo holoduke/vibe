@@ -10,11 +10,15 @@
 #include "engine/vk_engine/state/spacejets.h"
 #include "engine/vk_engine/state/aim_spread.h"
 #include "engine/audio.h"
+#include "engine/gun_synth.h"
+#include "engine/highway.h"     // highway::deck (bolts against the ground beyond the physics)
+#include "engine/log.h"
 #include "engine/voxel/voxel_world.h"   // VoxelWorld::raycast for bullet carving
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 
 namespace vibe {
@@ -127,6 +131,32 @@ void VulkanEngine::spread_tick(float dt) {
     // No gun in the hand (the tablet, the lamp, the editor): the crosshair is closed.
     const bool gun = state_ == State::Playing && gun_in_hand() && !terrain_edit_mode_ && game_.weapons_enabled;
     spread_->model.tick(d, std::clamp(dt, 0.0f, 0.1f), gun ? spread_->now_deg : 0.0f);
+
+    tick_rifle_sounds(std::clamp(dt, 0.0f, 0.1f));
+    // VIEW RECOIL (game/aim_spread.h ViewRecoil): the kick of the shots fired so far, given to the
+    // view; what the player turned since last frame is theirs (pulled against the climb, it is no
+    // longer owed). VIBE_NO_RECOIL=1: none. VIBE_LOG_RECOIL=1: the view's climb every 4 frames
+    // while it moves.
+    {
+        static const bool kOff = std::getenv("VIBE_NO_RECOIL") != nullptr;
+        static const bool kLogR = std::getenv("VIBE_LOG_RECOIL") != nullptr;
+        AimSpreadState& S = *spread_;
+        if (!S.have_last) { S.last_pitch = player_.pitch; S.last_yaw = player_.yaw; S.have_last = true; }
+        const float user_p = glm::degrees(player_.pitch - S.last_pitch), user_y = glm::degrees(player_.yaw - S.last_yaw);
+        if (!kOff && dt > 0.0f && state_ == State::Playing) {
+            const game::RecoilDef& rd = S.recoil_rifle ? game::kRifleRecoil : game::kLaserRecoil;
+            float add_p = 0.0f, add_y = 0.0f;
+            // (yaw: + turns right in the recoil's terms and in the view's)
+            S.recoil.tick(rd, std::clamp(dt, 0.0f, 0.1f), user_p, user_y, add_p, add_y);
+            constexpr float kPitchCap = kHalfPi - 0.01f;
+            player_.pitch = glm::clamp(player_.pitch + glm::radians(add_p), -kPitchCap, kPitchCap);
+            player_.yaw += glm::radians(add_y);
+            if (kLogR && (std::abs(add_p) > 1e-3f || std::abs(add_y) > 1e-3f) && (frame_number_ % 4) == 0)
+                log::infof("[recoil] owed %.2f deg up, %.2f deg right (shot %d of the burst); this frame %+.3f / %+.3f; the player turned %+.3f / %+.3f",
+                           double(S.recoil.owe_pitch), double(S.recoil.owe_yaw), int(S.recoil.shots), double(add_p), double(add_y), double(user_p), double(user_y));
+        }
+        S.last_pitch = player_.pitch; S.last_yaw = player_.yaw;
+    }
 }
 
 glm::vec3 VulkanEngine::spread_shot_dir(glm::vec3 forward, bool rifle) {
@@ -135,11 +165,74 @@ glm::vec3 VulkanEngine::spread_shot_dir(glm::vec3 forward, bool rifle) {
     const float u = frand(spawn_rng_state_), v = frand(spawn_rng_state_);
     const glm::vec3 dir = game::AimSpread::perturb(glm::normalize(forward), deg, u, v);
     spread_->model.on_shot(d);
+    // (and the view kicks: ViewRecoil, given out over the next frames by spread_tick)
+    {
+        const float aim = glm::smoothstep(0.0f, 1.0f, aim_zoom_);
+        spread_->recoil_rifle = rifle;
+        spread_->recoil.on_shot(rifle ? game::kRifleRecoil : game::kLaserRecoil, frand(spawn_rng_state_), aim, player_.crouch_factor);
+    }
     static const bool kLog = std::getenv("VIBE_LOG_SPREAD") != nullptr;
     if (kLog) log::infof("[spread] shot %s: cone %.2f deg, off by %.2f deg, heat %.1f", rifle ? "rifle" : "laser", double(deg),
                          double(glm::degrees(std::acos(std::clamp(glm::dot(dir, glm::normalize(forward)), -1.0f, 1.0f)))),
                          double(spread_->model.heat));
     return dir;
+}
+
+// ---------------------------------------------------------------- the rifle's sound
+// A machine gun (engine/gun_synth.h): each round is one report - the blast, the crack, the bolt's
+// clack - so a held trigger at kRifleRps is heard as rounds at exactly that rate, never a loop
+// that runs on after the finger lets go. The player's own is at the ear (three variants in turn
+// with a little pitch scatter); somebody else's is a source of the spatialiser at the gun. Every
+// round also has its tail, a source at the gun: the roll and the slaps of the surroundings,
+// carried, delayed and darkened by distance like any sound in the world.
+namespace {
+struct MgVoice { uint32_t h; float left; };
+std::vector<MgVoice> g_mg_voices;
+int  g_mg_state = 0;                 // 0 not tried, 1 ready, -1 no sound
+uint32_t g_mg_next = 0;
+}  // namespace
+
+void VulkanEngine::play_rifle_shot(glm::vec3 at, bool local) {
+    if (!audio_) return;
+    if (g_mg_state == 0) {
+        g_mg_state = 1;
+        struct Clip { ClipID id; const char* path; int what; };
+        const Clip clips[4] = { { ClipID::MgShot1, "assets/sounds/mg_shot_v1_1.wav", 0 }, { ClipID::MgShot2, "assets/sounds/mg_shot_v1_2.wav", 1 },
+                                { ClipID::MgShot3, "assets/sounds/mg_shot_v1_3.wav", 2 }, { ClipID::MgTail, "assets/sounds/mg_tail_v1.wav", 3 } };
+        for (const Clip& c : clips) {
+            std::error_code ec;
+            bool there = std::filesystem::exists(c.path, ec);
+            if (!there) {
+                there = glass_synth::write_wav(c.path, c.what < 3 ? gun_synth::report(c.what) : gun_synth::tail());
+                log::infof("[rifle] sound %s: %s (engine/gun_synth.h)", c.path, there ? "made now" : "could not be written");
+            }
+            if (there) audio_->load_clip(c.id, c.path); else g_mg_state = -1;
+        }
+    }
+    if (g_mg_state < 0) { audio_->play_at(ClipID::Shot, at, 0.8f); return; }
+    const ClipID shot = g_mg_next % 3u == 0u ? ClipID::MgShot1 : g_mg_next % 3u == 1u ? ClipID::MgShot2 : ClipID::MgShot3;
+    ++g_mg_next;
+    if (local) audio_->play_local(shot, 0.85f, 0.03f, 0.06f);
+    else if (const uint32_t h = audio_->source_start(shot, sound_space::Shape{ 10.0f, 14000.0f, 1600.0f, 0.004f, 700.0f }, false)) {
+        audio_->source_update(h, at, glm::vec3(0.0f), 1.6f, 1.0f + 0.03f * (frand(spawn_rng_state_) - 0.5f));
+        g_mg_voices.push_back({ h, 0.5f });
+    }
+    // (the tail: from the gun, the shooter's own too - it is what the surroundings send back)
+    if (g_mg_voices.size() < 24)
+        if (const uint32_t h = audio_->source_start(ClipID::MgTail, sound_space::Shape{ 14.0f, 6000.0f, 2200.0f, 0.003f, 900.0f }, false)) {
+            audio_->source_update(h, at, glm::vec3(0.0f), local ? 0.55f : 0.9f, 1.0f + 0.04f * (frand(spawn_rng_state_) - 0.5f));
+            g_mg_voices.push_back({ h, 1.7f });
+        }
+}
+
+// The one-shot sources are let go when their clip has played (a source is freed only by source_stop).
+void VulkanEngine::tick_rifle_sounds(float dt) {
+    if (!audio_) { g_mg_voices.clear(); return; }
+    for (MgVoice& v : g_mg_voices) {
+        v.left -= dt;
+        if (v.left <= 0.0f) audio_->source_stop(v.h);
+    }
+    g_mg_voices.erase(std::remove_if(g_mg_voices.begin(), g_mg_voices.end(), [](const MgVoice& v) { return v.left <= 0.0f; }), g_mg_voices.end());
 }
 
 void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction, bool rifle) {
@@ -186,7 +279,7 @@ void VulkanEngine::fire_projectile(glm::vec3 origin, glm::vec3 direction, bool r
         // Shot is "local" — happens at the camera, mostly bypasses 3D
         // attenuation. Light pitch jitter so rapid fire doesn't sound
         // mechanical.
-        if (rifle) audio_->play_local(ClipID::Shot, 0.75f, 0.06f, 0.08f);
+        if (rifle) play_rifle_shot(origin, true);            // (a machine gun: engine/gun_synth.h)
         else       audio_->play_local(ClipID::Laser, 0.7f, 0.05f, 0.06f);
     }
 
@@ -276,6 +369,8 @@ void VulkanEngine::update_projectiles(float dt) {
         bool was_impact = false;
         bool was_voxel_hit = false;
         bool was_water_hit = false;
+        bool ground_hit = false;             // stopped by the analytic ground (no physics there)
+        glm::vec3 ground_n(0.0f, 1.0f, 0.0f);
         glm::vec3 hit_pos(0.0f);
 
         if (!drop) {
@@ -614,6 +709,68 @@ void VulkanEngine::update_projectiles(float dt) {
                             log::infof("[bolt] stopped by %s at (%.1f, %.1f, %.1f)", what, double(hit_pos.x), double(hit_pos.y), double(hit_pos.z));
                     }
                 }
+                // THE GROUND WHERE THE PHYSICS HAS NONE (2026-11-27, the owner: "I cannot shoot
+                // the road outside the fuel station"). Jolt's heightfield covers the home tile
+                // only; beyond it - the highway's shelf, the station's terrace, the mountains, a
+                // region's tile - a bolt flew through the ground. Its way since the last step is
+                // tested against the ground as it is drawn: sample_terrain_height (the world's
+                // formula with the highway's shelf and the regions' tiles), the paved pads and a
+                // bridge's deck under it; stepped at <= 1 m and refined by halving.
+                if (!drop && !terrain_data_.heights.empty()) {
+                    const glm::vec3 a0 = std::isnan(it->prev_pos.x) ? it->spawn_origin : it->prev_pos;
+                    const float hx0 = terrain_data_.origin_x + 1.0f, hz0 = terrain_data_.origin_z + 1.0f;
+                    const float hx1 = terrain_data_.origin_x + terrain_data_.dim * terrain_data_.cell - 1.0f;
+                    const float hz1 = terrain_data_.origin_z + terrain_data_.dim * terrain_data_.cell - 1.0f;
+                    const auto in_home = [&](glm::vec3 p) { return p.x > hx0 && p.x < hx1 && p.z > hz0 && p.z < hz1; };
+                    if (!in_home(a0) || !in_home(bp)) {
+                        const auto ground = [&](glm::vec3 p) {
+                            if (in_home(p)) return -1e9f;                 // (Jolt's heightfield there)
+                            float g = sample_terrain_height(p.x, p.z);
+                            for (const DrivePad& pd : drive_pads_) {
+                                if (p.x < pd.x0 || p.x > pd.x1 || p.z < pd.z0 || p.z > pd.z1) continue;
+                                const float t = glm::clamp((p.x - pd.x0) / std::max(pd.x1 - pd.x0, 0.01f), 0.0f, 1.0f);
+                                g = std::max(g, glm::mix(pd.h0, pd.h1, t));
+                            }
+                            // (a deck counts only from above: a bolt may pass under a bridge)
+                            if (float dh = 0.0f; highway::deck(p.x, p.z, dh) && p.y > dh - 0.6f) g = std::max(g, dh);
+                            return g;
+                        };
+                        const glm::vec3 sd = bp - a0;
+                        const int n = std::clamp(int(std::ceil(glm::length(sd))), 1, 64);
+                        float tp = 0.0f;
+                        bool below0 = a0.y < ground(a0);
+                        for (int k = 1; k <= n && !below0; ++k) {
+                            const float tk = float(k) / float(n);
+                            const glm::vec3 pk = a0 + sd * tk;
+                            if (pk.y <= ground(pk)) {
+                                float lo = tp, hi = tk;
+                                for (int r = 0; r < 8; ++r) {
+                                    const float tm = 0.5f * (lo + hi);
+                                    const glm::vec3 pm = a0 + sd * tm;
+                                    (pm.y <= ground(pm) ? hi : lo) = tm;
+                                }
+                                glm::vec3 hp = a0 + sd * hi;
+                                hp.y = ground(hp);
+                                const float e = 0.25f;
+                                const glm::vec3 gn = glm::normalize(glm::vec3(ground(hp - glm::vec3(e, 0, 0)) - ground(hp + glm::vec3(e, 0, 0)), 2.0f * e,
+                                                                              ground(hp - glm::vec3(0, 0, e)) - ground(hp + glm::vec3(0, 0, e))));
+                                drop = true; was_impact = true;
+                                hit_pos = hp;
+                                ground_hit = true; ground_n = gn;
+                                // (the water over it takes the shot first)
+                                const float ws = water_surface_y(hp.x, hp.z);
+                                if (rt_.water_enabled && hp.y < ws && a0.y > ws && water_at(hp.x, hp.z) && sd.y < -1e-4f) {
+                                    const float tw = (ws - a0.y) / sd.y;
+                                    hit_pos = a0 + sd * tw; was_water_hit = true; ground_hit = false;
+                                }
+                                if (static const bool lg = std::getenv("VIBE_LOG_BOLT") != nullptr; lg)
+                                    log::infof("[bolt] stopped by the ground (no physics there) at (%.1f, %.1f, %.1f)", double(hit_pos.x), double(hit_pos.y), double(hit_pos.z));
+                                break;
+                            }
+                            tp = tk;
+                        }
+                    }
+                }
                 // Impact detection (terrain / castle / crates). Skipped when
                 // a spacejet or voxel hit already claimed the bullet. After
                 // Jolt's step the bullet's velocity tells us what happened:
@@ -709,6 +866,7 @@ void VulkanEngine::update_projectiles(float dt) {
                 glm::vec3 reflect = glm::length(post_vel) > 0.5f
                                          ? glm::normalize(post_vel)
                                          : -it->initial_dir;
+                if (ground_hit) reflect = glm::reflect(it->initial_dir, ground_n);   // (Jolt never saw that ground)
                 glm::vec3 saved_dir = it->initial_dir;
                 uint32_t  saved_body = it->body_id;
                 // A voxel-tower hit already carved the crater above; skip the
@@ -725,7 +883,7 @@ void VulkanEngine::update_projectiles(float dt) {
                     spawn_water_splash(hit_pos, 1.0f);
                 } else {
                 if (!was_voxel_hit) {
-                    spawn_impact_decal(hit_pos, saved_dir);
+                    spawn_impact_decal(hit_pos, saved_dir, ground_hit ? &ground_n : nullptr);
                 }
                 spawn_hit_particles(hit_pos, reflect, saved_dir);
                 if (audio_) {
@@ -1113,7 +1271,7 @@ void VulkanEngine::draw_shadow_debug(VkCommandBuffer cmd, const glm::mat4& vp) {
     }
 }
 
-void VulkanEngine::spawn_impact_decal(glm::vec3 hit_pos, glm::vec3 incoming_dir) {
+void VulkanEngine::spawn_impact_decal(glm::vec3 hit_pos, glm::vec3 incoming_dir, const glm::vec3* surface_n) {
     if (!physics_) return;
     glm::vec3 dir = glm::length(incoming_dir) > 1e-3f
                         ? glm::normalize(incoming_dir)
@@ -1159,6 +1317,8 @@ void VulkanEngine::spawn_impact_decal(glm::vec3 hit_pos, glm::vec3 incoming_dir)
         normal = -dir;
         pos    = hit_pos;
     }
+    // (the analytic ground beyond the physics' reach gives its own normal: combat's bolt loop)
+    if (surface_n) { normal = *surface_n; pos = hit_pos; rh.hit = false; }
     pos += normal * 0.02f;     // anti-z-fight skin (2 cm — 5 mm wasn't enough
                                 // on textured walls; the disc dropped behind
                                 // the bumpy triplanar bricks at glancing angles)

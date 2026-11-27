@@ -124,7 +124,7 @@ void VulkanEngine::mp_update(float dt) {
             fire_projectile(o, d, rifle);
             shot_weapon_offset_ = nullptr;
             mp_->remote_shot = false;
-            if (audio_) audio_->play_at(rifle ? ClipID::Shot : ClipID::Laser, o, 0.8f);
+            if (audio_) { if (rifle) play_rifle_shot(o, false); else audio_->play_at(ClipID::Laser, o, 0.8f); }      // (the rifle: a machine gun, combat.cpp)
             for (auto& a : mp_->avatars) if (a.id == e.from) { a.recoil_t = kRecoilDuration; a.muzzle_t = kMuzzleFlashDuration; a.combat_t = 0.0f; }
         } else if (e.kind == net::Event::Hit) {
             // (where and from where they were hit: the push their body gets if this kills them)
@@ -144,6 +144,10 @@ void VulkanEngine::mp_update(float dt) {
                     net::Event d{}; d.kind = net::Event::Death; d.from = net_->id(); d.to = e.from;
                     net_->send_event(d);
                     mp_feed(net_->name_of(e.from) + " killed " + net_->name_of(net_->id()));
+                    // (killed at the wheel: out of the car first - it stays where it is, on its
+                    //  wheels with the handbrake on; the view no longer follows it - jeep.cpp)
+                    if (jeep_driving()) jeep_use();
+                    if (jeep_ride_ >= 0) jeep_use();
                     // Respawn where this session started.
                     player_.position = mp_->spawn;
                     player_.velocity = glm::vec3(0.0f);
@@ -157,6 +161,8 @@ void VulkanEngine::mp_update(float dt) {
             for (auto& a : mp_->avatars) if (a.id == e.from) a.die = true;      // their body falls where it is (ragdoll.cpp)
             if (e.to == net_->id()) ++mp_->kills;
             mp_feed(net_->name_of(e.to) + " killed " + net_->name_of(e.from));
+        } else if (e.kind == net::Event::Rocket) {
+            rocket_net_event(e);                           // another player's launch (rocket.cpp)
         } else if (e.kind == net::Event::NpcHit || e.kind == net::Event::NpcCarTake || e.kind == net::Event::NpcCarTaken || e.kind == net::Event::NpcCarPush) {
             npc_event(e);
         } else if (e.kind == net::Event::Leave) {

@@ -107,11 +107,13 @@ float pm_flow_depth(vec2 wp, float water_y, float ray_t) {
 vec3 pm_get_flow_rate(vec2 wp, float water_y, float ray_t) {
     // Sample depth at centre + 4 taps for the gradient.
     const float eps_g = 0.5;
-    float d_c  = pm_flow_depth(wp, water_y, ray_t);
-    float d_xp = pm_flow_depth(wp + vec2(eps_g, 0.0), water_y, ray_t);
-    float d_xn = pm_flow_depth(wp - vec2(eps_g, 0.0), water_y, ray_t);
-    float d_zp = pm_flow_depth(wp + vec2(0.0, eps_g), water_y, ray_t);
-    float d_zn = pm_flow_depth(wp - vec2(0.0, eps_g), water_y, ray_t);
+    // (in one loop: one copy of the ground's height in the compiled shader, not five)
+    float d_c = 0.0, d_xp = 0.0, d_xn = 0.0, d_zp = 0.0, d_zn = 0.0;
+    RM_ONE_COPY for (int i = 0; i < 5; ++i) {
+        vec2 o = i < 3 ? vec2(eps_g, 0.0) : vec2(0.0, eps_g);
+        float d = pm_flow_depth(i == 0 ? wp : ((i & 1) == 1 ? wp + o : wp - o), water_y, ray_t);
+        if (i == 0) d_c = d; else if (i == 1) d_xp = d; else if (i == 2) d_xn = d; else if (i == 3) d_zp = d; else d_zn = d;
+    }
     // P_Malin's GetGradient is the derivative of (-terrainH) so it
     // points toward deeper water. Use that sign convention.
     vec2 grad = vec2(d_xp - d_xn, d_zp - d_zn) / (2.0 * eps_g);
@@ -512,7 +514,7 @@ WtObs wt_obstacles(vec2 p, vec2 fdir, float speed, float t) {
         vec4 P = scene.river_piers[i];
         vec2 d = p - P.xy;
         float a = max(P.z, 0.2);
-        float reach = a * (5.0 + 4.0 * U) + 5.0;
+        float reach = max(a * (5.0 + 4.0 * U) + 5.0, 2.0 * (a * (6.0 + 4.0 * U) + 4.0));     // (the foam lines run to twice their length scale)
         float r2 = dot(d, d);
         if (r2 > reach * reach) continue;
         float r = sqrt(r2);
@@ -545,6 +547,22 @@ WtObs wt_obstacles(vec2 p, vec2 fdir, float speed, float t) {
             float wl = a * (0.9 + 0.06 * down);
             float tail = exp(-lat * lat / (wl * wl)) * exp(-down / (a * (2.0 + 1.2 * U) + 0.8)) * smoothstep(1.2 * a, 3.0 * a, down);
             o.foam = max(o.foam, tail * 0.6 * vis);
+            // the foam LINES off its flanks (2026-11-27): on a real river the shear lines behind a
+            // stone or pier draw its white water out into two thin ribbons that drift on for many
+            // of its widths, closing slowly, wandering, broken into lengths. The noise is laid in a
+            // frame moving down the current at 0.9 U, so they drift at the surface speed. (Inside
+            // the solver's window the caller fades this out: the solver's drift foam does it there.)
+            float Ll = a * (6.0 + 4.0 * U) + 4.0;
+            if (down < 2.0 * Ll) {
+                float sd = down - 0.9 * U * t;
+                float off = a * (1.0 - 0.35 * smoothstep(0.0, Ll, down));
+                float wv = (noise2(vec2(sd * 0.25, float(i) * 3.1)) - 0.5) * (0.3 + 0.05 * down);
+                float lw = 0.10 + 0.02 * down + 0.05 * a;
+                float e1 = lat - off - wv, e2 = lat + off - wv;
+                float lv = min(exp(-e1 * e1 / (lw * lw)) + exp(-e2 * e2 / (lw * lw)), 1.0);
+                float brk = smoothstep(0.35, 0.65, noise2(vec2(sd * 0.4 + sign(lat) * 13.0, float(i) * 7.7)));
+                o.foam = max(o.foam, lv * brk * exp(-down / Ll) * smoothstep(0.5 * a, 1.5 * a, down) * 0.5 * vis);
+            }
             // the HOLE right behind it: the water drops into the lee and turns back - dark, no
             // white (it breaks a white sheet into a dark gap), before the trail begins
             float hl = a * 0.85;
@@ -581,3 +599,32 @@ WtObs wt_obstacles(vec2 p, vec2 fdir, float speed, float t) {
     return o;
 }
 
+
+// FOAM AS LACE (2026-11-26, the owner's "huge white spots"): the reference draws white water as
+// amount x a foam TEXTURE - bubble walls with open water between, thick foam with narrow holes,
+// thin foam mostly holes. The stream's and the solver's white was drawn as the amount alone
+// (smooth noises of 0.4 - 12 m), mixed in at 85 % opacity: smooth opaque blobs and veils. This
+// turns an amount into coverage: two sizes of cells (38 and 14 cm), carried with the current in
+// two phases (2 s cycle), broken into patches where thin, and the mean coverage where a pixel is
+// larger than the cells (no sparkle far off).
+float wt_foam_lace_at(vec2 q, float thick) {
+    float c1 = foam_cells(q * 2.6);
+    float c2 = foam_cells(q * 7.0 + 7.3);
+    float wall1 = 1.0 - smoothstep(0.04 + 0.22 * thick, 0.16 + 0.55 * thick, c1);
+    float wall2 = 1.0 - smoothstep(0.03 + 0.15 * thick, 0.14 + 0.40 * thick, c2);
+    return max(wall1, 0.75 * wall2 * mix(0.4, 1.0, clamp(wall1 + thick, 0.0, 1.0)));
+}
+float wt_foam_lace(vec2 p, vec2 flow, float amt, float t, float px) {
+    if (amt <= 0.002) return 0.0;
+    float thick = clamp(amt, 0.0, 1.0);
+    float cyc = t * 0.5, ph0 = fract(cyc), ph1 = fract(cyc + 0.5);
+    float w0 = 1.0 - abs(1.0 - 2.0 * ph0);
+    vec2 q0 = p - flow * (ph0 * 2.0) + pm_hash2(floor(cyc) + 41.0) * 9.0;
+    vec2 q1 = p - flow * (ph1 * 2.0) + pm_hash2(floor(cyc + 0.5) + 53.0) * 9.0;
+    float far = smoothstep(0.04, 0.12, px);          // (a pixel over a third of the small cells)
+    float lace = 0.30 + 0.55 * thick;                // (about the lace's mean coverage)
+    if (far < 1.0) lace = mix(mix(wt_foam_lace_at(q1, thick), wt_foam_lace_at(q0, thick), w0), lace, far);
+    // (thin foam comes in patches that break up; thick foam is nearly whole)
+    float brk = mix(smoothstep(0.30, 0.70, mix(noise2(q1 * 0.55 + 3.0), noise2(q0 * 0.55 + 3.0), w0)), 1.0, thick * thick);
+    return clamp(min(amt * 1.4, 1.0) * mix(lace, 1.0, 0.12 * thick * thick) * brk, 0.0, 1.0);
+}

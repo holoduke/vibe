@@ -328,6 +328,7 @@ add_library(vibe_anim STATIC
     src/anim/airborne.cpp
     src/anim/character_animator.cpp
     src/anim/life_layers.cpp
+    src/anim/hold_layer.cpp
 )
 target_link_libraries(vibe_anim PUBLIC vibe_core PRIVATE ozz_animation ozz_base)
 
@@ -366,6 +367,10 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/lane_edge.cpp
     src/engine/vk_engine/rock_formations.cpp
     src/engine/vk_engine/rock_formations_gpu.cpp
+    src/engine/vk_engine/shop_goods.cpp
+    src/engine/vk_engine/rock_cliffs.cpp
+    src/engine/vk_engine/scree_stream.cpp
+    src/engine/vk_engine/rock_bake.cpp
     src/engine/vk_engine/river_stream.cpp
     src/engine/vk_engine/jeep.cpp
     src/engine/vk_engine/sound_env.cpp
@@ -386,6 +391,7 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/fx.cpp
     src/engine/vk_engine/lens_fx.cpp
     src/engine/vk_engine/glass.cpp
+    src/engine/vk_engine/skin_blur.cpp
     src/engine/vk_engine/vegetation.cpp
     src/engine/vk_engine/veg_impostor.cpp
     src/engine/vk_engine/clutter_shadow.cpp
@@ -407,6 +413,9 @@ add_library(vibe_engine STATIC
     src/engine/vk_engine/water_sim.cpp
     src/engine/vk_engine/water_solver.cpp
     src/engine/vk_engine/water_spray.cpp
+    src/engine/vk_engine/water_wet.cpp
+    src/engine/vk_engine/water_grid.cpp
+    src/engine/vk_engine/terrain_water_pass.cpp
     src/engine/vk_engine/ssdm.cpp
     src/engine/vk_engine/flashlight.cpp
     src/engine/vk_engine/player_body.cpp
@@ -591,16 +600,25 @@ file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/shaders/*.glsl"
 set(SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR})
 
+# (terrain_raymarch.frag and its builds: since the terrain was split into passes - hit, ground,
+#  water; vk_engine/terrain_water_pass.cpp - each build is small enough for plain glslc -O again.
+#  The spirv-opt route with --compact-ids that kept the one large shader under SPIR-V's id limit
+#  is gone; the largest id bound is now ~0.93 M of the 4.19 M allowed, 2026-11-27.)
 set(COMPILED_SHADERS)
 foreach(SHADER ${SHADER_SOURCES})
     get_filename_component(SHADER_NAME ${SHADER} NAME)
     set(SPV_OUT "${SHADER_OUTPUT_DIR}/${SHADER_NAME}.spv")
+    # (terrain_raymarch.frag.spv is the terrain's ground pass: no water shading - terrain_water_pass.frag below)
+    set(_vibe_def)
+    if(SHADER_NAME STREQUAL "terrain_raymarch.frag")
+        set(_vibe_def -DVIBE_GROUND=1)
+    endif()
     add_custom_command(
         OUTPUT ${SPV_OUT}
         # -O = SPIR-V optimisation (perf preset). Enables dead-code
         # elimination, common-subexpression elim, loop unrolling.
         # Equivalent to running spirv-opt -O on the output.
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O ${SHADER} -o ${SPV_OUT}
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O ${_vibe_def} ${SHADER} -o ${SPV_OUT}
         DEPENDS ${SHADER} ${SHADER_INCLUDES}
         COMMENT "Compiling shader ${SHADER_NAME}"
         VERBATIM)
@@ -698,7 +716,7 @@ set(TR_SUMMER_SPV "${SHADER_OUTPUT_DIR}/terrain_raymarch_summer.frag.spv")
 add_custom_command(
     OUTPUT ${TR_SUMMER_SPV}
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
-            -DVIBE_SUMMER=1 -fshader-stage=frag
+            -DVIBE_SUMMER=1 -DVIBE_GROUND=1 -fshader-stage=frag
             ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_SUMMER_SPV}
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
     COMMENT "Compiling shader terrain_raymarch_summer.frag (no winter code)"
@@ -755,6 +773,32 @@ add_custom_command(
     COMMENT "Compiling shader water.frag (terrain_raymarch water variant)"
     VERBATIM)
 list(APPEND COMPILED_SHADERS ${WATER_SPV})
+
+# The water pass of the ray-marched terrain (VIBE_WATER_PASS; vk_engine/terrain_water_pass.cpp):
+# the water's shading alone, over the pixels the ground pass (VIBE_GROUND) marked as water.
+set(TR_WATER_PASS_SPV "${SHADER_OUTPUT_DIR}/terrain_water_pass.frag.spv")
+add_custom_command(
+    OUTPUT ${TR_WATER_PASS_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DVIBE_WATER_PASS=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_WATER_PASS_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader terrain_water_pass.frag (the terrain's water pass)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${TR_WATER_PASS_SPV})
+
+# The hit pass of the ray-marched terrain (VIBE_HIT): the march and the water's surface, nothing shaded;
+# each pixel's surface into scene binding 64 for the ground and water passes.
+set(TR_HIT_SPV "${SHADER_OUTPUT_DIR}/terrain_hit.frag.spv")
+add_custom_command(
+    OUTPUT ${TR_HIT_SPV}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -O
+            -DVIBE_HIT=1 -fshader-stage=frag
+            ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag -o ${TR_HIT_SPV}
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/terrain_raymarch.frag ${SHADER_INCLUDES}
+    COMMENT "Compiling shader terrain_hit.frag (the terrain's hit pass)"
+    VERBATIM)
+list(APPEND COMPILED_SHADERS ${TR_HIT_SPV})
 
 if(COMPILED_SHADERS)
     add_custom_target(shaders ALL DEPENDS ${COMPILED_SHADERS})

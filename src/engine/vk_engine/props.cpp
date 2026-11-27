@@ -426,6 +426,45 @@ void VulkanEngine::tick_spacejet(float dt) {
         return std::max(sample_terrain_height(x, z), rt_.water_level);
     };
 
+    // THE PATROL AREAS (jet_zones): the castle, the launch site and the sea beyond its coast. The
+    // sea point is found from the ground itself: the first place east of the pad (then round the
+    // compass) where 400 m in a row are under the water line, and 900 m on from there.
+    auto& Z = *spacejet_;
+    if (Z.zones.empty()) {
+        Z.zones.push_back(glm::vec3(0.0f, 0.0f, 520.0f));
+        Z.zones.push_back(glm::vec3(kLaunchSiteX, kLaunchSiteZ, 450.0f));
+        glm::vec2 sea(0.0f); bool found = false;
+        for (int b = 0; b < 16 && !found; ++b) {
+            const float a = float(b) * 0.3926991f;                       // east first, then round
+            const glm::vec2 d(std::cos(a), std::sin(a));
+            int wet = 0;
+            for (float s = 100.0f; s < 9000.0f; s += 50.0f) {
+                const glm::vec2 p = glm::vec2(kLaunchSiteX, kLaunchSiteZ) + d * s;
+                if (sample_terrain_height(p.x, p.y) < rt_.water_level - 1.0f) { if (++wet >= 8) { sea = p + d * 900.0f; found = true; break; } }
+                else wet = 0;
+            }
+        }
+        if (found) Z.zones.push_back(glm::vec3(sea.x, sea.y, 650.0f));
+        glm::vec2 lo(1e9f), hi(-1e9f);
+        for (const glm::vec3& z : Z.zones) { lo = glm::min(lo, glm::vec2(z) - z.z); hi = glm::max(hi, glm::vec2(z) + z.z); }
+        Z.zone_mid = (lo + hi) * 0.5f;
+        Z.zone_reach = 0.5f * glm::length(hi - lo) + 900.0f;
+        log::infof("[jets] patrol areas: castle, launch site (%.0f, %.0f)%s, middle (%.0f, %.0f), waves from %.0f m",
+                   kLaunchSiteX, kLaunchSiteZ, found ? "" : " (no sea found)", Z.zone_mid.x, Z.zone_mid.y, Z.zone_reach);
+        if (found) log::infof("[jets] patrol area over the sea at (%.0f, %.0f)", sea.x, sea.y);
+    }
+    // (an area by chance: the castle a little more often - the guns and the bombs are there)
+    auto pick_zone = [&]() -> const glm::vec3& {
+        const float u = frand(R);
+        const size_t n = Z.zones.size();
+        if (n < 2 || u < 0.40f) return Z.zones[0];
+        return Z.zones[1 + size_t(frand(R) * float(n - 1)) % (n - 1)];
+    };
+    auto point_in = [&](const glm::vec3& z, float share) {
+        const float a = frand(R) * 6.2831853f, d = std::sqrt(frand(R)) * z.z * share;
+        return glm::vec3(z.x + std::cos(a) * d, 0.0f, z.y + std::sin(a) * d);
+    };
+
     // Leader decision: pick the next maneuver.
     auto choose_next = [&](SpacejetFlight& f) {
         f.mode_t = 0.0f;
@@ -434,7 +473,7 @@ void VulkanEngine::tick_spacejet(float dt) {
             f.mode = JetMode::Egress;
             glm::vec3 h(f.fwd.x, 0.0f, f.fwd.z);
             if (glm::length(h) < 1e-3f) h = glm::vec3(1, 0, 0);
-            f.target = glm::normalize(h) * 3000.0f;
+            f.target = glm::vec3(Z.zone_mid.x, 0.0f, Z.zone_mid.y) + glm::normalize(h) * (Z.zone_reach + 1600.0f);
             return;
         }
         float agl = f.pos.y - ground_h(f.pos.x, f.pos.z);
@@ -449,9 +488,10 @@ void VulkanEngine::tick_spacejet(float dt) {
             f.target.y = ground_h(f.target.x, f.target.z);
         } else if (r < 0.60f) {
             f.mode = JetMode::Orbit;
-            f.orbit_r = frand_range(R, 260.0f, 520.0f);
+            f.orbit_r = frand_range(R, 300.0f, 750.0f);
+            { const glm::vec3& oz = pick_zone(); f.orbit_c = glm::vec2(oz.x, oz.y); }
             // Orbit in the direction we're already turning toward.
-            glm::vec3 rad = f.pos; rad.y = 0.0f;
+            glm::vec3 rad = f.pos - glm::vec3(f.orbit_c.x, 0.0f, f.orbit_c.y); rad.y = 0.0f;
             glm::vec3 tang = glm::cross(glm::vec3(0, 1, 0), glm::normalize(rad + glm::vec3(1e-3f)));
             f.orbit_dir = glm::dot(tang, f.fwd) >= 0.0f ? 1.0f : -1.0f;
             f.target.x = frand_range(R, 14.0f, 24.0f);     // orbit duration
@@ -485,10 +525,9 @@ void VulkanEngine::tick_spacejet(float dt) {
         glm::vec3 from(std::cos(bearing), 0.0f, std::sin(bearing));
         SpacejetFlight lead{};
         lead.cruise_alt = frand_range(R, 110.0f, 170.0f);
-        lead.pos = from * 1350.0f;
+        lead.pos = glm::vec3(Z.zone_mid.x, 0.0f, Z.zone_mid.y) + from * Z.zone_reach;
         lead.pos.y = ground_h(lead.pos.x, lead.pos.z) + lead.cruise_alt;
-        lead.target = glm::vec3(frand_range(R, -150.0f, 150.0f), 0.0f,
-                                frand_range(R, -150.0f, 150.0f));
+        lead.target = point_in(pick_zone(), 0.35f);       // (into one of the patrol areas)
         lead.fwd = glm::normalize(glm::vec3(lead.target.x, 0, lead.target.z) - glm::vec3(lead.pos.x, 0, lead.pos.z));
         lead.up = glm::vec3(0, 1, 0);
         lead.speed = frand_range(R, 105.0f, 125.0f);
@@ -707,7 +746,7 @@ void VulkanEngine::tick_spacejet(float dt) {
                     break;
                 }
                 case JetMode::Orbit: {
-                    glm::vec3 rad(f.pos.x, 0.0f, f.pos.z);
+                    glm::vec3 rad(f.pos.x - f.orbit_c.x, 0.0f, f.pos.z - f.orbit_c.y);
                     float d = glm::length(rad);
                     glm::vec3 ru = d > 1.0f ? rad / d : glm::vec3(1, 0, 0);
                     glm::vec3 tang = glm::cross(glm::vec3(0, 1, 0), ru) * f.orbit_dir;
@@ -823,8 +862,7 @@ void VulkanEngine::tick_spacejet(float dt) {
                                      f.target) > 0.96f) {
                             f.mode = JetMode::Ingress;    // back over the castle
                             f.mode_t = 0.0f;
-                            f.target = glm::vec3(frand_range(R, -120.0f, 120.0f), 0.0f,
-                                                 frand_range(R, -120.0f, 120.0f));
+                            f.target = point_in(pick_zone(), 0.3f);   // back over a patrol area
                         }
                     }
                     if (f.mode_t > 30.0f) choose_next(f);
@@ -834,7 +872,7 @@ void VulkanEngine::tick_spacejet(float dt) {
                     glm::vec3 to = f.target - f.pos; to.y = 0.0f;
                     desired = glm::normalize(to + glm::vec3(1e-3f, 0, 0));
                     glm::vec2 hp(f.pos.x, f.pos.z);
-                    if (glm::length(hp) > 1700.0f) { f.dead = true; f.trail.clear(); }
+                    if (glm::length(hp - Z.zone_mid) > Z.zone_reach + 400.0f) { f.dead = true; f.trail.clear(); }
                     break;
                 }
                 default: break;
@@ -1393,17 +1431,21 @@ void VulkanEngine::rebuild_tick_aabbs() {
     // in-place edit of a collider is picked up within a quarter second).
     {
         constexpr float kNearRadius = 24.0f, kRefreshDist = 8.0f;
+        // VIBE_WALK_OLD=1: the walker as before 2026-11-27 (boxes for boulders and trunks; the
+        // lane's stones and the water's boulders after the static prefix: no step onto them)
+        static const bool kWalkOld = std::getenv("VIBE_WALK_OLD") != nullptr;
         const glm::vec2 c(player_.position.x, player_.position.z);
         const size_t nw = world_.aabbs.size(), nv = voxel_->collision_aabbs.size();
         const glm::vec2 dc = c - near_static_center_;
         if (near_static_src_[0] != nw || near_static_src_[1] != nv ||
             ++near_static_age_ >= 15 || glm::dot(dc, dc) > kRefreshDist * kRefreshDist) {
             near_static_.clear();
+            near_round_.clear();
             auto take = [&](const std::vector<collision::AABB>& src) {
                 for (const auto& a : src)
                     if (a.max.x >= c.x - kNearRadius && a.min.x <= c.x + kNearRadius &&
                         a.max.z >= c.y - kNearRadius && a.min.z <= c.y + kNearRadius)
-                        near_static_.push_back(a);
+                        (a.round && !kWalkOld ? near_round_ : near_static_).push_back(a);
             };
             take(world_.aabbs);
             if (site_here()) take(site_cols_);  // the site's, where the engine is at one (sites.cpp)
@@ -1416,8 +1458,31 @@ void VulkanEngine::rebuild_tick_aabbs() {
             near_static_age_ = 0;
         }
     }
+    static const bool kWalkOld = std::getenv("VIBE_WALK_OLD") != nullptr;
     tick_aabbs_.assign(near_static_.begin(), near_static_.end());
-    tick_static_count_ = near_static_.size();
+    tick_rounds_.assign(near_round_.begin(), near_round_.end());
+    if (!kWalkOld) {
+        // The castle lane's stones stand still: in the static prefix, so a walker steps onto a low
+        // one (after it, as before, they counted as moving boxes - no step-up - and a knee-high
+        // stone stopped the walk dead).
+        if (globe::current().home)
+            for (const collision::AABB& a : lane_rock_cols_)
+                if (std::abs(0.5f * (a.min.x + a.max.x) - player_.position.x) < 12.0f && std::abs(0.5f * (a.min.z + a.max.z) - player_.position.z) < 12.0f) tick_aabbs_.push_back(a);
+        // The boulders in the water (water_fx.cpp water_boulder_add: a box of 0.7 r either way,
+        // from 0.35 r under the ground to 0.6 r over it, round a stone of radius r drawn 0.35 r
+        // under the ground): as the round stones they are.
+        std::vector<collision::AABB> wb;
+        water_boulder_colliders(player_.position, 6.0f, wb);
+        for (collision::AABB a : wb) {
+            const float r = 0.5f * (a.max.x - a.min.x) / 0.7f, ground = a.max.y - 0.6f * r;
+            const glm::vec2 c(0.5f * (a.min.x + a.max.x), 0.5f * (a.min.z + a.max.z));
+            a.min = glm::vec3(c.x - 0.95f * r, ground - 0.35f * r - 0.95f * r, c.y - 0.95f * r);
+            a.max = glm::vec3(c.x + 0.95f * r, ground - 0.35f * r + 0.95f * r, c.y + 0.95f * r);
+            a.round = 1;
+            tick_rounds_.push_back(a);
+        }
+    }
+    tick_static_count_ = tick_aabbs_.size();
     if (!physics_) return;
     if (dyn_tick_aabb_cache_.size() != dyn_props_.size()) {
         dyn_tick_aabb_cache_.resize(dyn_props_.size());
@@ -1452,11 +1517,11 @@ void VulkanEngine::rebuild_tick_aabbs() {
     }
     jeep_player_colliders(tick_aabbs_);          // the cars (not the one the player sits in)
     glass_player_colliders(tick_aabbs_);         // the panes still standing in a sheet of glass that has lost one (glass.cpp)
-    if (globe::current().home)                   // the castle lane's stones near the player
+    if (kWalkOld && globe::current().home)         // the castle lane's stones near the player
         for (const collision::AABB& a : lane_rock_cols_)
             if (std::abs(0.5f * (a.min.x + a.max.x) - player_.position.x) < 12.0f && std::abs(0.5f * (a.min.z + a.max.z) - player_.position.z) < 12.0f) tick_aabbs_.push_back(a);
     // (the rock formations are not boxes: the walker meets their surface - game_loop.cpp rock_walk)
-    water_boulder_colliders(player_.position, 6.0f, tick_aabbs_);      // the boulders in the stream and the river's shallows (water_fx.cpp)
+    if (kWalkOld) water_boulder_colliders(player_.position, 6.0f, tick_aabbs_);      // the boulders in the stream and the river's shallows (water_fx.cpp)
 }
 
 void VulkanEngine::init_doors() {

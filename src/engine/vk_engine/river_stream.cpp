@@ -24,6 +24,8 @@
 #include <future>
 #include <vector>
 
+namespace vibe { float water_level_off(float x, float z); }     // (vk_engine/water_fx.cpp: the river falls to the sea)
+
 namespace vibe::river_stream {
 
 namespace {
@@ -81,7 +83,7 @@ Made make(int stretch, float wl, int octaves, uint32_t serial) {
     const int total = river_rule::station_count();
     for (int k = stretch * kPer; k < std::min((stretch + 1) * kPer, total); ++k) {
         if (river_rule::in_home(river_rule::station(k).mid)) continue;          // (the home tile's: scatter.cpp)
-        river_rule::plants_at(k, wl, h_at, blocked, false, per, m.n);
+        river_rule::plants_at(k, wl + water_level_off(river_rule::station(k).mid.x, river_rule::station(k).mid.y), h_at, blocked, false, per, m.n);      // (the level there: the river falls)
     }
     for (int s = 0; s < kNSpecies; ++s) {
         std::vector<ScatterInstance>& v = per[kSpecies[s]];

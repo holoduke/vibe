@@ -572,7 +572,9 @@ void VulkanEngine::visit_settings(Self& s, F&& f) {
     f("glare_strength", s.rt_.glare_strength);
     f("motion_blur", s.rt_.motion_blur);
     f("motion_blur_camera", s.rt_.motion_blur_camera);
-    f("dof_strength", s.rt_.dof_strength);
+    // (was "dof_strength", on at 1: renamed 2026-11-27 so an old file's value no longer switches the
+    //  aim blur back on - the owner asked for it gone; it stays as an option, off)
+    f("aim_dof", s.rt_.dof_strength);
     f("colorblind_mode", s.rt_.colorblind_mode);
     f("particle_fog_light", s.rt_.particle_fog_light);
     f("snow_tracks", s.rt_.snow_tracks);

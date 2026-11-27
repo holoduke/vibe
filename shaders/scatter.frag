@@ -45,6 +45,24 @@ layout(set = 0, binding = 32) uniform sampler2D u_cloud_shadow;   // sunlight th
 
 #include "rock_sdf.glsl"
 #include "ground_fx.glsl"      // (VIBE_TEST_DEBRIS: gfx.lsd_fade.z)
+#include "water_course.glsl"   // the stream's surface (wc_stream_surface)
+#include "shore_wet.glsl"      // materials at the water: a stone at the waterline is wet, weed on its top under water
+
+// The baked ground texture (terrain_bake.cpp; ground_paste.glsl gp_bake reads it the same way): streamed
+// scree takes its tone from the ground it lies on.
+layout(set = 0, binding = 46) uniform sampler2DArray u_sc_bake_a;
+bool sc_ground_colour(vec2 xz, float dist, out vec3 alb) {
+    alb = vec3(0.0);
+    float t0 = gfx.paste.y;
+    if (t0 <= 0.0) return false;
+    float l0 = floor(max(log2(max(dist / t0, 1.0)), gfx.paste.z));
+    if (l0 > 6.0) return false;
+    float span0 = 2048.0 * 0.0075 * exp2(l0);
+    if (max(abs(xz.x - scene.camera_pos.x), abs(xz.y - scene.camera_pos.z)) > 0.47 * span0) return false;
+    vec4 a = textureLod(u_sc_bake_a, vec3(xz / span0, l0), 0.0);
+    alb = a.rgb * a.rgb;
+    return true;
+}
 
 vec2 _octa_encode(vec3 n) {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
@@ -62,7 +80,7 @@ void main() {
     bool plant = pc.grass_params.y > 0.5;
     vec3 wpos = vWorldPos;
     gl_FragDepth = gl_FragCoord.z;
-    float stone_cav = 0.0, stone_ground = 0.0;
+    float stone_cav = 0.0, stone_ground = 0.0, stone_acc = 0.0, stone_rough = 1.0;
     vec3 tex_n = N;      // normal for the texture projection weights (the smooth one)
     if (!plant) {
         // Stone: real geometry with a real normal (scatter.vert). Added
@@ -97,9 +115,35 @@ void main() {
     vec3 tex = (texture(u_albedo[7], uvA).rgb * wA +
                 texture(u_albedo[7], uvB).rgb * wB) / max(wA + wB, 1e-3);
     vec3 albedo = tex * vColor;
+    if (!plant && vRotSeed.x > 25.0) {
+        // Streamed scree: the tone of the ground it lies on (the baked ground texture under its
+        // base), the rock scan for the grain - a stone fallen from the cliff above wears the
+        // cliff's and the slope's colour, not a fixed grey.
+        vec3 gc;
+        if (sc_ground_colour(vInst.xz, vDistToCam, gc)) {
+            vec3 tm = textureLod(u_albedo[7], vec2(0.5), 12.0).rgb;
+            vec3 grain = tex / max(tm, vec3(0.02));
+            float gl = dot(gc, vec3(0.333));
+            vec3 tone = mix(vec3(gl), gc, 0.55) * 1.15;          // (the hue toned down: green turf under a stone does not make it green)
+            albedo = mix(albedo, clamp(grain, vec3(0.5), vec3(1.6)) * tone * vColor, 0.7);
+        }
+    }
     if (!plant) {
         albedo *= 1.0 - 0.5 * clamp(stone_cav, 0.0, 1.0);
         albedo = mix(albedo, albedo * vec3(0.52, 0.47, 0.38), stone_ground * 0.85);
+        // What LIES on a stone's up faces - snow above the snow line on every stone, dust on
+        // scree (rot > 4 pi: scatter.cpp) - there or not (the reference's accumulation: binary by
+        // slope, its edge broken by the detail normal, kept off the raised grain's flanks).
+        if ((int(gfx.rock.y + 0.5) & 8) != 0) {
+            float hgt  = clamp(0.5 * dot(tex, vec3(0.333)) / max(dot(textureLod(u_albedo[7], vec2(0.5), 12.0).rgb, vec3(0.333)), 0.02), 0.0, 1.0);
+            float snow = 0.8 * smoothstep(70.0, 90.0, wpos.y - clamp(N.z * 30.0, -16.0, 16.0)) * (wpos.y > 60.0 ? stream_snow_clear(wpos.xz) : 1.0);      // (none along the stream: scene_ubo.glsl)
+            float rate = max(vRotSeed.x > 12.5 ? 0.17 : 0.0, snow);
+            float dn   = (N.x - tex_n.x) + (N.z - tex_n.z);
+            stone_acc  = ceil(clamp(rate - 1.0 + N.y - 4.0 * dn * dn * (1.0 - hgt), 0.0, 1.0));
+            albedo = mix(albedo, snow > 0.17 ? vec3(0.62, 0.65, 0.70) : vec3(0.130, 0.112, 0.082), stone_acc * (snow > 0.17 ? 1.0 : 0.8));
+            // the grain in the gloss, near only (gone by 13 m)
+            stone_rough = mix(1.0, mix(1.22, 0.74, smoothstep(0.25, 0.75, hgt)), 1.0 - clamp((vDistToCam - 3.0) / 10.0, 0.0, 1.0));
+        }
     }
     int part = plant ? int(vUv.x + 0.5) : -1;
     // (part 10 = a flowering stalk of the meadow: a grass blade in everything but its head)
@@ -303,6 +347,25 @@ void main() {
         N = normalize(mix(N, outw, 0.88 * k));
         albedo *= mix(1.0, mix(0.55, 1.05, smoothstep(-0.8, 0.7, side)), k) * mix(0.62, 1.0, h01);
     }
+    // Plants grow OUT of the ground (2026-11-27; the reference game's foliage takes the ground's
+    // colour at its root): within a band over the plant's foot the albedo takes the hue of the
+    // ground it stands on (the baked ground texture under it - sc_ground_colour; the blade's own
+    // brightness kept, sqrt(ground x albedo) as the tufts' rule above), the soil itself at the very
+    // foot, and the foot is in the plant's own shade. Not the lily rafts (parts 1, 2, 9: on the
+    // water) nor the debris (>= 20: lying flat).
+    if (plant && part != 1 && part != 2 && part != 9 && part < 20) {
+        float zone = (part == 8 ? 0.09 : 0.14) * clamp(vInst.w, 0.4, 2.5);
+        float rb = 1.0 - smoothstep(0.0, zone, wpos.y - vInst.y);
+        vec3 gcl;
+        if (rb > 0.001 && sc_ground_colour(vInst.xz, vDistToCam, gcl)) {
+            const vec3 kLumR = vec3(0.212671, 0.71516, 0.072169);
+            vec3 g = sqrt(max(gcl * albedo, vec3(0.0)));
+            vec3 hued = g * (dot(albedo, kLumR) / max(dot(g, kLumR), 0.001));
+            albedo = mix(albedo, hued, 0.75 * rb);
+            albedo = mix(albedo, gcl, 0.35 * rb * rb);
+        }
+        if (part != 8) albedo *= mix(1.0, 0.72, rb);       // (a tuft's blade is shaded toward its root already)
+    }
     // Half-Lambert wrap (same reason as grass.frag): hard Lambert on
     // randomly-rotated faceted rocks floors half the faces to black.
     float ndl_raw = dot(N, L);
@@ -327,6 +390,27 @@ void main() {
     // Grass blades: glossier close by, matt with distance (the game's rule - a field of small
     // highlights far off turns to noise).
     float rough = part == 8 ? min(vDistToCam * 0.005 + 0.45, 0.99) : (part >= 20 ? 0.8 : 0.6);
+    if (!plant) rough = mix(clamp(rough * stone_rough, 0.05, 1.0), 1.0, stone_acc);
+    // At the water (shore_wet.glsl, as the ground and the meshes): the stones' wet band, weed on
+    // their submerged tops, the tint by depth. (Stones only; the light above is the forward fallback.)
+    if (!plant && scene.water_params.x > 0.5 && SW_ON(1)) {
+        float st = wc_stream_surface(vWorldPos.xz);
+        float wl = max(scene.water_params.y, st);
+        float W  = st > scene.water_params.y ? scene.water_wet.w : scene.water_wet.z;
+        if (vWorldPos.y < wl + W) {
+            float v = sw_band(vWorldPos.y, wl, W, vWorldPos.xz), m = sw_wet_m(v);
+            albedo = sw_wet_albedo(albedo, m);
+            rough = sw_wet_rough(rough, v, m);
+            float below = wl - vWorldPos.y;
+            if (below > 0.0) {
+                float g = sw_growth(vWorldPos.xz, 0.5, N.y, below);
+                if (g > 0.0) { float gh; albedo = mix(albedo, sw_growth_col(vWorldPos.xz, gh), g); rough = mix(rough, 0.6, g); }
+                float rk;
+                albedo = sw_bed_tint(albedo, below, clamp(scene.water_color.rgb * 2.5, vec3(0.01), vec3(0.9)), rk);
+            }
+            outGBuffer0 = vec4(clamp(albedo, vec3(0.0), vec3(1.0)), (part == 8 ? 2.0 : 1.0) / 255.0);
+        }
+    }
     outGBuffer1 = vec4(_octa_encode(N), rough, plant ? ((part == 6 || part == 7 || part >= 20) ? 1.0 / 3.0 : 1.0) : 0.0);
     {
         vec2 current_uv = gl_FragCoord.xy * scene.viewport.zw;

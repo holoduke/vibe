@@ -415,6 +415,7 @@ struct SceneUBO {
     glm::vec4  wm_cache;         // the world's slow fields as textures, near and far (wm_cache.cpp; shaders: rm_world_vr)
     glm::vec4  wm_cache1;
     glm::vec4  car_press[4];     // cars pressing the grass down (scene_ubo.glsl car_press)
+    glm::vec4  car_snow[16];     // the snow each car still carries (jeep.cpp jeep_snow_fill; scene_ubo.glsl car_snow)
     glm::vec4  flower_field[4];  // the flowering meadow's fields (flower_fields_; scene_ubo.glsl flower_field)
     glm::vec4  hw_jn[4];         // where a side road leaves a highway (highway_field.cpp hw_junction_scene; scene_ubo.glsl hw_jn)
     glm::ivec4 lp_flags;         // the lighting ports (light_port.cpp; scene_ubo.glsl lp_*)
@@ -424,8 +425,8 @@ struct SceneUBO {
     glm::vec4  water_swell;      // x = the water surface at the eye about the level (water_fx.cpp water_swell_height)
     glm::vec4  river_piers[24];   // the piers standing in the river: x z, width (water_fx.cpp river_piers; scene_ubo.glsl river_piers)
     glm::vec4  stream_info;      // the stream (engine/water_course.h; scene_ubo.glsl stream_*)
-    glm::vec4  stream_box[8];
-    glm::vec4  stream_pts[64];
+    glm::vec4  stream_box[16];
+    glm::vec4  stream_pts[128];
     glm::vec4  water_body;       // the player's body middle (scatter.vert: lilies part round it; scene_ubo.glsl water_body)
     glm::vec4  water_fft;        // the wind sea's cascades (water_sim.cpp water_sim_fill; scene_ubo.glsl water_fft)
     glm::vec4  water_fft_L;
@@ -434,7 +435,11 @@ struct SceneUBO {
     glm::vec4  water_sun;        // x: the sun's disc seen through the cloud deck (glints, caustics; water_sim.cpp)
     glm::vec4  water_sw;         // the shallow-water solver's window: corner x z, size (m), 1 = on (water_solver.cpp; scene_ubo.glsl water_sw)
     glm::vec4  water_sw2;        // x 1 = foam particles on
+    glm::vec4  water_wet;        // materials at the water: switches, growth rate, band heights (water_wet.cpp; scene_ubo.glsl water_wet)
+    glm::vec4  water_grid;       // the sea's projected grid, foam lift, lamp glint, in-water fog light (water_wet.cpp)
 };
+// Materials at the water and the sea's surface switches (water_wet.cpp): fills water_wet / water_grid.
+void water_wet_fill(SceneUBO& d);
 const glm::vec4* hw_junction_scene();      // (highway_field.cpp: four vec4, in the chart's coordinates)
 // The wind sea's height (m about the level) from the FFT cascades read back from the GPU, and the
 // bound of it the shader's hit search uses (water_sim.cpp; the CPU twin of water_waves.glsl).
@@ -443,9 +448,14 @@ float water_fft_bound();
 // The cascades' slope / fold / height picture and its sampler (deferred_lighting.cpp binding 29:
 // the reflected caustics); null before water_sim.cpp made them.
 void water_sim_grad_view(VkImageView& view, VkSampler& sampler);
+// The water's level under the datum rt_.water_level at (x, z) (<= 0; water_fx.cpp, the twin of
+// shaders/water_level.glsl): the open sea 1 m under it, the river falling to it down its course.
+float water_level_off(float x, float z);
 // The piers standing in the river, for the foam behind them (water_fx.cpp; scene_ubo.glsl river_piers).
 void river_piers_clear();
-void river_pier_add(glm::vec2 p, float half_width);
+// top: the height of its top (1e5 = unknown, a wall standing out of the water); a stone whose top lies
+// under the water is a round stone in the solver's bed and a hump in the stream's surface (river_piers w).
+void river_pier_add(glm::vec2 p, float half_width, float top = 1e5f);
 // The boulders standing in the water (scatter.cpp adds them; their boxes near a place, for a walker: props.cpp).
 void water_boulder_add(glm::vec2 p, float ground, float r);
 void water_boulder_colliders(glm::vec3 c, float reach, std::vector<collision::AABB>& out);
@@ -473,6 +483,11 @@ void light_port_destroy(VmaAllocator a);
 // kept) and the copy that keeps it (end of the deferred pass; src in TRANSFER_SRC layout).
 VkImageView light_port_prev_lit();
 void light_port_copy_lit(VkCommandBuffer cmd, VkDevice dev, VmaAllocator a, VkImage src, VkExtent2D ext, VkFormat fmt);
+
+// The notice while background pipelines compile (loader_screen.cpp; from vkpipe::compile_status):
+// what is happening, n of m, which one, the estimated time left; fades out when done. Call
+// between ImGui::NewFrame and ImGui::Render.
+void draw_compile_notice();
 
 // ---- KHR ray tracing entry points ----
 //

@@ -28,6 +28,7 @@
 
 namespace vibe {
 
+
 // Per-frame camera state shared across the three render passes
 // (terrain_raymarch_lr, world depth pre-pass, world color pass). draw()
 // calls this once before any of them; each pass reads the cached
@@ -89,6 +90,7 @@ VulkanEngine::FrameView VulkanEngine::compute_frame_view() {
         const float dtz = glm::clamp(last_frame_dt_, 0.0f, 0.1f);
         aim_zoom_ += ((body_aim_ ? 1.0f : 0.0f) - aim_zoom_) * (1.0f - std::exp(-dtz / 0.07f));
         view_fov_deg_ = glm::mix(glm::clamp(rt_.fov_deg, 55.0f, 100.0f), kAimFov, glm::smoothstep(0.0f, 1.0f, aim_zoom_));
+        view_fov_deg_ = std::min(view_fov_deg_ + jeep_fov_extra(), 115.0f);       // (driving: a little wider with speed and the boost - jeep.cpp)
     }
     fv.proj = glm::perspective(glm::radians(view_fov_deg_), aspect, 0.05f, view_far_);
     fv.proj[1][1] *= -1.0f;
@@ -137,6 +139,123 @@ VulkanEngine::FrameView VulkanEngine::compute_frame_view() {
     return fv;
 }
 
+// The terrain passes' push constants (the hit pass, the ground pass and the water pass of one
+// resolution must cast exactly the same rays: one place sets them). lr = the low-resolution pass.
+void VulkanEngine::terrain_rm_push(VkCommandBuffer cmd, bool lr) {
+    const FrameView& fv = current_frame_view_;
+    const glm::mat4& vp = fv.vp;
+    if (lr) {
+        PushConstants pc{};
+        pc.mvp      = vp;
+        // Camera-relative (rotation only), as the full-resolution pass in render_world(): with the
+        // full inverse the near and far points of a ray are both "camera + a little", and far
+        // from the origin the difference - the ray's direction - lost its precision.
+        pc.model    = glm::mat4(glm::inverse(glm::dmat4(fv.proj) * glm::dmat4(glm::dmat3(fv.view))));
+        // (the temporal upscaler: the whole picture part of its pixel aside - the pixel at
+        // uv then shows the scene at uv + lr_jit)
+        if (tr_->lr_jit != glm::vec2(0.0f))
+            pc.model = pc.model * glm::translate(glm::mat4(1.0f), glm::vec3(2.0f * tr_->lr_jit.x, 2.0f * tr_->lr_jit.y, 0.0f));
+        pc.prev_mvp = prev_view_proj_valid_ ? prev_view_proj_ : vp;
+        // Plateau half-extent must mirror the full-res raymarch path
+        // (line ~2800) — otherwise the LR pass paints a much wider
+        // plateau than the full-res one, and switching scale below 100%
+        // makes the area around the castle visibly jump up to plateau
+        // height. Was 28.0 (pre-shrink default), full-res was already 11.5.
+        pc.color    = glm::vec4(0.0f, 0.0f, 11.5f, 22.0f);
+        // emissive layout for the raymarch shader:
+        //   x = step factor (0.15..0.8) — march step relative to SDF gap
+        //   y = lod_near_m  — ray distance at which the FBM LOD ramp starts
+        //   z = lod_far_m   — ray distance at which the FBM LOD ramp ends
+        //   w = lod_min_oct — minimum octave count at far end of ramp
+        pc.emissive = glm::vec4(
+            std::clamp(rt_.terrain_raymarch_step_factor, 0.05f, 0.8f),
+            std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
+            std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
+                     (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_lod_min_octaves, 2, 8)));
+        pc.tex_params = glm::vec4(
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_max_steps, 60, 300)),
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_shadow_steps, 16, 96)),
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_octaves, 4, 24)),
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_normal_octaves, 4, 32)));
+        // grass_params slot repurposed for raymarch knobs:
+        //   x = volumetric fog strength (0 = off)
+        //   y = relaxation cone-stepping flag (>0.5 = on)
+        //   z = fog god-ray self-shadow flag (>0.5 = on)
+        //   w = water RT-reflection flag (>0.5 = march FBM in refl dir)
+        pc.grass_params = glm::vec4(
+            std::max(0.0f, rt_.terrain_raymarch_fog_strength),
+            rt_.terrain_raymarch_relaxation ? 1.0f : 0.0f,
+            rt_.terrain_raymarch_fog_godrays ? 1.0f : 0.0f,
+            rt_.water_rt_reflections ? 1.0f : 0.0f);
+        vkCmdPushConstants(cmd, pipeline_layout_,
+                           kPushConstantStages,
+                           0, sizeof(PushConstants), &pc);
+        return;
+    }
+    const glm::mat4 prev_vp = prev_view_proj_;
+        PushConstants pc{};
+        pc.mvp = vp;
+        // Reuse cached inverse from FrameView (was glm::inverse(vp) each
+        // time -- same matrix as fv.inv_vp computed once in compute_frame_view).
+        // Camera-relative (rotation only): the view rays must not depend on where the
+        // camera is. With the full inverse the ray directions lost their precision
+        // with altitude (the far and near points are both ~eye + something), and the
+        // whole raymarched landscape shook from frame to frame when flying up.
+        pc.model = glm::mat4(glm::inverse(glm::dmat4(fv.proj) * glm::dmat4(glm::dmat3(fv.view))));   // frag: + camera position where it needs a point
+        pc.prev_mvp = prev_vp;
+        // .xy = plateau centre, .z = plateau half-extent, .w = plateau
+        // height. Shader's terrainM blends FBM toward the plateau
+        // height inside the castle footprint so brushes / dyn-props
+        // visibly sit on the procedural surface. Values mirror the
+        // gameplay heightmap's plateau in init_world (11.5 m half-ext,
+        // 22 m height, centred at origin — tight pad just under the
+        // castle so the surrounding terrain stays fully procedural).
+        pc.color = glm::vec4(0.0f, 0.0f, 11.5f, 22.0f);
+        pc.emissive = glm::vec4(0.0f);
+        // tex_params for the raymarch shader carries quality knobs:
+        //   .x = max ray-march steps      (60..300)
+        //   .y = shadow ray steps         (16..96)
+        //   .z = FBM octaves for march    (4..9)
+        //   .w = FBM octaves for normals  (4..16)
+        // Lower = faster, higher = smoother / longer reach.
+        pc.tex_params = glm::vec4(
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_max_steps, 60, 300)),
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_shadow_steps, 16, 96)),
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_octaves, 4, 24)),
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_normal_octaves, 4, 32)));
+        // The patch terrain (terrain_patches.cpp): the ground within the march's reach is in
+        // its depth picture this frame - a negative step count tells the shader to read it
+        // there instead of marching (terrain_raymarch.frag `patch_mode`).
+        if (terrain_patches_active()) pc.tex_params.x = -pc.tex_params.x;
+        // emissive layout — mirrors render_terrain_raymarch_lr:
+        //   x = step factor (0.15..0.8)
+        //   y = lod_near_m  — ray-t at which FBM LOD ramp starts
+        //   z = lod_far_m   — ray-t at which FBM LOD ramp ends
+        //   w = lod_min_oct — minimum octave count at far end
+        // (x negative = this is the full-resolution pass: the shader may
+        // clip its march against the depth pre-pass copy.)
+        pc.emissive = glm::vec4(
+            -std::clamp(rt_.terrain_raymarch_step_factor, 0.05f, 0.8f),
+            std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
+            std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
+                     (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
+            static_cast<float>(std::clamp(rt_.terrain_raymarch_lod_min_octaves, 2, 8)));
+        // grass_params slot — fog strength + flags (mirrors LR pass).
+        pc.grass_params = glm::vec4(
+            std::max(0.0f, rt_.terrain_raymarch_fog_strength),
+            rt_.terrain_raymarch_relaxation ? 1.0f : 0.0f,
+            rt_.terrain_raymarch_fog_godrays ? 1.0f : 0.0f,
+            rt_.water_rt_reflections ? 1.0f : 0.0f);
+        // With the patches the march's 'relaxation' flag is not read: its place carries the
+        // baked ground texture - the distance its first level is made for, 0 = none this frame
+        // (terrain_bake.cpp; shaders/terrain_rm_bake.glsl g_bake_t0).
+        if (terrain_patches_active()) pc.grass_params.y = terrain_bake_ready() ? terrain_bake_t0() : 0.0f;
+        vkCmdPushConstants(cmd, pipeline_layout_,
+                           kPushConstantStages,
+                           0, sizeof(PushConstants), &pc);
+}
+
 void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
     const FrameView& fv = current_frame_view_;
     const glm::mat4& vp = fv.vp;
@@ -150,63 +269,22 @@ void VulkanEngine::render_terrain_raymarch_lr(VkCommandBuffer cmd) {
     VkRect2D scissor{ {0, 0}, tr_->lr_extent };
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                       terrain_raymarch_lr_pipeline_ ? terrain_raymarch_lr_pipeline_
-                       : terrain_raymarch_pipeline_  ? terrain_raymarch_pipeline_
-                                                     : terrain_raymarch_lite_lr_pipeline_);
+    // (the ground builds only with the water pass ready: terrain_water_pass.cpp)
+    terrain_rm_request_variant(2);      // (compiled when first wanted)
+    VkPipeline lr_pipe = !terrain_water_pass_ready(true) ? terrain_raymarch_lite_lr_pipeline_
+                       : terrain_raymarch_lr_pipeline_ ? terrain_raymarch_lr_pipeline_
+                       : terrain_raymarch_lite_lr_pipeline_;
     if (simple_shading_ && shade_test_[0] <= 1 && terrain_raymarch_lite_lr_pipeline_)      // (shading test, the ground flat or simple: the first-start build)
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrain_raymarch_lite_lr_pipeline_);
+        lr_pipe = terrain_raymarch_lite_lr_pipeline_;
+    if (!lr_pipe) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lr_pipe);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                              pipeline_layout_, 0, 1, &scene_desc_set_,
                              0, nullptr);
 
-    PushConstants pc{};
-    pc.mvp      = vp;
-    // Camera-relative (rotation only), as the full-resolution pass in render_world(): with the
-    // full inverse the near and far points of a ray are both "camera + a little", and far
-    // from the origin the difference - the ray's direction - lost its precision.
-    pc.model    = glm::mat4(glm::inverse(glm::dmat4(fv.proj) * glm::dmat4(glm::dmat3(fv.view))));
-    // (the temporal upscaler: the whole picture part of its pixel aside - the pixel at
-    // uv then shows the scene at uv + lr_jit)
-    if (tr_->lr_jit != glm::vec2(0.0f))
-        pc.model = pc.model * glm::translate(glm::mat4(1.0f), glm::vec3(2.0f * tr_->lr_jit.x, 2.0f * tr_->lr_jit.y, 0.0f));
-    pc.prev_mvp = prev_view_proj_valid_ ? prev_view_proj_ : vp;
-    // Plateau half-extent must mirror the full-res raymarch path
-    // (line ~2800) — otherwise the LR pass paints a much wider
-    // plateau than the full-res one, and switching scale below 100%
-    // makes the area around the castle visibly jump up to plateau
-    // height. Was 28.0 (pre-shrink default), full-res was already 11.5.
-    pc.color    = glm::vec4(0.0f, 0.0f, 11.5f, 22.0f);
-    // emissive layout for the raymarch shader:
-    //   x = step factor (0.15..0.8) — march step relative to SDF gap
-    //   y = lod_near_m  — ray distance at which the FBM LOD ramp starts
-    //   z = lod_far_m   — ray distance at which the FBM LOD ramp ends
-    //   w = lod_min_oct — minimum octave count at far end of ramp
-    pc.emissive = glm::vec4(
-        std::clamp(rt_.terrain_raymarch_step_factor, 0.05f, 0.8f),
-        std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
-        std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
-                 (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
-        static_cast<float>(std::clamp(rt_.terrain_raymarch_lod_min_octaves, 2, 8)));
-    pc.tex_params = glm::vec4(
-        static_cast<float>(std::clamp(rt_.terrain_raymarch_max_steps, 60, 300)),
-        static_cast<float>(std::clamp(rt_.terrain_raymarch_shadow_steps, 16, 96)),
-        static_cast<float>(std::clamp(rt_.terrain_raymarch_octaves, 4, 24)),
-        static_cast<float>(std::clamp(rt_.terrain_raymarch_normal_octaves, 4, 32)));
-    // grass_params slot repurposed for raymarch knobs:
-    //   x = volumetric fog strength (0 = off)
-    //   y = relaxation cone-stepping flag (>0.5 = on)
-    //   z = fog god-ray self-shadow flag (>0.5 = on)
-    //   w = water RT-reflection flag (>0.5 = march FBM in refl dir)
-    pc.grass_params = glm::vec4(
-        std::max(0.0f, rt_.terrain_raymarch_fog_strength),
-        rt_.terrain_raymarch_relaxation ? 1.0f : 0.0f,
-        rt_.terrain_raymarch_fog_godrays ? 1.0f : 0.0f,
-        rt_.water_rt_reflections ? 1.0f : 0.0f);
-    vkCmdPushConstants(cmd, pipeline_layout_,
-                       kPushConstantStages,
-                       0, sizeof(PushConstants), &pc);
+    terrain_rm_push(cmd, true);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    if (lr_pipe != terrain_raymarch_lite_lr_pipeline_) draw_terrain_water_pass(cmd, true);
 }
 
 // The terrain's low-resolution march (frame.cpp "march pre-pass"): the cut-down terrain shader
@@ -688,75 +766,26 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         // props (which already wrote depth earlier in this pass) still
         // occlude correctly. Misses (sky) discard, leaving compose's
         // sky pass to fill those pixels.
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          (env_->snow * 255.0f < 1.0f && terrain_raymarch_summer_pipeline_ && !std::getenv("VIBE_NO_SUMMER_SHADER"))
+        // (the ground builds shade no water: drawn only once the water pass is there - terrain_water_pass.cpp)
+        const bool rm_split_ok = terrain_water_pass_ready(false);
+        if (env_->snow * 255.0f < 1.0f && !std::getenv("VIBE_NO_SUMMER_SHADER")) terrain_rm_request_variant(1);   // (compiled when first wanted)
+        VkPipeline rm_pipe = !rm_split_ok ? terrain_raymarch_lite_pipeline_
+                           : (env_->snow * 255.0f < 1.0f && terrain_raymarch_summer_pipeline_ && !std::getenv("VIBE_NO_SUMMER_SHADER"))
                               ? terrain_raymarch_summer_pipeline_
-                              : terrain_raymarch_pipeline_ ? terrain_raymarch_pipeline_ : terrain_raymarch_lite_pipeline_);
+                              : terrain_raymarch_pipeline_ ? terrain_raymarch_pipeline_ : terrain_raymarch_lite_pipeline_;
         // (VIBE_LITE_TERRAIN=1: look at the first-start build)
         static const bool kForceLite = std::getenv("VIBE_LITE_TERRAIN") != nullptr;
-        if ((kForceLite || (simple_shading_ && shade_test_[0] <= 1)) && terrain_raymarch_lite_pipeline_) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrain_raymarch_lite_pipeline_);
-        PushConstants pc{};
-        pc.mvp = vp;
-        // Reuse cached inverse from FrameView (was glm::inverse(vp) each
-        // time -- same matrix as fv.inv_vp computed once in compute_frame_view).
-        // Camera-relative (rotation only): the view rays must not depend on where the
-        // camera is. With the full inverse the ray directions lost their precision
-        // with altitude (the far and near points are both ~eye + something), and the
-        // whole raymarched landscape shook from frame to frame when flying up.
-        pc.model = glm::mat4(glm::inverse(glm::dmat4(fv.proj) * glm::dmat4(glm::dmat3(fv.view))));   // frag: + camera position where it needs a point
-        pc.prev_mvp = prev_vp;
-        // .xy = plateau centre, .z = plateau half-extent, .w = plateau
-        // height. Shader's terrainM blends FBM toward the plateau
-        // height inside the castle footprint so brushes / dyn-props
-        // visibly sit on the procedural surface. Values mirror the
-        // gameplay heightmap's plateau in init_world (11.5 m half-ext,
-        // 22 m height, centred at origin — tight pad just under the
-        // castle so the surrounding terrain stays fully procedural).
-        pc.color = glm::vec4(0.0f, 0.0f, 11.5f, 22.0f);
-        pc.emissive = glm::vec4(0.0f);
-        // tex_params for the raymarch shader carries quality knobs:
-        //   .x = max ray-march steps      (60..300)
-        //   .y = shadow ray steps         (16..96)
-        //   .z = FBM octaves for march    (4..9)
-        //   .w = FBM octaves for normals  (4..16)
-        // Lower = faster, higher = smoother / longer reach.
-        pc.tex_params = glm::vec4(
-            static_cast<float>(std::clamp(rt_.terrain_raymarch_max_steps, 60, 300)),
-            static_cast<float>(std::clamp(rt_.terrain_raymarch_shadow_steps, 16, 96)),
-            static_cast<float>(std::clamp(rt_.terrain_raymarch_octaves, 4, 24)),
-            static_cast<float>(std::clamp(rt_.terrain_raymarch_normal_octaves, 4, 32)));
-        // The patch terrain (terrain_patches.cpp): the ground within the march's reach is in
-        // its depth picture this frame - a negative step count tells the shader to read it
-        // there instead of marching (terrain_raymarch.frag `patch_mode`).
-        if (terrain_patches_active()) pc.tex_params.x = -pc.tex_params.x;
-        // emissive layout — mirrors render_terrain_raymarch_lr:
-        //   x = step factor (0.15..0.8)
-        //   y = lod_near_m  — ray-t at which FBM LOD ramp starts
-        //   z = lod_far_m   — ray-t at which FBM LOD ramp ends
-        //   w = lod_min_oct — minimum octave count at far end
-        // (x negative = this is the full-resolution pass: the shader may
-        // clip its march against the depth pre-pass copy.)
-        pc.emissive = glm::vec4(
-            -std::clamp(rt_.terrain_raymarch_step_factor, 0.05f, 0.8f),
-            std::max(1.0f, (rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_)),
-            std::max((rt_.terrain_raymarch_lod_near_m * rm_air_lod_k_) + 1.0f,
-                     (rt_.terrain_raymarch_lod_far_m * rm_air_lod_k_)),
-            static_cast<float>(std::clamp(rt_.terrain_raymarch_lod_min_octaves, 2, 8)));
-        // grass_params slot — fog strength + flags (mirrors LR pass).
-        pc.grass_params = glm::vec4(
-            std::max(0.0f, rt_.terrain_raymarch_fog_strength),
-            rt_.terrain_raymarch_relaxation ? 1.0f : 0.0f,
-            rt_.terrain_raymarch_fog_godrays ? 1.0f : 0.0f,
-            rt_.water_rt_reflections ? 1.0f : 0.0f);
-        // With the patches the march's 'relaxation' flag is not read: its place carries the
-        // baked ground texture - the distance its first level is made for, 0 = none this frame
-        // (terrain_bake.cpp; shaders/terrain_rm_bake.glsl g_bake_t0).
-        if (terrain_patches_active()) pc.grass_params.y = terrain_bake_ready() ? terrain_bake_t0() : 0.0f;
-        vkCmdPushConstants(cmd, pipeline_layout_,
-                           kPushConstantStages,
-                           0, sizeof(PushConstants), &pc);
+        if ((kForceLite || (simple_shading_ && shade_test_[0] <= 1)) && terrain_raymarch_lite_pipeline_) rm_pipe = terrain_raymarch_lite_pipeline_;
+        if (!rm_pipe) rm_pipe = terrain_raymarch_pipeline_;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rm_pipe);
+        terrain_rm_push(cmd, false);      // (the hit pass pushed the same: terrain_rm_push)
         // 3 verts, 1 instance — gl_VertexIndex 0..2 covers the screen.
         vkCmdDraw(cmd, 3, 1, 0, 0);
+        // The water over the pixels the ground build marked (terrain_water_pass.cpp; the lite build shades its own).
+        if (rm_pipe != terrain_raymarch_lite_pipeline_) {
+            prof_mark(cmd, "w_terrain_ground");
+            draw_terrain_water_pass(cmd, false);
+        }
         // Restore cube pipeline + cube mesh for the grass / dust /
         // viewmodel passes that follow.
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());
@@ -792,6 +821,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
     // the terrain↔water silhouette is a pixel-exact hardware depth test
     // — the previous analytic-vs-rasterised mismatch (edge gaps / seam
     // lines) is gone by construction.
+    if (rt_.water_enabled && !rt_.terrain_raymarch_enabled) terrain_water_plane_request();   // (compiled when first wanted)
     if (rt_.water_enabled && !rt_.terrain_raymarch_enabled
         && terrain_water_pipeline_ != VK_NULL_HANDLE
         && water_plane_mesh_.index_count > 0) {
@@ -1115,6 +1145,7 @@ void VulkanEngine::render_world(VkCommandBuffer cmd) {
         const float rock_d = spc.grass_params.x;
         scatter_draw_cells(cmd, scatter_.rock_mesh.index_count, scatter_.rock_cells,
                            [&](const ScatterCell& c) { return cell_in(c, rock_d); });
+        scree_draw(cmd, [&](const ScatterCell& c) { return cell_in(c, rock_d); });      // (the streamed scree: scree_stream.cpp)
         // Flowers + ferns: per-species mesh, instance ranges in one buffer.
         if (scatter_.plant_buffer && scatter_plant_pipeline_) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, scatter_plant_pipeline_);

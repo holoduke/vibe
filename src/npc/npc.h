@@ -19,6 +19,7 @@
 // call update() too, which for them only moves the clock that views() blends two states with.
 // Nothing here depends on frame rate or on who is watching: the same seed and the same number
 // of steps give the same world (tests/test_npc.cpp).
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -44,8 +45,27 @@ enum class Pose : uint8_t {
 };
 
 // Something a person does once, over a fixed time (the renderer plays a clip over it):
-enum class Act : uint8_t { None = 0, SitDown = 1, StandUp = 2, CarEnter = 3, CarExit = 4 };
-constexpr float kActTime[5] = { 0.0f, 3.2f, 2.6f, 3.6f, 3.4f };      // seconds each takes
+enum class Act : uint8_t { None = 0, SitDown = 1, StandUp = 2, CarEnter = 3, CarExit = 4,
+                         PutDown = 5, PickUp = 6 };     // (what is carried, set down at View::aim / taken up from it)
+constexpr float kActTime[7] = { 0.0f, 3.2f, 2.6f, 3.6f, 3.4f, 1.7f, 1.6f };      // seconds each takes
+
+// WHAT PEOPLE CARRY (View::item: the low four bits are in the hands, the high four what this person
+// has set down where it is - on the table in front of its seat, on its desk, on the floor beside
+// it: item_place). The renderer has the meshes and the holds (npc_world.cpp "WHAT THEY CARRY").
+enum class Item : uint8_t { None = 0, Box = 1, Clipboard = 2, Cup = 3, Bag = 4, Toolbox = 5, Phone = 6, Tablet = 7 };
+// Where somebody sets a thing down from where it is: `pos` / `yaw` of a seat (its top, the way it
+// faces) or of where it stands. kind: 0 the floor beside (a spot), 1 the table in front of a
+// seat (or the counter in front of a stool), 2 a desk (`desk_keys`: the keyboard's middle),
+// 3 the seat beside (a bench).
+inline glm::vec3 item_place(glm::vec3 pos, float yaw, int kind, glm::vec3 desk_keys = glm::vec3(0.0f)) {
+    const glm::vec3 fwd(std::sin(yaw), 0.0f, -std::cos(yaw)), right(std::cos(yaw), 0.0f, std::sin(yaw));
+    switch (kind) {
+    case 1: return pos + fwd * 0.40f + right * 0.16f + glm::vec3(0.0f, 0.30f, 0.0f);
+    case 2: return desk_keys + right * 0.34f + fwd * 0.04f + glm::vec3(0.0f, -0.012f, 0.0f);
+    case 3: return pos + right * 0.42f;
+    default: return pos + right * 0.42f + fwd * 0.10f;
+    }
+}
 
 // What a renderer needs of one agent, blended to the present moment.
 // View::style of a CAR: what kind it is and what it is doing (bits).
@@ -76,6 +96,7 @@ struct View {
     glm::vec3 aim{0.0f};         // ... and the seat it is sitting down on or getting up from (a car's seat: `car`, `seat`)
     float     yaw = 0.0f;        // radians; 0 looks toward -z, as the player's
     float     speed = 0.0f;      // m/s (negative: a car reversing)
+    uint8_t   item = 0;          // a person: what it carries (low four bits) and has set down (high four): Item
 };
 
 // The road: a closed course of `length` metres. at(s) gives the centre line's point and its
@@ -90,6 +111,12 @@ struct View {
 // pockets, 4 at a phone - and how fast that is, of the plain pace.
 constexpr float kPace[8] = { 1.0f, 0.85f, 0.82f, 0.67f, 0.81f, 0.82f, 1.0f, 1.0f };      // (the clips' own paces, a little quicker: they were made slow. 2 was 0.42, the "tired" shuffle, until 2026-11-26)
 constexpr int kSeatHeightCm[2] = { 45, 75 };      // a chair's seat above its floor, a bar stool's
+// HOW SOMEBODY IS DRESSED: bits 4..6 of a person's `look` (set from the role when the person is made;
+// the renderer picks the outfit, face and colours from it and the person's number - npc_world.cpp,
+// player_body.cpp people_look). 0 a soldier in full kit (the runners), 1 a soldier off duty or at
+// the base, 2 a civilian, 3 a technician, 4 somebody of the office.
+enum class Dress : uint8_t { Soldier = 0, Garrison = 1, Civilian = 2, Technician = 3, Office = 4 };
+inline Dress dress_of(uint8_t look) { return Dress((look >> 4) & 7); }
 
 struct Road {
     float length = 0.0f;

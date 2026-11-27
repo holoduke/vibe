@@ -15,6 +15,8 @@
 #include "engine/terrain.h"
 #include "engine/log.h"
 #include "anim/anim_lod.h"
+#include "engine/vk_engine/state/people.h"
+#include <glm/gtc/matrix_transform.hpp>
 #include "npc/npc.h"
 
 #include <algorithm>
@@ -46,6 +48,142 @@ bool seg_aabb(glm::vec3 a, glm::vec3 b, glm::vec3 mn, glm::vec3 mx, float& t_hit
 }
 }
 
+// WHAT THEY CARRY (npc.h Item; docs/ARCHITECTURE.md "What people carry"). The NPC engine says what
+// somebody has in the hands and what it has set down where it is, and when it sets a thing down
+// or takes it up (acts PutDown / PickUp, at View::aim). Here: the things themselves - small meshes
+// put together from the box and the cylinder - and how each is held. A HOLD is the item's frame in
+// the body's model space (from the chest, last frame's) and, for each hand that holds it, the
+// grip: the middle of the palm, the way the fingers point, the way the palm faces - which the
+// animator's hold layer (anim/hold_layer.cpp) takes the arm to, last of everything. So the arm
+// swing of a walk, a clip's arms, the seat pose keep the hand that is free; the other is on the
+// cup, the box, the bag. What the hand does WITH it is moved here: the cup to the mouth now and
+// then, the board and the tablet up to be read (and the head looks at them), the box down on
+// the table and up again.
+namespace carry {
+
+struct Piece { int mesh; glm::vec3 at, size, color; float glow; };      // mesh: 0 the box, 1 the cylinder (size: radius, half height, radius)
+struct Thing { const Piece* p; int n; };
+constexpr Piece kBox[] = { { 0, { 0.0f, 0.0f, 0.0f }, { 0.40f, 0.28f, 0.30f }, { 0.36f, 0.24f, 0.12f }, 0.0f },
+                           { 0, { 0.0f, 0.141f, 0.0f }, { 0.06f, 0.004f, 0.302f }, { 0.55f, 0.48f, 0.34f }, 0.0f } };
+constexpr Piece kClipboard[] = { { 0, { 0.0f, 0.0f, 0.0f }, { 0.23f, 0.32f, 0.006f }, { 0.30f, 0.20f, 0.11f }, 0.0f },
+                                 { 0, { 0.0f, -0.012f, 0.004f }, { 0.21f, 0.27f, 0.002f }, { 0.80f, 0.80f, 0.78f }, 0.0f },
+                                 { 0, { 0.0f, 0.14f, 0.007f }, { 0.09f, 0.03f, 0.008f }, { 0.55f, 0.56f, 0.58f }, 0.0f } };
+constexpr Piece kCup[] = { { 1, { 0.0f, 0.0f, 0.0f }, { 0.040f, 0.055f, 0.040f }, { 0.75f, 0.72f, 0.66f }, 0.0f },
+                           { 1, { 0.0f, -0.005f, 0.0f }, { 0.042f, 0.022f, 0.042f }, { 0.30f, 0.17f, 0.08f }, 0.0f },
+                           { 1, { 0.0f, 0.058f, 0.0f }, { 0.043f, 0.005f, 0.043f }, { 0.05f, 0.05f, 0.05f }, 0.0f } };
+constexpr Piece kBag[] = { { 0, { 0.0f, 0.0f, 0.0f }, { 0.30f, 0.34f, 0.13f }, { 0.48f, 0.36f, 0.22f }, 0.0f },
+                           { 0, { -0.06f, 0.21f, 0.0f }, { 0.012f, 0.10f, 0.012f }, { 0.40f, 0.30f, 0.18f }, 0.0f },
+                           { 0, { 0.06f, 0.21f, 0.0f }, { 0.012f, 0.10f, 0.012f }, { 0.40f, 0.30f, 0.18f }, 0.0f },
+                           { 0, { 0.0f, 0.255f, 0.0f }, { 0.13f, 0.012f, 0.012f }, { 0.40f, 0.30f, 0.18f }, 0.0f } };
+constexpr Piece kToolbox[] = { { 0, { 0.0f, 0.0f, 0.0f }, { 0.20f, 0.20f, 0.46f }, { 0.55f, 0.05f, 0.03f }, 0.0f },
+                               { 0, { 0.0f, 0.103f, 0.0f }, { 0.205f, 0.01f, 0.465f }, { 0.08f, 0.08f, 0.08f }, 0.0f },
+                               { 0, { 0.0f, 0.17f, -0.10f }, { 0.02f, 0.13f, 0.02f }, { 0.06f, 0.06f, 0.06f }, 0.0f },
+                               { 0, { 0.0f, 0.17f, 0.10f }, { 0.02f, 0.13f, 0.02f }, { 0.06f, 0.06f, 0.06f }, 0.0f },
+                               { 0, { 0.0f, 0.23f, 0.0f }, { 0.03f, 0.025f, 0.22f }, { 0.06f, 0.06f, 0.06f }, 0.0f } };
+constexpr Piece kPhone[] = { { 0, { 0.0f, 0.0f, 0.0f }, { 0.074f, 0.154f, 0.009f }, { 0.02f, 0.02f, 0.022f }, 0.0f },
+                             { 0, { 0.0f, 0.0f, 0.0047f }, { 0.068f, 0.146f, 0.001f }, { 0.10f, 0.14f, 0.20f }, 0.35f } };
+constexpr Piece kTablet[] = { { 0, { 0.0f, 0.0f, 0.0f }, { 0.25f, 0.175f, 0.008f }, { 0.12f, 0.12f, 0.13f }, 0.0f },
+                              { 0, { 0.0f, 0.0f, 0.0042f }, { 0.23f, 0.155f, 0.001f }, { 0.12f, 0.17f, 0.24f }, 0.30f } };
+inline Thing thing(uint8_t item) {
+    switch (npc::Item(item)) {
+    case npc::Item::Box: return { kBox, 2 };
+    case npc::Item::Clipboard: return { kClipboard, 3 };
+    case npc::Item::Cup: return { kCup, 3 };
+    case npc::Item::Bag: return { kBag, 4 };
+    case npc::Item::Toolbox: return { kToolbox, 5 };
+    case npc::Item::Phone: return { kPhone, 2 };
+    case npc::Item::Tablet: return { kTablet, 2 };
+    default: return { nullptr, 0 };
+    }
+}
+// How far its bottom is below its middle (what it stands on, set down).
+inline float half_height(uint8_t item) {
+    switch (npc::Item(item)) {
+    case npc::Item::Box: return 0.14f; case npc::Item::Cup: return 0.055f; case npc::Item::Bag: return 0.17f;
+    case npc::Item::Toolbox: return 0.10f; default: return 0.004f;      // (a board, a tablet, a phone lie flat)
+    }
+}
+
+struct Hold {
+    glm::mat4 M{1.0f};          // the item, model space
+    uint8_t   hands = 0;        // 1 left, 2 right
+    glm::vec3 grip[2]{}, fingers[2]{}, palm[2]{};
+    float     curl[2]{ 1.0f, 1.0f };
+    bool      read = false;     // the head looks at it
+};
+
+inline glm::mat4 frame(glm::vec3 p, float pitch) {
+    return glm::translate(glm::mat4(1.0f), p) * glm::rotate(glm::mat4(1.0f), pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+}
+inline void grip(Hold& h, int side, glm::vec3 at, glm::vec3 fingers, glm::vec3 palm, float curl) {
+    h.hands |= uint8_t(1u << side);
+    h.grip[side] = glm::vec3(h.M * glm::vec4(at, 1.0f));
+    h.fingers[side] = glm::normalize(glm::mat3(h.M) * fingers);
+    h.palm[side] = glm::normalize(glm::mat3(h.M) * palm);
+    h.curl[side] = curl;
+}
+
+// How `item` is carried by somebody whose chest (Spine2) is at C in model space (+x right, +y up,
+// -z forward). drink: 0 .. 1, how far a cup is on its way to the mouth; look: 0 .. 1, how far a
+// board, a tablet or a phone is up to be read.
+inline Hold carried(uint8_t item, glm::vec3 C, float drink, float look) {
+    Hold h;
+    switch (npc::Item(item)) {
+    case npc::Item::Box:
+        h.M = frame(C + glm::vec3(0.0f, -0.36f, -0.31f), 0.0f);
+        grip(h, 0, { -0.205f, -0.03f, 0.03f }, { 0.0f, 0.15f, -1.0f }, { 1.0f, 0.0f, 0.0f }, 0.7f);
+        grip(h, 1, { 0.205f, -0.03f, 0.03f }, { 0.0f, 0.15f, -1.0f }, { -1.0f, 0.0f, 0.0f }, 0.7f);
+        break;
+    case npc::Item::Cup: {
+        const glm::vec3 low = C + glm::vec3(0.17f, -0.30f, -0.23f), mouth = C + glm::vec3(0.035f, 0.30f, -0.135f);
+        const float d = drink * drink * (3.0f - 2.0f * drink);
+        h.M = frame(glm::mix(low, mouth, d), 0.95f * d);
+        grip(h, 1, { 0.046f, -0.005f, 0.0f }, { -0.25f, 0.0f, -1.0f }, { -1.0f, 0.0f, 0.0f }, 0.9f);
+        break; }
+    case npc::Item::Bag:
+        h.M = frame(C + glm::vec3(0.235f, -0.78f, 0.03f), 0.0f);
+        grip(h, 1, { 0.0f, 0.255f, 0.0f }, { -0.35f, -0.25f, -1.0f }, { -1.0f, 0.0f, 0.0f }, 1.0f);
+        break;
+    case npc::Item::Toolbox:
+        h.M = frame(C + glm::vec3(0.255f, -0.79f, 0.0f), 0.0f);
+        grip(h, 1, { 0.0f, 0.23f, 0.0f }, { -0.30f, -0.20f, -1.0f }, { -1.0f, 0.0f, 0.0f }, 1.0f);
+        break;
+    case npc::Item::Phone: {
+        const float l = look * look * (3.0f - 2.0f * look);
+        h.M = frame(glm::mix(C + glm::vec3(0.16f, -0.32f, -0.12f), C + glm::vec3(0.07f, -0.02f, -0.30f), l), glm::mix(-0.2f, -0.75f, l));
+        grip(h, 1, { 0.0f, -0.035f, -0.02f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }, 0.75f);
+        h.read = l > 0.5f;
+        break; }
+    case npc::Item::Tablet:
+    case npc::Item::Clipboard: {
+        // (held on the left forearm, the board's lower left corner in the hand; up to be read)
+        const float l = look * look * (3.0f - 2.0f * look);
+        const bool tab = item == uint8_t(npc::Item::Tablet);
+        h.M = frame(glm::mix(C + glm::vec3(-0.16f, -0.36f, -0.16f), C + glm::vec3(-0.03f, -0.13f, -0.30f), l), glm::mix(-0.35f, -0.85f, l));
+        grip(h, 0, { tab ? -0.105f : -0.095f, tab ? -0.05f : -0.11f, -0.012f }, { 0.55f, 0.45f, 0.0f }, { 0.0f, 0.0f, 1.0f }, 0.65f);
+        h.read = l > 0.5f;
+        break; }
+    default: break;
+    }
+    return h;
+}
+
+// The item set down at `place` (model space: where its bottom is), standing upright; a board, a
+// tablet or a phone lying flat.
+inline glm::mat4 set_down(uint8_t item, glm::vec3 place) {
+    const bool flat = item == uint8_t(npc::Item::Clipboard) || item == uint8_t(npc::Item::Tablet) || item == uint8_t(npc::Item::Phone);
+    glm::mat4 M = glm::translate(glm::mat4(1.0f), place + glm::vec3(0.0f, half_height(item), 0.0f));
+    if (flat) M = M * glm::rotate(glm::mat4(1.0f), -1.5708f, glm::vec3(1.0f, 0.0f, 0.0f));
+    return M;
+}
+
+// What each shown body carries this frame (draw_npc_bodies draws it): the item and its frame in
+// the body's model space; and each body's chest last frame.
+struct Shown { uint8_t item = 0; glm::mat4 M{1.0f}; uint32_t id = 0; glm::vec3 chest{0.0f}; bool chest_ok = false; };
+
+}  // namespace carry
+static carry::Shown g_carry_shown[kNpcBodies];      // (per shown body: npc_pose fills it, draw_npc_bodies draws it)
+
 // HOW SOMEBODY WHO IS SHOT GOES DOWN. Not a doll thrown by the shot: the body first REACTS - a
 // clip made for where the shot struck and what the person was doing (text to motion,
 // docs/animation/actions.md "Death") - and at the moment that reaction loses its balance the
@@ -62,18 +200,47 @@ const ShotClip kShotHead  = { "shot_head",  0.63f };      // limp at once, strai
 const ShotClip kShotLeg   = { "shot_leg",   0.77f };      // the leg gives way, down sideways
 const ShotClip kShotRun   = { "shot_run",   0.43f };      // trips at a run, tumbles
 const ShotClip kShotWalk  = { "shot_walk",  1.30f };      // stops, staggers, collapses
+// (2026-11-27, vibe_prompts/shot2.txt: shot_knees s37 frames 28 - 96, shot_side s11 frames 36 - 88)
+const ShotClip kShotKnees = { "shot_knees", 1.80f };      // the knees buckle, a moment kneeling, then forward on the face
+const ShotClip kShotSide  = { "shot_side",  1.07f };      // struck on the right of the chest: staggers right and back, down on that side
 }
 
 // Which reaction: by where the shot struck (head, legs, trunk), from which side (the bolt's
 // direction against the way the person faces) and how fast the person was moving. The same on
 // every machine: all of it comes from the hit that was sent and the person's own state.
-static const ShotClip& pick_shot_clip(float height, bool from_front, float speed, uint32_t id) {
-    if (height > 1.50f) return kShotHead;
-    if (speed > 2.4f) return kShotRun;
-    if (height < 0.75f) return kShotLeg;
-    if (!from_front) return kShotBack;
-    if (speed > 0.5f) return kShotWalk;
-    switch (id % 3u) { case 0: return kShotFront; case 1: return kShotGut; default: return kShotSpin; }
+// (2026-11-27) By WHERE on the body as well: a shot high on one side of the chest - a
+// shoulder - spins the body round that side; a leg gives way on its own side; a chest from the
+// front throws it back, the gut doubles it over; and every clip is then played left for right
+// when the shot came from the other side than the take's (npc_shot_plan).
+// Kinds of the plan: how the direction is fitted after the clip is chosen.
+enum ShotFit : int { kFitNone = 0, kFitPush = 1, kFitTowardShooter = 2, kFitLegSide = 3, kFitSpin = 4, kFitSideHit = 5 };
+struct ShotPick { const ShotClip* clip; int fit; float knock; };
+static ShotPick pick_shot_clip(float height, float lateral, bool from_front, float speed, uint32_t id) {
+    const bool shoulder = height > 1.20f && std::abs(lateral) > 0.13f;
+    if (height > 1.50f && !shoulder) return { &kShotHead, kFitNone, 0.15f };
+    if (speed > 2.4f) return { &kShotRun, kFitNone, 0.25f };
+    if (height < 0.75f) return { &kShotLeg, kFitLegSide, 0.30f };
+    if (shoulder) return { &kShotSpin, kFitSpin, 0.35f };
+    if (!from_front) return { &kShotBack, kFitPush, 0.40f };
+    if (speed > 0.5f) return { &kShotWalk, kFitPush, 0.35f };
+    // (the chest a hand or more off the middle, below the shoulder: down on that side - the take is
+    //  struck on the right, played left for right for the left)
+    if (height >= 1.05f && std::abs(lateral) > 0.09f && id % 2u == 0u) return { &kShotSide, kFitSideHit, 0.35f };
+    if (height < 1.05f) return id % 3u == 0u ? ShotPick{ &kShotFront, kFitPush, 0.40f }
+                             : id % 3u == 1u ? ShotPick{ &kShotKnees, kFitTowardShooter, 0.20f } : ShotPick{ &kShotGut, kFitTowardShooter, 0.25f };
+    return id % 4u == 0u ? ShotPick{ &kShotGut, kFitTowardShooter, 0.25f } : ShotPick{ &kShotFront, kFitPush, 0.45f };
+}
+// What the takes do by their prompts (vibe_prompts/shot.txt), for when a clip's own travel is
+// too small to tell: model space (x right, -z forward), and the turn (+ = to the left).
+static void shot_clip_authored(const char* name, glm::vec3& travel, float& yaw) {
+    const std::string n(name);
+    travel = glm::vec3(0.0f); yaw = 0.0f;
+    if (n == "shot_front" || n == "shot_walk") travel = glm::vec3(0.0f, 0.0f, 1.0f);       // back
+    else if (n == "shot_gut" || n == "shot_back" || n == "shot_run") travel = glm::vec3(0.0f, 0.0f, -1.0f);
+    else if (n == "shot_leg") travel = glm::vec3(1.0f, 0.0f, 0.0f);                        // to the right (the right leg)
+    else if (n == "shot_side") travel = glm::vec3(0.6f, 0.0f, 0.8f);                       // right and back
+    else if (n == "shot_knees") travel = glm::vec3(0.0f, 0.0f, -1.0f);                     // forward
+    else if (n == "shot_spin") yaw = 1.0f;                                                 // to the left (the left shoulder)
 }
 
 void VulkanEngine::npc_dying_pose(float dt) {
@@ -93,13 +260,24 @@ void VulkanEngine::npc_dying_pose(float dt) {
         in.velocity = in.desired_velocity = glm::vec3(0.0f);
         in.has_look_at = false; in.teleported = false; in.seated = false;
         // (of the life layers only the posture stays; what was going on lets go by itself)
-        in.life_on_clip = false; in.fidgets = 0.0f; in.layer_clip = anim::kNoClip; in.action_mirror = false;
+        in.life_on_clip = false; in.fidgets = 0.0f; in.layer_clip = anim::kNoClip; in.action_mirror = d.mirror;
         in.lod = std::min(d.av.lod, 1);
+        // (turned the way the shot pushed, over the first third of a second: about where it stood)
+        if (std::abs(d.turn) > 1e-3f) {
+            const glm::vec3 o(d.model0[3]);
+            const float k = glm::smoothstep(0.0f, 0.35f, d.t);
+            d.model = glm::translate(glm::mat4(1.0f), o) * glm::rotate(glm::mat4(1.0f), d.turn * k, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                      glm::translate(glm::mat4(1.0f), -o) * d.model0;
+        }
         d.av.palette_prev = d.av.palette;
         d.av.palette = -1;
         pose_character(*d.av.animator, in, &d.av.palette, &d.av.pose_rows);
         glm::vec3 now[kCorpseParts];
         const bool have = corpse_part_centres(d.model, now);
+        if (have && d.hit_part < 0) {        // (the part the shot struck, in the first pose: it is followed from here)
+            float best = 1e9f;
+            for (int k = 0; k < kCorpseParts; ++k) { const float dd = glm::distance(now[k], d.hit_pos); if (dd < best) { best = dd; d.hit_part = k; } }
+        }
         if (d.t >= d.hand || !have) {
             // The physics' from here: every part goes on as the clip moved it (no faster than a
             // falling body moves), and the shot itself adds nothing - the reaction was the clip.
@@ -111,13 +289,15 @@ void VulkanEngine::npc_dying_pose(float dt) {
             }
             glm::mat4 vi = d.view_inv;
             if (have) vi[3] = glm::vec4(now[2], 1.0f);        // (the head, where it is now)
-            corpse_spawn(d.model, vi, glm::vec3(0.0f), d.hit_pos, d.hit_dir, 0.0f, vel);
+            // (and the shot's own push, on the part it struck as that part is now: the fall goes on the way it was driven)
+            const glm::vec3 at = have && d.hit_part >= 0 ? now[d.hit_part] : d.hit_pos;
+            corpse_spawn(d.model, vi, glm::vec3(0.0f), at, d.hit_dir, d.knock, vel);
             npc_dying_.erase(npc_dying_.begin() + ptrdiff_t(i));
             continue;
         }
         for (int k = 0; k < kCorpseParts; ++k) d.parts_prev[k] = now[k];
         d.have_prev = true;
-        d.av.prev_model = d.av.model = d.model;
+        d.av.prev_model = d.av.model; d.av.model = d.model;
         d.av.eye = now[2];
         d.av.view_inv = d.view_inv; d.av.view_inv[3] = glm::vec4(now[2], 1.0f);
         d.av.mesh_lod = body_mesh_lod(d.av.eye, d.av.mesh_lod);
@@ -438,6 +618,11 @@ void VulkanEngine::npc_pose(float dt) {
         if (body_of[k] < 0) continue;
         MpAvatar& a = npc_bodies_[size_t(body_of[k])];
         const npc::View& v = npc_views_[size_t(near_[k].view)];
+        // WHO IT IS TO LOOK AT (player_body.cpp people_look): the agent and its look byte - the same on
+        // every machine; a car's driver that the NPC engine does not have is the car's. Dressed as the
+        // NPC engine says (npc::Dress); a police car's driver is a soldier of the base.
+        a.person = ((uint32_t(v.id) + (v.kind == npc::Kind::Car ? 1000u : 0u)) << 8 | uint32_t(v.look)) + 1u;
+        a.dress = v.kind == npc::Kind::Person ? uint8_t(npc::dress_of(v.look)) : uint8_t((v.style & npc::kCarPolice) ? npc::Dress::Garrison : npc::Dress::Civilian);
         a.palette_prev = a.fresh_pose ? -1 : a.palette;
         a.palette = -1;
         if (!a.animator) { a.animator = std::make_unique<anim::CharacterAnimator>(anim_set_); apply_anim_tuning(a.animator->tuning); a.fresh_pose = true; }
@@ -579,6 +764,7 @@ void VulkanEngine::npc_pose(float dt) {
         a.unarmed = !run;                               // (the soldiers on the run carry their rifles)
         if (!run) in.held = anim::HeldItem::None;       // (nothing in the hands)
         in.aiming = false;
+        if (run) in.carry = 1.0f;                       // (and carry them low across the body, not at the ready: anim WeaponDef carry_*)
         in.desired_velocity = in.velocity;              // (a stroll, not a soldier's pace)
         // Upright. The soldier's walk is a patrol walk: hunched, the head down over a rifle. Somebody
         // strolling to a shop door carries the head up - the spine, neck and head are raised by what
@@ -673,7 +859,7 @@ void VulkanEngine::npc_pose(float dt) {
         // really has (motion warping: character_animator.h action_*).
         static const char* kActClip[5] = { "", "sit_down", "stand_up", "car_enter", "car_exit" };
         const anim::IAnimationRuntime& rtm = *anim_set_.runtime;
-        if (near_[k].car < 0 && v.act != npc::Act::None) {
+        if (near_[k].car < 0 && v.act != npc::Act::None && v.act <= npc::Act::CarExit) {      // (PutDown / PickUp: no clip - the hands, below)
             const anim::ClipId clip = rtm.find_clip(kActClip[int(v.act)]);
             if (clip >= 0) {
                 in.action_clip = clip;
@@ -720,6 +906,78 @@ void VulkanEngine::npc_pose(float dt) {
                 in.action_warp = true; in.action_warp_full = true;
                 in.action_hips = glm::vec3(glm::inverse(rf.model) * glm::vec4(v.pos + glm::vec3(0.0f, 0.10f, 0.0f), 1.0f));
                 in.velocity = in.desired_velocity = glm::vec3(0.0f);
+            }
+        }
+        // WHAT THEY CARRY (carry::, at the top of this file): the item in the hands, how it is held,
+        // what the hand does with it - and, setting it down or taking it up (the acts), the hands to
+        // the place and the body bent down to a low one. From the chest as it was last frame.
+        {
+            carry::Shown& sh = g_carry_shown[size_t(body_of[k])];
+            if (sh.id != a.id || a.fresh_pose) { sh = carry::Shown{}; sh.id = a.id; }
+            sh.item = 0;
+            const int sp2 = art.rig()[anim::Role::Spine2];
+            const glm::vec3 C = sh.chest_ok ? sh.chest : (sp2 >= 0 ? art.skeleton().rest_pos[size_t(sp2)] : glm::vec3(0.0f, 1.25f, 0.0f));
+            uint8_t item = near_[k].car >= 0 ? uint8_t(0) : uint8_t(v.item & 15);
+            // (the ways of walking and standing that are at a phone: the phone)
+            const bool phone_clip = v.act == npc::Act::None && ((v.pose == npc::Pose::Walk && v.look % 8 == 4) || (v.pose == npc::Pose::Stand && v.style == 3));
+            if (!item && near_[k].car < 0 && phone_clip) item = uint8_t(npc::Item::Phone);
+            if (run || a.seated || v.pose == npc::Pose::Sit) item = 0;
+            const bool act_item = near_[k].car < 0 && (v.act == npc::Act::PutDown || v.act == npc::Act::PickUp);
+            if (act_item && !item) item = uint8_t(v.item >> 4);              // (taking up: what lies there)
+            static const bool kNoCarry = std::getenv("VIBE_NPC_NO_CARRY") != nullptr;
+            if (kNoCarry) item = 0;
+            if (item) {
+                const float tl = float(life_now) + float(a.id) * 2.31f;
+                float drink = 0.0f, look = 0.0f;
+                const bool walking = v.pose == npc::Pose::Walk && std::abs(v.speed) > 0.3f;
+                if (item == uint8_t(npc::Item::Cup) && !act_item) {
+                    // a sip now and then: every 9 - 15 s, for 2.6 s (not while walking fast)
+                    const float per = 9.0f + float(a.id % 7u), ph = std::fmod(tl, per);
+                    if (ph < 2.6f && std::abs(v.speed) < 1.0f) drink = glm::clamp(std::sin(ph / 2.6f * 3.14159f) * 1.7f, 0.0f, 1.0f);
+                }
+                if ((item == uint8_t(npc::Item::Clipboard) || item == uint8_t(npc::Item::Tablet) || item == uint8_t(npc::Item::Phone)) && !act_item) {
+                    // read for a while, lowered for a while; a glance at it while walking
+                    const float per = 11.0f + float(a.id % 5u), ph = std::fmod(tl, per);
+                    look = walking ? (ph < 3.0f ? 1.0f : 0.0f) : (ph < per * 0.62f ? 1.0f : 0.0f);
+                    if (phone_clip) look = 1.0f;
+                    // (eased: the board comes up over half a second)
+                    const float e0 = glm::clamp(ph / 0.5f, 0.0f, 1.0f), e1 = glm::clamp(((walking ? 3.0f : per * 0.62f) - ph) / 0.5f, 0.0f, 1.0f);
+                    if (look > 0.5f && !phone_clip) look = std::min(e0, e1);
+                }
+                carry::Hold h = carry::carried(item, C, drink, look);
+                auto move = [](carry::Hold& x, const glm::mat4& D) {
+                    x.M = D * x.M;
+                    for (int s = 0; s < 2; ++s) {
+                        x.grip[s] = glm::vec3(D * glm::vec4(x.grip[s], 1.0f));
+                        x.fingers[s] = glm::mat3(D) * x.fingers[s];
+                        x.palm[s] = glm::mat3(D) * x.palm[s];
+                    }
+                };
+                if (act_item) {
+                    // the hand reaches the place at half the act: setting down, the item is there
+                    // from then on; taking up, it was there until then
+                    const float u = glm::clamp(v.act_t / npc::kActTime[int(v.act)], 0.0f, 1.0f);
+                    float reach = u < 0.5f ? u / 0.5f : (1.0f - u) / 0.5f;
+                    reach = reach * reach * (3.0f - 2.0f * reach);
+                    const glm::vec3 place = glm::vec3(glm::inverse(rf.model) * glm::vec4(v.aim, 1.0f));
+                    const glm::mat4 Md = carry::set_down(item, place);
+                    const bool lies = v.act == npc::Act::PutDown ? u >= 0.5f : u < 0.5f;
+                    if (lies) { move(h, Md * glm::inverse(h.M)); if (reach < 0.3f) h.hands = 0; }
+                    else {
+                        glm::mat4 Mi = h.M;
+                        Mi[3] = glm::mix(h.M[3], Md[3], reach);
+                        for (int c = 0; c < 3; ++c) Mi[c] = glm::vec4(glm::normalize(glm::mix(glm::vec3(h.M[c]), glm::vec3(Md[c]), reach)), 0.0f);
+                        move(h, Mi * glm::inverse(h.M));
+                    }
+                    // (a low place - the floor, a car's boot - is reached by bending down)
+                    in.crouch = std::max(in.crouch, glm::clamp((1.0f - place.y) / 0.8f, 0.0f, 1.0f) * reach);
+                    in.has_look_at = true; in.look_at = place; in.look_weight = 4.0f; in.look_id = 9;
+                }
+                in.hold_hands = h.hands;
+                for (int s = 0; s < 2; ++s) { in.hold_grip[s] = h.grip[s]; in.hold_fingers[s] = h.fingers[s]; in.hold_palm[s] = h.palm[s]; in.hold_curl[s] = h.curl[s]; }
+                in.fidget_arms &= uint8_t(~h.hands);
+                if (h.read && !act_item) { in.has_look_at = true; in.look_at = glm::vec3(h.M[3]); in.look_weight = 3.0f; in.look_id = 8; }
+                sh.item = item; sh.M = h.M;
             }
         }
         anim::LodInput li;
@@ -875,7 +1133,18 @@ void VulkanEngine::npc_pose(float dt) {
     for (Posed& r : posed) {
         MpAvatar& a = *r.a;
         if (r.skip) a.palette = body_push_rows(a.pose_rows);
-        else pose_finish(*a.animator, r.in, a.lod >= 3 ? nullptr : &a.palette, &a.pose_rows);
+        else {
+            pose_finish(*a.animator, r.in, a.lod >= 3 ? nullptr : &a.palette, &a.pose_rows);
+            {   // (where the chest is: what is carried is held from it next frame)
+                carry::Shown& sh = g_carry_shown[size_t(&a - npc_bodies_.data())];
+                const int sp2 = anim_set_.runtime->rig()[anim::Role::Spine2];
+                if (sp2 >= 0 && a.lod < 3 && size_t(sp2) < a.animator->model().size()) { sh.chest = glm::vec3(a.animator->model()[size_t(sp2)][3]); sh.chest_ok = true; }
+            }
+            // (where the rifle is drawn: the animator's frame for it - the soldiers on the run had
+            //  theirs drawn at the view, level at the eye, while the hands were elsewhere)
+            a.weapon_offset = a.animator->weapon_offset();
+            a.fire_offset = a.animator->weapon_fire_offset();
+        }
         a.prev_model = a.fresh_pose ? r.rf.model : a.model;
         a.fresh_pose = false;
         a.model = r.rf.model;
@@ -893,7 +1162,11 @@ void VulkanEngine::npc_pose(float dt) {
             // On its feet: the reaction first (npc_dying_pose). On a seat, or in the middle of
             // sitting down or getting into a car (the hips carried by a warp): the physics' at once.
             const glm::vec3 fwd(std::sin(a.dying_st.yaw), 0.0f, -std::cos(a.dying_st.yaw));
-            const ShotClip& sc = pick_shot_clip(a.hit_pos.y - r.rf.model[3].y, glm::dot(a.hit_dir, fwd) < 0.0f, glm::length(r.in.velocity), a.id);
+            const glm::vec3 right(-fwd.z, 0.0f, fwd.x);
+            const glm::vec3 origin(r.rf.model[3]);
+            const float lateral = glm::dot(a.hit_pos - origin, right);        // + the body's right side
+            const ShotPick pick = pick_shot_clip(a.hit_pos.y - origin.y, lateral, glm::dot(a.hit_dir, fwd) < 0.0f, glm::length(r.in.velocity), a.id);
+            const ShotClip& sc = *pick.clip;
             const int clip = (r.in.seated || r.in.action_warp || std::getenv("VIBE_NO_DEATH_CLIPS")) ? -1 : anim_set_.runtime->find_clip(sc.name);
             if (clip < 0) {
                 // (shot in a car that drives: the body goes on at the car's speed - npc_hit put it in dying_st)
@@ -902,10 +1175,50 @@ void VulkanEngine::npc_pose(float dt) {
                 a.id = 0; a.present = false; a.drawn = false; a.palette = -1;
                 continue;
             }
-            log::infof("[npc] person %u goes down: %s", a.id - 1, sc.name);
             NpcDying d;
             d.in = r.in; d.model = r.rf.model; d.view_inv = vi; d.clip = clip; d.hand = sc.hand;
             d.hit_pos = a.hit_pos; d.hit_dir = a.hit_dir;
+            d.model0 = r.rf.model; d.knock = pick.knock;
+            {
+                // WHICH WAY IT GOES DOWN (pick_shot_clip's fit). The take's own travel to the
+                // hand-over (or, if it hardly moves, what its prompt asked for), in the world;
+                // played left for right when the shot's side is the other one; then the body is
+                // turned, over the first third of a second, by up to 35 degrees so that it goes
+                // down the way the shot pushed it.
+                const anim::Transform rm = a.animator ? a.animator->action_root(clip, sc.hand) : anim::Transform{};
+                glm::vec3 trav(rm.t.x, 0.0f, rm.t.z);
+                float yaw = glm::cross(glm::vec3(0.0f, 0.0f, -1.0f), rm.r * glm::vec3(0.0f, 0.0f, -1.0f)).y;
+                if (glm::length(trav) < 0.25f) { glm::vec3 t0; float y0; shot_clip_authored(sc.name, t0, y0); trav = t0; if (std::abs(yaw) < 0.2f) yaw = y0; }
+                const glm::mat3 M(r.rf.model);
+                auto world_of = [&](glm::vec3 m, bool mir) { if (mir) m.x = -m.x; glm::vec3 w = M * m; w.y = 0.0f; return w; };
+                glm::vec3 s(a.hit_dir.x, 0.0f, a.hit_dir.z);
+                s = glm::length(s) > 1e-3f ? glm::normalize(s) : -fwd;
+                glm::vec3 want = s;
+                switch (pick.fit) {
+                case kFitLegSide: d.mirror = (glm::dot(world_of(trav, false), right) > 0.0f) != (lateral > 0.0f); break;
+                case kFitSideHit: d.mirror = (glm::dot(world_of(trav, false), right) > 0.0f) != (lateral > 0.0f); break;
+                case kFitSpin: {
+                    // (the struck shoulder is driven back: a turn about the up axis of r x s; + = to the left)
+                    const float torque = glm::cross(right * lateral, s).y;
+                    d.mirror = (yaw > 0.0f) != (torque > 0.0f);
+                    break;
+                }
+                case kFitTowardShooter: want = -s; [[fallthrough]];
+                case kFitPush: {
+                    const float keep = glm::dot(world_of(trav, false), want), flip = glm::dot(world_of(trav, true), want);
+                    d.mirror = std::abs(trav.x) > 0.15f && flip > keep + 0.05f;
+                    break;
+                }
+                default: break;
+                }
+                if ((pick.fit == kFitPush || pick.fit == kFitTowardShooter) && glm::length(trav) > 0.05f) {
+                    const glm::vec3 tw = glm::normalize(world_of(trav, d.mirror));
+                    const float ang = std::atan2(glm::cross(tw, want).y, glm::dot(tw, want));     // + = about +y
+                    d.turn = glm::clamp(ang, -0.61f, 0.61f);
+                }
+                log::infof("[npc] person %u goes down: %s%s, struck %.2f m up, %.2f m %s of the middle; turned %.0f deg", a.id - 1, sc.name,
+                           d.mirror ? " (left for right)" : "", double(a.hit_pos.y - origin.y), double(std::abs(lateral)), lateral > 0.0f ? "right" : "left", double(glm::degrees(d.turn)));
+            }
             a.view_inv = r.rf.view_inv; a.eye = r.rf.eye; a.drawn = a.lod < 3 && a.palette >= 0;
             d.av = std::move(a);
             a = MpAvatar{};
@@ -1114,6 +1427,51 @@ VkCommandBuffer cmd, const glm::mat4& vp) {
         mp_->draw = &d.av;
         draw_viewmodel(cmd, vp, d.av.view_inv);
         mp_->draw = nullptr;
+    }
+    // WHAT THEY CARRY (carry::): in the hands of the shown bodies, and what lies where somebody set
+    // it down - a cup on a table, a toolbox beside a tank. The world pipeline, plain colours.
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, world_pipeline());
+    auto draw_thing = [&](uint8_t item, const glm::mat4& W) {
+        const carry::Thing t = carry::thing(item);
+        for (int i = 0; i < t.n; ++i) {
+            const carry::Piece& p = t.p[i];
+            const Mesh& m = p.mesh == 0 ? cube_mesh_ : cylinder_mesh_;
+            if (!m.index_count) continue;
+            const glm::mat4 M = W * glm::translate(glm::mat4(1.0f), p.at) * glm::scale(glm::mat4(1.0f), p.size);
+            VkDeviceSize off = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &m.vertex_buffer, &off);
+            vkCmdBindIndexBuffer(cmd, m.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            PushConstants pc{};
+            pc.mvp = vp * M;
+            pc.model = M;
+            pc.prev_mvp = prev_view_proj_valid_ ? prev_view_proj_ * M : pc.mvp;
+            pc.color = glm::vec4(p.color * (1.0f + 2.5f * p.glow), 1.0f);
+            pc.emissive = glm::vec4(0.0f);
+            pc.tex_params = glm::vec4(-1.0f, -1.0f, 1.0f, -1.0f);
+            vkCmdPushConstants(cmd, pipeline_layout_, kPushConstantStages, 0, sizeof(PushConstants), &pc);
+            vkCmdDrawIndexed(cmd, m.index_count, 1, 0, 0, 0);
+        }
+    };
+    for (size_t b = 0; b < npc_bodies_.size() && b < size_t(kNpcBodies); ++b) {
+        const MpAvatar& a = npc_bodies_[b];
+        const carry::Shown& sh = g_carry_shown[b];
+        if (!a.id || !a.drawn || !sh.item || sh.id != a.id) continue;
+        glm::mat4 build(1.0f);
+        if (a.person && people_ && people_->ok) {
+            const PersonLook L = people_look(a.person, a.dress);
+            build = glm::scale(glm::mat4(1.0f), glm::vec3(L.width, L.height, L.width));
+        }
+        draw_thing(sh.item, a.model * build * sh.M);
+    }
+    const glm::vec3 eye = current_frame_view_.eye_pos;
+    for (const npc::View& v : npc_views_) {
+        const uint8_t placed = uint8_t(v.item >> 4);
+        if (!placed || v.kind != npc::Kind::Person || v.hidden || v.act == npc::Act::PickUp) continue;
+        if (glm::distance(v.pos, eye) > 70.0f) continue;
+        const int kind = v.pose == npc::Pose::Sit ? (v.style == 4 ? 2 : (v.style >= 1 && v.style <= 3) ? 1 : 3) : 0;
+        const glm::vec3 at = npc::item_place(v.pos, v.yaw, kind, v.aim);
+        draw_thing(placed, glm::translate(glm::mat4(1.0f), at) * glm::rotate(glm::mat4(1.0f), -v.yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                           carry::set_down(placed, glm::vec3(0.0f)));
     }
 }
 

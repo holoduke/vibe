@@ -20,6 +20,14 @@
     // the raw GI with the surface albedo (`mate`) at the end — same
     // structure as cube.frag — and lerp toward a smooth sky-at-N
     // estimate by `gi_softener` for low-sample noise control.
+    // THE WET BAND above the waterline (shore_wet.glsl, the reference's rule): linear over W above
+    // max(the authored top, the solver's surface - 0.1 W), the sea's swash and dry line, a ragged
+    // top; the albedo darkened as a * saturate(0.5 - 0.5 luma), the gloss in the rain block below
+    // (a mirror at the line). Here - after the baked ground texture - so the moving line is never
+    // baked; before the bounce light, which takes this albedo.
+    float sw_line = -1e9, sw_swash_edge = 0.0;
+    float sw_w = sw_terrain_band(pos, sw_line, sw_swash_edge);
+    if (sw_w > 0.0) mate = sw_wet_albedo(mate, sw_wet_m(sw_w));
     vec3 gi_indirect = vec3(0.0);
     // Terrain GI sample count capped (was scene.rt_flags2.x directly).
     // 17+ samples * (1 BLAS hit + bounce shadow ray) per pixel was the
@@ -309,6 +317,19 @@
     }
     vec3 col = mate * lin + gi_indirect;
     if (RMDBG(2097152)) col = vec3(0.9 * cl_sh * cl_sh);      // view: the cloud shadow map on the ground (white = open sky)
+#if RM_PART == 4 || !defined(RM_PART)
+    // (view: the sun on the ground - r its visibility (shadows, the far horizon), g the far horizon alone,
+    //  b the cosine; white = full sun)
+    if (RMDBG(268435456)) col = vec3(sha, sun_horizon_lit(u_sun_horizon, pos), dif);
+    // (the sun's terms one by one, 1 = that term shadows: with 134217728 r the ground's own march,
+    //  g the traced object shadow, b the contact shadow; with 67108864 r grass / clutter / stones,
+    //  g the cloud shadow (1 - cl_sh), b the road / relief term (1 - rm_road_vis))
+    if (RMDBG(268435456) && RMDBG(134217728)) col = vec3(dbg_sh_self, dyn_shadow, dbg_sh_cs);
+    if (RMDBG(268435456) && RMDBG(67108864))  col = vec3(dbg_sh_near, 1.0 - cl_sh, 1.0 - rm_road_vis);
+    // (with 33554432: the shade's light - r the AO as applied, g the sky fill's strength x 4, b the
+    //  GI's x 4 (luminance), to compare with the sun's: the sun term is dif x sun intensity)
+    if (RMDBG(268435456) && RMDBG(33554432)) col = vec3(ao_shaped, 4.0 * dot(amb * scene.sky_color.rgb * 0.75, vec3(0.2126, 0.7152, 0.0722)), 4.0 * dot(gi_indirect, vec3(0.2126, 0.7152, 0.0722)));
+#endif
     // A highway's sheen: asphalt is matt seen from above and glares toward a low sun; the
     // polished wheel tracks and the tar more so.
     if (hw_pave > 0.001) {
@@ -336,6 +357,16 @@
             float flat_w = smoothstep(0.55, 0.85, nor.y);
             shore = (1.0 - smoothstep(0.03, 0.50, above)) * flat_w;
             shore_foam = (1.0 - smoothstep(0.0, 0.022, abs(above - 0.010))) * flat_w;
+            if (SW_ON(1)) {
+                // (the reference's band replaces the analytic lap: soaked and glossy as the band
+                //  says, on every slope; at the sea the foam line rides the swash's edge)
+                shore = sw_w;
+                // (a lake's and the river's foam line on the bank: as their lace on the water - half in a
+                //  breeze, broken, none on still water; it drew a thin white line along every bank)
+                float sk_f = wt_sea_k(pos.xz);
+                shore_foam *= mix(0.5 * smoothstep(0.2, 0.8, wt_lake()) * smoothstep(0.35, 0.75, tile_noise2(pos.xz, 0.6, vec2(11.0))), 1.0, sk_f);
+                if (sw_swash_edge > 0.0) shore_foam = max(shore_foam * (1.0 - sk_f), sw_swash_edge * flat_w);
+            }
             // The beach itself: bare sand with darker grit and pebbles from
             // the waterline up to about 70 cm above it (also under water).
             float beach = (1.0 - smoothstep(0.30, 0.75, above + 0.10 * tile_noise2(pos.xz, 0.9, vec2(0.0)))) * flat_w;
@@ -344,6 +375,7 @@
                 float peb = smoothstep(0.62, 0.72, tile_noise2(pos.xz, 11.0, vec2(3.7))) * smoothstep(0.35, 0.6, tile_noise2(pos.xz, 2.3, vec2(0.0)));
                 vec3 sandc = mix(scene.terrain_sand_color.rgb, vec3(0.200, 0.172, 0.125), 0.65) * mix(0.78, 1.12, grit);
                 sandc = mix(sandc, vec3(0.10, 0.097, 0.09) * mix(0.6, 1.3, tile_noise2(pos.xz, 5.1, vec2(0.0))), peb * 0.8);
+                if (sw_w > 0.0) sandc = sw_wet_albedo(sandc, sw_wet_m(sw_w));        // (the wet band, as on the ground it replaces)
                 // Lit with a smoothed normal: sand is fine-grained, the rocky
                 // relief of the ground it replaces would show through as veins.
                 vec3 bn = normalize(mix(nor, vec3(0.0, 1.0, 0.0), 0.8));
@@ -359,11 +391,31 @@
             float pn = tile_noise2(pos.xz, 0.33, vec2(0.0)) * 0.65 + tile_noise2(pos.xz, 1.21, vec2(7.0)) * 0.35;
             float thr = 0.66 - 0.34 * wet;
             float puddle = flatn * smoothstep(thr, thr + 0.06, pn) * smoothstep(0.2, 0.6, wet);
+            float pd_flat = puddle;          // (how far the puddle's normal goes to straight up)
+            if (SW_ON(4)) {
+                // PUDDLES IN THE HOLLOWS (the reference's rule): the material's height h (the
+                // displacement's height byte, else the scan's) is taken off the puddle noise x 1.5,
+                // so water stands first in the cobbles' joints, between pebbles and in ripple
+                // troughs, then spreads over the tops as the rain goes on.
+                //   P = saturate((saturate(2.5 rate noise - 1.5 h) - 0.5) 2.5 + 0.5) flat
+                float hb = (GND_SSDM && g_gnd_ssdm_h > 0.0) ? clamp(g_gnd_ssdm_h / kGndSsdmMax, 0.0, 1.0) : g_sw_mat_h * 0.6;
+                float fl = clamp(2.0 * (nor.y - 0.5), 0.0, 1.0); fl *= fl * fl;
+                float x = clamp(2.5 * wet * smoothstep(0.15, 0.75, pn) - 1.5 * hb, 0.0, 1.0);
+                puddle = clamp((x - 0.5) * 2.5 + 0.5, 0.0, 1.0) * fl * smoothstep(0.2, 0.6, wet) * (1.0 - sw_w);
+                // (height x (1 - 0.4 p): standing water flattens the relief by up to 40 %)
+                if (GND_SSDM && g_gnd_ssdm_h > 0.0) g_gnd_ssdm_h = max(g_gnd_ssdm_h * (1.0 - 0.4 * puddle), 0.006 * kGndSsdmMax);
+                // (the flat water normal only in the lowest texels: m^2 (1 - saturate((h' - 0.1) / 0.9))^4 > 0.8)
+                float h2 = hb * (1.0 - 0.4 * puddle);
+                float lo = 1.0 - clamp((h2 - 0.1) / 0.9, 0.0, 1.0); lo *= lo; lo *= lo;
+                float mw = sw_wet_m(max(puddle, wet * 0.5));
+                pd_flat = puddle * smoothstep(0.6, 0.8, mw * mw * lo * (0.5 + 0.5 * puddle) * 1.6) * smoothstep(0.90, 0.96, nor.y);
+            } else {
             // (standing water is level: what the ground's material stands out by is scaled down in a
             //  puddle, for the screen-space displacement - the reference game's rule. Here, in the
             //  lighting, so it is the same for a baked pixel and one worked out)
             if (GND_SSDM && g_gnd_ssdm_h > 0.0) g_gnd_ssdm_h = max(g_gnd_ssdm_h * (1.0 - 0.9 * puddle), 0.006 * kGndSsdmMax);
-            vec3 pn_n = normalize(mix(nor, vec3(0.0, 1.0, 0.0), max(max(puddle, 0.5 * wet), 0.92 * shore)));
+            }
+            vec3 pn_n = normalize(mix(nor, vec3(0.0, 1.0, 0.0), max(max(pd_flat, 0.5 * wet), 0.92 * shore * smoothstep(0.55, 0.85, nor.y))));
             if (puddle > 0.01 && pd < 60.0) {
                 vec3 rw = water_ripples(pos.xz);
                 pn_n = normalize(vec3(pn_n.x - rw.x * puddle, pn_n.y, pn_n.z - rw.y * puddle));
@@ -377,9 +429,15 @@
             float cov = scene.crater_info.y;
             skyr = mix(skyr, vec3(dot(skyr, vec3(0.2126, 0.7152, 0.0722))), cov);
             float film = max(puddle, 0.11 * wet * smoothstep(0.5, 0.95, nor.y));
+            if (SW_ON(1)) {
+                // (the band's roughness (1 - w') r: a mirror at the waterline fading up the bank;
+                //  its darkening is already in the albedo, above)
+                film = max(film, 0.4 * shore * shore);      // (x 0.4: at full mirror the line glinted as a white strip along the bank)
+            } else {
             film = max(film, 0.40 * shore);                          // the glassy sheet on wet sand
-            col *= mix(1.0, 0.55, puddle);
             col *= mix(1.0, 0.70, shore * (1.0 - puddle));           // soaked sand is darker
+            }
+            col *= mix(1.0, 0.55, puddle);
             col += skyr * Fw * film * ao_shaped;
             float sg = max(dot(normalize(rr), sunDir), 0.0);
             float sg2 = sg * sg; float sg8 = sg2 * sg2 * sg2 * sg2;

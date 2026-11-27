@@ -116,6 +116,12 @@ struct WeaponDef {
     // (LR-9: brings its holo sight, at (0.162, -0.119) in the weapon frame, onto the crosshair.)
     glm::vec3 ads_shift_fp{-0.162f, 0.119f, -0.120f};
     float     hip_fire_hold = 0.7f;     // seconds a weapon fired from the hip stays level before it sinks again
+    // CARRIED (CharacterAnimationInput::carry; seen from outside): not aimed at all - the rifle
+    // held across the body at the low ready, as a soldier runs with it. About the butt: the muzzle
+    // turned to the left and down, the weapon canted; the butt comes off the shoulder to the
+    // right of the belly. Independent of where the head looks (the view's pitch is not followed).
+    float     carry_yaw = 0.62f, carry_pitch = -0.58f, carry_roll = 0.35f;   // radians: left, down (-), cant
+    glm::vec3 carry_shift{-0.03f, -0.30f, -0.10f};      // aim frame, added to shoulder_offset (+x right, +y up, -z forward)
     glm::vec3 tablet_centre{0.155f, -0.165f, -0.40f};   // the tablet in the weapon frame (as drawn)
     glm::vec3 tablet_chest{0.10f, -0.20f, -0.30f};      // ... and from the neck joint when seen from outside (model axes)
 };
@@ -195,6 +201,10 @@ struct CharacterAnimationInput {
     // sights. Not aiming it is carried at the ready - lower, canted, the muzzle down until a
     // shot is fired from the hip. Default true: the stance everything had before there were two.
     bool      aiming = true;
+    // Carried, not held at the ready (0 .. 1): the low ready of somebody running with a rifle he is
+    // not about to use (WeaponDef carry_*). A shot brings it level for hip_fire_hold, then it goes
+    // back; aiming overrides it. Followed in about a quarter of a second.
+    float     carry = 0.0f;
     // At the wheel of a vehicle: the pose is a driver's - the model's hips where they are at
     // rest (the caller puts them on the seat), the legs forward to the pedals (seat_legs: 0 an
     // upright seat, 1 a low one with the legs stretched out), the hands on the wheel's rim.
@@ -289,6 +299,17 @@ struct CharacterAnimationInput {
     LayerMask layer_mask = LayerMask::UpperBody;
     float     layer_rate = 1.0f, layer_weight = 1.0f;
     bool      action_mirror = false;
+    // HOLDING something that is not a weapon (a cup, a box, a bag - npc_world.cpp "WHAT THEY CARRY"):
+    // each hand in hold_hands (1 left, 2 right) goes to its grip after everything else - hold_grip the
+    // middle of the palm, hold_fingers the way the fingers point, hold_palm the way the palm faces,
+    // model space - eased in and out by the animator (hold_halflife); hold_curl: how far its fingers
+    // close round it (0 open .. 1 a fist). A hand let go goes back to what the layers below have.
+    uint8_t   hold_hands = 0;
+    glm::vec3 hold_grip[2]{};
+    glm::vec3 hold_fingers[2]{ glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 0.0f, -1.0f) };
+    glm::vec3 hold_palm[2]{ glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f) };
+    float     hold_curl[2]{ 1.0f, 1.0f };
+    float     hold_halflife = 0.12f;
     bool      first_person = false;
     bool      teleported = false;        // position jumped: drop every world-space memory
     int       lod = 0;                   // 0 full .. 3 no pose (see anim_lod.h)
@@ -372,6 +393,12 @@ private:
     void clip_layer(const CharacterAnimationInput& in, float dt);
     void gesture_layer(const CharacterAnimationInput& in, float dt, bool alive, bool sitting, bool moving);
     void look_layer(const CharacterAnimationInput& in, float dt, bool busy, bool moving, bool sitting);
+    void hold_layer(const CharacterAnimationInput& in, float dt);       // hands on what is carried (hold_layer.cpp)
+    float hold_w_[2] = { 0.0f, 0.0f };
+    // How far each hand is on what it carries (0 .. 1; tests, the renderer: an item follows the hand while it comes).
+public:
+    float hold_weight(int side) const { return hold_w_[side & 1]; }
+private:
     void rotate_in_model(int joint, const glm::quat& q);              // turns a joint about model axes (local pose)
     glm::quat model_rotation(int joint) const;                        // from pose_, by walking the parents
     void fit_limb(int a, int b, int c, glm::vec3 target, const glm::vec3* pole, bool from_rest = false);
@@ -395,6 +422,7 @@ private:
     float  rate_ = 1.0f, stride_ = 1.0f, warp_ = 0.0f;
     float  aim_w_ = 1.0f;                // 1 = aiming, 0 = at the ready
     float  since_shot_ = 1e9f;           // seconds: a weapon fired from the hip stays level for a moment
+    float  carry_w_ = 0.0f;              // the low carry, as it is now (eased)
     float  snap_axis_ = 0.0f;            // the captured direction (a multiple of 90 degrees) a diagonal request is turned onto
     bool   snap_on_ = false, strafe_run_ = false;
     float  lean_roll_ = 0.0f, lean_roll_v_ = 0.0f, lean_pitch_ = 0.0f, lean_pitch_v_ = 0.0f;

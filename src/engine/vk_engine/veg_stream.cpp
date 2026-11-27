@@ -369,7 +369,7 @@ std::shared_ptr<CellData> generate_cell(CellKey key, const VulkanEngine::WvState
             r.vi.pos_scale = glm::vec4(x, h - 0.05f, z, scale);
             r.vi.rot_arch_phase = glm::vec4(rot * 6.2831853f, float(ai), phase * 6.2831853f, 0.0f);
             const float tr = 0.38f * scale;
-            r.col = { glm::vec3(x - tr, h - 0.5f, z - tr), glm::vec3(x + tr, h + S.arch_h[size_t(ai)] * scale * 0.6f, z + tr) };
+            r.col = { glm::vec3(x - tr, h - 0.5f, z - tr), glm::vec3(x + tr, h + S.arch_h[size_t(ai)] * scale * 0.6f, z + tr), 1 };      // (round: a trunk)
             trees.push_back(r);
         }
     std::sort(trees.begin(), trees.end(), [](const Ranked& a, const Ranked& b) { return a.rank < b.rank; });
@@ -493,6 +493,12 @@ void VulkanEngine::wv_nf_poll() {
     if (S.nf_active && S.nf_job.valid() && S.nf_job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const std::vector<unsigned char> px = S.nf_job.get();
         S.nf_active = false;
+        if (static const bool lg = std::getenv("VIBE_LOG_NF") != nullptr; lg) {
+            size_t cut = 0;
+            for (size_t k = size_t(N) * 4; k + 3 < px.size(); k += 4) cut += px[k + 3] < 128 ? 1 : 0;
+            log::infof("[near-field] bake round (%.0f, %.0f) landed: %zu of %d texels without grass; %zu cut boxes known at home",
+                       S.nf_job_center.x, S.nf_job_center.y, cut, N * N, home_grass_cuts_.size());
+        }
         if (S.nf_job_chart != &globe::current()) return;      // (baked for another part of the planet: re-anchored meanwhile)
         if (S.nf_image) {
             // (every bake after the first: into the texture that is already bound)

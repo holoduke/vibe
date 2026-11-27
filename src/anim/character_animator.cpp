@@ -138,7 +138,7 @@ void CharacterAnimator::reset() {
     dip_ = dip_v_ = pelvis_ik_ = pelvis_ik_v_ = 0.0f;
     for (Lock& l : lock_) l = Lock{};
     recoil_t_ = 0.0f; reload_t_ = -1.0f; reload_w_ = 0.0f; equip_t_ = 1.0f;
-    aim_w_ = 1.0f; since_shot_ = 1e9f;
+    aim_w_ = 1.0f; since_shot_ = 1e9f; carry_w_ = 0.0f;
     rng_ = 0x9E3779B9u; rng_seeded_ = false;
     gaze_mode_ = 0; gaze_left_ = 0.0f; gaze_yaw_t_ = gaze_pitch_t_ = 0.0f;
     gaze_half_ = 0.45f; gaze_sweep_ = gaze_sweep_to_ = 0.0f;
@@ -261,6 +261,12 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
     if (!started_) aim_w_ = in.aiming ? 1.0f : 0.0f;
     // (up to the aim quickly, down from it at ease)
     aim_w_ += ((in.aiming ? 1.0f : 0.0f) - aim_w_) * (1.0f - std::exp(-dt / (in.aiming ? 0.07f : 0.14f)));
+    {   // the low carry: wanted, not aiming, no fresh shot from the hip, no reload
+        const float want = in.held == HeldItem::Rifle && !in.aiming && since_shot_ > weapon.hip_fire_hold && reload_t_ < 0.0f
+                         ? std::clamp(in.carry, 0.0f, 1.0f) : 0.0f;
+        if (!started_) carry_w_ = want;
+        carry_w_ += (want - carry_w_) * (1.0f - std::exp(-dt / (want > carry_w_ ? 0.22f : 0.08f)));
+    }
     recoil_t_ = std::max(0.0f, recoil_t_ - dt);
     if (in.reload_seq != reload_seq_) { reload_seq_ = in.reload_seq; reload_t_ = 0.0f; }
     if (reload_t_ >= 0.0f) {
@@ -306,6 +312,7 @@ void CharacterAnimator::update(const CharacterAnimationInput& in) {
     arms(in);
     rt.local_to_model(*ctx_, pose_, model_);
     }
+    hold_layer(in, dt);                   // (hands on what is carried: hold_layer.cpp)
 
     // A pose that is not finite is never handed on: the last good one stands in, and it is counted.
     if (!pose_is_valid(pose_) || !pose_is_valid(model_)) {
@@ -1181,6 +1188,13 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
     dbg_.reload = reload_t_ >= 0.0f ? reload_u_ : 0.0f;
     dbg_.equip = lowered;
 
+    // (carried low: across the body whatever the head does - the view's pitch is not followed)
+    const float carry = held_ == HeldItem::Rifle && !in.first_person ? smooth01(carry_w_) * (1.0f - lowered) : 0.0f;
+    if (carry > 1e-4f)
+        off = off * about(weapon.butt, glm::angleAxis(weapon.carry_yaw * carry, kUp) * rot_x(weapon.carry_pitch * carry) *
+                                       glm::angleAxis(weapon.carry_roll * carry, kBack));
+    // (level whatever the view's pitch: the view frame is the one the weapon is drawn in, so the pitch is taken out here)
+    if (carry > 1e-4f) off = glm::mat4_cast(rot_x(-in.aim_pitch * carry)) * off;
     const float p = in.aim_pitch;
     const glm::vec3 cam_f(0.0f, std::sin(p), -std::cos(p)), cam_u(0.0f, std::cos(p), std::sin(p));
     const glm::mat4 V(glm::vec4(1.0f, 0.0f, 0.0f, 0.0f), glm::vec4(cam_u, 0.0f), glm::vec4(-cam_f, 0.0f), glm::vec4(in.eye_local, 1.0f));
@@ -1191,7 +1205,7 @@ void CharacterAnimator::arms(const CharacterAnimationInput& in) {
     // direction (the aim) and is moved so that its butt sits in the right shoulder.
     if (!in.first_person && held_ == HeldItem::Rifle && tuning.shoulder_weapon) {
         const glm::vec3 shoulder(model_[size_t(rig[Role::RightArm])][3]);
-        const glm::vec3 anchor = shoulder + glm::mat3(V) * (weapon.shoulder_offset + weapon.ready_shift * ready);
+        const glm::vec3 anchor = shoulder + glm::mat3(V) * (weapon.shoulder_offset + weapon.ready_shift * ready * (1.0f - carry) + weapon.carry_shift * carry);
         // (where the butt is without the recoil: the kick still drives the weapon back from there)
         const glm::vec3 butt(V * offset_for(0.0f) * glm::vec4(weapon.butt, 1.0f));
         W[3] += glm::vec4(anchor - butt, 0.0f);

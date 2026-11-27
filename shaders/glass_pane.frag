@@ -26,7 +26,7 @@ layout(push_constant) uniform PC {
     vec4 uaxis_h;       // xyz the direction of u, w the pane's height (m)
     vec4 vaxis_s;       // xyz the direction of v, w the pane's seed
     vec4 tint_n;        // rgb the glass's tint, a the number of impacts
-    vec4 misc;          // x: 1 cracked, 2 burst; y: seconds since it burst; z: 1 = toughened glass (small dice)
+    vec4 misc;          // x: 1 cracked, 2 burst; y: seconds since it burst; z: 1 = toughened glass (small dice); w: the eye indoors (glass_common.glsl glass_reflection)
     vec4 hits[7];       // xy where (pane uv, m), z fall (0 .. 3.2), w seed (0 .. 1)
 } pc;
 
@@ -292,7 +292,7 @@ void main() {
     float fres = glass_fresnel(ndv);
     vec3 R = reflect(-V, N);
     vec3 sky = scene.sky_color.rgb;
-    vec3 env = glass_mirror(R) + glass_glint(R, 900.0, 60.0, 24.0, 0.12);
+    vec3 env = glass_reflection(vWorld, R, pc.vp, uv, pc.misc.w);      // (misc.w: the eye indoors)
     col = mix(col, env, fres);
     float dust = fract(sin(dot(floor(vUv * 37.0), vec2(12.9898, 78.233))) * 43758.5453);
     col += sky * 0.012 * dust * (0.4 + 0.6 * (1.0 - ndv));

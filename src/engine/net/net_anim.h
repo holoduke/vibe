@@ -65,6 +65,8 @@ inline RemoteFrame remote_animation_input(const PlayerState& s, anim::CharacterA
     in.shot_seq = s.shot_seq;
     in.reloading = (s.flags & kFlagReload) != 0;
     in.aiming = (s.flags & kFlagAim) != 0;
+    // (sprinting on the ground, not aiming: the rifle carried low across the body, not held at the ready)
+    in.carry = ((s.move & kMoveSprint) && (s.flags & kFlagGround) && !(s.flags & kFlagAim)) ? 1.0f : 0.0f;
     return f;
 }
 

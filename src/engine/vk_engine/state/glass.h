@@ -79,12 +79,17 @@ struct VulkanEngine::GlassState {
         glm::vec2 c[3];                         // its corners in its own plane
         float wait = 0.0f;                      // seconds it still hangs in the frame
         float age = 0.0f, life = 6.0f;
-        float floor_y[2]{ -1e9f, -1e9f };       // the floor behind and in front of the pane
+        float floor_y[2]{ -1e9f, -1e9f };       // the floor behind and in front of the pane (when it burst; the first guess)
+        float fy = -1e9f;                       // the floor under where it is now (glass_tick: measured again every 25 cm it travels)
+        glm::vec2 fy_at{ 1e9f, 1e9f };          // where that was measured (x, z)
         glm::vec3 pane_o{0.0f}, pane_n{0.0f, 0.0f, 1.0f};
         float lie = 0.0f;                       // which way it lies once it is down
         bool  rest = false, bounced = false;
     };
     std::vector<Shard> shards;
+    // The eye under a roof (a shelter: rocket.cpp shelters_near) this frame, 0 or 1: the panes
+    // then mirror the room, not the sky (glass_common.glsl glass_reflection). Set by fx.cpp.
+    float indoor = 0.0f;
 
     // The lenses of the sights of the weapons drawn this frame (draw_viewmodel leaves them here;
     // the glass pass draws them).

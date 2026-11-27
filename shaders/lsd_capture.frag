@@ -16,7 +16,7 @@ layout(push_constant) uniform PC {
     vec4 grass_params;
 } pc;
 
-const int kTextureCount = 43;     // (cube.frag kTextureCount)
+const int kTextureCount = 48;     // (cube.frag kTextureCount)
 layout(set = 0, binding = 3) uniform sampler2D u_albedo[kTextureCount];
 
 void main() {

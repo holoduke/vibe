@@ -8,6 +8,10 @@ namespace vibe::collision {
 struct AABB {
     glm::vec3 min;
     glm::vec3 max;
+    // 1 = the box round something ROUND (a boulder, a tree trunk): the player's walker meets the
+    // upright capsule inside it instead (tri_collision.h round_in_box; props.cpp
+    // rebuild_tick_aabbs). Everything else (cars, NPCs, physics) still sees the box.
+    unsigned char round = 0;
 };
 
 bool aabb_overlap(const AABB& a, const AABB& b);

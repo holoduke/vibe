@@ -128,6 +128,10 @@ VegImpostorAtlas bake_veg_impostors
         return p[3] / 255.0f;
     };
 
+    // The crowns' mean colour as the cards show it (per archetype: summed over its views, by
+    // coverage) - logged, so the far ground's woods colour (terrain_rm_main_light.glsl kRmWoodsFar)
+    // can be kept equal to it.
+    std::vector<glm::vec4> arch_mean(archs.size(), glm::vec4(0.0f));
     // (one archetype per task: each writes its own row of the atlas)
     auto bake_one = [&](size_t a) {
         const int R = kTile * kSS;
@@ -299,6 +303,7 @@ VegImpostorAtlas bake_veg_impostors
                 glm::vec3 mc(0.0f); float wsum = 0.0f, lfm = 0.0f;
                 for (size_t k = 0; k < tc.size(); ++k)
                     if (tc[k].a > 0.0f) { mc += glm::vec3(tc[k]) * tc[k].a; lfm += tn[k].a * tc[k].a; wsum += tc[k].a; }
+                arch_mean[a] += glm::vec4(mc, wsum);
                 if (wsum > 0.0f)
                     for (size_t k = 0; k < tc.size(); ++k)
                         if (tc[k].a <= 0.0f && tn[k].a > -0.5f) {
@@ -329,6 +334,13 @@ VegImpostorAtlas bake_veg_impostors
     for (size_t a = 0; a < archs.size(); ++a)
         if (out.row[a] >= 0) tasks.push_back(std::async(std::launch::async, bake_one, a));
     for (auto& t : tasks) t.get();
+    {
+        glm::vec4 sp[2] = { glm::vec4(0.0f), glm::vec4(0.0f) };
+        for (size_t a = 0; a < archs.size(); ++a) if (out.row[a] >= 0) sp[archs[a].species == 0 ? 0 : 1] += arch_mean[a];
+        for (int s = 0; s < 2; ++s) if (sp[s].w > 0.0f)
+            log::infof("[veg] far card mean colour (linear), %s: %.4f %.4f %.4f", s == 0 ? "conifers" : "leaf trees",
+                       double(sp[s].x / sp[s].w), double(sp[s].y / sp[s].w), double(sp[s].z / sp[s].w));
+    }
     return out;
 }
 

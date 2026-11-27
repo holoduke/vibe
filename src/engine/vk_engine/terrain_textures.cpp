@@ -720,12 +720,22 @@ void VulkanEngine::init_grass_mask_texture() {
     if (!grass_mask_data_.empty()) {
         const wc::Course& st = wc::stream(rt_.water_level);
         const float cell = kWorldSide / float(dim);
-        for (const glm::vec4& B : st.box) {
+        // (over the boxes' union, each texel once: the boxes overlap, and a texel in three of them
+        //  had its grass thinned three times - world.cpp's carve had the same fault)
+        glm::vec4 U(1e9f, 1e9f, -1e9f, -1e9f);
+        for (const glm::vec4& B : st.box) U = glm::vec4(std::min(U.x, B.x), std::min(U.y, B.y), std::max(U.z, B.z), std::max(U.w, B.w));
+        if (!st.box.empty()) {
+            const glm::vec4& B = U;
             const int x0 = std::clamp(int((B.x + 0.5f * kWorldSide) / cell), 0, dim - 1), x1 = std::clamp(int((B.z + 0.5f * kWorldSide) / cell), 0, dim - 1);
             const int z0 = std::clamp(int((B.y + 0.5f * kWorldSide) / cell), 0, dim - 1), z1 = std::clamp(int((B.w + 0.5f * kWorldSide) / cell), 0, dim - 1);
             for (int mz = z0; mz <= z1; ++mz)
                 for (int mx = x0; mx <= x1; ++mx) {
-                    const float d = wc::stream_distance(glm::vec2((float(mx) + 0.5f) * cell - 0.5f * kWorldSide, (float(mz) + 0.5f) * cell - 0.5f * kWorldSide), rt_.water_level);
+                    const glm::vec2 wq((float(mx) + 0.5f) * cell - 0.5f * kWorldSide, (float(mz) + 0.5f) * cell - 0.5f * kWorldSide);
+                    bool in = false;
+                    for (const glm::vec4& S : st.box)
+                        if (wq.x >= S.x && wq.x <= S.z && wq.y >= S.y && wq.y <= S.w) { in = true; break; }
+                    if (!in) continue;
+                    const float d = wc::stream_distance(wq, rt_.water_level);
                     if (d > 1.5f) continue;
                     uint8_t& r = grass_mask_data_[(size_t(mz) * dim + mx) * 2];
                     r = uint8_t(float(r) * glm::smoothstep(0.0f, 1.5f, d));

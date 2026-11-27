@@ -53,7 +53,10 @@ are made with Tencent HY-Motion 1.0 (text to motion) on this PC.
   | `shot_spin` | s11 | 33 - 90 | 1.00 s |
   | `shot_run` | s23 | 12 - 50 | 0.43 s |
   | `shot_walk` | s11 | 30 - 95 | 1.30 s |
+  | `shot_knees` | s37 (`shot2.txt`) | 28 - 96 | 1.80 s |
+  | `shot_side` | s11 (`shot2.txt`) | 36 - 88 | 1.07 s |
 
+- (2026-11-27) The choice also looks at the side the bolt struck (a shoulder, the side of the chest, which leg) and every clip may be played left for right and turned up to 35 degrees so the body goes down the way the shot pushed: docs/ARCHITECTURE.md "Falling the way the shot drove".
 - Played by `npc_world.cpp` (`pick_shot_clip`, `npc_dying_pose`): which clip follows from where the bolt struck (above 1.5 m the head, under 0.75 m a leg), from which side, and how fast the person moved. At the hand-over time (the hips have begun to drop) the pose becomes a ragdoll whose parts go on at the speed the clip moved them (`corpse_spawn(..., part_velocity)`); the fall and the landing are the physics'. On a seat, or in the middle of an act that warps the hips: the ragdoll at once.
 - Not yet: players killed in multiplayer still buckle for 0.38 s and fall (multiplayer.cpp); seated people have no clip of their own.
 
@@ -151,3 +154,23 @@ The pavilion's people needed five new motions: typing seated, reading seated, le
 - **Looking at something** (style 7: the rocket from the apron, the pad from the pavilion's glass, the hall from the mezzanine's rail): the head fixed on `View::aim` by the look layer, the trunk leaning back with a look that goes up.
 - **Fingers on every action clip** (`CharacterAnimator::action`): the clips come from a body of 22 joints - no fingers - so every hand was the rest pose's, flat and spread. A hand that holds nothing now hangs with its fingers a little curled.
 - Not done: no clip for getting on to a task chair (the same `sit_down` as for a bench, begun beside the chair: the body goes sideways through the armrest); the chairs do not turn or roll; nobody carries anything; the meeting table's people play the diner's `table_talk`. Seen in stills only - how the typing, the pointing and the talking MOVE has to be judged in play.
+
+## Carrying things (2026-11-27): a hold layer, made by rule
+
+People carry a box, a clipboard, a tablet, a coffee cup, a bag, a toolbox or a phone (npc.h `Item`;
+docs/ARCHITECTURE.md "What people carry"). NOT text-to-motion clips: a test game was running when this
+was made (the generator needs 11 - 13 GB of the 16), and a clip's cup or table is never where this
+one's is - the hands have to be solved to the real thing anyway.
+- `CharacterAnimationInput::hold_hands` / `hold_grip` / `hold_fingers` / `hold_palm` / `hold_curl`
+  (model space): `anim/hold_layer.cpp`, the LAST layer - after locomotion, an action clip or the seat
+  and after the life layers. Each holding arm is solved to its grip (two bones, the elbow out and
+  down, the hand turned to the grip's fingers and palm, the fingers closed by `hold_curl`), eased in
+  and out with `hold_halflife` (0.12 s). A hand not holding keeps what the layers below gave it.
+- What the hand does with it is moved by the caller (`npc_world.cpp` "WHAT THEY CARRY", `carry::carried`):
+  a sip from the cup every 9 - 15 s (2.6 s, to the mouth and tilted), the board / tablet / phone up
+  to be read part of the time with the head on it (a glance while walking), the box in both hands in
+  front of the belly, the bag and the toolbox at the side on a straight arm.
+- Setting down and taking up (acts `PutDown` 1.7 s, `PickUp` 1.6 s at `View::aim`): the hands to the
+  place by half the act (the item is there from then on / until then), the body bent down to a low
+  place through `crouch`, the head on the place. No clip plays meanwhile (the motion-matched stand).
+- Not checked in motion; nothing of it measured. `VIBE_NPC_NO_CARRY=1`: nobody carries anything.

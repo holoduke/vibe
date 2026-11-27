@@ -17,7 +17,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 namespace vibe {
@@ -172,6 +174,7 @@ void VulkanEngine::corpse_spawn(const glm::mat4& model, const glm::mat4& view_in
     c->av.muzzle_t = 0.0f;
     c->av.recoil_t = 0.0f;
     c->av.settle = 0.0f;        // frames skinned since the physics went to sleep
+    corpse_obstacles(0.0f);     // (the cars beside it are there before it falls)
 }
 
 // A bolt through a body that fell or is falling. The bolt's own body does not touch it (the
@@ -206,8 +209,77 @@ bool VulkanEngine::corpse_bolt_hits(glm::vec3 a, glm::vec3 b, glm::vec3& hit) {
     return true;
 }
 
+// WHAT A BODY THAT FELL LIES ON. The physics' world (Jolt, NON_MOVING) has the level's boxes -
+// castle, walls, the station's and the pavilion's .col boxes (tables, counters, booths, stools,
+// benches, desks), trees, rocks, bridges - the home terrain and each body's own floor slab; the
+// driven car is a vehicle of the physics (layer CAR). It did NOT have what is no obstacle to a
+// walker: the chairs (a chair is sat on: the station's 16 diner chairs, the pavilion's desk and
+// meeting chairs, its sofas have no collider at all) and every car but the driven one (the
+// parked cars and the NPC engine's have no physics). A body shot beside them fell through.
+// Now, in the physics' CORPSE layer (only fallen bodies meet them; walkers, bolts and the driven
+// car do not): a seat and a backrest box for every such seat of the sites' .nav files (made
+// once), and the cars within 9 m of a body as bodies moved with them (PhysicsWorld::
+// corpse_cars_set; while any body lies there). VIBE_LOG_CORPSE_OBST=1: what was added.
+void VulkanEngine::corpse_obstacles(float dt) {
+    if (!physics_) return;
+    static const bool lg = std::getenv("VIBE_LOG_CORPSE_OBST") != nullptr;
+    if (!corpse_props_made_) {
+        corpse_props_made_ = true;
+        std::vector<PhysicsWorld::CorpseProp> props;
+        auto read = [&](const char* path, glm::vec3 base) {
+            if (base == glm::vec3(0.0f)) return;                      // (the site is not placed)
+            FILE* fp = std::fopen(path, "r");
+            if (!fp) return;
+            char line[256], kind[32];
+            int n = 0;
+            while (std::fgets(line, sizeof(line), fp)) {
+                float x, y, z, yaw;
+                if (std::sscanf(line, "seat %31s %f %f %f %f", kind, &x, &y, &z, &yaw) != 5) continue;
+                const std::string k(kind);
+                // seat half width / half depth / height under the top, the back's offset behind,
+                // its height above the seat and its half width (the models: tools/gasstation
+                // chair(), tools/office chair() and sofa())
+                float hw, hd, h, back, bh, bw;
+                if (k == "chair")                    { hw = 0.21f; hd = 0.21f; h = 0.50f; back = 0.215f; bh = 0.42f; bw = 0.20f; }
+                else if (k == "desk" || k == "meet") { hw = 0.24f; hd = 0.22f; h = 0.40f; back = 0.25f;  bh = 0.55f; bw = 0.22f; }
+                else if (k == "sofa")                { hw = 0.40f; hd = 0.30f; h = 0.42f; back = 0.36f;  bh = 0.40f; bw = 0.40f; }
+                else continue;                        // (stools, booths, benches, picnic tables: colliders of their own)
+                const glm::vec3 s = base + glm::vec3(x, y, z);
+                const glm::vec3 fwd(std::sin(yaw), 0.0f, -std::cos(yaw));
+                // (a box turned by -yaw about y has its x axis along the seat's right: (cos yaw, 0, sin yaw))
+                props.push_back({ s - glm::vec3(0.0f, 0.5f * h, 0.0f), glm::vec3(hw, 0.5f * h, hd), -yaw });
+                props.push_back({ s - fwd * back + glm::vec3(0.0f, 0.5f * bh + 0.05f, 0.0f), glm::vec3(bw, 0.5f * bh, 0.03f), -yaw });
+                ++n;
+            }
+            std::fclose(fp);
+            log::infof("[ragdoll] %d seats of %s are something a fallen body lies on", n, path);
+        };
+        read("assets/gasstation/gasstation.nav", station_pos_);
+        read("assets/office/office.nav", office_pos_);
+        if (!props.empty()) physics_->corpse_props_add(props.data(), props.size());
+    }
+    // The cars near any body that lies or falls.
+    static std::vector<PhysicsWorld::CorpseCar> cars;
+    cars.clear();
+    for (const Corpse& c : corpses_) {
+        if (!c.rag) continue;
+        const size_t before = cars.size();
+        corpse_car_bodies(c.p0[0], 9.0f, cars);
+        // (one car near two bodies: once)
+        for (size_t i = before; i < cars.size();) {
+            bool dup = false;
+            for (size_t j = 0; j < before; ++j) if (cars[j].key == cars[i].key) dup = true;
+            if (dup) cars.erase(cars.begin() + ptrdiff_t(i)); else ++i;
+        }
+    }
+    const size_t had = physics_->corpse_cars_count();
+    physics_->corpse_cars_set(cars.data(), cars.size(), dt);
+    if (lg && had != physics_->corpse_cars_count()) log::infof("[ragdoll] %zu car(s) are something a fallen body lies on", physics_->corpse_cars_count());
+}
+
 void VulkanEngine::corpses_update(float dt) {
     if (!physics_) return;
+    corpse_obstacles(dt);
     static const float kLife = 25.0f;
     const size_t nb = body_bones_.size();
     for (Corpse& c : corpses_) {

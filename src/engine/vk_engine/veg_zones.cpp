@@ -370,6 +370,7 @@ void VulkanEngine::build_scatter_from(const Heightmap& hm) {
     sp.tufts_cpu = std::getenv("VIBE_NO_PLANT_GPU") != nullptr || std::getenv("VIBE_TUFTS_CPU") != nullptr;
     if (!paint_.empty()) sp.paint = &paint_;
     scatter_ = build_scatter(device_, allocator_, graphics_queue_, graphics_queue_family_, hm, sp);
+    scree_set_params(sp);                        // (the scree is streamed round the camera by the same rule: scree_stream.cpp)
     scatter_set_raymarch_surface(scatter_, rt_.terrain_raymarch_enabled);
     init_plant_gpu();
 }

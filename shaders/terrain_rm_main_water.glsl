@@ -15,6 +15,9 @@
             return;
         }
 #endif
+#ifdef VIBE_GROUND
+        return;      // (never reached: the ground build has no water pixels - the water pass shades them)
+#else
 #if !defined(VIBE_LITE) && !defined(VIBE_WATER)
         if (RMDBG(131072)) {       // (shading test, water "flat": as the first-start build above)
             vec3 wp = ro + rd * t_water;
@@ -50,6 +53,7 @@
         float wt_bed_y = water_only ? meshHeight(wpos.xz) : terrainM_lod(wpos.xz, t_water);
         float wt_depth = max(0.0, water_y - wt_bed_y);
         float wt_seak  = wt_sea_k(wpos.xz);
+        wt_W = mix(wt_W, max(wt_W, scene.water_sun.z), wt_seak);     // (the open sea: its own wind, a sea breeze at least - environment.cpp sea_wind)
         float wave_str = scene.water_params.z * wt_lake();      // (calm in still air, rough in a gale: environment.cpp)
         float wave_t   = scene.water_params.w;
         // wave-frequency multiplier — packed in water_color_shallow.w
@@ -227,7 +231,7 @@
         // shows a little more of the water's own colour.
         if (wt_sw_k > 1e-4) {
             wnor = normalize(vec3(wnor.x - wt_sw_g.x, wnor.y, wnor.z - wt_sw_g.y));
-            rm_sea_crest += clamp((water_y - scene.water_params.y) * 0.08, -0.3, 0.8);
+            rm_sea_crest += clamp((water_y - scene.water_params.y + (SW_ON(8192) ? 1.0 : 0.0)) * 0.08, -0.3, 0.8);      // (over the sea's level: 1 m under the datum)
         }
         // The river's current (terrain_rm_water.glsl wt_river: wm_river's polyline): the ripple
         // pattern is carried along the channel, faster where it is deep (mid-channel), in two
@@ -267,8 +271,24 @@
                             (1.0 - smoothstep(1880.0, 1990.0, wpos.x)) * (1.0 - wt_seak);        // (nor into the sea)
                     float pool = 1.0 - smoothstep(22.0, 55.0, distance(wpos.xz, vec2(43.4, 297.4)));   // (the pool under the stone bridge)
                     speed = (0.30 + 1.10 * smoothstep(0.3, 2.2, wt_depth)) * (1.0 - 0.6 * pool);
+                    // (the river falls to the sea in three short rapids - water_level.glsl: faster
+                    //  there: 75 x the level's fall per metre, up to +2.2 m/s - over its stones a rapid is far steeper
+                    //  than the 1 % its level falls on average; water_fx.cpp the same)
+                    if (SW_ON(8192)) speed += 3.0 * clamp((wl_profile(riv_along - 6.0) - wl_profile(riv_along + 6.0)) / 12.0, 0.0, 0.03) * 25.0;
                     wt_riv_along = riv_along;
                 }
+                // Calm margins (the reference paints a calm-to-rough value across its river strips:
+                // toward the bank the normal falls to 30 % and the streak foam goes): from half the
+                // channel's half width out, and where the water is only a few decimetres deep (the
+                // river's real bank is not at its nominal width). The current slows there too.
+                // water_wet bit 1024 (VIBE_NO_CALM_MARGIN=1: off).
+#ifndef RM_NO_CALM
+                float wt_calm = SW_ON(1024)
+                    ? max(smoothstep(0.5, 1.0, rv.z / max(rv.w, 0.1)), 1.0 - smoothstep(0.08, 0.5, wt_depth)) : 0.0;
+#else
+                float wt_calm = 0.0;
+#endif
+                speed *= 1.0 - 0.6 * wt_calm;
                 if (riv_k > 0.001) {
                     wt_riv_k = riv_k;
                     vec2 fl = rv.xy * speed + scene.water_wind.xy * (0.012 * wt_W);           // (the wind pushes the surface a little)
@@ -283,6 +303,10 @@
                     // its sloped rivers, whose solver holds only the local part; here the solver holds the
                     // whole current, so its departure from the course's is added - half of it: carried
                     // over the 4 s cycle the full eddying flow winds the pattern into rings)
+                    // (how far the solver's current departs from the course's here: behind and beside
+                    //  a stone the course-frame streaks below give way to the solver's foam, which
+                    //  really bends round it)
+                    float wt_sw_dev = wt_sw.k * smoothstep(0.35, 0.9, length(wt_sw.vel - fl) / max(speed, 0.4));
                     fl += wt_sw.k * 0.5 * (wt_sw.vel - fl);
                     wt_riv_flow = fl * riv_k;
                     // Two phases half a 4 s cycle apart, blended so neither restart shows; each
@@ -355,6 +379,7 @@
                         nr = normalize(vec3(nr.x - s.x, nr.y, nr.z - s.y));
                     }
                     wt_dbg_n = nr.xz;
+                    { float cs = mix(1.0, 0.3, wt_calm); nr = normalize(vec3(nr.x * cs, nr.y, nr.z * cs)); }   // (calm margin)
                     nr = normalize(vec3(nr.x - obs.slope.x, nr.y, nr.z - obs.slope.y));
                     wnor = normalize(mix(wnor, nr, riv_k));
                     // Foam streaks drawn out along the flow, carried like the pattern.
@@ -378,12 +403,13 @@
                     //  pixel tall; VIBE_RM_SKIP=25165824 shows them in blue)
                     float s_patch = smoothstep(0.35, 0.75, noise2(wpos.xz * 0.11 + o0 * 0.11) * w0 + noise2(wpos.xz * 0.11 + o1 * 0.11) * w1);
                     float foam_s = smoothstep(0.66, 0.95, T) * smoothstep(0.6, 1.3, speed) * 0.32 * s_patch;
+                    foam_s *= 1.0 - wt_calm * (1.0 - smoothstep(1.0, 2.0, speed));      // (no streaks in a slow calm margin)
                     float foam_B = clamp(T * T * T * 0.5 * wt_riv_B * 8.0, 0.0, 1.0);
                     // (the stream: in patches where the streaks gather, not as a veil - T^3 x B lay a
                     //  thin even froth over every sheet; VIBE_RM_SKIP=25165824 shows it as red)
                     if (wt_in_stream) foam_B = smoothstep(0.58, 0.85, T) * clamp(wt_riv_B * 2.5, 0.0, 1.0);
                     wt_dbg3 = RMDBG(67108864) ? vec3(fract(q0.x * 0.08), fract(q0.y * 0.45), T) : vec3(foam_B, wt_in_stream ? 0.15 : 0.0, foam_s);
-                    wt_riv_foam = riv_k * max(foam_s, foam_B);
+                    wt_riv_foam = riv_k * max(foam_s, foam_B) * (1.0 - wt_sw_dev);
                     // A step's face: white water all over, broken by the streak pattern.
                     if (wt_in_stream) {
                         float fall = smoothstep(0.25, 0.9, wt_st.slope) * step(0.01, wt_st.drop);      // (a step's face)
@@ -399,6 +425,25 @@
                         wt_riv_foam = max(wt_riv_foam, fall * tongue * (0.20 + 0.75 * strands));
                         // ... and boils white in the pool at its foot, the foam drifting out with the current.
                         wt_riv_foam = max(wt_riv_foam, wt_st.foot * smoothstep(0.25, 0.75, T * 0.6 + strands * 0.6) * (0.6 + 0.4 * tongue));
+                        // A WATERFALL (a fall over 1.2 m, its face near sheer: water_course.cpp): the falling
+                        // sheet in streaks - long vertical strands across the whole width, fine and coarse,
+                        // running DOWN at the falling water's speed (sqrt(2 g h): 4 - 7 m/s), white where the
+                        // water is torn to air, glassy darker strands between; aerated white over the whole
+                        // pool where it lands (the mist over the foot: water_spray.cpp).
+                        float wfall = smoothstep(1.0, 1.8, wt_st.drop) * smoothstep(0.6, 1.6, wt_st.slope);
+                        if (wfall > 0.0) {
+                            float vf = 5.0;
+                            float sy = wpos.y + wave_t * vf;
+                            float s1 = noise2(vec2(wt_st.lat * 4.5, sy * 0.35) + 7.0);
+                            float s2 = noise2(vec2(wt_st.lat * 13.0, sy * 0.9) + 2.0);
+                            float s3 = noise2(vec2(wt_st.lat * 31.0, sy * 2.2) + 5.0);
+                            float st3 = s1 * 0.5 + s2 * 0.32 + s3 * 0.18;
+                            float torn = smoothstep(0.38, 0.62, st3);
+                            wt_riv_foam = max(wt_riv_foam, wfall * mix(0.35, 1.0, torn));
+                            wnor = normalize(wnor + vec3(rv.y, 0.0, -rv.x) * ((s2 - 0.5) * 0.6 * wfall));      // (the strands ripple the sheet across)
+                        }
+                        float wland = wt_st.foot * smoothstep(1.0, 1.8, scene.stream_pts[max(int(wt_st.seg), 1) - 1].z - scene.stream_pts[max(int(wt_st.seg), 1)].z);
+                        if (wland > 0.0) wt_riv_foam = max(wt_riv_foam, wland * mix(0.7, 1.0, smoothstep(0.3, 0.7, T * 0.5 + strands * 0.5)));
                         // A STEEP SHEET (the water following its bed down steep ground: water_course.cpp):
                         // white water that grows with the slope and the speed, broken by the streak
                         // pattern, and STANDING WAVES - short crests across the flow that stay where they
@@ -406,9 +451,17 @@
                         float sheet = smoothstep(0.06, 0.20, wt_sl) * (1.0 - step(0.01, wt_st.drop));
                         if (sheet > 0.0) {
                             float along = wt_st.seg * 8.0;
-                            float sw_ph = along * 3.3 + 1.7 * wc_n1(wt_st.lat * 0.8 + wt_st.seg) + 0.35 * sin(wave_t * 2.1 + wt_st.lat);
+                            // (2026-11-26: the crests were one even ruled grating - every 1.9 m, straight
+                            //  across the whole width, tilting the normal by up to 0.6 - which turned the
+                            //  mirror into regular horizontal stripes over the rapid (sw_rapid3_zoom.png).
+                            //  Now short-crested: the spacing wanders (a slow warp of the phase), the
+                            //  crests come in patches across and along, a quarter of the tilt, and they
+                            //  fade where a pixel is wider than a fifth of their spacing.)
+                            float sw_ph = along * 3.3 + 3.0 * wc_n1(along * 0.15 + wt_st.lat * 0.9 + 3.0) + 1.7 * wc_n1(wt_st.lat * 0.8 + wt_st.seg) + 0.35 * sin(wave_t * 2.1 + wt_st.lat);
                             float crest = sin(sw_ph);
-                            float amp = sheet * (0.25 + 0.35 * smoothstep(1.5, 4.0, speed));
+                            float sw_patch = smoothstep(0.30, 0.75, wc_n1(wt_st.lat * 1.6 + along * 0.23 + 5.0));
+                            float sw_px = max(t_water, 0.05) * 2.0 * scene.viewport.w;
+                            float amp = sheet * (0.08 + 0.10 * smoothstep(1.5, 4.0, speed)) * sw_patch * (1.0 - smoothstep(0.2, 0.45, sw_px / 1.9));
                             wnor = normalize(vec3(wnor.x - rv.x * amp * cos(sw_ph), wnor.y, wnor.z - rv.y * amp * cos(sw_ph)));
                             float rough = sheet * smoothstep(1.4, 3.8, speed);      // (white only where it really runs fast: a pale veil over the whole sheet read as a mirror)
                             float wwhite = rough * smoothstep(0.30, 0.85, strands * 0.8 + 0.35 * smoothstep(0.3, 0.95, crest));
@@ -417,6 +470,58 @@
                         }
                         // (the surface tilts with the stream's own slope: the face of a step leans down it)
                         wnor = normalize(vec3(wnor.x + rv.x * wt_sl, wnor.y, wnor.z + rv.y * wt_sl));
+                        // The surface's relief (water_relief.glsl: humps over the stones under it, standing
+                        // waves, pillows in the gaps) tilts it as it stands - its slope from two taps a
+                        // little apart (not the solver's part: its slope is in the normal below, ws_at).
+                        if (SW_ON(4096)) {
+                            float re = max(0.12, max(t_water, 0.05) * 2.0 * scene.viewport.w);
+                            float r0 = wr_relief(wpos.xz, wt_st, false);
+                            vec2  px = wpos.xz + vec2(re, 0.0), pz = wpos.xz + vec2(0.0, re);
+                            vec2  rg = vec2(wr_relief(px, wc_stream_at(px), false) - r0, wr_relief(pz, wc_stream_at(pz), false) - r0) / re;
+                            rg *= 1.0 / max(1.0, length(rg) / 0.8);
+                            wnor = normalize(vec3(wnor.x - rg.x, wnor.y, wnor.z - rg.y));
+                            // (a crest's top is where the water breaks: a little white on the highest humps)
+                            wt_riv_foam = max(wt_riv_foam, smoothstep(0.12, 0.35, r0) * smoothstep(0.35, 0.8, T) * 0.6);
+                        }
+                    }
+                    // THE RIVER'S RAPIDS (2026-11-27, they "barely read"): its level falls 0.23 m over
+                    // ~8 m at 700, 1250 and 1800 m down the course (water_level.glsl wl_profile - the
+                    // hit pass draws that step); the step's face runs white, broken by the streaks,
+                    // and below it a train of standing waves (crests fixed in place, ~5.5 m apart -
+                    // 2 pi U^2 / g at ~3 m/s - dying out over ~40 m) breaks white on its crests; the
+                    // water there is milky. Less toward the calm margins. VIBE_NO_SLOPED_RIVER: none.
+                    if (!wt_in_stream && SW_ON(8192)) {
+                        float xr = riv_along - 700.0;
+                        if (abs(riv_along - 1250.0) < abs(xr)) xr = riv_along - 1250.0;
+                        if (abs(riv_along - 1800.0) < abs(xr)) xr = riv_along - 1800.0;
+                        float face = 1.0 - smoothstep(4.5, 8.0, abs(xr));
+                        float tail = smoothstep(0.0, 4.0, xr) * (1.0 - smoothstep(14.0, 55.0, xr));
+                        // Foam LINES below the rapid (as on real rivers: the white water's leftovers
+                        // drawn out by the current into long ribbons, 0.2 - 0.6 m wide, wandering,
+                        // broken into lengths, thinning out over ~150 m). In the course's frame and
+                        // carried in the same two phases as the streaks, so they drift at the
+                        // surface speed; fewer toward the calm margins.
+                        if (xr > 6.0 && xr < 200.0) {
+                            float lk = smoothstep(6.0, 18.0, xr) * exp(-(xr - 18.0) / 70.0) * (1.0 - 0.8 * wt_calm) * (1.0 - wt_sw_dev);
+                            float l0 = noise2(vec2(q0.x * 0.03, q0.y * 0.85 + 0.6 * noise2(vec2(q0.x * 0.05, 3.0)))) ;
+                            float l1 = noise2(vec2(q1.x * 0.03, q1.y * 0.85 + 0.6 * noise2(vec2(q1.x * 0.05, 3.0)))) ;
+                            float b0 = noise2(vec2(q0.x * 0.12, q0.y * 0.3) + 21.0), b1 = noise2(vec2(q1.x * 0.12, q1.y * 0.3) + 21.0);
+                            float ln = smoothstep(0.66, 0.80, l0) * smoothstep(0.35, 0.6, b0) * w0 + smoothstep(0.66, 0.80, l1) * smoothstep(0.35, 0.6, b1) * w1;
+                            wt_riv_foam = max(wt_riv_foam, riv_k * ln * lk * 0.75);
+                        }
+                        if (face + tail > 0.0) {
+                            float side = 1.0 - 0.7 * wt_calm;
+                            float lat = noise2(vec2(riv_frame.y * 0.35, xr * 0.12) + 9.0);
+                            float amp = tail * (0.55 + 0.45 * lat) * side;
+                            float ph = 6.2832 * (xr - 4.0) / 5.5 + 0.6 * sin(riv_frame.y * 0.45);
+                            float dh = -0.18 * 1.14 * amp * sin(ph);                     // (slope of 0.18 cos(k x) along the flow)
+                            wnor = normalize(vec3(wnor.x - dh * rv.x * riv_k, wnor.y, wnor.z - dh * rv.y * riv_k));
+                            float crest = smoothstep(0.25, 0.85, cos(ph)) * amp;
+                            float whit = max(face * side * mix(0.75, 1.0, smoothstep(0.3, 0.8, T)),
+                                             crest * mix(0.35, 1.0, smoothstep(0.35, 0.75, T)));
+                            wt_riv_foam = max(wt_riv_foam, riv_k * whit);
+                            wt_riv_B = max(wt_riv_B, 0.30 * max(face, 0.6 * tail) * side);
+                        }
                     }
                     // The white water round the piers and rocks: pillow, wake, trail, eddy spirals.
                     if (obs.foam > 0.0) wt_riv_foam = max(wt_riv_foam, riv_k * obs.foam * mix(0.55, 1.0, smoothstep(0.3, 0.8, T)));
@@ -485,7 +590,7 @@
         // Soft water edge: over the last centimetres (8 at the sea, 4 elsewhere) the water
         // gives way - its normal goes flat, its reflection and glints fade, and the bed's own
         // colour takes over (below).
-        float wt_edge = smoothstep(0.0, mix(0.04, 0.08, wt_seak), wt_depth);
+        float wt_edge = smoothstep(0.0, 0.08, wt_depth);      // (the reference: the last 8 cm everywhere - 4 cm at a lake drew a line)
         wnor = normalize(mix(vec3(0.0, 1.0, 0.0), wnor, wt_edge));
         // Splash rings bend the surface normal.
         vec3 rip_w = water_ripples(wpos.xz);
@@ -512,7 +617,9 @@
         if (wt_sw.k > 0.001) {
             vec2 sg = wt_sw.grad * (wt_sw.k * wt_edge);
             wnor = normalize(vec3(wnor.x - sg.x, wnor.y, wnor.z - sg.y));
-            float F = wt_sw.foam * wt_sw.k;
+            // (x 1.8: the field's foam saturates at about half where the reference's would be near 1 -
+            //  its many particles carry the rest of its white water; at 1 x the stones' white was a faint veil)
+            float F = min(wt_sw.foam * wt_sw.k * 1.8, 1.0);
             if (F > 0.002) {
                 float fc = wave_t / 1.5, fp0 = fract(fc), fp1 = fract(fc + 0.5);
                 float fw0 = 1.0 - abs(1.0 - 2.0 * fp0);
@@ -520,7 +627,7 @@
                 float T0 = noise2((wpos.xz - v * (fp0 * 1.5) + pm_hash2(floor(fc)) * 13.0) * 2.3) * 0.65 + noise2((wpos.xz - v * (fp0 * 1.5)) * 6.1 + 3.0) * 0.35;
                 float T1 = noise2((wpos.xz - v * (fp1 * 1.5) + pm_hash2(floor(fc + 0.5) + 5.0) * 13.0) * 2.3) * 0.65 + noise2((wpos.xz - v * (fp1 * 1.5)) * 6.1 + 3.0) * 0.35;
                 float T = mix(T1, T0, fw0);
-                wt_sw_white = clamp(1.5 * smoothstep(0.0, 1.0, clamp(T * F - 0.015 * (1.0 - F) + 0.1 * F * F * F, 0.0, 1.0)) * 1.6, 0.0, 1.0) * wt_edge;
+                wt_sw_white = clamp(1.5 * smoothstep(0.0, 1.0, clamp(T * F - 0.015 * (1.0 - F) + 0.1 * F * F * F, 0.0, 1.0)), 0.0, 1.0) * wt_edge;      // (was x 1.6 more: with the lace's own x 1.4 the stones' white was a solid sheet)
             }
         }
         // Winter: the lake freezes - no waves, a nearly flat sheet with a faint ripple in the surface.
@@ -1070,7 +1177,9 @@
         //   albedo: the water colour setting (x 2.5: it was a lit tint, now an albedo) or the
         //   river's murk along its course, milkier where it runs fast (x (1 + 4.5 B));
         //   sigma: 0.5 /m (the old see-through's), the river's murk, thicker where it runs white.
-        vec3  wt_alb = clamp(mix(scene.water_color.rgb, wt_murk.rgb, (wt_riv_k > 0.001 && (wt_in_stream || wt_riv_along >= 0.0)) ? wt_riv_k : 0.0) * 2.5, vec3(0.01), vec3(0.9));
+        // (x 1.4 for a lake: at x 2.5 the castle lake's in-scatter was a milky green sheet - the owner:
+        //  "foggy"; the sea and running water keep 2.5)
+        vec3  wt_alb = clamp(mix(scene.water_color.rgb, wt_murk.rgb, (wt_riv_k > 0.001 && (wt_in_stream || wt_riv_along >= 0.0)) ? wt_riv_k : 0.0) * mix(1.4, 2.5, max(wt_seak, wt_riv_k)), vec3(0.01), vec3(0.9));
         wt_alb = min(wt_alb * (1.0 + 4.5 * min(wt_riv_B, wt_in_stream ? 0.08 : 1.0) * wt_riv_k), vec3(0.95));      // (the stream: its white water is drawn as froth; its body stays dark and clear)
         float wt_sig = mix(0.5, wt_murk.w, wt_riv_k) * (1.0 + 2.0 * min(wt_riv_B, wt_in_stream ? 0.08 : 1.0));
         vec3  wt_refr = refract(rd, wnor, 1.0 / 1.33);
@@ -1098,11 +1207,13 @@
             vec3  rr  = refract(rd, nr, 1.0 / 1.33);
             if (dot(rr, rr) > 1e-6 && rr.y < -0.05) {
                 float tb = depth_clean / -rr.y;
-                vec3  pb = wpos + rr * tb;
-                float hb = water_only ? meshHeight(pb.xz) : terrainM_lod(pb.xz, t_water);
-                tb = max(wpos.y - hb, 0.0) / -rr.y;           // (once more, to the bed where the ray got to)
-                pb = wpos + rr * tb;
-                hb = water_only ? meshHeight(pb.xz) : terrainM_lod(pb.xz, t_water);
+                vec3  pb = wpos;
+                float hb = 0.0;
+                RM_ONE_COPY for (int i = 0; i < 2; ++i) {      // (twice: the second time to the bed where the ray got to - one copy of the height in the code)
+                    pb = wpos + rr * tb;
+                    hb = water_only ? meshHeight(pb.xz) : terrainM_lod(pb.xz, t_water);
+                    if (i == 0) tb = max(wpos.y - hb, 0.0) / -rr.y;
+                }
                 if (hb < water_y - 0.01) {
                     wt_refr_ok = true;
                     wt_bed_p = vec3(pb.x, hb, pb.z);
@@ -1142,6 +1253,32 @@
             }
             vec3  S = wt_sig * wt_alb * (phase * Lsun * (1.0 - exp(-ks * wt_d)) / ks +
                                          0.2572201 * Ein * (1.0 - exp(-2.0 * wt_sig * wt_d)) / (2.0 * wt_sig));
+            // THE LIGHT INSIDE THE WATER from the froxel fog volume (the reference: the volume's own
+            // in-scatter between the surface and the bed, in the near 3/4 of its slices - so shafts
+            // and shadows show in clear water). ADDED to the analytic in-scatter above, never in
+            // place of it (replacing it turned the castle lake flat grey-blue): along the refracted
+            // path to the bed, four taps of the volume's light - the sun's visibility there (its
+            // shadow rays: piers, trees, the bank) against the surface's, and the lamps' light -,
+            // each through the water's grey extinction, with the water's albedo.
+            if (scene.water_grid.w > 0.5 && pfx_trk.d.fog2.w > 0.5 && wt_d > 0.05) {
+                float sl = sqrt(clamp(t_water / max(pfx_trk.d.fog1.w, 1.0), 0.0, 1.0));
+                float nk = 1.0 - clamp(4.0 * (sl - 0.75), 0.0, 1.0);
+                if (nk > 0.0) {
+                    vec3  wdir = wt_refr_ok ? normalize(wt_refr) : rd;
+                    float Ld = min(wt_d, 12.0), ds = Ld * 0.25;
+                    vec3  L0 = scene.sun_color.rgb * scene.sun_color.a * 2.5 * step(0.0, sunDirW.y);
+                    float dvis = 0.0;
+                    vec3  loc = vec3(0.0);
+                    for (int i = 0; i < 4; ++i) {
+                        float s = (float(i) + 0.5) * ds;
+                        vec3  li;
+                        float vi = wfx_light(wpos + wdir * s, li);
+                        dvis += (vi - water_lit) * exp(-ks * s) * ds;
+                        loc  += li * exp(-2.0 * wt_sig * s) * ds;
+                    }
+                    S = max(S + nk * wt_sig * wt_alb * (phase * L0 * dvis + 0.25 * loc), vec3(0.0));
+                }
+            }
             baseTint = S;
         }
 #endif
@@ -1207,17 +1344,92 @@
 #endif
                 vec3 u_nor = water_only ? meshNormal(u_pos.xz)
                                         : calcNormal(u_pos, t_water);
-                vec3 u_mat = getMaterial(u_pos, u_nor);
+                vec3 u_mat;
+                bool u_baked = false;
+#if !defined(VIBE_WATER) && !defined(VIBE_BAKE) && !defined(VIBE_MARCH_ONLY) && !defined(VIBE_LITE)
+                // (2026-11-26, the owner: "foggy water, very sharp edges where the water stops". The bed
+                //  was getMaterial's bare palette - no scan, no stones, often the lawn's green at the
+                //  water level - while the bank beside it is the full ground from the baked ground
+                //  texture: a flat green sheet meeting textured soil in a line. The bed now reads the
+                //  SAME baked texture (its texels under the water are baked too, flagged 0.5:
+                //  rm_bake_fetch_a), so the shallows show the bank's own material running under the
+                //  water.)
+                if (g_bake_t0 > 0.0) {
+                    vec3 bn; float bp0, bp1, bp2;
+                    float gsv = g_gnd_ssdm_h;
+                    u_baked = rm_bake_fetch_a(u_pos, t_water + wt_d, 0.45, bn, u_mat, bp0, bp1, bp2);
+                    g_gnd_ssdm_h = gsv;
+                    if (u_baked) u_nor = normalize(mix(u_nor, bn, 0.7));
+                }
+#endif
+                if (!u_baked) u_mat = getMaterial(u_pos, u_nor);
+#ifndef VIBE_WATER
+                // (no lawn under the water: a green that is grass's turns to silt a few cm down)
+                {
+                    float gr = clamp((u_mat.g - max(u_mat.r, u_mat.b)) * 10.0, 0.0, 1.0) * smoothstep(0.03, 0.25, depth_clean);
+                    float lu = dot(u_mat, vec3(0.2126, 0.7152, 0.0722));
+                    u_mat = mix(u_mat, lu * vec3(1.25, 1.0, 0.70), gr);
+                }
+#endif
 #ifndef VIBE_WATER
                 // The bed is WET: a submerged stone or soil is darker and a little more saturated than
                 // the same dry (water fills its pores - about half the albedo; the reference retints
                 // submerged ground and forces it wet). Dry, the stream's bed of pale stones under 20 cm of
                 // clear water was brighter than the meadow beside it: the stream read as a pale sheet.
+                if (SW_ON(1)) {
+                    // (the reference: below the waterline the wet value is 1 - shore_wet.glsl's wet albedo)
+                    u_mat = mix(u_mat, sw_wet_albedo(u_mat, 1.0), smoothstep(-0.02, 0.06, depth_clean));
+                } else {
                 u_mat = mix(vec3(dot(u_mat, vec3(0.3, 0.5, 0.2))), u_mat, 1.25) * 0.55 * smoothstep(-0.02, 0.06, depth_clean) + u_mat * (1.0 - smoothstep(-0.02, 0.06, depth_clean));
+                }
                 u_mat = max(u_mat, vec3(0.0));
 #endif
                 float bed_spec = 0.0;
-                {
+                float bed_hn = 0.5;          // (the bed's own height 0..1 here, for the growth's hollows)
+                bool  wb_done = false;
+#ifndef VIBE_WATER
+                // THE BED FROM SCANNED SETS (water_bed.glsl, slots 43..46; VIBE_NO_BED_SCAN=1: the
+                // code-made pebbles and weed below): river stones where the water runs fast, silt in
+                // slow and deep water, rock where the bed is steep, the growth scan on the up-facing
+                // bed; the stones' relief marched along the refracted ray from their heights; the
+                // last centimetres at the edge keep the bank's own material (no line at the water).
+                if (wb_on()) {
+                    wb_done = true;
+                    float bfp = max(t_water, 0.05) * 2.0 * scene.viewport.w;      // ~metres per pixel
+                    float below0 = water_y - u_pos.y;
+                    float spd = length(wt_riv_flow);
+                    WbW W = wb_weights(u_pos.xz, spd, below0, u_nor.y, bfp);
+                    vec2 bp = u_pos.xz + u_look;
+                    if (SW_ON(32) && bfp < 0.03 && depth_clean > 0.02) {
+                        vec3  rdw = wt_refr_ok ? normalize(wt_refr) : rd;
+                        const float kHmax = 0.09;
+                        vec2  off = rdw.xz / max(-rdw.y, 0.2) * kHmax;
+                        off *= 1.0 / max(1.0, length(off) / 0.45);
+                        vec2  q0 = bp - off;
+                        float sp = 0.0, fp = kHmax;
+                        for (int i = 1; i <= 5; ++i) {
+                            float s = float(i) / 5.0;
+                            float f = kHmax * (1.0 - s) - wb_height(q0 + off * s, W);
+                            if (f <= 0.0) { bp = q0 + off * mix(sp, s, fp / max(fp - f, 1e-5)); break; }
+                            sp = s; fp = f;
+                        }
+                    }
+                    WbMat M = wb_material(bp, W);
+                    float gM = sw_growth(bp, M.hn, u_nor.y, below0) * (1.0 - 0.7 * smoothstep(0.6, 1.5, spd));      // (fast water scours it)
+                    wb_growth(M, bp, W.lod, gM);
+                    bed_hn = M.hn;
+                    float bk = smoothstep(0.01, 0.15, depth_clean);
+                    u_mat = mix(u_mat, SW_ON(1) ? sw_wet_albedo(M.alb, 1.0) : M.alb * 0.6, bk);
+                    u_nor = normalize(u_nor + vec3(M.tn.x, 0.0, -M.tn.y) * bk);
+                    float rgh = M.rough * 0.6;       // (wet: smoother than the dry scan)
+                    vec3  bh = normalize(sunDirW - rd);
+                    bed_spec = pow(max(dot(u_nor, bh), 0.0), mix(160.0, 12.0, rgh)) * 0.5 * (1.0 - rgh) * water_lit * bk;
+                    float rk;
+                    u_mat = sw_bed_tint(u_mat, below0, wt_alb, rk);
+                    bed_spec *= 1.0 - 0.6 * rk;
+                }
+#endif
+                if (!wb_done) {
                     float bfp = max(t_water, 0.05) * 2.0 * scene.viewport.w;      // ~metres per pixel
                     float bwA = smoothstep(2.0, 5.0, 0.22 / bfp);
                     float bwB = smoothstep(2.0, 5.0, 0.075 / bfp);
@@ -1226,9 +1438,36 @@
                         // further along the line of sight than straight below.
                         vec2  bp = u_pos.xz + u_look;
                         float be = max(0.004, 1.5 * bfp), bid, bk, tmp1, tmp2;
+#ifndef VIBE_WATER
+                        // THE BED'S RELIEF under clear shallows (the reference gets it from displacing
+                        // the bed in its G-buffer; here the bed is shaded in the water pixel): a short
+                        // march of the stones' height along the refracted ray - from where the ray is
+                        // as high as the tallest stone down to the bed's base - so the stones stand up
+                        // and the near ones hide what lies behind them. 5 steps + one linear refine.
+                        if (SW_ON(32) && bwA > 0.2 && depth_clean > 0.02) {
+                            vec3  rdw = wt_refr_ok ? normalize(wt_refr) : rd;
+                            const float kHmax = 0.12;
+                            vec2  off = rdw.xz / max(-rdw.y, 0.2) * (kHmax * bwA);
+                            off *= 1.0 / max(1.0, length(off) / 0.45);
+                            vec2  q0 = bp - off;
+                            float sp = 0.0, fp = kHmax * bwA;               // (the ray's height over the base at the last step)
+                            for (int i = 1; i <= 5; ++i) {
+                                float s = float(i) / 5.0;
+                                float hb = bed_h(q0 + off * s, bwA, bwB, tmp1, tmp2);
+                                float f = kHmax * bwA * (1.0 - s) - hb;
+                                if (f <= 0.0) {
+                                    float sh = mix(sp, s, fp / max(fp - f, 1e-5));
+                                    bp = q0 + off * sh;
+                                    break;
+                                }
+                                sp = s; fp = f;
+                            }
+                        }
+#endif
                         float hR = bed_h(bp + vec2(be, 0.0), bwA, bwB, tmp1, tmp2);
                         float hU = bed_h(bp + vec2(0.0, be), bwA, bwB, tmp1, tmp2);
                         float hC = bed_h(bp, bwA, bwB, bid, bk);
+                        bed_hn = clamp(hC / 0.10, 0.0, 1.0);
                         u_nor = normalize(u_nor + vec3(hC - hR, 0.0, hC - hU) / be * 0.9);
                         // Crevices between the stones are dark; stone tops stay open.
                         float crev = smoothstep(0.0, 0.045, hC) * smoothstep(0.0, 0.45, bk);
@@ -1245,6 +1484,28 @@
                         bed_spec = pow(max(dot(u_nor, bh), 0.0), 90.0) * 0.6 * crev * bwA * water_lit;
                     }
                 }
+#ifndef VIBE_WATER
+                // GROWTH UNDER WATER (the reference's submerged "moss", shore_wet.glsl sw_growth):
+                // weed clumps on the up-facing bed below ~0.35 m, in the stones' hollows first;
+                // then THE BED'S TINT by depth - toward the water's own albedo, its brightness
+                // given back (the extinction does the darkening). The bed is not in the G-buffer,
+                // so the growth's height reaches the displacement only where the ground is seen
+                // directly under water (terrain_rm_main_light.glsl bed_sub).
+                if (!wb_done) {
+                    float below = water_y - u_pos.y;
+                    float gM = sw_growth(u_pos.xz, bed_hn, u_nor.y, below);
+                    if (gM > 0.0) {
+                        float gh;
+                        vec3  gc = sw_growth_col(u_pos.xz, gh);
+                        u_mat = mix(u_mat, gc, gM);
+                        bed_spec *= 1.0 - gM;
+                        u_nor = normalize(mix(u_nor, vec3(0.0, 1.0, 0.0), 0.3 * gM));
+                    }
+                    float rk;
+                    u_mat = sw_bed_tint(u_mat, below, wt_alb, rk);
+                    bed_spec *= 1.0 - 0.6 * rk;        // (the roughness toward a fixed 0.3: a softer highlight)
+                }
+#endif
                 float u_dif = max(dot(u_nor, sunDirW), 0.0) * water_lit;
 #ifndef VIBE_WATER
                 // (the sun reaches the bed through the water too: grey extinction along its refracted path)
@@ -1327,6 +1588,7 @@
         vec3 wt_white = vec3(1.0);
 #endif
         float foam_cover = 0.0;   // how much opaque foam sits on the surface here
+        float dbg_wcap = 0.0, dbg_rip = 0.0, dbg_band0 = 0.0;      // (the white-term debug views below)
         // Shore-foam band: a thin lighter highlight at the very edge
         // of the water/land boundary that fades out within
         // `water_foam_params.x` metres of noise-free depth. Reads as
@@ -1363,8 +1625,12 @@
                 //  gently for metres, they followed the depth contours far out from the bank as
                 //  long thin white arcs - the river keeps the edge line only)
                 band *= max(edge, lap * mix(0.35, 1.0, patchy) * (1.0 - wt_riv_k));
+                // (2026-11-26, the owner: the lace along every bank read as a hard white line. A lake's
+                //  and the river's lace is thin, broken and only where there are ripples to make it:
+                //  half of it in a breeze, none on still water; the sea keeps its surf foam.)
+                band *= mix(0.5 * smoothstep(0.2, 0.8, wt_lake()) * mix(0.25, 1.0, patchy), 1.0, wt_seak);
                 // (the surf's fronts and the foam they leave, the river's streaks: the same lace)
-                band = max(band, max(wt_surf_foam, wt_in_stream ? 0.0 : wt_riv_foam));      // (the stream's white water is its own, below: not this lace)
+                band = max(band, wt_surf_foam);      // (the river's streaks: laced below, carried by the current; the stream's white water is its own, further down)
                 // Foam, not paint: a lace of bubble walls with open water in
                 // between (two sizes, drifting and slowly reshaping). Thick
                 // foam keeps narrow holes, thin foam is mostly holes - so the
@@ -1379,11 +1645,19 @@
                     float lace  = max(wall1, 0.75 * wall2 * mix(0.4, 1.0, wall1 + thick));
                     band = min(band * 1.5, 1.0) * mix(lace, 1.0, 0.10 * thick);
                 }
+                // The river's foam streaks and lines through a lace CARRIED by the current (two phases,
+                // wt_foam_lace) - laced with the shore's slowly drifting lace above, the bubbles stood
+                // still while the streak moved under them.
+                if (!wt_in_stream && wt_riv_foam > 0.002 && wt_riv_k > 0.001) {
+                    vec2 rfl = mix(wt_riv_flow / wt_riv_k, wt_sw.vel, wt_sw.k);
+                    band = max(band, wt_foam_lace(wpos.xz, rfl, wt_riv_foam, wave_t, max(t_water, 0.05) * 2.0 * scene.viewport.w));
+                }
             }
             // River style: blend in the flow-driven foam pattern on top
             // of the shore band. pm_foam_tex was set in the river branch
             // above (1.0 when river style is off, so no effect).
             float flow_foam = clamp(1.0 - pm_foam_tex, 0.0, 1.0);
+            dbg_band0 = band;
             float foam_mix = max(band, flow_foam);
 #ifdef VIBE_WATER
             foam_amt = foam_mix;
@@ -1393,6 +1667,12 @@
 #else /* VIBE_WATER */
             foam_cover = foam_mix * scene.water_foam_color.a * foam_op;
 #endif /* VIBE_WATER */
+            // (the soft edge's foam term, the reference's 1 - e^(-4 gap) over its last 8 cm: no foam
+            //  drawn on the dry edge; the normal, the extinction and the refraction already fade
+            //  through wt_edge - the flattened normal, the depth, the bed mixed in at the end)
+#ifndef RM_NO_CALM
+            foam_cover *= 1.0 - exp(-4.0 * wt_depth / 0.08);
+#endif
             baseTint = mix(baseTint, scene.water_foam_color.rgb * wt_white, foam_cover);
         }
         // Reflection goes over the tinted water; foam is matte, so it
@@ -1417,6 +1697,55 @@
         }
         col_w += scene.sun_color.rgb * scene.sun_color.a * spec *
                   0.8 * water_lit;
+#if !defined(VIBE_WATER) && !defined(VIBE_LITE)
+        // LAMPS GLINTING ON THE WATER (the reference: one local light a pixel, picked by its weight,
+        // the same mirror GGX as the sun, a short visibility test). The lamps the terrain pass has:
+        // scene.lamp_lights (the lanterns and street lamps nearest the eye; the deferred pass's lamp
+        // list, binding 26, is not in this pass's set). Every lamp's glint is weighed; one is picked
+        // with a chance by its weight, and the sum is kept where a short ray (<= 10 m) toward it is
+        // free - an estimate of the shadowed sum whose noise the upscaler averages. The lobe is the
+        // sun's widened by the lamp's own size (0.17 m) as seen from the water.
+        if (scene.water_grid.z > 0.5 && scene.lamp_info.y > 0.5 && wt_edge > 0.01) {
+            vec3  dnx = dFdx(wnor), dny = dFdy(wnor);
+            float a2b = 1.6e-7 + 2.0 * clamp(0.5 * (dot(dnx, dnx) + dot(dny, dny)), 0.0, 0.25) + 0.15 * (0.003 + 0.00512 * wt_W) + 2.0 * wt_fine_var;
+            float NV = max(cosV, 1e-3);
+            vec3  lsum = vec3(0.0);
+            float wsum = 0.0, pick_d = 0.0;
+            vec3  pick_l = vec3(0.0);
+            float rnd = fract(sin(dot(gl_FragCoord.xy + float(scene.rt_flags.w & 63) * vec2(7.13, 3.71), vec2(12.9898, 78.233))) * 43758.5453);
+            for (int li = 0, li_n = int(scene.lamp_info.y + 0.5); li < li_n; ++li) {
+                float lI = scene.lamp_lights[li].w;
+                if (lI < 1e-3) continue;
+                vec3  to = scene.lamp_lights[li].xyz - wpos;
+                float d = length(to);
+                if (d >= 60.0 || d < 0.2) continue;
+                vec3  L = to / d;
+                float NL = max(dot(wnor, L), 0.0);
+                if (NL <= 0.0) continue;
+                vec3  Hl = normalize(L - rd);
+                float a2 = a2b + 0.03 / (d * d);                    // (the lamp's glass, 0.17 m, seen from here)
+                float NH = max(dot(wnor, Hl), 0.0);
+                float dd = 1.0 + (a2 - 1.0) * NH * NH;
+                float D = a2 / (3.14159265 * dd * dd);
+                float al = sqrt(a2);
+                float Vis = 0.5 / max(NL * (NV * (1.0 - al) + al) + NV * (NL * (1.0 - al) + al), 1e-5);
+                float Fh = 0.04 + 0.96 * pow(1.0 - clamp(dot(-rd, Hl), 0.0, 1.0), 5.0);
+                float fall = 1.0 - d / 60.0; fall *= fall;
+                // (the ground's lantern light is lI x fall over ~34 m; a point light's glint goes as
+                //  1 / d^2 - kept finite near the glass)
+                vec3  c = vec3(1.0, 0.62, 0.28) * lI * fall * min(NL * D * Vis * Fh / max(d * d, 1.0), 2000.0);
+                float w = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                if (w <= 0.0) continue;
+                lsum += c;
+                wsum += w;
+                if (rnd * wsum < w) { pick_l = L; pick_d = d; }      // (a running pick: chance w / sum)
+            }
+            if (wsum > 1e-6 && pick_d > 0.0) {
+                bool blocked = any_hit_no_terrain(wpos + vec3(0.0, 0.05, 0.0), pick_l, min(max(pick_d - 0.45, 0.05), 10.0));
+                if (!blocked) col_w += lsum * wt_edge;
+            }
+        }
+#endif
         // Subtle darkening of the surface tint when in shadow.
 #ifdef VIBE_WATER
         col_w *= mix(0.7, 1.0, water_lit);
@@ -1486,6 +1815,7 @@
                 foam_lit = 1.0;
             }
 #endif
+            dbg_wcap = foam;
 #ifdef VIBE_WATER
             foam_amt = max(foam_amt, foam);
 #endif /* VIBE_WATER */
@@ -1504,6 +1834,16 @@
         if ((wt_riv_k > 0.001 && (wt_in_stream || wt_riv_B > 0.02 || wt_obs_foam > 0.01)) || wt_sw_white > 0.001) {
             float white = clamp(max(wt_obs_foam, (wt_riv_k > 0.001 && (wt_in_stream || wt_riv_B > 0.02)) ? wt_riv_foam * (wt_in_stream ? 1.0 : 0.8) : 0.0), 0.0, 1.0);
             white = max(white, wt_sw_white);        // (the shallow-water solver's foam)
+            // (the amount through the foam lace: bubble walls and open water, not smooth opaque
+            //  blobs - terrain_rm_water.glsl wt_foam_lace)
+            {
+                vec2 lfl = wt_riv_k > 0.001 ? wt_riv_flow / wt_riv_k : wt_sw.vel;
+                // (inside the solver's window the lace rides the solver's own velocity - the foam
+                //  it laces is carried by it: a lace on the course's current slid straight over
+                //  foam that bends round the stones)
+                lfl = mix(lfl, wt_sw.vel, wt_sw.k);
+                white = wt_foam_lace(wpos.xz, lfl, white, wave_t, max(t_water, 0.05) * 2.0 * scene.viewport.w);
+            }
             wt_dbg_white = white;
 #ifdef VIBE_WATER
             foam_amt = max(foam_amt, white);
@@ -1518,6 +1858,7 @@
             vec2 fq = wpos.xz * 7.0;
             float fnz = noise2(fq) * 0.6 + noise2(fq * 2.3 + 3.1) * 0.4;
             float rf_amt = rip_w.z * smoothstep(0.25, 0.75, fnz + rip_w.z * 0.5);
+            dbg_rip = rf_amt;
 #ifdef VIBE_WATER
             foam_amt = max(foam_amt, rf_amt * 0.8);
 #endif /* VIBE_WATER */
@@ -1586,6 +1927,14 @@
         if (RMDBG(16777216)) col_w = vec3(clamp(0.5 + 3.0 * wt_dbg_n.x, 0.0, 1.0), clamp(0.5 + 3.0 * wt_dbg_n.y, 0.0, 1.0), 0.0);      // (view: the running water's carried pattern alone - to measure how it moves)
         if (RMDBG(8388608) && RMDBG(16777216)) col_w = wt_dbg3;      // (view: the stream's white by its source - r fast-water foam, g a sheet's rough water, b the streaks)
         if (RMDBG(33554432)) col_w = reflCol;      // (view: what the water mirrors, before the Fresnel)
+        // (view: the stream's water by its course segment - r, g from the segment's number, b how far along it;
+        //  white where it is not the stream: where the water's footprint ends, which segment drew it)
+        if (RMDBG(134217728)) col_w = wt_in_stream ? vec3(fract(floor(wt_st.seg) * 0.37), fract(floor(wt_st.seg) * 0.61), fract(wt_st.seg)) : vec3(1.0);
+        // (the white terms one by one: with 33554432 r the shore band / lace, g the foam cover (band and
+        //  the flow pattern), b the wave-peak / whitecap foam; with 67108864 r the white water (river,
+        //  obstacles, solver), g the solver's foam alone, b the ripple churn)
+        if (RMDBG(134217728) && RMDBG(33554432)) col_w = vec3(dbg_band0, foam_cover, dbg_wcap);
+        if (RMDBG(134217728) && RMDBG(67108864)) col_w = vec3(wt_dbg_white, wt_sw_white, dbg_rip);
         outColor = vec4(col_w, 1.0);
         // The G-buffer of a water pixel: Ray Reconstruction's guides are the refracted bed's (the
         // reference's, WATER_FULL 3.11) - its albedo in rgb (the deferred pass passes material 8's
@@ -1702,4 +2051,5 @@
             outMotion = vec2(0.0);
         }
         return;
+#endif /* ! VIBE_GROUND */
     }

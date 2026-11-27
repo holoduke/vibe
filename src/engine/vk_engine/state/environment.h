@@ -37,6 +37,11 @@ struct VulkanEngine::EnvState {
     // The wind on the water (apply_environment; scene_ubo.glsl water_wind): xy = the way it
     // blows (unit), z = speed m/s, w = the swell's height scale pow(saturate(z / 30), 2.2).
     glm::vec4 water_wind{ 0.944f, 0.330f, 7.0f, 0.00718f };
+    // The wind the OPEN SEA's waves are made by (m/s; environment.cpp water_wind_now): the weather's
+    // wind, but never under a sea breeze that grows with it - the wind over a hundred kilometres of
+    // open water, not the still air in a valley. It sets the FFT cascades (water_sim.cpp) and the
+    // swell's scale (water_wind.w); scene water_sun.z for the sea's whitecaps and glint.
+    float sea_wind = 7.0f;
     // The way the wind direction has carried the water's drifting patterns: the sum of the
     // direction over time (m per m/s of drift; scene_ubo.glsl water_swell.yz). Summed, not
     // direction x clock - that swung the patterns round whenever the wind veered.

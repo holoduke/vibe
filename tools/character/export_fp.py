@@ -22,6 +22,10 @@ import os
 import struct
 import sys
 
+# (2026-11-27) Replaced by make_people.py, which writes these files AND the other people into one
+# atlas with a new layout - running this one alone would leave the atlas and the people apart.
+raise SystemExit("export_fp.py is replaced by tools/character/make_people.py (same arguments: blender -b soldier.blend --python tools/character/make_people.py -- <mh_assets> <assets/character>)")
+
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 OUT = os.path.abspath(argv[0])
 os.makedirs(OUT, exist_ok=True)

@@ -177,6 +177,7 @@ const std::vector<const VulkanEngine::CastleMeshGpu*>& VulkanEngine::mesh_parts_
     if (site_here()) for (const auto& g : site_meshes_) mesh_parts_now_.push_back(&g);
     for (const auto& ch : hw_chunks_) for (const auto& g : ch.second) mesh_parts_now_.push_back(&g);
     rockf_parts(mesh_parts_now_);                                                                            // (rock formations: rock_formations_gpu.cpp)
+    shop_parts(mesh_parts_now_);                                                                             // (the mart's goods: shop_goods.cpp)
     if (globe::current().home) for (const auto& g : jeep_draw_) mesh_parts_now_.push_back(&g);              // (jeep.cpp)       // (a highway's roadside objects: highway_furniture.cpp)
     return mesh_parts_now_;
 }
@@ -185,6 +186,8 @@ void VulkanEngine::destroy_castle_meshes() {
     destroy_sites();
     hw_objects_destroy();
     rockf_destroy();
+    shop_destroy();
+    scree_destroy();
     river_stream::destroy(allocator_);
     destroy_jeep();
     destroy_mesh_parts(castle_meshes_);
@@ -240,16 +243,17 @@ void VulkanEngine::draw_castle_meshes(VkCommandBuffer cmd, const glm::mat4& vp,
             pc.grass_params = glm::vec4(relief - 1.0f, g.sway ? 1.0f : 0.0f,
                                         g.triplanar ? 1.0f : 0.0f, -1.0f);
             if (!depth_only) {
-                pc.color = glm::vec4(tex_on ? g.tint : g.fallback, 1.0f);
+                // (.a: 2 + the kit piece of a rock formation - cube_main_surfaces.glsl reads its bake by it)
+                pc.color = glm::vec4(tex_on ? g.tint : g.fallback, g.rock_piece >= 0 ? 2.0f + float(g.rock_piece) : 1.0f);
                 // Self-lit parts (lantern glass) glow faintly by day, fully at night.
                 pc.emissive = g.emissive;
                 if (g.emissive.a > 0.5f && g.emissive.a < 1.5f && g.emissive.r < 3.5f) {       // (flames burn at full strength by day too)
                     const float night = env_->night >= 0.0f ? env_->night : 1.0f - glm::smoothstep(4.0f, 16.0f, rt_.sun_pitch_deg);
                     pc.emissive = glm::vec4(glm::vec3(g.emissive) * glm::mix(0.12f, 1.0f, night), g.emissive.a);
-                    pc.color = glm::vec4(glm::vec3(pc.color) * glm::mix(0.45f, 1.0f, night), 1.0f);
+                    pc.color = glm::vec4(glm::vec3(pc.color) * glm::mix(0.45f, 1.0f, night), pc.color.a);
                 }
                 // (w -1: the cars are kept clean of the ground paste - cube.frag, ground_paste.glsl)
-                const bool car = !jeep_draw_.empty() && gp >= jeep_draw_.data() && gp < jeep_draw_.data() + jeep_draw_.size();
+                const bool car = (!jeep_draw_.empty() && gp >= jeep_draw_.data() && gp < jeep_draw_.data() + jeep_draw_.size()) || shop_owns(gp);       // (and the mart's goods)
                 pc.tex_params = tex_on
                     ? glm::vec4(static_cast<float>(g.tex_albedo),
                                 static_cast<float>(g.tex_normal), g.uv_scale, car ? -1.0f : 0.0f)

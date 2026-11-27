@@ -14,7 +14,7 @@
 
 namespace vibe::net {
 
-constexpr uint8_t  kProtocolVersion = 10;      // 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in. 5: the NPC world (kMsgNpc). 6: its wire format 4 (styles, runners). 7: shots at NPCs and their cars taken, as events. 8: NpcHit may name somebody who sits in a car, or a car (its driver); a car with people in it can be taken. 9: the NPC world's wire format 5 (a car's speed in thirds of a m/s, its kind and siren in the style bits), NpcCarPush. 10: the NPC world may have 160 agents (the same 27 bytes each), and people have styles 4 (sitting) and 5..7 (standing)
+constexpr uint8_t  kProtocolVersion = 12;      // 12: the NPC world's wire format 6 (what people carry: 28 bytes an agent, acts PutDown / PickUp). 11: the rocket's launch and flight (Event::Rocket). 2: packed state with weapon / input / shot counter, stamped events. 3: cars. 4: the weapon byte also says which car a player rides in. 5: the NPC world (kMsgNpc). 6: its wire format 4 (styles, runners). 7: shots at NPCs and their cars taken, as events. 8: NpcHit may name somebody who sits in a car, or a car (its driver); a car with people in it can be taken. 9: the NPC world's wire format 5 (a car's speed in thirds of a m/s, its kind and siren in the style bits), NpcCarPush. 10: the NPC world may have 160 agents (the same 27 bytes each), and people have styles 4 (sitting) and 5..7 (standing)
 constexpr uint32_t kInterpDelayMs = 100;       // remote players are shown at least this far in the past
 constexpr uint32_t kMaxInterpDelayMs = 500;    // ... and at most this far, however slow the link
 constexpr uint32_t kMaxExtrapolateMs = 250;    // nothing newer: carry on along the last velocity this long at most
@@ -52,7 +52,8 @@ struct Event {
                           NpcHit = 6,        // somebody of the NPC world was shot: to = which (a person - on foot or in a car - or a car: its driver), a = where, b = the shot's direction
                           NpcCarTake = 7,    // a client asks the host for an NPC car that stands: to = which
                           NpcCarTaken = 8,   // that car is a players' car now: from = who gets in, to/a/b = pack_taken()
-                          NpcCarPush = 9 };  // a client's car struck an NPC car: to = which, a = the change of its velocity (m/s, world), b[0] = of its turning (rad/s); the host's to apply
+                          NpcCarPush = 9,    // a client's car struck an NPC car: to = which, a = the change of its velocity (m/s, world), b[0] = of its turning (rad/s); the host's to apply
+                          Rocket = 10 };     // the rocket (rocket.cpp): a[0] = stage (1 counting, 2 flying), a[1] = s left of the count / s of flight, a[2] = the flight's time warp; sent on the button and every 2 s after
     uint8_t  kind;
     uint32_t from;             // Fire: shooter. Hit: shooter. Death: the one who died. Leave: who left
     uint32_t to;               // Hit: victim. Death: killer

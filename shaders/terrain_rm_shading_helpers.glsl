@@ -34,8 +34,9 @@ vec3 calcNormal(vec3 pos, float t) {
     if (t > 1500.0) {
         float e = max(0.0025 * t, 3.0);
         g_rm_fp_only = true;
-        float h0 = terrainM_lod(pos.xz, t);
-        vec3 nf = normalize(vec3(h0 - terrainM_lod(pos.xz + vec2(e, 0.0), t), e, h0 - terrainM_lod(pos.xz + vec2(0.0, e), t)));
+        vec3 h3 = rm_m3_corner(pos.xz, e, t);       // (terrain_rm_heightfield.glsl: one copy of the height in a loop)
+        float h0 = h3.x;
+        vec3 nf = normalize(vec3(h0 - h3.y, e, h0 - h3.z));
         g_rm_fp_only = false;
         return nf;
     }
@@ -89,21 +90,23 @@ vec3 calcNormal(vec3 pos, float t) {
     // (the landscape and the relief on it apart: see terrainB_lod_pw)
     float bC, bR, bU;
     if (RMDBG(2048)) {         // profiling / comparison: the three passes this replaced
-        bC = terrainB_lod_pw(pos.xz, t, tpl);
-        bR = terrainB_lod_pw(pos.xz + vec2(eps, 0.0), t, tpl);
-        bU = terrainB_lod_pw(pos.xz + vec2(0.0, eps), t, tpl);
+        RM_ONE_COPY for (int i = 0; i < 3; ++i) {      // (one copy of the height in the code)
+            float b = terrainB_lod_pw(pos.xz + (i == 1 ? vec2(eps, 0.0) : i == 2 ? vec2(0.0, eps) : vec2(0.0)), t, tpl);
+            if (i == 0) bC = b; else if (i == 1) bR = b; else bU = b;
+        }
     } else {
         bC = terrainB_slope(pos.xz, t, tpl, eps, bR, bU);
     }
     g_nb = vec2(bC - bR, bC - bU) / eps; g_nb_h = bC; g_nb_ok = true;
     if (RMDBG(524288)) g_rm_relief_lite = true;       // profiling: the normal's relief from the main rills alone
     vec3 d3;
-    d3.x = rm_ground_detail(pos.xz, t, bC);
-    if (RMDBG(1048576)) d3.yz = d3.xx;            // profiling: one tap of the relief, not three (its slope is lost)
-    else {
-        d3.y = rm_ground_detail(pos.xz + vec2(eps, 0.0), t, bR);
-        d3.z = rm_ground_detail(pos.xz + vec2(0.0, eps), t, bU);
+    // (the three taps in one loop: one copy of the relief in the compiled shader)
+    d3 = vec3(0.0);
+    RM_ONE_COPY for (int i = 0; i < (RMDBG(1048576) ? 1 : 3); ++i) {
+        float dd = rm_ground_detail(i == 0 ? pos.xz : pos.xz + (i == 1 ? vec2(eps, 0.0) : vec2(0.0, eps)), t, i == 0 ? bC : (i == 1 ? bR : bU));
+        if (i == 0) d3.x = dd; else if (i == 1) d3.y = dd; else d3.z = dd;
     }
+    if (RMDBG(1048576)) d3.yz = d3.xx;            // profiling: one tap of the relief, not three (its slope is lost)
     float hC = bC + d3.x * (1.0 - tpl);
     float hR = bR + d3.y * (1.0 - tpl);
     float hU = bU + d3.z * (1.0 - tpl);
@@ -508,6 +511,7 @@ vec3 getMaterial(vec3 pos, vec3 nor) {
     float snow_aspect = clamp(nor.z * 30.0, -16.0, 16.0);
     float snowMask = smoothstep(80.0 - 20.0 * nz, 90.0, h - snow_aspect)
                    * smoothstep(0.3, 0.7, slope);
+    if (snowMask > 0.001) snowMask *= stream_snow_clear(pos.xz);
     col = mix(col, snow, snowMask);
     float beachMask = smoothstep(2.5, 1.0, h) * smoothstep(0.5, 0.9, slope);
     col = mix(col, sand, rm_band(g_mat_h, 0.42, beachMask));       // (sand in the hollows first)

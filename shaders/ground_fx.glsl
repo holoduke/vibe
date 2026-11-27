@@ -24,6 +24,7 @@ layout(std430, set = 0, binding = GFX_BINDING) readonly buffer GroundFxB {
     vec4 lsd;        // x 1 = on, y z the capture window's corner (world x, z), w its size (m)
     vec4 lsd_fade;   // x fade in from (m), y full by (m), z 1 = VIBE_TEST_DEBRIS (the debris magenta: scatter.frag), w 1 = VIBE_TEST_LSD
     vec4 dec;        // x decals in the list, y tiles across, z tiles down, w 1 = on
+    vec4 rock;       // the rock kit's bake (rock_breaker.glsl): x pieces with a bake, y switches, z the breaker's first layer, w the layers' size
     GfxDecal decals[kGfxMaxDecals];
     uint tiles[];    // per tile 8 words: bit i = decal i reaches the tile
 } gfx;

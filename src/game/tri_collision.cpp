@@ -170,6 +170,67 @@ Contact resolve_capsule(const std::vector<const Mesh*>& meshes, glm::vec3& a, gl
     return out;
 }
 
+Round round_in_box(const glm::vec3& lo, const glm::vec3& hi) {
+    Round o;
+    o.r = 0.5f * std::min(hi.x - lo.x, hi.z - lo.z);
+    const glm::vec2 c(0.5f * (lo.x + hi.x), 0.5f * (lo.z + hi.z));
+    o.a = glm::vec3(c.x, lo.y, c.y);
+    o.b = glm::vec3(c.x, std::max(hi.y - o.r, lo.y), c.y);
+    return o;
+}
+
+void resolve_capsule_rounds(const std::vector<Round>& rounds, glm::vec3& a, glm::vec3& b, float r,
+                            glm::vec3& vel, float walk_ny, Contact& out, int iters) {
+    for (int it = 0; it < iters; ++it) {
+        bool any = false;
+        for (const Round& o : rounds) {
+            const float rr = r + o.r;
+            if (std::abs(a.x - o.a.x) > rr || std::abs(a.z - o.a.z) > rr) continue;
+            if (std::min(a.y, b.y) > o.b.y + rr || std::max(a.y, b.y) < o.a.y - rr) continue;
+            glm::vec3 s, t;
+            const float d2 = segment_segment(a, b, o.a, o.b, s, t);
+            if (d2 >= rr * rr) continue;
+            const float d = std::sqrt(d2);
+            glm::vec3 dir = d > 1e-5f ? (s - t) / d : glm::vec3(0.0f, 1.0f, 0.0f);
+            const float pen = rr - d;
+            glm::vec3 push;
+            if (dir.y >= walk_ny) {
+                push = glm::vec3(0.0f, std::min(pen / dir.y, r), 0.0f);
+                out.ground = true;
+                out.ground_n = dir;
+                if (vel.y < 0.0f) vel.y = 0.0f;
+            } else {
+                // (round the side: along the horizontal only when it is a wall, so a body that
+                //  brushes a stone glides round it and is not lifted or pressed down)
+                if (std::abs(dir.y) < 0.35f) { dir.y = 0.0f; const float l = glm::length(dir); dir = l > 1e-5f ? dir / l : glm::vec3(1.0f, 0.0f, 0.0f); }
+                push = dir * pen;
+                const float vn = glm::dot(vel, dir);
+                if (vn < 0.0f) vel -= dir * vn;
+            }
+            a += push; b += push;
+            out.push += push;
+            out.touched = true;
+            any = true;
+        }
+        if (!any) break;
+    }
+}
+
+bool floor_below_rounds(const std::vector<Round>& rounds, float x, float z, float y_hi, float y_lo,
+                        float walk_ny, float& y, glm::vec3& normal) {
+    bool found = false;
+    for (const Round& o : rounds) {
+        const float dx = x - o.b.x, dz = z - o.b.z, d2 = dx * dx + dz * dz;
+        if (d2 >= o.r * o.r) continue;
+        const float up = std::sqrt(o.r * o.r - d2);
+        if (up < walk_ny * o.r) continue;                         // (too steep there: the side)
+        const float h = o.b.y + up;
+        if (h > y_hi || h < y_lo) continue;
+        if (!found || h > y) { y = h; normal = glm::vec3(dx, up, dz) / o.r; found = true; }
+    }
+    return found;
+}
+
 bool floor_below(const std::vector<const Mesh*>& meshes, float x, float z, float y_hi, float y_lo,
                  float walk_ny, float& y, glm::vec3& normal) {
     bool found = false;

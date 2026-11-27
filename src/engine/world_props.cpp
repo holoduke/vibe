@@ -439,7 +439,7 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
               log::infof("[rock] baked %d at (%.1f, %.1f, %.1f) scale %.2f", arch[size_t(ai)].baked, x, gy, z, s); }
         float he = s * 0.72f;
         cols.push_back({ glm::vec3(x - he, gy - 1.0f, z - he),
-                         glm::vec3(x + he, gy + s * ysq * 1.1f, z + he) });
+                         glm::vec3(x + he, gy + s * ysq * 1.1f, z + he), 1 });      // (round: the walker meets the stone, not the box)
     };
     auto add_rock = [&](float x, float z, float s, float ysq) { add_rock_ex(x, z, s, ysq, -1, 0.12f); };
 
@@ -579,7 +579,7 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
         out.push_back(vi);
         float tr = 0.38f * scale;
         cols.push_back({ glm::vec3(x - tr, h - 0.5f, z - tr),
-                         glm::vec3(x + tr, h + arch[size_t(ai)].height * scale * 0.6f, z + tr) });
+                         glm::vec3(x + tr, h + arch[size_t(ai)].height * scale * 0.6f, z + tr), 1 });
         if (pine) ++st.pines; else ++st.broadleaf;
         if (old_tree) ++st.old;
     }
@@ -682,7 +682,7 @@ std::vector<VegInstance> place_vegetation(const Heightmap& hm, const Road* road,
                             out.push_back(vi);
                             const float tr = 0.38f * scale;
                             cols.push_back({ glm::vec3(x - tr, h - 0.5f, z - tr),
-                                             glm::vec3(x + tr, h + arch[size_t(ai)].height * scale * 0.6f, z + tr) });
+                                             glm::vec3(x + tr, h + arch[size_t(ai)].height * scale * 0.6f, z + tr), 1 });
                             if (pine) ++st.pines; else ++st.broadleaf;
                         }
                     }

@@ -21,6 +21,7 @@ struct VulkanEngine::RockfState {
     struct Level { CastleMeshGpu part; bool made = false; uint32_t last_used = 0; uint32_t tris = 0; };
     std::vector<std::array<Level, rockf::kLevels>> kit;
     std::vector<int8_t> level;                  // per formation: the level it is drawn at now, -1 = not drawn
+    std::vector<uint8_t> traced;                // per formation: 1 = in the ray-tracing structure (near: its shadow, bounce light), 0 = drawn only (far)
     // What is drawn and traced this frame: a copy of the level's part per formation, with its
     // place (the copies share the kit's buffers and own nothing).
     std::vector<CastleMeshGpu> draw;
@@ -35,6 +36,19 @@ struct VulkanEngine::RockfState {
     std::unordered_map<int, std::unique_ptr<tricol::Mesh>> walk;          // formation -> its triangles in the world
     std::vector<const tricol::Mesh*> walk_near;                           // those near the player now
     glm::vec3 cols_at{1e9f};
+    // The tops picture (rockf_tops_poll): where its window stands, what was in it.
+    glm::ivec2 tops_c{INT32_MAX, INT32_MAX};
+    uint64_t   tops_sig = 0;
+    bool       tops_empty = true;
+    std::vector<float> tops_px;
+    // The cliff walls (rock_cliffs.cpp): the rule's ground and keep-out kept from placement; ALL
+    // formations = the fixed list, then the cliff slots (index = fixed count + slot); each slot's
+    // generation as last seen (a change: that formation was given back or replaced).
+    rockf::Env env;
+    bool env_ok = false;
+    std::vector<rockf::Inst> all;
+    std::vector<uint32_t> slot_gen;
+    bool all_dirty = true, force_draw = false;
 };
 
 } // namespace vibe

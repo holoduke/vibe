@@ -307,7 +307,8 @@ void build_stretch(size_t c, const Ground&, std::vector<game::LevelMesh>& out) {
             }
         }
     }
-    const glm::vec3 tints[3] = { glm::vec3(1.32f, 1.27f, 1.18f), glm::vec3(1.05f, 1.03f, 1.00f), glm::vec3(1.50f, 1.40f, 1.22f) };
+    // (2026-11-27, the owner: "the stones are too white, a bit more like sand colour": sandstone tones)
+    const glm::vec3 tints[3] = { glm::vec3(1.30f, 1.10f, 0.82f), glm::vec3(1.04f, 0.92f, 0.74f), glm::vec3(1.42f, 1.19f, 0.86f) };
     for (int k = 0; k < 3; ++k) {
         game::LevelMesh& m = shade[k];
         if (m.idx.empty()) continue;

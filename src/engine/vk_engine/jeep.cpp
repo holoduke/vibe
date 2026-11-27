@@ -14,8 +14,10 @@
 //              near it as boxes: tree trunks, the road's guard rail, buildings.
 //   driving    Use (E) at the door gets in and out. Forward / back: accelerate, brake, and -
 //              once stopped - reverse. Left / right or the stick: steering, lighter at speed.
-//              Jump (space): handbrake. The camera follows behind and a little above; the mouse
-//              or the right stick looks round it, and it swings back behind when left alone.
+//              Jump (space): handbrake - with the throttle from a standstill a burnout. The
+//              camera follows behind and a little above (the middle mouse button: nearer,
+//              farther, from the driver's seat); the right mouse button looks round, and it
+//              swings back when let go.
 //
 // Drawn through the static-mesh path (CastleMeshGpu with a transform), so it is lit, shadowed
 // and ray traced like everything else. Home's chart only (the course lies within it).
@@ -28,6 +30,7 @@
 #include "engine/globe.h"
 #include "engine/vk_engine/state/environment.h"
 #include "engine/siren_synth.h"
+#include "engine/tyre_synth.h"
 #include "engine/vk_engine/state/car_traffic.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -35,6 +38,7 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -73,6 +77,17 @@ struct VulkanEngine::JeepState {
     // itself once the boost has been off for a moment; run dry, it has to come back to a quarter first.
     float turbo = 1.0f, turbo_idle = 0.0f;
     bool  turbo_dry = false, boosting = false;
+    // A burnout (handbrake + throttle from a standstill: jeep_tick): the front brakes hold, the
+    // rear wheels spin. Held until the handbrake is let go - then it launches.
+    bool  burnout = false;
+    float squeal = 0.0f;               // how hard its tyres slide on a hard surface now (jeep_marks): the squeal's level
+    // The view widens a few degrees with speed and with the boost (jeep_fov_extra), and shakes a
+    // little while boosting.
+    float fov_extra = 0.0f, boost_k = 0.0f;
+    // Snow lying on it (winter: scene UBO car_snow, scene_ubo.glsl snow_cover): 1 all there, 0 gone.
+    // Blown off by driving - speed x time, gone after about a minute - and settling again on a
+    // car that stands in falling snow.
+    float snow = 1.0f;
     // Lights: head lights on / off (L), brake lights by the pedal. Where they are (the car's
     // frame), and which drawn parts are lamps (1 head, 2 tail).
     bool      lights_on = false, prev_l = false, prev_mm = false;
@@ -89,7 +104,12 @@ struct VulkanEngine::JeepState {
     glm::vec3 head[2]{ { -0.4f, 0.85f, -1.8f }, { 0.4f, 0.85f, -1.8f } }, tail[2]{ { -0.6f, 0.6f, 1.8f }, { 0.6f, 0.6f, 1.8f } };
     std::vector<uint8_t> kind;
     std::vector<uint8_t> painted;      // which drawn parts carry the body's paint
-    int       cam_mode = 1;            // the view: 0 near, 1 medium, 2 far (middle mouse button)
+    int       cam_mode = 1;            // the view: 0 near, 1 medium, 2 far, 3 from the driver's seat (middle mouse button)
+    // The chase view's own: how much the car tumbles (0 on its wheels .. 1 rolling / in the air)
+    // and the way it is heading on the ground plan, both followed smoothly (jeep_after_sim).
+    float     cam_tumble = 0.0f;
+    glm::vec2 cam_head{0.0f, -1.0f};
+    float     cockpit_yaw = 0.0f, cockpit_pitch = 0.0f;       // the driver's head turned (right mouse button), seat view
     float     cam_h = 1.45f;
     // The driver: where his hips are (the car's frame), how far his legs are stretched
     // (0 an upright seat .. 1), and the steering wheel's rim radius.
@@ -159,6 +179,19 @@ namespace {
 
 constexpr int   kPatchN = 128;
 constexpr float kPatchCell = 2.0f;
+bool g_car_tune_old = false;            // VIBE_CAR_TUNE=old: the handling before 2026-11-27 (init_jeep)
+
+// How much light falls on the ground from the sky by day, in lux, for the sun's height (degrees)
+// and the cloud's share of the direct light (1 clear): a clear noon ~100,000, sunset ~400, the end
+// of civil twilight (-6) ~3, night under 0.3. What a car's head light is measured against.
+float daylight_lux(float sun_deg, float direct) {
+    if (sun_deg > 0.0f) {
+        const float s = std::sin(glm::radians(sun_deg));
+        return 400.0f + (100000.0f * s * (0.25f + 0.75f * direct) + 18000.0f * std::sqrt(s));
+    }
+    if (sun_deg > -6.0f) return 3.0f * std::pow(400.0f / 3.0f, (sun_deg + 6.0f) / 6.0f);
+    return std::max(0.25f, 3.0f * std::pow(0.1f, (-6.0f - sun_deg) / 6.0f));
+}
 
 struct JMat { const char* name; int tex; glm::vec3 tint; float tile; glm::vec3 emissive; bool full; };
 // (-1 painted, -2 bare metal, -3 glass; 29 = the pavilion's woven fabric)
@@ -315,6 +348,21 @@ void VulkanEngine::init_jeep() {
     add("assets/pickup",    { 0.045f, 0.10f, 0.065f }, pickup, -1.0f);
     add("assets/saloon",    { 0.70f, 0.70f, 0.68f }, saloon, -1.0f);
     if (jeep_all_.empty()) return;
+    // HANDLING, 2026-11-27 ("feels a bit sluggish, as if gravity is too low"). Every kind: it
+    // falls at 1.45 g (lands sooner off a crest, floats less), springs a little stiffer and
+    // better damped (the body settles in one swing), the tyres a little more grip, the engine
+    // spins up faster. Steering is quicker in jeep_tick (kSteerRate). Measured with
+    // VIBE_TEST_JEEP_PERF (docs/ARCHITECTURE.md "Handling, 2026-11-27"). VIBE_CAR_TUNE=old: as before.
+    g_car_tune_old = std::getenv("VIBE_CAR_TUNE") && std::string(std::getenv("VIBE_CAR_TUNE")) == "old";
+    if (!g_car_tune_old)
+        for (JeepState* c : jeep_all_) {
+            PhysicsWorld::VehicleDesc& t = c->tune;
+            t.gravity = 14.2f;
+            t.suspension_hz *= 1.12f;
+            t.suspension_damping = std::min(t.suspension_damping + 0.06f, 0.75f);
+            t.grip *= 1.06f;
+            t.engine_inertia *= 0.80f;
+        }
     const int pick = std::getenv("VIBE_TEST_CAR") ? std::atoi(std::getenv("VIBE_TEST_CAR")) : 0;      // (tests: which one is simulated first)
     jeep_ = jeep_all_[size_t(std::clamp(pick, 0, int(jeep_all_.size()) - 1))];
     npc_cars_init();
@@ -453,7 +501,7 @@ void VulkanEngine::destroy_jeep() {
     for (JeepState* c : jeep_all_) delete c;
     if (audio_) for (auto& kv : car_voices_) audio_->engine_stop(kv.second);
     car_voices_.clear();
-    if (cars_x_) { if (audio_) for (auto& kv : cars_x_->sirens) audio_->source_stop(kv.second.src); cars_x_->sirens.clear(); }
+    if (cars_x_) { if (audio_) for (auto& kv : cars_x_->sirens) audio_->source_stop(kv.second.src); cars_x_->sirens.clear(); if (audio_ && cars_x_->squeal_src) audio_->source_stop(cars_x_->squeal_src); cars_x_->squeal_src = 0; }
     for (NpcCar& c : npc_cars_) delete c.car;
     npc_cars_.clear();
     jeep_all_.clear();
@@ -467,6 +515,59 @@ void VulkanEngine::jeep_park(JeepState& J, glm::vec3 pos, float yaw) {
     for (int i = 0; i < 4; ++i) J.st.wheel[i] = J.st.body * glm::translate(glm::mat4(1.0f), J.wheel_pos[i]);
     J.body_prev = J.st.body;
     J.posed = true;
+    jeep_place(J, J.st, 0.0f);
+}
+
+// WHAT A WHEEL STANDS ON at (x, z): the same ground the simulated car's physics is given
+// (jeep_feed_world) - inside the home tile its own heightfield, outside the world's formula with
+// the road's shelf and crown; a paved place (drive_pads_) and the kerb round it; a bridge's deck.
+// Cars that are placed rather than simulated (the NPC traffic, a car standing where it was left,
+// one that is struck and slides) stand on this too, so that they are neither in the road nor
+// over it (2026-11-27: the NPC cars took their height from the course's centre line, which runs
+// in 20 m pieces and knows nothing of a bridge's deck or a region's ground).
+float VulkanEngine::car_ground(float x, float z) const {
+    float gh = (std::abs(x) < 1022.0f && std::abs(z) < 1022.0f) ? sample_terrain_height(x, z) : world_ground_height(x, z, rt_.water_level, 9);
+    for (const DrivePad& p : drive_pads_) {
+        const float dx = std::max({ p.x0 - x, x - p.x1, 0.0f }), dz = std::max({ p.z0 - z, z - p.z1, 0.0f });
+        const float d = std::sqrt(dx * dx + dz * dz);
+        if (d > 1.5f) continue;
+        const float t = glm::clamp((x - p.x0) / std::max(p.x1 - p.x0, 0.01f), 0.0f, 1.0f);
+        gh = std::max(gh, glm::mix(glm::mix(p.h0, p.h1, t), gh, d / 1.5f));
+    }
+    if (float dh = 0.0f; highway::deck(x, z, dh)) gh = std::max(gh, dh);
+    return gh;
+}
+
+// A car standing on that ground at (pos.x, pos.z), turned by `yaw` (as jeep_park): the ground is
+// found under each of its four wheels, and the body lies on the plane through them - height,
+// pitch along it and roll across it. `tilt` (if given) gets (pitch, roll) in radians.
+glm::mat4 VulkanEngine::car_on_ground(const JeepState& J, glm::vec3 pos, float yaw, glm::vec2* tilt) const {
+    const glm::mat4 R = glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+    float h[4];
+    for (int w = 0; w < 4; ++w) {
+        const glm::vec3 p = glm::vec3(R * glm::vec4(J.wheel_pos[w].x, 0.0f, J.wheel_pos[w].z, 0.0f));
+        h[w] = car_ground(pos.x + p.x, pos.z + p.z);
+    }
+    const float zf = 0.5f * (J.wheel_pos[0].z + J.wheel_pos[1].z), zr = 0.5f * (J.wheel_pos[2].z + J.wheel_pos[3].z);
+    const float xl = 0.5f * (J.wheel_pos[0].x + J.wheel_pos[2].x), xr = 0.5f * (J.wheel_pos[1].x + J.wheel_pos[3].x);
+    const float hf = 0.5f * (h[0] + h[1]), hr = 0.5f * (h[2] + h[3]), hl = 0.5f * (h[0] + h[2]), hri = 0.5f * (h[1] + h[3]);
+    const float base = std::max(std::abs(zr - zf), 0.5f), track = std::max(std::abs(xr - xl), 0.5f);
+    // (front is -z: a front higher than the rear is the nose up, a positive turn about +x;
+    //  the right side higher is a positive turn about +z)
+    const float pitch = std::atan2(hf - hr, base), roll = std::atan2(hri - hl, track);
+    // (the height of the plane under the origin)
+    const float y = hr + (hf - hr) * (0.0f - zr) / (zf - zr != 0.0f ? zf - zr : 1.0f) + (hri - hl) * (0.0f - 0.5f * (xl + xr)) / track;
+    if (tilt) *tilt = glm::vec2(pitch, roll);
+    return glm::translate(glm::mat4(1.0f), glm::vec3(pos.x, y, pos.z)) * R *
+           glm::rotate(glm::mat4(1.0f), pitch, glm::vec3(1.0f, 0.0f, 0.0f)) * glm::rotate(glm::mat4(1.0f), roll, glm::vec3(0.0f, 0.0f, 1.0f));
+}
+
+// A car standing on the ground where it is put (car_on_ground), not simulated.
+void VulkanEngine::car_settle(JeepState& J, glm::vec3 pos, float yaw) {
+    jeep_park(J, pos, yaw);
+    J.st.body = car_on_ground(J, pos, yaw);
+    for (int i = 0; i < 4; ++i) J.st.wheel[i] = J.st.body * glm::translate(glm::mat4(1.0f), J.wheel_pos[i]);
+    J.body_prev = J.st.body;
     jeep_place(J, J.st, 0.0f);
 }
 
@@ -632,6 +733,7 @@ bool VulkanEngine::jeep_use() {
         player_.position = out;
         player_.velocity = glm::vec3(0.0f);
         prev_player_position_ = player_.position;
+        J.burnout = false; physics_->vehicle_burnout(false);
         physics_->vehicle_input(0.0f, 0.0f, 0.0f, 1.0f);
         return true;
     }
@@ -687,7 +789,7 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
             p.y = world_ground_height(p.x, p.z, rt_.water_level, 9);
             for (const auto& a : world_.aabbs)                    // (a slab it stands on: the apron)
                 if (p.x > a.min.x && p.x < a.max.x && p.z > a.min.z && p.z < a.max.z && a.max.y > p.y && a.max.y < p.y + 1.0f) p.y = a.max.y;
-            jeep_park(*jeep_all_[i], p, yaw);
+            car_settle(*jeep_all_[i], p, yaw);        // (on its four wheels: the bay may slope)
         }
     }
     cars_collide(dt);                       // (the other cars are solid to this one, and what is struck moves: CARS STRIKE CARS, below)
@@ -703,6 +805,7 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
             if (frame_number_ > 90) { J.driving = true; J.net_mine = true; J.cam_init = false; }
             (void)th; (void)stv;
         }
+        J.burnout = false; physics_->vehicle_burnout(false);
         physics_->vehicle_input(0.0f, 0.0f, 0.0f, 1.0f);
         return;
     }
@@ -710,13 +813,15 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
         GLFWwindow* w = window_->handle();
         const bool l = glfwGetKey(w, GLFW_KEY_L) == GLFW_PRESS;
         if (l && !J.prev_l) J.lights_on = !J.lights_on;
+        if (static const bool tl = std::getenv("VIBE_TEST_JEEP_LIGHTS") != nullptr; tl) J.lights_on = true;      // (tests: the head lights on)
+        if (static const char* ts = std::getenv("VIBE_TEST_CAR_SNOW"); ts && frame_number_ < 100) J.snow = float(std::atof(ts));     // (tests: the share of its snow the driven car starts with)
         J.prev_l = l;
         // (Dusk: a car that is driven puts its lights on by itself - once; after that L is the driver's.)
         if (cars_need_lights()) { if (!J.dusk_lit) { J.dusk_lit = true; J.lights_on = true; } }
-        else J.dusk_lit = false;
+        else { if (J.dusk_lit) J.lights_on = false; J.dusk_lit = false; }      // (and off again by itself at dawn: 2026-11-27, lights put on in the dusk burned all day)
         const bool mm = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
-        if (mm && !J.prev_mm) J.cam_mode = (J.cam_mode + 1) % 3;
-        if (static const char* tv = std::getenv("VIBE_TEST_JEEP_VIEW")) J.cam_mode = std::clamp(std::atoi(tv), 0, 2);       // (tests: which view)
+        if (mm && !J.prev_mm) J.cam_mode = (J.cam_mode + 1) % 4;      // (near, medium, far, from the driver's seat)
+        if (static const char* tv = std::getenv("VIBE_TEST_JEEP_VIEW")) J.cam_mode = std::clamp(std::atoi(tv), 0, 3);       // (tests: which view)
         J.prev_mm = mm;
     }
     float throttle = (in.fwd ? 1.0f : 0.0f) - (in.back ? 1.0f : 0.0f);
@@ -766,10 +871,97 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
                            double(glm::length(glm::cross(J.st.angular_velocity, J.st.velocity)) / 9.81f), double(J.steer));
         }
     }
+    // VIBE_TEST_JEEP_PERF=1: how the car goes, as numbers (tests; with VIBE_TEST_JEEP_AT on a long
+    // straight). From rest: full throttle straight on until 100 km/h ("0-100 in"); then held at
+    // 60 km/h for two seconds; then full lock with the throttle held for four seconds (the most
+    // sideways g, the body's most roll); then the brakes to a stop (100-0 is not measured: from 60).
+    if (static const bool perf = std::getenv("VIBE_TEST_JEEP_PERF") != nullptr; perf) {
+        static int phase = 0; static float t = 0.0f, g_max = 0.0f, roll_max = 0.0f, g_lat = 0.0f, g_sum = 0.0f, g_n = 0.0f; static glm::vec3 v_was(0.0f);
+        {   // (the sideways acceleration: the change of the velocity across the car, smoothed over a fifth of a second)
+            const glm::vec3 a = dt > 0.0f ? (J.st.velocity - v_was) / dt : glm::vec3(0.0f);
+            v_was = J.st.velocity;
+            const glm::vec3 rgt = glm::normalize(glm::vec3(J.st.body[0]));
+            g_lat += (std::abs(glm::dot(a, rgt)) / 9.81f - g_lat) * std::min(1.0f, dt / 0.2f);
+        }
+        const float sp = glm::length(J.st.velocity);
+        t += dt; hand = 0.0f;
+        {   // (along the road, in its right-hand lane, as the autopilot of VIBE_TEST_JEEP=<t>,9 steers: it stays on asphalt)
+            steer_in = 0.0f;
+            glm::vec2 f2(-J.st.body[2].x, -J.st.body[2].z);
+            f2 = glm::length(f2) > 1e-3f ? glm::normalize(f2) : glm::vec2(0.0f, -1.0f);
+            // (VIBE_TEST_JEEP_PERF=2: on open ground - straight on the way it faced at the start, and a steady
+            //  full lock to the right in the third part instead of left and right)
+            static const int pmode = std::atoi(std::getenv("VIBE_TEST_JEEP_PERF"));
+            static glm::vec2 h0(0.0f);
+            if (h0 == glm::vec2(0.0f)) h0 = f2;
+            if (pmode == 2) steer_in = glm::clamp((f2.x * h0.y - f2.y * h0.x) * 4.0f, -1.0f, 1.0f);
+            else {
+            const glm::vec3 p(J.st.body[3]);
+            float d = 0.0f, h = 0.0f, s = 0.0f;
+            static float way = 0.0f;
+            glm::vec3 tp; glm::vec2 td;
+            if (highway::nearest(p.x, p.z, 300.0f, d, h, s)) {
+                if (way == 0.0f && highway::point_along(s, tp, td)) way = glm::dot(td, f2) >= 0.0f ? 1.0f : -1.0f;
+                if (highway::point_along(s + way * (12.0f + sp * 0.9f), tp, td)) {
+                    td *= way;
+                    const glm::vec2 to = glm::normalize(glm::vec2(tp.x, tp.z) + glm::vec2(-td.y, td.x) * 1.8f - glm::vec2(p.x, p.z));
+                    steer_in = glm::clamp((f2.x * to.y - f2.y * to.x) * 3.0f, -1.0f, 1.0f);
+                }
+            }
+            }
+        }
+        if (phase == 0 && std::atoi(std::getenv("VIBE_TEST_JEEP_PERF")) == 2 && sp * 3.6f >= 60.0f) { phase = 1; t = 3.0f; }      // (on open ground: only up to 60, and a second there - the room is the apron's)
+        if (phase == 0) { throttle = 1.0f; if (sp * 3.6f >= 100.0f) { log::infof("[jeep] perf: %s 0-100 km/h in %.2f s", J.dir.c_str(), double(t)); phase = 1; t = 0.0f; } else if (t > 30.0f) { log::infof("[jeep] perf: %s 0-100 not reached in 30 s (%.0f km/h)", J.dir.c_str(), double(sp * 3.6f)); phase = 1; t = 0.0f; } }
+        else if (phase == 1) { throttle = sp * 3.6f > 62.0f ? -0.6f : (sp * 3.6f < 58.0f ? 0.7f : 0.25f); if (t > 4.0f) { phase = 2; t = 0.0f; } }
+        else if (phase == 2) {
+            steer_in = (std::atoi(std::getenv("VIBE_TEST_JEEP_PERF")) == 2 || std::fmod(t, 2.4f) < 1.2f) ? 1.0f : -1.0f; throttle = 0.45f;      // (full lock one way, then the other, 1.2 s each: it stays on the road)
+            if (t > 0.8f) {
+                g_max = std::max(g_max, g_lat); if (t > 2.0f) { g_sum += g_lat; g_n += 1.0f; }
+                roll_max = std::max(roll_max, std::abs(std::asin(glm::clamp(J.st.body[0].y, -1.0f, 1.0f))));
+            }
+            if (t > 4.8f) { log::infof("[jeep] perf: %s full lock %s from 60 km/h: up to %.2f g sideways (%.2f g on average over the last 2.8 s), body roll up to %.1f deg, %.0f km/h at the end", J.dir.c_str(), std::atoi(std::getenv("VIBE_TEST_JEEP_PERF")) == 2 ? "to the right" : "left and right", double(g_max), double(g_sum / std::max(g_n, 1.0f)), double(glm::degrees(roll_max)), double(sp * 3.6f)); phase = 3; t = 0.0f; }
+        } else { throttle = sp > 0.5f ? -1.0f : 0.0f; }
+    }
+    // VIBE_TEST_JEEP_FLIP=<s>: after <s> seconds at the wheel the car is thrown over - a blow up
+    // under its left side (tests: the chase view in a roll, VIBE_LOG_JEEP_CAM).
+    if (static const char* fl = std::getenv("VIBE_TEST_JEEP_FLIP"); fl) {
+        static float ft = 0.0f; static bool done = false;
+        ft += dt;
+        if (!done && ft > float(std::atof(fl))) {
+            done = true;
+            const glm::vec3 com(J.st.body * glm::vec4(0.0f, J.tune.com_height, 0.0f, 1.0f));
+            physics_->vehicle_impulse(glm::vec3(0.0f, J.tune.mass * 6.5f, 0.0f), com - glm::normalize(glm::vec3(J.st.body[0])) * 0.9f);
+            log::infof("[jeep] test: thrown over at %.0f km/h", double(glm::length(J.st.velocity) * 3.6f));
+        }
+    }
     const glm::vec3 fwd = -glm::vec3(J.st.body[2]);
     const float v_fwd
 
  = glm::dot(J.st.velocity, fwd), speed = glm::length(J.st.velocity);
+    // A BURNOUT: the handbrake (space) and the throttle together from a standstill. The front
+    // brakes hold the car, the rear wheels spin under full power - the engine screams, the rear
+    // tyres smoke and squeal (jeep_marks, car_tyre_audio). Let go of the handbrake with the
+    // throttle still down and it launches. Held until the handbrake is let go; at speed the
+    // handbrake is the handbrake (a slide). VIBE_TEST_BURNOUT=<s0>,<s1>: held from s0 to s1
+    // seconds at the wheel, the throttle down until 4 s after (tests).
+    {
+        static const char* tb = std::getenv("VIBE_TEST_BURNOUT");
+        if (tb) {
+            static float s0 = 1.0f, s1 = 4.0f, tt = 0.0f; static bool rd = false;
+            if (!rd) { rd = true; std::sscanf(tb, "%f,%f", &s0, &s1); }
+            tt += dt;
+            hand = (tt > s0 && tt < s1) ? 1.0f : 0.0f; throttle = (tt > s0 && tt < s1 + 4.0f) ? 1.0f : 0.0f; steer_in = 0.0f;
+            if (static float lt = 0.0f; tt - lt > 0.5f && tt < s1 + 5.0f) {
+                lt = tt;
+                log::infof("[jeep] burnout test %.1f s: %s, %.1f km/h, %.0f rpm, gear %d, rear wheels %.1f / %.1f rad/s, front %.1f / %.1f, squeal %.2f, puffs %zu",
+                           double(tt), J.burnout ? "burnout" : "-", double(speed * 3.6f), double(J.st.rpm), J.st.gear, double(J.st.wheel_spin[2]), double(J.st.wheel_spin[3]),
+                           double(J.st.wheel_spin[0]), double(J.st.wheel_spin[1]), double(J.squeal), J.puffs.size());
+            }
+        }
+        const bool want = hand > 0.5f && throttle > 0.05f;
+        if (!want) J.burnout = false;
+        else if (!J.burnout && std::abs(v_fwd) < 3.0f) J.burnout = true;
+    }
     float forward = throttle, brake = 0.0f;
     if (throttle < -0.05f && v_fwd > 1.2f) { brake = -throttle; forward = 0.0f; }             // braking, then reverse
     else if (throttle > 0.05f && v_fwd < -1.2f) { brake = throttle; forward = 0.0f; }
@@ -794,7 +986,9 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
     const float lock = std::atan(wheelbase * a_grip / std::max(speed * speed, 1.0f)) + glm::mix(0.035f, 0.085f, glm::smoothstep(0.55f, 1.4f, held));
     const float limit = glm::clamp(lock / std::max(J.tune.max_steer, 0.1f), 0.05f, 1.0f);
     const float want = steer_in * limit;
-    const float rate = 2.6f / (1.0f + speed / 25.0f) * (std::abs(want) < std::abs(J.steer) ? 2.0f : 1.0f);
+    // (2026-11-27: 3.4 rad/s at a standstill, was 2.6 - "sluggish"; VIBE_CAR_TUNE=old: as it was)
+    const float kSteerRate = g_car_tune_old ? 2.6f : 3.4f;
+    const float rate = kSteerRate / (1.0f + speed / 25.0f) * (std::abs(want) < std::abs(J.steer) ? 2.0f : 1.0f);
     J.steer += glm::clamp(want - J.steer, -dt * rate, dt * rate);
     // Traction control, as every such car has: when a driven wheel spins (its slip past where
     // a tyre grips best) the throttle is eased until it bites again. Without it full throttle
@@ -829,9 +1023,19 @@ void VulkanEngine::jeep_tick(InputFrame& in, float dt) {
             if (J.turbo >= 0.25f) J.turbo_dry = false;
         }
     }
+    physics_->vehicle_burnout(J.burnout);
+    if (J.burnout) {
+        // (all the engine has to the wheels; the brake pedal holds the front ones - the rear's
+        //  brake torque is taken away by vehicle_burnout - and the handbrake is not used)
+        forward = std::clamp(throttle, 0.0f, 1.0f); brake = 1.0f;
+        J.throttle_in = forward;
+        physics_->vehicle_input(forward, J.steer, brake, 0.0f, dt, forward);
+        J.brake_in = 1.0f;
+    } else {
     J.throttle_in = std::abs(forward);       // (what the engine is asked for: its sound's load)
     physics_->vehicle_input(forward, J.steer, brake, hand, dt, forward > 0.0f ? std::max(forward, std::clamp(throttle, 0.0f, 1.0f)) : 0.0f);
     J.brake_in = std::max(brake, hand);
+    }
     // The driver's hands are full: no walking, shooting or jumping.
     in.fwd = in.back = in.left = in.right = in.jump = in.sprint = in.crawl = false;
     in.move_x = in.move_y = 0.0f;
@@ -899,6 +1103,7 @@ void VulkanEngine::jeep_place(JeepState& J, const PhysicsWorld::VehicleState& pr
 // After the physics ticks: where everything is now - the parts, the driver, the camera.
 void VulkanEngine::jeep_after_sim(float dt) {
     jeep_ride_place();
+    cars_snow_tick(dt);
     if (!jeep_ || !jeep_->spawned || !physics_) return;
     JeepState& J = *jeep_;
     J.body_prev = J.st.body;
@@ -959,21 +1164,88 @@ void VulkanEngine::jeep_after_sim(float dt) {
                    int(J.st.wheel_contact[0]), int(J.st.wheel_contact[1]), int(J.st.wheel_contact[2]), int(J.st.wheel_contact[3]), double(B[1].y), int(J.driving),
                    double(J.st.suspension[0]), double(J.st.suspension[1]), double(J.st.suspension[2]), double(J.st.suspension[3]),
                    double(world_ground_height(B[3].x, B[3].z, rt_.water_level, 9)));
-    if (!J.driving) return;
+    if (!J.driving) { J.fov_extra = 0.0f; J.boost_k = 0.0f; return; }
     // -- the camera: behind and above, looking where the player looks --
     // The player's yaw / pitch are the camera's (the mouse and the stick turn them as on
     // foot). Left alone for a moment while moving, the view swings back behind the jeep.
-    const glm::vec3 pos(B[3]);
     const glm::vec3 f = -glm::vec3(B[2]);
-    const float car_yaw = std::atan2(f.x, -f.z);
     const float speed = glm::length(J.st.velocity);
+    // -- the speed in the view: a few degrees wider with speed, more with the boost, eased in
+    //    and out; and a small shake while the boost pushes (jeep_fov_extra, world_render.cpp) --
+    {
+        J.boost_k += ((J.boosting ? 1.0f : 0.0f) - J.boost_k) * (1.0f - std::exp(-dt * (J.boosting ? 4.0f : 1.6f)));
+        static const float kFovSpeed = std::getenv("VIBE_CAR_FOV_SPEED") ? float(std::atof(std::getenv("VIBE_CAR_FOV_SPEED"))) : 5.0f;
+        static const float kFovBoost = std::getenv("VIBE_CAR_FOV_BOOST") ? float(std::atof(std::getenv("VIBE_CAR_FOV_BOOST"))) : 6.0f;
+        const float want = kFovSpeed * glm::smoothstep(15.0f, 55.0f, speed) + kFovBoost * J.boost_k;
+        J.fov_extra += (want - J.fov_extra) * (1.0f - std::exp(-dt * (want > J.fov_extra ? 3.0f : 1.5f)));
+    }
+    static const bool kCamOld = std::getenv("VIBE_CAR_CAM_OLD") != nullptr;      // (tests: the chase view as before 2026-11-27 - no easing in a roll, the origin as pivot)
+    // HOW MUCH IT TUMBLES (0 on its wheels .. 1 rolling or in the air): on its side, wheels off
+    // the ground, turning fast about a level axis. The chase view goes soft while it does - it
+    // keeps the horizon and its own heading and lets the car turn over in front of it, instead
+    // of following every turn of the body (2026-11-27: "when the car is rolling the camera moves
+    // erratically"). On its wheels again it closes in as before.
+    {
+        int down = 0;
+        for (int w = 0; w < 4; ++w) down += J.st.wheel_contact[w] ? 1 : 0;
+        const glm::vec3 av = J.st.angular_velocity;
+        const float level_spin = glm::length(glm::vec2(av.x, av.z));
+        const float want = std::max({ 1.0f - glm::smoothstep(0.55f, 0.85f, B[1].y), down == 0 ? glm::smoothstep(0.2f, 0.6f, std::abs(J.st.velocity.y) + level_spin * 0.3f) : 0.0f,
+                                       glm::smoothstep(1.2f, 3.0f, level_spin) });
+        J.cam_tumble += (want - J.cam_tumble) * (1.0f - std::exp(-dt * (want > J.cam_tumble ? 10.0f : 1.6f)));
+        if (kCamOld) J.cam_tumble = 0.0f;
+    }
+    // The way it heads on the ground plan: its nose flattened - but a nose that points at the sky
+    // or the ground says nothing of that, so then the way it moves, and with neither the last one.
+    {
+        glm::vec2 h(f.x, f.z);
+        const float hl = glm::length(h);
+        glm::vec2 want = J.cam_head;
+        const glm::vec2 vel(J.st.velocity.x, J.st.velocity.z);
+        const float w_nose = glm::smoothstep(0.25f, 0.6f, hl) * (1.0f - J.cam_tumble), w_vel = glm::smoothstep(2.0f, 6.0f, glm::length(vel)) * J.cam_tumble;
+        if (w_nose + w_vel > 1e-3f) {
+            glm::vec2 m = (hl > 1e-3f ? h / hl : glm::vec2(0.0f)) * w_nose + (glm::length(vel) > 1e-3f ? glm::normalize(vel) : glm::vec2(0.0f)) * w_vel;
+            if (glm::length(m) > 1e-3f) want = glm::normalize(m);
+        }
+        if (!J.cam_init) J.cam_head = want;
+        J.cam_head = glm::normalize(J.cam_head + (want - J.cam_head) * std::min(1.0f, dt * glm::mix(12.0f, 2.0f, J.cam_tumble)) + glm::vec2(1e-6f, 0.0f));
+    }
+    const float car_yaw = kCamOld ? std::atan2(f.x, -f.z) : std::atan2(J.cam_head.x, -J.cam_head.y);
     // As in other driving games: the view stays behind the jeep by itself and turns with it,
     // a little late. Holding the right mouse button the mouse looks round the jeep; let go
     // and the view comes back behind it.
     static float last_yaw = 0.0f, last_pitch = 0.0f;
     const float kPitch = -0.20f;
-    if (!J.cam_init) { J.cam_yaw = car_yaw; J.orbit_yaw = J.orbit_pitch = 0.0f; last_yaw = player_.yaw; last_pitch = player_.pitch; }
+    if (!J.cam_init) { J.cam_yaw = car_yaw; J.orbit_yaw = J.orbit_pitch = 0.0f; J.cockpit_yaw = J.cockpit_pitch = 0.0f; last_yaw = player_.yaw; last_pitch = player_.pitch; }
     const float d_yaw = std::remainder(player_.yaw - last_yaw, 6.2831853f), d_pitch = player_.pitch - last_pitch;
+    // FROM THE DRIVER'S SEAT (the fourth view of the middle mouse button): the eye where the
+    // driver's is, looking along the car - with its pitch, not its roll (the horizon stays level).
+    // The right mouse button held: the head turns where the mouse says, as far as a neck turns
+    // (110 degrees each way, 60 up, 45 down); let go and it comes back to the road.
+    // VIBE_COCKPIT_EYE=<x>,<y>,<z>: where the eye is from the driver's hips (the car's frame).
+    if (J.cam_mode == 3) {
+        if (J.look_held) {
+            J.cockpit_yaw = glm::clamp(J.cockpit_yaw + d_yaw, -1.92f, 1.92f);
+            J.cockpit_pitch = glm::clamp(J.cockpit_pitch + d_pitch, -0.78f, 1.05f);
+        } else {
+            J.cockpit_yaw -= J.cockpit_yaw * std::min(1.0f, dt * 5.0f);
+            J.cockpit_pitch -= J.cockpit_pitch * std::min(1.0f, dt * 5.0f);
+        }
+        static const glm::vec3 kEye = [] { glm::vec3 e(0.0f, 0.70f, -0.10f); if (const char* s = std::getenv("VIBE_COCKPIT_EYE")) std::sscanf(s, "%f,%f,%f", &e.x, &e.y, &e.z); return e; }();
+        const glm::vec3 eye(B * glm::vec4(J.hip + kEye, 1.0f));
+        const float car_pitch = std::asin(glm::clamp(f.y / std::max(glm::length(f), 1e-3f), -1.0f, 1.0f));
+        const float yaw_now = std::atan2(f.x, -f.z);
+        player_.yaw = yaw_now + J.cockpit_yaw;
+        player_.pitch = glm::clamp(car_pitch * 0.85f + J.cockpit_pitch - 0.04f, -1.45f, 1.45f);
+        last_yaw = player_.yaw; last_pitch = player_.pitch;
+        J.cam_yaw = car_yaw; J.orbit_yaw = J.orbit_pitch = 0.0f;
+        J.cam_pos = eye; J.cam_init = true;
+        player_.position = eye - (player_.eye_position() - player_.position);
+        player_.velocity = J.st.velocity;
+        player_.on_ground = true;
+        prev_player_position_ = player_.position;
+        return;
+    }
     if (J.look_held) {
         J.orbit_yaw = std::remainder(J.orbit_yaw + d_yaw, 6.2831853f);
         J.orbit_pitch = glm::clamp(J.orbit_pitch + d_pitch, -0.9f, 0.55f);
@@ -981,7 +1253,8 @@ void VulkanEngine::jeep_after_sim(float dt) {
         J.orbit_yaw -= J.orbit_yaw * std::min(1.0f, dt * 7.0f);
         J.orbit_pitch -= J.orbit_pitch * std::min(1.0f, dt * 7.0f);
     }
-    J.cam_yaw += std::remainder(car_yaw - J.cam_yaw, 6.2831853f) * std::min(1.0f, dt * 4.5f);
+    // (it swings round after the car more slowly while the car tumbles)
+    J.cam_yaw += std::remainder(car_yaw - J.cam_yaw, 6.2831853f) * std::min(1.0f, dt * glm::mix(4.5f, 1.2f, J.cam_tumble));
     // (VIBE_TEST_JEEP_ORBIT=<yaw>[,<pitch>][,<distance>]: the view held round the car - tests)
     if (static const char* ob = std::getenv("VIBE_TEST_JEEP_ORBIT")) { float d = J.cam_dist; std::sscanf(ob, "%f,%f,%f", &J.orbit_yaw, &J.orbit_pitch, &d); J.cam_dist = d; }
     player_.yaw = J.cam_yaw + J.orbit_yaw;
@@ -990,24 +1263,59 @@ void VulkanEngine::jeep_after_sim(float dt) {
     const glm::vec3 look(std::sin(player_.yaw) * std::cos(player_.pitch), std::sin(player_.pitch), -std::cos(player_.yaw) * std::cos(player_.pitch));
     // (2026-11-23: nearer than the first 4.3 / 6.4 / 10.5; 2.7 / 3.3 / 4.0 was too near)
     static const float kDist[3] = { 3.6f, 4.6f, 5.8f }, kHigh[3] = { 1.30f, 1.45f, 1.65f };
-    if (!std::getenv("VIBE_TEST_JEEP_ORBIT")) J.cam_dist += (kDist[J.cam_mode] - J.cam_dist) * std::min(1.0f, dt * 6.0f);
-    J.cam_h += (kHigh[J.cam_mode] - J.cam_h) * std::min(1.0f, dt * 6.0f);
-    const float dist = J.cam_dist + std::min(speed * 0.03f, 1.2f);                  // (it drops back a little at speed)
-    const glm::vec3 pivot = pos + glm::vec3(0.0f, J.cam_h, 0.0f);
+    const int vm = std::clamp(J.cam_mode, 0, 2);
+    if (!std::getenv("VIBE_TEST_JEEP_ORBIT")) J.cam_dist += (kDist[vm] - J.cam_dist) * std::min(1.0f, dt * 6.0f);
+    J.cam_h += (kHigh[vm] - J.cam_h) * std::min(1.0f, dt * 6.0f);
+    const float dist = J.cam_dist + std::min(speed * 0.03f, 1.2f) + 0.9f * J.cam_tumble;      // (it drops back a little at speed, and while it tumbles)
+    // (the pivot is the car's centre of mass, not its origin on the ground line: rolling over,
+    //  the origin swings round the centre by a metre and the view swung with it)
+    const glm::vec3 com(B * glm::vec4(0.0f, J.tune.com_height, 0.5f * (J.wheel_pos[0].z + J.wheel_pos[2].z), 1.0f));
+    const glm::vec3 pivot = kCamOld ? glm::vec3(B[3]) + glm::vec3(0.0f, J.cam_h, 0.0f) : com + glm::vec3(0.0f, J.cam_h - J.tune.com_height, 0.0f);
     glm::vec3 want = pivot - look * dist;
-    // (not under the ground, and not through a hill between it and the jeep)
-    for (int k = 0; k < 2; ++k) {
-        const float g = std::max(world_ground_height(want.x, want.z, rt_.water_level, 9), rt_.water_level) + 0.6f;
-        if (want.y < g) want.y = g;
+    // (not under the ground, and not through a hill between it and the car: the ground along
+    //  the line from the car to the view is looked at, and the view goes up over it)
+    {
+        const float wl = rt_.water_level;
+        for (int k = 1; k <= 4; ++k) {
+            const float s = float(k) / 4.0f;
+            const glm::vec3 q = glm::mix(pivot, want, s);
+            const float g = std::max(world_ground_height(q.x, q.z, wl, 7), wl) + 0.6f;
+            if (q.y < g) want.y += (g - q.y) / s;
+        }
     }
     if (!J.cam_init) { J.cam_pos = want; J.cam_init = true; }
     // (the position follows stiffly: a lagging camera on a bumpy road makes one seasick.
     //  It first goes along with the car, then closes what is left: following alone it hung
     //  back by speed x a time that depends on the frame's length, so with uneven frames
-    //  the car moved back and forth in the picture)
-    J.cam_pos += J.st.velocity * dt;
-    J.cam_pos += (want - J.cam_pos) * (1.0f - std::exp(-dt * 14.0f));
-    player_.position = J.cam_pos - (player_.eye_position() - player_.position);
+    //  the car moved back and forth in the picture. While it tumbles it follows softly - the
+    //  centre's own speed, and a slower closing.)
+    {
+        J.cam_pos += J.st.velocity * dt;          // (the body's velocity is its centre of mass's)
+        J.cam_pos += (want - J.cam_pos) * (1.0f - std::exp(-dt * glm::mix(14.0f, 3.5f, J.cam_tumble)));
+        const float g = std::max(world_ground_height(J.cam_pos.x, J.cam_pos.z, rt_.water_level, 7), rt_.water_level) + 0.45f;
+        if (J.cam_pos.y < g) J.cam_pos.y = g;
+    }
+    // (VIBE_LOG_JEEP_CAM=1: how calmly the chase view moves - every 30 frames the most it turned in
+    //  one frame and the most its place jumped in one frame beyond what the car's own motion explains)
+    if (static const bool lc = std::getenv("VIBE_LOG_JEEP_CAM") != nullptr; lc) {
+        static glm::vec3 last_p(0.0f), last_look(0.0f, 0.0f, -1.0f); static float turn_max = 0.0f, jump_max = 0.0f; static bool has = false;
+        if (has) {
+            turn_max = std::max(turn_max, glm::degrees(std::acos(glm::clamp(glm::dot(look, last_look), -1.0f, 1.0f))));
+            jump_max = std::max(jump_max, glm::length((J.cam_pos - last_p) - J.st.velocity * dt));
+        }
+        last_p = J.cam_pos; last_look = look; has = true;
+        if (frame_number_ % 30 == 0) {
+            log::infof("[jeep] cam: tumble %.2f, up %.2f, most turn in a frame %.2f deg, most jump %.3f m, %.1f m/s", double(J.cam_tumble), double(B[1].y), double(turn_max), double(jump_max), double(speed));
+            turn_max = jump_max = 0.0f;
+        }
+    }
+    // (the boost: a small shake, a few centimetres, of the view - not of the aim)
+    glm::vec3 shake(0.0f);
+    if (J.boost_k > 0.01f) {
+        const float t = float(frame_clock_s_);
+        shake = glm::vec3(std::sin(t * 37.0f) + 0.6f * std::sin(t * 71.0f + 1.3f), std::sin(t * 43.0f + 0.7f) + 0.5f * std::sin(t * 83.0f), 0.0f) * (0.012f * J.boost_k * glm::smoothstep(8.0f, 30.0f, speed));
+    }
+    player_.position = J.cam_pos + shake - (player_.eye_position() - player_.position);
     player_.velocity = J.st.velocity;
     player_.on_ground = true;
     prev_player_position_ = player_.position;
@@ -1116,6 +1424,9 @@ void VulkanEngine::jeep_marks(JeepState& J, float dt) {
     const glm::mat4& B = J.st.body;
     const glm::vec3 up = glm::normalize(glm::vec3(B[1]));
     const glm::vec3 com(B * glm::vec4(0.0f, J.tune.com_height, 0.0f, 1.0f));
+    J.squeal = 0.0f;
+    // (a burnout: the rear tyres spin on the spot - thick smoke that hangs, three times as much, bigger puffs)
+    const bool burn = J.burnout && J.driving;
     for (int w = 0; w < 4; ++w) {
         const glm::vec3 c(J.st.wheel[w][3]);
         const glm::vec3 axle = glm::normalize(glm::vec3(J.st.wheel[w][0]));
@@ -1131,6 +1442,7 @@ void VulkanEngine::jeep_marks(JeepState& J, float dt) {
         if (J.st.wheel_contact[w]) k = std::max(glm::smoothstep(0.19f, 0.34f, ang) * glm::smoothstep(1.2f, 2.5f, v_lat), glm::smoothstep(2.2f, 7.0f, slip));
         const glm::vec3 g = c - up * (J.wheel_radius - 0.035f);
         const bool hard = highway::distance(g.x, g.z) < 5.7f || g.y > world_ground_height(g.x, g.z, rt_.water_level, 9) + 0.15f;
+        if (hard) J.squeal = std::max(J.squeal, glm::smoothstep(0.12f, 0.7f, k));
         auto& M = J.marks[w];
         if (k > 0.08f && hard) {
             if (M.empty() || M.back().a <= 0.0f || glm::distance(M.back().p, g) > 0.30f)
@@ -1138,10 +1450,10 @@ void VulkanEngine::jeep_marks(JeepState& J, float dt) {
         } else if (!M.empty() && M.back().a > 0.0f) M.push_back({ g, axle * (0.42f * J.wheel_width), 0.0f });
         if (M.size() > 700) M.erase(M.begin(), M.begin() + 150);
         if (k > 0.22f) {
-            J.puff_acc += dt * k * (hard ? 22.0f : 16.0f);
+            J.puff_acc += dt * k * (hard ? 22.0f : 16.0f) * (burn && w >= 2 ? 3.0f : 1.0f);
             while (J.puff_acc >= 1.0f) {
                 J.puff_acc -= 1.0f;
-                if (J.puffs.size() >= 220) break;
+                if (J.puffs.size() >= (burn ? 480u : 220u)) break;
                 JeepState::Puff p;
                 p.p = g + up * 0.12f + glm::vec3(rnd01() - 0.5f, 0.0f, rnd01() - 0.5f) * 0.25f;
                 p.v = v * 0.18f + glm::vec3(rnd01() - 0.5f, 0.9f + rnd01() * 0.8f, rnd01() - 0.5f) * 0.9f;
@@ -1149,6 +1461,7 @@ void VulkanEngine::jeep_marks(JeepState& J, float dt) {
                 p.age = 0.0f; p.life = (hard ? 1.9f : 1.2f) * (0.7f + 0.6f * rnd01());
                 p.size = 0.28f + 0.2f * rnd01(); p.seed = rnd01() * 40.0f;
                 p.bright = hard ? 1.0f : 0.62f;
+                if (burn && w >= 2) { p.life *= 1.7f; p.size += 0.15f; p.v.y += 0.35f; }
                 J.puffs.push_back(p);
             }
         }
@@ -1188,10 +1501,24 @@ bool VulkanEngine::jeep_headlights(glm::vec4& pos, glm::vec4& dir, glm::vec4& co
     const glm::mat4& B = best->st.body;
     const glm::vec3 f = -glm::normalize(glm::vec3(B[2])), up = glm::normalize(glm::vec3(B[1]));
     const glm::vec3 p = glm::vec3(B * glm::vec4(0.5f * (best->head[0] + best->head[1]), 1.0f)) + f * 0.12f;
-    // Dipped: aimed a little down, wide and flat as far as one cone can be.
+    // Dipped: aimed a little down, wide and flat - the shape is the shader's (scene_ubo.glsl
+    // car_beam_pattern: a sharp cut-off just under the horizon, a wide spread, the brightest
+    // part just under the cut), asked for by col.w > 1.5.
     pos = glm::vec4(p, 270.0f);        // (was 95 m: the road was dark a few car lengths ahead)
-    dir = glm::vec4(glm::normalize(f - up * 0.030f), std::cos(glm::radians(34.0f)));
-    col = glm::vec4(glm::vec3(1.0f, 0.96f, 0.88f) * 52.0f, std::cos(glm::radians(13.0f)));
+    dir = glm::vec4(glm::normalize(f - up * 0.030f), std::cos(glm::radians(40.0f)));
+    // HOW BRIGHT AGAINST THE DAY (2026-11-27: "car lights during the day are way too bright, it
+    // lights the entire grass field"). A dipped beam puts some tens of lux on the road ahead;
+    // the sun and sky put 400 lux on the ground at sunset and up to 100,000 at noon. The beam's
+    // strength here (52) is the one that looks right at night, where the eye is adapted to a
+    // few lux; against the day it is that times (a few lux / the day's lux): at noon about a
+    // ten-thousandth - not seen on the ground at all, as by day; at sunset a hundredth; in the
+    // dusk it comes up to full. VIBE_CAR_BEAM_DAY=1: as before (full strength by day too).
+    static const bool kOld = std::getenv("VIBE_CAR_BEAM_DAY") != nullptr;
+    const float sun_deg = env_->sun_elev > -999.0f ? env_->sun_elev : rt_.sun_pitch_deg;
+    const float k = kOld ? 1.0f : std::min(1.0f, 5.0f / daylight_lux(sun_deg, env_->cloud_direct));
+    if (k < 2e-4f) return false;       // (nothing that would show: the slot is the torch's again)
+    col = glm::vec4(glm::vec3(1.0f, 0.96f, 0.88f) * (52.0f * k), kOld ? std::cos(glm::radians(13.0f)) : 2.0f);
+    if (kOld) dir.w = std::cos(glm::radians(34.0f));
     return true;
 }
 
@@ -1214,7 +1541,7 @@ bool VulkanEngine::jeep_heat_sources(std::vector<glm::vec4>& out, glm::vec3 eye)
     for (const JeepState* c : jeep_all_) add(c);
     for (const NpcCar& nc : npc_cars_)
         if (nc.agent >= 0 && std::find(jeep_all_.begin(), jeep_all_.end(), nc.car) == jeep_all_.end()) add(nc.car);
-    return jeep_ && jeep_->driving && jeep_->cam_mode == 0;
+    return jeep_ && jeep_->driving && jeep_->cam_mode == 3;       // (2026-11-27: the seat view; the near chase view was taken for the cabin before there was one)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1261,7 +1588,7 @@ void VulkanEngine::car_audio_tick(float dt) {
     struct Cand { JeepState* J; float d; bool wanted = true; float rank = 0.0f; const NpcCar* npc = nullptr; };
     std::vector<Cand> cand;
     const bool home = globe::current().home;
-    const bool cabin = jeep_ && jeep_->driving && jeep_->cam_mode == 0;
+    const bool cabin = jeep_ && jeep_->driving && jeep_->cam_mode == 3;      // (the view from the driver's seat)
     sound_env_tick(dt, cabin);
     if (home && !off) {
         for (JeepState* c : jeep_all_) {
@@ -1369,6 +1696,7 @@ void VulkanEngine::car_audio_tick(float dt) {
                        J.dir.substr(J.dir.find_last_of("/\\") + 1).c_str(), double(heard.distance), double(heard.gain), heard.gain > 0.0f ? 20.0 * std::log10(double(heard.gain)) : -999.0,
                        double(heard.cutoff_hz), double(heard.doppler), double(heard.pan), double(heard.send), double(heard.occlusion), double(sp), c.wanted ? "" : " (let go)");
     }
+    car_tyre_audio(dt);         // (the driven car's tyres: a burnout, a slide)
     siren_audio_tick(dt);       // (the sirens: sources of the same spatialiser, after the listener's speed and the surroundings are set)
     // VIBE_LOG_AUDIO_COST=1: every 300 frames, what the mixer cost since the last line (all the
     // engine's sound, on the audio thread) and how many engine voices and loops were in it.
@@ -1393,6 +1721,8 @@ bool VulkanEngine::cars_need_lights() const {
 void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puffs, std::vector<Vertex>& glow, glm::vec3 eye, glm::vec3 R, glm::vec3 U) {
     if (!globe::current().home) return;
     static const bool smoke_old = std::getenv("VIBE_TEST_SMOKE_OLD") != nullptr;       // (tests: as it was, to compare)
+    // (a head lamp's glow by day: a third of the night's - a lamp that is on shows, it does not blaze; the dusk brings it up)
+    const float head_day = 0.35f + 0.65f * glm::smoothstep(0.001f, 0.2f, std::min(1.0f, 5.0f / daylight_lux(env_->sun_elev > -999.0f ? env_->sun_elev : rt_.sun_pitch_deg, env_->cloud_direct)));
     auto flare = [&](glm::vec3 p, glm::vec3 out, float r, glm::vec3 tint) {
         const glm::vec3 to = eye - p;
         const float d = glm::length(to);
@@ -1413,7 +1743,7 @@ void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puff
         const glm::vec3 f = -glm::normalize(glm::vec3(B[2]));
         const bool braking = c->braking();
         for (int s = 0; s < 2; ++s) {
-            if (c->lights_on) flare(glm::vec3(B * glm::vec4(c->head[s], 1.0f)) + f * 0.05f, f, 0.42f, glm::vec3(1.0f, 0.95f, 0.85f) * 2.4f);
+            if (c->lights_on) flare(glm::vec3(B * glm::vec4(c->head[s], 1.0f)) + f * 0.05f, f, 0.42f, glm::vec3(1.0f, 0.95f, 0.85f) * 2.4f * head_day);
             if (c->lights_on || braking)
                 flare(glm::vec3(B * glm::vec4(c->tail[s], 1.0f)) - f * 0.05f, -f, braking ? 0.30f : 0.20f, glm::vec3(1.0f, 0.06f, 0.04f) * (braking ? 2.6f : 0.9f));
         }
@@ -1429,7 +1759,7 @@ void VulkanEngine::jeep_fx(std::vector<Vertex>& marks, std::vector<Vertex>& puff
             const glm::vec3 f = -glm::normalize(glm::vec3(B[2]));
             const bool braking = c->braking();
             for (int s = 0; s < 2; ++s) {
-                if (c->lights_on) flare(glm::vec3(B * glm::vec4(c->head[s], 1.0f)) + f * 0.05f, f, 0.42f, glm::vec3(1.0f, 0.95f, 0.85f) * 2.4f);
+                if (c->lights_on) flare(glm::vec3(B * glm::vec4(c->head[s], 1.0f)) + f * 0.05f, f, 0.42f, glm::vec3(1.0f, 0.95f, 0.85f) * 2.4f * head_day);
                 if (c->boosting) flare(glm::vec3(B * glm::vec4(c->tail[s], 1.0f)) - f * 0.08f, -f, 0.36f, glm::vec3(0.35f, 0.65f, 1.0f) * 3.2f);
                 if (c->lights_on || braking)
                     flare(glm::vec3(B * glm::vec4(c->tail[s], 1.0f)) - f * 0.05f, -f, braking ? 0.30f : 0.20f, glm::vec3(1.0f, 0.06f, 0.04f) * (braking ? 2.6f : 0.9f));
@@ -1764,6 +2094,95 @@ void VulkanEngine::jeep_grass_press(glm::vec4 out[4]) const {
 }
 
 
+// THE VIEW WIDENS WITH SPEED (2026-11-27, "nicer effect when using boost, a little more FOV"):
+// degrees added to the view's angle while driving - up to VIBE_CAR_FOV_SPEED (5) with the speed
+// from 55 to 200 km/h, VIBE_CAR_FOV_BOOST (6) more while the boost pushes; eased in over a
+// third of a second, out over two thirds (jeep_after_sim). Not in the seat view.
+float VulkanEngine::jeep_fov_extra() const {
+    if (!jeep_ || !jeep_->driving || !jeep_->spawned) return 0.0f;
+    return jeep_->cam_mode == 3 ? 0.4f * jeep_->fov_extra : jeep_->fov_extra;
+}
+
+// SNOW ON THE CARS (2026-11-27). Winter lays snow on what faces up (scene_ubo.glsl snow_cover),
+// cars included; a car that drives loses it: the share it still carries goes down by speed x
+// time - 60 s at 72 km/h, never faster than 15 s - and comes back on one that stands in falling
+// snow over about three minutes (by how hard it snows). The NPC cars' in npc_cars_place.
+void VulkanEngine::cars_snow_tick(float dt) {
+    if (dt <= 0.0f) return;
+    for (JeepState* c : jeep_all_) {
+        if (!c->posed) continue;
+        const float sp = glm::length(c->st.velocity);
+        if (sp > 1.0f) c->snow = std::max(0.0f, c->snow - dt * std::min(sp / 20.0f, 4.0f) / 60.0f);
+        else if (env_->snowfall > 0.05f) c->snow = std::min(1.0f, c->snow + dt * env_->snowfall / 180.0f);
+    }
+}
+
+// The cars' snow for the scene block (scene_ubo.glsl car_snow): the eight posed cars nearest the
+// eye within 300 m, two vec4 each - [0] xy the middle (world xz), zw the way it faces; [1] x half
+// its width, y half its length, z its floor's height (world y), w the share of its snow left.
+// An unused slot has x = 0 (the shader stops there). A car not in the list keeps all its snow.
+void VulkanEngine::jeep_snow_fill(glm::vec4 out[16]) const {
+    for (int i = 0; i < 16; ++i) out[i] = glm::vec4(0.0f);
+    if (!globe::current().home) return;
+    const glm::vec3 eye = player_.eye_position();
+    std::vector<std::pair<float, const JeepState*>> near_;
+    auto add = [&](const JeepState* c) {
+        if (!c || !c->posed || c->snow > 0.995f) return;
+        const float d = glm::distance(glm::vec3(c->st.body[3]), eye);
+        if (d < 300.0f) near_.push_back({ d, c });
+    };
+    for (const JeepState* c : jeep_all_) add(c);
+    for (const NpcCar& nc : npc_cars_) if (nc.agent >= 0) add(nc.car);
+    std::sort(near_.begin(), near_.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (size_t k = 0; k < near_.size() && k < 8; ++k) {
+        const JeepState* c = near_[k].second;
+        const glm::mat4& B = c->st.body;
+        glm::vec2 f(-B[2].x, -B[2].z);
+        const float fl = glm::length(f);
+        f = fl > 1e-3f ? f / fl : glm::vec2(0.0f, -1.0f);
+        float hx, z0, z1; c->body_box(hx, z0, z1);
+        const glm::vec3 mid(B * glm::vec4(0.0f, 0.0f, 0.5f * (z0 + z1), 1.0f));
+        out[2 * k]     = glm::vec4(mid.x, mid.z, f.x, f.y);
+        out[2 * k + 1] = glm::vec4(hx + 0.05f, 0.5f * (z1 - z0) + 0.05f, mid.y, c->snow);
+    }
+}
+
+// THE TYRES SQUEAL (2026-11-27): one sound for the car that is driven - a burnout, a slide, a
+// locked wheel on a hard surface (jeep_marks' `squeal`, 0..1). A source of the spatialiser at the
+// car (audio.h "SOUND IN SPACE"); its loudness follows the slide, its pitch rises with it. The
+// sound is made in code (engine/tyre_synth.h: 6 s that loop), written to
+// assets/sounds/tyre_squeal.wav the first time it is needed. VIBE_NO_TYRE_SQUEAL=1: none.
+void VulkanEngine::car_tyre_audio(float dt) {
+    if (!cars_x_ || !audio_ || !audio_->ok() || dt <= 0.0f) return;
+    CarTrafficState& X = *cars_x_;
+    static const bool off = std::getenv("VIBE_NO_TYRE_SQUEAL") != nullptr;
+    const bool on = !off && jeep_ && jeep_->driving && jeep_->spawned && globe::current().home;
+    float want = on ? jeep_->squeal : 0.0f;
+    X.squeal_level += (want - X.squeal_level) * (1.0f - std::exp(-dt * (want > X.squeal_level ? 14.0f : 6.0f)));
+    if (X.squeal_level < 0.01f && want < 0.01f) {
+        if (X.squeal_src) { audio_->source_stop(X.squeal_src); X.squeal_src = 0; }
+        return;
+    }
+    if (!X.squeal_src) {
+        if (X.squeal_clip == 0) {
+            const char* path = "assets/sounds/tyre_squeal.wav";
+            std::error_code ec;
+            const bool made = !std::filesystem::exists(path, ec) && tyre::write_squeal_wav(path);
+            X.squeal_clip = std::filesystem::exists(path, ec) ? 1 : -1;
+            if (X.squeal_clip > 0) audio_->load_clip(ClipID::TyreSqueal, path);
+            log::infof("[jeep] the tyres' squeal: %s%s", X.squeal_clip > 0 ? path : "could not be written - none", made ? " (made now: engine/tyre_synth.h)" : "");
+        }
+        if (X.squeal_clip <= 0 || !on) return;
+        X.squeal_src = audio_->source_start(ClipID::TyreSqueal, sound_space::Shape{ 6.0f, 9000.0f }, true, 0.0f);
+        if (!X.squeal_src) return;
+    }
+    if (!jeep_) return;
+    const JeepState& J = *jeep_;
+    const glm::vec3 pos = glm::vec3(J.st.body * glm::vec4(0.0f, 0.3f, 0.5f * (J.wheel_pos[2].z + J.wheel_pos[0].z), 1.0f));
+    const float lvl = 0.55f * X.squeal_level;
+    audio_->source_update(X.squeal_src, pos, J.st.velocity, lvl, 0.92f + 0.16f * X.squeal_level);
+}
+
 // The cars as obstacles for a player on foot (props.cpp, the per-tick collision list). The
 // player collides with axis-aligned boxes only and a car stands at any angle, so each of a
 // car's collision boxes is cut along its length into pieces about as long as it is wide, and
@@ -1802,6 +2221,22 @@ void VulkanEngine::jeep_player_colliders(std::vector<collision::AABB>& out) cons
             }
         }
     }
+}
+
+// The cars that have no physics of their own, as bodies for what has fallen beside them
+// (ragdoll.cpp corpse_obstacles; PhysicsWorld::corpse_cars_set): the parked ones and the NPC
+// engine's, within `reach` of `at`. Not the driven one (it is a vehicle of the physics already).
+void VulkanEngine::corpse_car_bodies(glm::vec3 at, float reach, std::vector<PhysicsWorld::CorpseCar>& out) const {
+    auto add = [&](const JeepState& J, uint32_t key) {
+        if (!J.loaded || !J.posed || J.boxes.empty()) return;
+        const glm::vec3 c(J.st.body[3]);
+        if (std::abs(c.x - at.x) > reach || std::abs(c.z - at.z) > reach || std::abs(c.y - at.y) > reach) return;
+        out.push_back({ key, J.st.body, J.boxes.data(), J.boxes.size() });
+    };
+    for (size_t i = 0; i < jeep_all_.size(); ++i)
+        if (!(jeep_all_[i]->driving && jeep_all_[i] == jeep_)) add(*jeep_all_[i], 1u + uint32_t(i));
+    for (size_t i = 0; i < npc_cars_.size(); ++i)
+        if (npc_cars_[i].agent >= 0) add(*npc_cars_[i].car, 1000u + uint32_t(i));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1915,7 +2350,7 @@ bool VulkanEngine::npc_car_make(const net::NpcCarTaken& t) {
     J->door_want[0] = J->door_want[1] = 0.0f; J->door_hold = 0.0f;
     // (upright where it stands: the lean and dip it was shown with are the NPC engine's)
     const glm::vec3 p(t.p[0], t.p[1], t.p[2]);
-    jeep_park(*J, p, t.yaw);
+    car_settle(*J, p, t.yaw);                                  // (on its four wheels where it stands: not at the NPC engine's height, which is the lane's)
     jeep_all_.push_back(J);
     npc_taken_.push_back(t);
     // (a copy of the host's world still has the car for a moment: not shown twice)
@@ -2112,6 +2547,7 @@ void VulkanEngine::npc_cars_place(const std::vector<npc::View>& views, float dt)
         if (pick < 0) break;                                   // (all lent: the far ones are not shown)
         NpcCar& c = npc_cars_[size_t(pick)];
         c.agent = w.second; c.roll = 0.0f; c.pitch = 0.0f; c.steer = 0.0f; c.last = v.pos; c.last_yaw = v.yaw; c.last_speed = v.speed;
+        c.car->snow = (v.pose == npc::Pose::Drive && std::abs(v.speed) > 2.0f) ? 0.0f : 1.0f;      // (one that is under way has driven its snow off)
         c.car->posed = false;                                  // (it jumps there: no motion from where it was)
         const glm::vec3 paint = (v.style & npc::kCarPolice) ? kPolicePaint : kPaint[(v.look / 3) % 10];      // (the military police: olive drab)
         for (size_t i = 0; i < c.car->painted.size(); ++i)
@@ -2148,8 +2584,35 @@ void VulkanEngine::npc_cars_place(const std::vector<npc::View>& views, float dt)
         if (jump) { c.lean = 0.0f; c.dip = 0.0f; }
         const PhysicsWorld::VehicleState prev = J.st;
         // (the wheels stand on the road; the body turns about a line a little above the axles)
-        const glm::mat4 G = glm::translate(glm::mat4(1.0f), v.pos) * glm::rotate(glm::mat4(1.0f), -v.yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
-                            glm::rotate(glm::mat4(1.0f), c.pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+        // ON ITS FOUR WHEELS (2026-11-27, "NPC cars a bit inside the road or floating"): the NPC
+        // engine's height is its lane's centre line - points 20 m apart, eased toward a point ahead,
+        // and nothing of a bridge's deck, a paved place, the road's crown where it overtakes, a region's
+        // ground; nor is it moved when the car is struck or stands with its driver shot. So within
+        // kFitReach of the eye the body is laid on the ground under its four wheels (car_on_ground:
+        // the same ground the simulated car stands on), height, pitch and roll; beyond, the lane's
+        // height and the pitch of its way are good enough. VIBE_NPC_CAR_LANE_Y=1: as before everywhere.
+        static const bool kLaneY = std::getenv("VIBE_NPC_CAR_LANE_Y") != nullptr;
+        constexpr float kFitReach = 320.0f;
+        glm::mat4 G;
+        if (!kLaneY && glm::distance(v.pos, eye) < kFitReach) {
+            static double fit_us = 0.0; static int fit_n = 0;
+            const auto t0 = std::chrono::steady_clock::now();
+            G = car_on_ground(J, v.pos, -v.yaw);
+            fit_us += double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count()) * 1e-3; ++fit_n;
+            if (static const bool lg = std::getenv("VIBE_LOG_NPC_GROUND") != nullptr; lg && frame_number_ % 300 == 0 && fit_n > 0) {
+                log::infof("[npc-cars] on the ground: %d cars laid in 300 frames, %.1f us each, %.3f ms a frame; car %d at (%.1f, %.2f, %.1f): the lane said y %.2f, the wheels' ground %.2f",
+                           fit_n, fit_us / fit_n, fit_us / 300.0 * 1e-3, c.agent, double(v.pos.x), double(G[3].y), double(v.pos.z), double(v.pos.y), double(G[3].y));
+                fit_us = 0.0; fit_n = 0;
+            }
+        } else {
+            G = glm::translate(glm::mat4(1.0f), v.pos) * glm::rotate(glm::mat4(1.0f), -v.yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                glm::rotate(glm::mat4(1.0f), c.pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+        }
+        {   // (its snow: blown off as it drives, settling again where it stands in falling snow - cars_snow_tick)
+            const float sp = std::abs(v.speed);
+            if (sp > 1.0f) J.snow = std::max(0.0f, J.snow - dt * std::min(sp / 20.0f, 4.0f) / 60.0f);
+            else if (env_->snowfall > 0.05f) J.snow = std::min(1.0f, J.snow + dt * env_->snowfall / 180.0f);
+        }
         const glm::vec3 pivot(0.0f, J.wheel_radius + 0.15f, 0.0f);
         const glm::mat4 B = G * glm::translate(glm::mat4(1.0f), pivot) * glm::rotate(glm::mat4(1.0f), c.lean, glm::vec3(0.0f, 0.0f, 1.0f)) *
                             glm::rotate(glm::mat4(1.0f), c.dip, glm::vec3(1.0f, 0.0f, 0.0f)) * glm::translate(glm::mat4(1.0f), -pivot);
@@ -2430,6 +2893,12 @@ void VulkanEngine::cars_collide(float dt) {
         const glm::mat4 M = glm::translate(glm::mat4(1.0f), p1) * glm::rotate(glm::mat4(1.0f), S.w * dt, glm::vec3(0.0f, 1.0f, 0.0f)) * glm::translate(glm::mat4(1.0f), -p0);
         c->st.body = M * prev.body;
         for (int w = 0; w < 4; ++w) c->st.wheel[w] = M * prev.wheel[w];
+        {   // (on its four wheels where it has slid to: 2026-11-27 - it kept the tilt and the height of where
+            //  it was struck, and over a dip or a rise it hung in the air or sank in)
+            const glm::vec3 fw = -glm::vec3(c->st.body[2]);
+            c->st.body = car_on_ground(*c, p1, std::atan2(-fw.x, -fw.z));
+            for (int w = 0; w < 4; ++w) c->st.wheel[w] = c->st.body * glm::translate(glm::mat4(1.0f), c->wheel_pos[w]);
+        }
         c->st.velocity = glm::vec3(S.v.x, 0.0f, S.v.y);
         c->st.angular_velocity = glm::vec3(0.0f, S.w, 0.0f);
         c->body_prev = prev.body;

@@ -33,7 +33,7 @@ layout(set = 0, binding = 1) uniform SwParams {
     vec4 obs[kObs];     // x z, radius, w: < 5e4 the centre's height of a round stone; else a wall (pier)
     vec4 body_a[kBodies];   // x z, radius, w the bottom's height
     vec4 body_b[kBodies];   // xyz velocity; w: >= 0 a body (its top's height), < 0 a splash of -w m
-    vec4 flow[kFlowN * kFlowN];   // xy the course's current (m/s), z 1 = sea (not the solver's)
+    vec4 flow[kFlowN * kFlowN];   // xy the course's current (m/s), z 1 = sea (not the solver's), w the level under the datum (m)
 } P;
 
 layout(set = 0, binding = 2, rgba32f) uniform image2D u_s0;     // h, u, v, the height at the frame's start
@@ -102,7 +102,7 @@ void mode_inputs(ivec2 c, uint li) {
         if (d2 >= o.z * o.z) continue;
         b = max(b, o.w >= 5e4 ? g + 1e3 : o.w + sqrt(o.z * o.z - d2));
     }
-    float top = max(scene.water_params.y, wc_stream_surface(wp));
+    float top = max(scene.water_params.y + fl.w, wc_stream_surface(wp));      // (fl.w: the level under the datum here - water_fx.cpp water_level_off; the river falls to the sea)
     bool is_on = home && fl.z < 0.5 && scene.water_params.x > 0.5;
     imageStore(u_in, c, uvec4(floatBitsToUint(b), floatBitsToUint(is_on ? top : -1e9), packHalf2x16(fl.xy), floatBitsToUint(g)));
 }
@@ -139,6 +139,29 @@ vec4 f_bil(int which, vec2 p) {
     vec2 t = f - vec2(i);
     vec4 a = f_load(which, i), b = f_load(which, i + ivec2(1, 0)), c = f_load(which, i + ivec2(0, 1)), d = f_load(which, i + ivec2(1, 1));
     return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+// The foam's backtrace, Catmull-Rom over 4 x 4 cells, clamped to the 2 x 2 cells round the point
+// (monotone: no new extremes). A bilinear backtrace at the river's 0.05 - 0.2 cells a step smears a
+// line of foam by about a(1 - a) dx^2 each step - over the 5 s a foam line lives (500 steps) a
+// metre either side: lines behind the stones were a fog. The cubic keeps them a few cells wide.
+vec4 f_cr(int which, vec2 p) {
+    vec2 f = p - 0.5;
+    ivec2 i = ivec2(floor(f));
+    vec2 t = f - vec2(i), t2 = t * t, t3 = t2 * t;
+    vec2 wa = -0.5 * t3 + t2 - 0.5 * t, wb = 1.5 * t3 - 2.5 * t2 + 1.0, wc = -1.5 * t3 + 2.0 * t2 + 0.5 * t, wd = 0.5 * t3 - 0.5 * t2;
+    vec4 acc = vec4(0.0), mn = vec4(1e9), mx = vec4(-1e9);
+    for (int j = 0; j < 4; ++j) {
+        float wy = j == 0 ? wa.y : (j == 1 ? wb.y : (j == 2 ? wc.y : wd.y));
+        vec4 row = vec4(0.0);
+        for (int k = 0; k < 4; ++k) {
+            float wx = k == 0 ? wa.x : (k == 1 ? wb.x : (k == 2 ? wc.x : wd.x));
+            vec4 v = f_load(which, i + ivec2(k - 1, j - 1));
+            row += v * wx;
+            if (j == 1 || j == 2) { if (k == 1 || k == 2) { mn = min(mn, v); mx = max(mx, v); } }
+        }
+        acc += row * wy;
+    }
+    return clamp(acc, mn, mx);
 }
 float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 437.545); }       // (the reference's, x 0.1 of the cell index outside)
 uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
@@ -232,7 +255,7 @@ void mode_height(ivec2 c) {
     float e = edge_e(c);
     hn += e * e * e * (I.top - hn);
     imageStore(u_s1, c, vec4(hn, vel, hprev));
-    imageStore(u_f1, c, vec4(F.xy, 0.0, 1.0));
+    imageStore(u_f1, c, vec4(F.xyz, 1.0));
 }
 
 // ---------------------------------------------------------------- mode 2: pressure, foam, bodies
@@ -310,9 +333,31 @@ void mode_pressure(ivec2 c) {
 
     // ---- foam: advected, decaying 2 % a step, made where fast shallow water meets higher bed
     //      downstream (in front of and round stones), on crests, and where the surface rises suddenly
-    vec4 Fq = f_bil(1, q);
+    vec4 Fq = f_cr(1, q);
     float f = Fq.x;
     float sp = length(vel);
+    // The DRIFT foam (z, ours; pc.f.x = 1 on, VIBE_NO_FOAM_DRIFT=1 off): the reference's foam lives
+    // ~1 s (2 % a step) - at 1 - 2 m/s a trail of a metre or two; its long lines are its quarter of a
+    // million particles. Here a second advected channel that lives ~6 s (half-life 5.8 s) carries
+    // them: fed by the white water (f) and by the flanks and shear behind stones and piers at any
+    // depth, carried by the solver's own velocity (it splits round the next stone, collects in the
+    // eddies and along the shear lines), thinning out downstream.
+    float z = Fq.z;
+    bool drift_on = pc.f.x > 0.5;
+    float curl = (vN[1].y - vN[0].y) / (2.0 * dx) - (vN[3].x - vN[2].x) / (2.0 * dx);
+    if (drift_on) {
+        z = max(0.0, z * (1.0 - 0.0012) - 0.00004 - (d < 0.03 ? 0.004 : 0.0));
+        // (a flank: a dry neighbour that is a stamped stone / pier, not a bank - the bed there stands
+        //  over the unstamped ground)
+        bool flank = false;
+        for (int k = 0; k < 4; ++k) {
+            In J = in_at(c + off[k]);
+            if (bN[k] > h && J.b > J.g + 0.08) flank = true;
+        }
+        float spd = smoothstep(0.12, 0.6, sp);      // (the stone bridge pool runs at 0.3 - 0.6 m/s: its piers still draw lines)
+        float src = (flank ? 0.012 * spd : 0.0) + 0.005 * S1f(clamp((abs(curl) - 0.5) / 2.0, 0.0, 1.0)) * spd;
+        z += src * step(0.02, d);
+    } else z = 0.0;
     f = max(0.0, f - 0.02 * max(0.2, f) * (1.0 + 0.2 * S1f(clamp((sp - 2.0) / 0.8, 0.0, 1.0))));
     float O = 0.0, Cc = 0.0, Gm = 0.0, lap = 0.0, dhF = 0.0, rise = 0.0;
     if (sp > 0.001 || dot(I.tgt, I.tgt) > 0.01) {
@@ -332,7 +377,7 @@ void mode_pressure(ivec2 c) {
         float spa = max(sp, length(va));
         float fast = clamp((spa - 0.65) / 0.35, 0.0, 1.0);
         vec2 vd = va / max(length(va), 1e-4);
-        float bdown = max(in_at(c + ivec2(round(vd))).b, in_at(c + ivec2(round(2.0 * vd))).b);
+        float bdown = max(max(in_at(c + ivec2(round(vd))).b, in_at(c + ivec2(round(2.0 * vd))).b), in_at(c + ivec2(round(3.0 * vd))).b);
         rise = clamp((bdown - bp - 0.03) / 0.12, 0.0, 1.0);
         float deep = clamp((dq - 0.15) / 0.65, 0.0, 1.0);
         float rfr = rough * fast * rise;
@@ -342,6 +387,7 @@ void mode_pressure(ivec2 c) {
             atomicMax(C.stat[5], uint(clamp(dq, 0.0, 50.0) * 100.0));
         }
         O = 0.8 * spa * S1f(rough) * S1f(fast) * S1f(rise) * (1.0 - S1f(deep)) * rfr * rfr;
+        O *= step(0.02, d);         // (only on water: the dry upstream slope of a stone passed every test and took all the foam)
         vec2 gh = vec2(hN[1] - hN[0], hN[3] - hN[2]) / (2.0 * dx);
         Gm = length(gh);
         lap = (hN[0] + hN[1] + hN[2] + hN[3] - 4.0 * h) / (dx * dx);
@@ -353,6 +399,16 @@ void mode_pressure(ivec2 c) {
              (1.0 - 0.98 * S1f(clamp((follow - 0.05) / 0.3, 0.0, 1.0)));
         float add = min(0.01 * SG, Cc) + min(0.008, O / (O + 1.0));
         if (Gm > 0.0637 / dx && 100.0 * dhF > 4.0 && lap > -4.0) add += 1.28 * max(0.0, dhF);     // (a sudden rise > 4 cm: a jump, an impact)
+        if (P.part.w > 0.5 && Gm > 0.0637 / dx && 100.0 * dhF > 4.0 && lap > -4.0) atomicAdd(C.stat[6], 1u);      // (VIBE_LOG_SOLVER: cells the sudden-rise source fires in)
+        // Two more sources (ours: the reference's visible white water round a rock is mostly its
+        // quarter of a million particles; ours are fewer and fainter): the PILLOW - fast water piled
+        // up over the authored top against a stone - and the WAKE's shear - eddies shed at its
+        // sides (the curl of the velocity) - so the white water builds up in front and is carried
+        // off in lines and spirals behind.
+        float pile = S1f(clamp((h - I.top - 0.02) / 0.08, 0.0, 1.0)) * fast * step(0.02, d) * rise;      // (against a stone: higher bed ahead. Without it the water standing over a falling authored top - the stream's end over the river at the confluence - was a "pillow" in 9000 cells: a solid white sheet)
+        float shear = S1f(clamp((abs(curl) - 1.5) / 3.0, 0.0, 1.0)) * fast * step(0.02, d) * (1.0 - S1f(deep));
+        add += 0.012 * pile + 0.006 * shear;
+        if (P.part.w > 0.5) { if (pile > 0.5) atomicAdd(C.stat[7], 1u); }
         f += min(add, 0.02);
     }
     float fy = max(0.0, F.y - 0.03);
@@ -408,9 +464,10 @@ void mode_pressure(ivec2 c) {
         if (O > 0.004) atomicAdd(C.stat[2], 1u);
     }
     imageStore(u_s0, c, vec4(h, vel, S.w));
-    imageStore(u_f0, c, vec4(f, fy, 0.0, 1.0));
+    if (drift_on) z = clamp(z + 0.004 * f, 0.0, 1.0);       // (the white water feeds the long-lived lines)
+    imageStore(u_f0, c, vec4(f, fy, z, 1.0));
     bool wet = h - bp > 0.001;
-    imageStore(u_r, c, vec4(wet ? h - I.top : 0.0, wet ? vel : vec2(0.0), max(f, fy)));
+    imageStore(u_r, c, vec4(wet ? h - I.top : 0.0, wet ? vel : vec2(0.0), max(max(f, fy), 0.45 * z)));
 
     // ---- new foam particles (the reference's rule; in the inner half, on frames a global random lets through)
     if (P.misc.w > 0.5 && P.part.z > 0.5 && pc.m.y == 0 && wet) {
@@ -425,6 +482,13 @@ void mode_pressure(ivec2 c) {
                      clamp(100.0 * min(0.01 * SG, Cc), 0.0, 1.0) > 0.98 + 1.5 * r2 ||
                      (Gm > 0.0637 / dx && 100.0 * dhF > 4.0 && lap < -4.0);
             if (A) spawn(wp, h, vel, 2.0 * clamp(0.5 + 0.5 * ww * u01(pcg(seed + 2u)), 0.0, 1.0), seed, int(5.0 * ww));
+        }
+        // (ours: flecks off the drift foam - every frame, not behind the global random - that live
+        //  4 - 7 s riding the flow, so they gather in the eddies and along the foam lines; a life
+        //  over 2 s marks them for the draw: full size from the start)
+        if (ww > 0.25 && z > 0.15) {
+            uint sd = pcg(uint(c.x) * 83492791u ^ uint(c.y) * 2654435761u ^ floatBitsToUint(P.misc.z));
+            if (u01(sd) < 0.02 * z * ww) spawn(wp, h, vel, 4.0 + 3.0 * u01(pcg(sd + 5u)), sd, 1);
         }
     }
 }

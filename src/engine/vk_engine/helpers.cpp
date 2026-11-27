@@ -61,7 +61,9 @@ static_assert(sizeof(PushConstants) == 256, "push constant layout");
 //     → 11584 (water_fft, water_fft_L, water_rip, water_flags: the wind sea's cascades, the ripple field, water_sim.cpp).
 //     → 11600 (water_sun: the sun's disc through the clouds, for the water's glints).
 //     → 11632 (water_sw, water_sw2: the shallow-water solver's window, water_solver.cpp).
-static_assert(sizeof(SceneUBO) == 11632, "scene ubo layout");
+//     → 11664 (water_wet, water_grid: materials at the water, the sea's grid, water_wet.cpp).
+//     → 13072 (stream_box[8] -> [16], stream_pts[64] -> [128]: a longer stream with tighter bends).
+static_assert(sizeof(SceneUBO) == 13072, "scene ubo layout");
 
 RtFuncs g_rt;
 

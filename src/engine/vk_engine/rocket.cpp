@@ -27,6 +27,7 @@
 #include "engine/terrain.h"
 #include "engine/highway.h"
 #include "engine/globe.h"
+#include "engine/net/net.h"
 #include "game/level.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -217,6 +218,127 @@ void VulkanEngine::place_house(game::Level& lv, glm::vec3 hp) {
 
 }
 
+// The control house's way in (2026-11-27, "the little house is in the grass. make a walk path to
+// it. and a concrete slab."): a concrete slab before the door's steps, flush with the ground, and
+// a worn gravel path from it curving out to the pad's apron - the nearest paving - ending in a
+// step up onto the apron's edge. Both follow the ground (the same 9-octave height the grass bake
+// stands on) a few centimetres over it; the grass is cut out under them (home_grass_cuts_, read
+// by the near-field bake: veg_stream.cpp) and nothing else needs to know. `hp`: place_house's.
+void VulkanEngine::place_house_path(glm::vec3 hp) {
+    static const bool off = std::getenv("VIBE_NO_HOUSE_PATH") != nullptr;
+    if (off) return;
+    const float wl = rt_.water_level;
+    // (VIBE_HOUSE_PATH_LIFT=<m>: all of it that much higher - a test aid, to see it from afar)
+    static const float lift = [] { const char* e = std::getenv("VIBE_HOUSE_PATH_LIFT"); return e ? float(std::atof(e)) : 0.0f; }();
+    // (the ground as DRAWN: all its octaves, as sample_terrain_height takes it beyond the home tile -
+    //  the 9-octave height the grass bake uses lay up to a hand under it here, and buried it)
+    const int oct = std::clamp(rt_.terrain_raymarch_octaves, 4, 24);
+    // (and with its close relief - stones and rills a hand high, terrain.cpp raymarch_ground_relief, as
+    //  the shader draws them: laid on the bare formula the path and slab were buried)
+    auto ground = [&](float x, float z) { const float h = world_ground_height(x, z, wl, oct); return h + std::max(0.0f, raymarch_ground_relief(x, z, h, wl)) + lift; };
+    auto mesh = [](int tex, glm::vec3 tint) {
+        game::LevelMesh m;
+        m.tex_albedo = m.tex_normal = tex;
+        m.tint = tint; m.fallback = tint * 0.3f;
+        m.relief = 0.0f;
+        return m;
+    };
+    auto vert = [](game::LevelMesh& m, glm::vec3 p, glm::vec3 n, float tile) {
+        const glm::vec2 uv = std::abs(n.y) > 0.6f ? glm::vec2(p.x, p.z) : std::abs(n.x) > 0.6f ? glm::vec2(p.z, p.y) : glm::vec2(p.x, p.y);
+        m.verts.push_back({ p, n, uv.x / tile, uv.y / tile });
+    };
+    auto quad = [&](game::LevelMesh& m, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, float tile) {
+        glm::vec3 n = glm::cross(b - a, d - a);
+        n = glm::length(n) > 1e-9f ? glm::normalize(n) : glm::vec3(0.0f, 1.0f, 0.0f);
+        const uint32_t i0 = uint32_t(m.verts.size());
+        for (const glm::vec3& p : { a, b, c, d }) vert(m, p, n, tile);
+        m.idx.insert(m.idx.end(), { i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3 });
+    };
+    // a level block: top at `top`, sides down to `bot` (no bottom)
+    auto block = [&](game::LevelMesh& m, glm::vec2 lo, glm::vec2 hi, float top, float bot, float tile) {
+        quad(m, { lo.x, top, lo.y }, { lo.x, top, hi.y }, { hi.x, top, hi.y }, { hi.x, top, lo.y }, tile);
+        quad(m, { lo.x, bot, hi.y }, { hi.x, bot, hi.y }, { hi.x, top, hi.y }, { lo.x, top, hi.y }, tile);
+        quad(m, { hi.x, bot, lo.y }, { lo.x, bot, lo.y }, { lo.x, top, lo.y }, { hi.x, top, lo.y }, tile);
+        quad(m, { hi.x, bot, hi.y }, { hi.x, bot, lo.y }, { hi.x, top, lo.y }, { hi.x, top, hi.y }, tile);
+        quad(m, { lo.x, bot, lo.y }, { lo.x, bot, hi.y }, { lo.x, top, hi.y }, { lo.x, top, lo.y }, tile);
+    };
+    auto finish = [&](game::LevelMesh& m) {
+        if (m.idx.empty()) return;
+        m.bmin = glm::vec3(1e9f); m.bmax = glm::vec3(-1e9f);
+        for (const auto& v : m.verts) { m.bmin = glm::min(m.bmin, v.p); m.bmax = glm::max(m.bmax, v.p); }
+        world_.meshes.push_back(std::move(m));
+    };
+
+    // -- the slab: before the steps (house-local x -2.8 .. -1.2, out to z 4.6), 2.8 x 1.9 m --
+    game::LevelMesh conc = mesh(kTexConcrete, glm::vec3(0.92f, 0.91f, 0.88f));
+    const glm::vec2 s0(hp.x - 3.4f, hp.z + 4.6f), s1(hp.x - 0.6f, hp.z + 6.5f);
+    float gmax = -1e9f, gmin = 1e9f;
+    for (float fx = s0.x; fx <= s1.x + 1e-3f; fx += 0.2f) for (float fz = s0.y; fz <= s1.y + 1e-3f; fz += 0.2f) { const float g = ground(fx, fz); gmax = std::max(gmax, g); gmin = std::min(gmin, g); }
+    const float slab_top = gmax + 0.03f;           // (over the highest of the ground's close relief under it)
+    block(conc, s0, s1, slab_top, gmin - 0.3f, 1.6f);
+    home_grass_cuts_.push_back(glm::vec4(s0.x - 0.2f, s0.y - 0.1f, s1.x + 0.2f, s1.y + 0.25f));
+
+    // -- the path: a quadratic curve from the slab's front edge to the apron's west edge --
+    const float apron_x = kLaunchSiteX - 70.0f, apron_top = kLaunchSiteH + 0.35f;
+    const glm::vec2 A(hp.x - 2.0f, s1.y - 0.05f);
+    const glm::vec2 E(apron_x - 0.75f, kLaunchSiteZ - 1.5f);
+    const glm::vec2 C(A.x + 2.5f, E.y + 1.5f);                   // (out from the door first, then round toward the pad)
+    game::LevelMesh grit = mesh(kTexGravel, glm::vec3(0.82f, 0.76f, 0.66f));
+    auto at = [&](float t) { const float u = 1.0f - t; return u * u * A + 2.0f * u * t * C + t * t * E; };
+    float len = 0.0f;
+    for (int i = 1; i <= 64; ++i) len += glm::distance(at(float(i - 1) / 64.0f), at(float(i) / 64.0f));
+    const int n = std::max(8, int(len / 0.4f));
+    // (a low bed of grit: 7 cm over the ground along its crown, its edges sloping 18 cm out to
+    //  4 cm under it - the ground's close relief, stones and rills a hand high, stands up through
+    //  anything laid flat on it)
+    constexpr float kCrown = 0.07f, kEdge = 0.18f;
+    uint32_t prev = 0;
+    for (int i = 0; i <= n; ++i) {
+        const float t = float(i) / float(n);
+        const glm::vec2 p = at(t);
+        const glm::vec2 d = glm::normalize(at(std::min(t + 0.01f, 1.0f)) - at(std::max(t - 0.01f, 0.0f)));
+        const glm::vec2 side(-d.y, d.x);
+        // worn: about 1.1 m wide, wider where it bends and at the ends, the edges ragged
+        const float s = float(i) * 0.4f;
+        const float w = 0.55f + 0.08f * std::sin(s * 0.9f + 1.3f) + 0.05f * std::sin(s * 2.7f) + 0.12f * (1.0f - std::min(1.0f, std::min(t, 1.0f - t) * 8.0f));
+        const float jl = 0.06f * std::sin(s * 5.3f + 0.7f), jr = 0.06f * std::sin(s * 4.1f + 2.1f);
+        const glm::vec2 l = p + side * (w + jl), r = p - side * (w + jr);
+        const glm::vec2 lo = l + side * kEdge, ro = r - side * kEdge;
+        const uint32_t il = uint32_t(grit.verts.size());
+        vert(grit, glm::vec3(lo.x, ground(lo.x, lo.y) - 0.04f, lo.y), glm::vec3(0.0f, 1.0f, 0.0f), 2.0f);
+        vert(grit, glm::vec3(l.x, ground(l.x, l.y) + kCrown, l.y), glm::vec3(0.0f, 1.0f, 0.0f), 2.0f);
+        vert(grit, glm::vec3(r.x, ground(r.x, r.y) + kCrown, r.y), glm::vec3(0.0f, 1.0f, 0.0f), 2.0f);
+        vert(grit, glm::vec3(ro.x, ground(ro.x, ro.y) - 0.04f, ro.y), glm::vec3(0.0f, 1.0f, 0.0f), 2.0f);
+        if (i > 0) {
+            // (front faces up: cross(b - a, c - a) along the normal, as append_church wants it)
+            auto tri = [&](uint32_t i0, uint32_t i1, uint32_t i2) {
+                const glm::vec3 a = grit.verts[i0].p, b = grit.verts[i1].p, c = grit.verts[i2].p;
+                if (glm::cross(b - a, c - a).y < 0.0f) std::swap(i1, i2);
+                grit.idx.insert(grit.idx.end(), { i0, i1, i2 });
+            };
+            for (uint32_t k = 0; k < 3; ++k) {
+                tri(prev + k, prev + k + 1, il + k + 1);
+                tri(prev + k, il + k + 1, il + k);
+            }
+        }
+        prev = il;
+        if (i % 2 == 0) {
+            const float h = w + kEdge + 0.2f;
+            home_grass_cuts_.push_back(glm::vec4(p.x - h, p.y - h, p.x + h, p.y + h));
+        }
+    }
+    // a step up onto the apron where the path meets it (and a walker's box for it)
+    const float step_top = 0.5f * (ground(E.x, E.y) + apron_top);
+    const glm::vec2 st0(E.x - 0.05f, E.y - 0.85f), st1(apron_x + 0.02f, E.y + 0.85f);
+    block(conc, st0, st1, step_top, ground(E.x, E.y) - 0.3f, 1.6f);
+    world_.aabbs.push_back({ glm::vec3(st0.x, ground(E.x, E.y) - 0.3f, st0.y), glm::vec3(st1.x, step_top, st1.y) });
+    home_grass_cuts_.push_back(glm::vec4(st0.x - 0.2f, st0.y - 0.2f, st1.x + 0.2f, st1.y + 0.2f));
+    log::infof("[house] path from the door (%.1f, %.1f) to the apron (%.1f, %.1f): %.1f m, %d pieces; slab top %.2f, ground %.2f .. %.2f (9 octaves at the door: %.2f)",
+               A.x, A.y, E.x, E.y, len, n, slab_top, gmin, gmax, world_ground_height(A.x, A.y, wl, 9));
+    finish(conc);
+    finish(grit);
+}
+
 void VulkanEngine::place_launch_site() {
     const glm::vec3 pad(kLaunchSiteX, kLaunchSiteH, kLaunchSiteZ);
     auto site = game::load_mesh_groups("assets/rocket/site.mesh");
@@ -259,6 +381,7 @@ void VulkanEngine::place_launch_site() {
         }
     }
     place_house(world_, hp);
+    place_house_path(hp);
 
     place_office();
     place_gasstation();
@@ -647,6 +770,8 @@ bool VulkanEngine::rocket_press_button() {
         rocket_.button_t = static_cast<float>(glfwGetTime());
         if (audio_) audio_->play_at(ClipID::Beep, launch_button_, 0.9f, 0.0f, 0.0f);
         log::info("[rocket] launch button pressed: T-10");
+        rocket_.net_owner = true; rocket_.net_from = 0;       // (the others are told: rocket_net_send)
+        rocket_net_send();
     }
     return true;       // (the key was meant for the button either way)
 }
@@ -792,9 +917,16 @@ void VulkanEngine::tick_rocket(float dt) {
     if (static const char* tr = std::getenv("VIBE_TEST_ROCKET"); tr && R.stage == 0 && !R.test_done && now > float(std::atof(tr))) {
         R.test_done = true;
         R.stage = 1; R.countdown = 10.0f; R.beep_at = 10;
+        R.net_owner = true; R.net_from = 0;
+        rocket_net_send();
         if (const char* skip = std::getenv("VIBE_TEST_ROCKET_T")) R.test_skip = std::atof(skip);
     }
 
+    // Multiplayer: whoever pressed the button tells the others the count and then the flight's time.
+    if (R.net_owner && (R.stage == 1 || R.stage == 2)) {
+        R.net_sync_t -= dt;
+        if (R.net_sync_t <= 0.0f) rocket_net_send();
+    } else if (R.stage != 1 && R.stage != 2) { R.net_owner = false; R.net_from = 0; }
     if (R.stage == 1) {                                   // the count
         R.countdown -= dt;
         if (R.countdown < float(R.beep_at) - 1.0f && R.beep_at > 1) {
@@ -953,6 +1085,75 @@ void VulkanEngine::tick_rocket(float dt) {
         }
         cam_shake_ = std::max(cam_shake_, R.thr_vis * air * 0.55f / (1.0f + std::pow(dist / 180.0f, 2.0f)));
     }
+}
+
+// ------------------------------------------------------------------ multiplayer
+// The rocket on every machine: the flight is a fixed-step simulation (engine/rocket_sim.h) that
+// gives the same flight everywhere from the same lift-off, so only its clock travels. The machine
+// whose button was pressed sends Event::Rocket (reliable) at once and every 2 s while it counts or
+// flies: the stage, the seconds left of the count or the seconds of flight, and the time warp.
+// Another machine starts its count there, or - joined late, or behind / ahead by more than the
+// link explains - brings its own simulation to that moment (stepped forward; from lift-off
+// again if it is ahead). VIBE_LOG_ROCKET_NET=1 logs every word sent and received.
+void VulkanEngine::rocket_net_send() {
+    Rocket& R = rocket_;
+    R.net_sync_t = 2.0f;
+    if (!net_ || !R.net_owner || (R.stage != 1 && R.stage != 2)) return;
+    net::Event e{};
+    e.kind = net::Event::Rocket; e.from = net_->id();
+    e.a[0] = float(R.stage);
+    e.a[1] = R.stage == 1 ? R.countdown : float(R.sim.t + R.acc);
+    e.a[2] = R.warp;
+    net_->send_event(e);
+    static const bool lg = std::getenv("VIBE_LOG_ROCKET_NET") != nullptr;
+    if (lg) log::infof("[rocket] net: sent stage %d, %.2f s, warp %.1f", R.stage, double(e.a[1]), double(e.a[2]));
+}
+
+void VulkanEngine::rocket_net_event(const net::Event& e) {
+    if (!launch_site_placed_) return;
+    Rocket& R = rocket_;
+    RocketSim& S = R.sim;
+    const int stage = int(std::lround(e.a[0]));
+    const float val = e.a[1], warp = e.a[2];
+    if (!std::isfinite(val) || !std::isfinite(warp) || val < 0.0f || val > 1.0e6f || (stage != 1 && stage != 2)) return;
+    static const bool lg = std::getenv("VIBE_LOG_ROCKET_NET") != nullptr;
+    if (R.net_owner) return;                         // (both pressed: each keeps its own; the first word wins on the others)
+    const bool on_mount = R.stage == 0 && (S.phase == RocketSim::Pad || S.phase == RocketSim::Landed);
+    if (stage == 1) {
+        if (!(on_mount || (R.stage == 1 && R.net_from == e.from))) return;
+        if (R.stage == 0) {
+            if (audio_) audio_->play_at(ClipID::Beep, launch_button_, 0.8f, 0.0f, 0.0f);
+            if (net_) mp_feed(net_->name_of(e.from) + " started the rocket's count");
+            log::infof("[rocket] the count, from another player: T-%.1f", double(val));
+        }
+        R.stage = 1; R.countdown = val; R.beep_at = std::clamp(int(std::ceil(val)), 1, 10);
+        R.net_from = e.from;
+        if (lg) log::infof("[rocket] net: count %.2f s from %u", double(val), e.from);
+        return;
+    }
+    // In flight. (about a tenth of a second on the way: at the flight's warp)
+    const double target = double(val) + 0.1 * double(std::max(warp, 1.0f));
+    const double tol = 0.5 + 0.6 * double(std::max(warp, R.warp));
+    bool from_start = false;
+    if (R.stage != 2) {
+        if (R.stage == 3 && R.net_from != e.from) return;          // (ours was lost; this is somebody else's)
+        from_start = true;
+    } else if (S.t > target + tol) from_start = true;               // ahead: from the lift-off again
+    else if (S.t > target - tol) { R.net_from = e.from; return; }   // in step
+    if (from_start) {
+        S.reset(S.rs);
+        S.liftoff();
+        R.stage = 2; R.trail.clear();
+        R.thr_vis = std::max(R.thr_vis, 0.5f);
+        log::infof("[rocket] the flight, from another player: joined at T+%.1f s", target);
+    }
+    int steps = 0;
+    while (S.t < target && S.phase != RocketSim::Landed && S.phase != RocketSim::Crashed && steps < 400000) { S.step(); ++steps; }
+    R.px = S.x; R.py = S.y; R.pux = S.ux; R.puy = S.uy;
+    R.acc = 0.0; R.warp = std::clamp(warp, 1.0f, 60.0f);
+    R.first = true;                                                   // (no motion vectors across the jump)
+    R.net_from = e.from;
+    if (lg) log::infof("[rocket] net: flight at T+%.2f s (asked %.2f, %d steps%s)", S.t, target, steps, from_start ? ", from lift-off" : "");
 }
 
 // The rocket as the camera sees it: its transform, or `false` when it is out of sight.

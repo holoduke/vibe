@@ -1,5 +1,5 @@
 #version 460
-// Froxel volumetric fog (Wronski 2014, Hillaire / Frostbite 2015).
+// Froxel volumetric fog (Wronski 2014, Hillaire 2015).
 // 160x90x64 camera-aligned froxels, quadratic depth slices up to
 // params.w metres. pc.sun.w selects the pass:
 //   0 inject   - per froxel: height-fog density x drifting noise, sun

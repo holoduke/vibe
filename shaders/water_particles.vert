@@ -34,7 +34,9 @@ void main() {
     float dist = max(distance(c, eye), 0.05);
     // (the reference's radius 0.007 sqrt(sin(pi - life)): grows in, shrinks away; a little larger here -
     //  lit points, not spheres in a G-buffer)
-    float r = 0.010 * sqrt(clamp(sin(3.14159265 - min(life, 2.0) * 1.5), 0.05, 1.0));
+    //  A life over 2 s is a fleck off the drift foam (water_solver.comp): full size at once, a
+    //  little larger, so the flecks read from the bank.
+    float r = life > 2.0 ? 0.016 : 0.012 * sqrt(clamp(sin(3.14159265 - min(life, 2.0) * 1.5), 0.05, 1.0));
     float rpx = dist * pc.f.x * 0.7;
     float rr = max(r, rpx);
     vA = clamp((r * r) / (rr * rr), 0.08, 1.0);

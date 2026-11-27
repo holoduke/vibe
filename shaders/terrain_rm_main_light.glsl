@@ -24,6 +24,7 @@
     // object shadows (which ignore the terrain) were drawn onto it.
     float self_shadow = 1.0;
     if (dif > 0.0 && !RMDBG(4)) self_shadow = lo_ok ? lo_sh.x : rm_self_shadow_base(pos, nor, sunDir);
+    float dbg_sh_self = self_shadow;      // (the sun-term debug views, terrain_rm_main_gi.glsl)
 
 
     // Fake grass-cast shadow: probe the grass mask along the sun's
@@ -148,7 +149,9 @@
             self_shadow = max(self_shadow, occ * pfd * 0.9);
         }
     }
+    float dbg_sh_near = 1.0 - (1.0 - self_shadow) / max(1.0 - dbg_sh_self, 1e-3);      // (grass, clutter, stones on top of the march)
     float shadow = max(dyn_shadow, self_shadow);
+    float dbg_sh_cs = 0.0;
 #ifndef VIBE_WATER
     // Screen-space contact shadow (contact_shadow.glsl; scene.lp_flags bit 1) against the depth
     // pre-pass - objects, trees and their cards, rocks; the ground itself is not in it, so the
@@ -159,6 +162,7 @@
         float cs_occ = contact_shadow(u_prepass_depth, pos + nor * clamp(t * 0.002, 0.005, 0.5), sunDir, cs_len,
                                       rmRand(uvec3(gl_FragCoord.xy, uint(scene.rt_flags.w) & 63u) + uvec3(0u, 211u, 7u)), cs_uv);
         shadow = 1.0 - (1.0 - shadow) * (1.0 - cs_occ * 0.85 * clamp(scene.rt_params.w, 0.0, 1.0));
+        dbg_sh_cs = cs_occ;
     }
 #endif
 
@@ -249,6 +253,7 @@
 #if RM_PART == 2
     // (the palette's bands meet by the scan's height close by: getMaterial, g_mat_h)
     g_mat_h = (gnd_det_h > 0.0 && t < 45.0) ? gnd_det_h : -1.0;
+    g_sw_mat_h = clamp(gnd_det_h, 0.0, 1.0);       // (the puddles' hollows where the displacement has no height: terrain_rm_main_gi.glsl)
     g_mat_hk = 1.0 - smoothstep(20.0, 45.0, t);
     mate = getMaterial(pos, nor) * rm_det_tint;
     g_mat_h = -1.0;
@@ -275,7 +280,17 @@
     // above 1 km) the woods are a canopy colour on the ground - where they
     // really stand inside the landscape (the baked cover), and in the same
     // height band, in patches, outside it.
-    if (t > 1200.0) {
+    // (2026-11-27, the owner: "the terrain should have the same colour as the forest from large
+    //  distance when trees disappear".) The hand-over is a SUM: the drawn trees thin out with
+    //  distance (veg_stream.cpp kReach / kFarRank: all to 650 m, half to 1100, a quarter to 1600,
+    //  then the biggest 14 / 8.5 / 5 %, cards grown x1.35 - veg.vert; the last fifth of the draw
+    //  distance and sub-pixel trees dropped - veg_cull.comp), and the ground under them takes the
+    //  woods' colour by exactly the share of cover the trees no longer give (rm_tree_cover below:
+    //  the trees' cover by distance, measured against those rules), so trees + ground keep the
+    //  forest's tone and the forest does not end in a line. The colour is the far cards' own mean
+    //  (veg_impostor.cpp logs "[veg] far card mean colour"), times their crown shading.
+    const vec3 kRmWoodsFar = vec3(0.046, 0.073, 0.019);      // (logged 2026-11-27: conifers 0.036 0.057 0.025, leaf trees 0.064 0.102 0.007 - 60 / 40)
+    if (t > 450.0 && !RMDBG(262144)) {      // (VIBE_RM_SKIP=262144: without it - to measure what it costs)
         vec2 cuv = pos.xz / 2048.0 + 0.5;
         float woods;
         if (all(greaterThan(cuv, vec2(0.0))) && all(lessThan(cuv, vec2(1.0)))) {
@@ -283,9 +298,22 @@
         } else {
             woods = rm_forest(pos.xz, pos.y, nor.y, scene.water_params.y);     // (the rule the trees there are placed by)
         }
-        vec3 canopy = mix(vec3(0.028, 0.052, 0.024), vec3(0.058, 0.082, 0.034), tile_noise2(pos.xz, 0.11, vec2(0.0)));
-        mate = mix(mate, canopy, woods * smoothstep(1200.0, 1700.0, t));
+        // the share of a wood's cover the drawn trees still give at this distance
+        float cover = 1.0 - 0.38 * smoothstep(550.0, 750.0, t)       // half the trees (bigger ones kept)
+                          - 0.20 * smoothstep(1000.0, 1200.0, t)     // a quarter
+                          - 0.17 * smoothstep(1500.0, 1700.0, t)     // the biggest 14 %, grown
+                          - 0.08 * smoothstep(2300.0, 2500.0, t)     // 8.5 %
+                          - 0.06 * smoothstep(3100.0, 3300.0, t);    // 5 %
+        cover *= 1.0 - smoothstep(3040.0, 3800.0, t);                // the draw distance's last fifth (tree_draw_distance 3800)
+        vec3 canopy = kRmWoodsFar * mix(0.82, 1.18, tile_noise2(pos.xz, 0.11, vec2(0.0)));
+        mate = mix(mate, canopy, woods * (1.0 - cover));
     }
+    // The water's level here (water_level.glsl: the open sea 1 m under the datum, the river falling
+    // to it down its course) - only near the datum, where it can matter.
+    float rm_wl_here = scene.water_params.y;
+#ifdef VIBE_WATER_LEVEL_GLSL
+    if (SW_ON(8192) && scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 2.5) rm_wl_here = wl_at(pos.xz);
+#endif
     // The sea's shore (beyond home's lakes): a beach of sand from just under the high-water
     // line up to a metre or so above it, with a ragged upper edge, and sand on the bed
     // below - the height layers put grass at the water level, which ran straight into the sea.
@@ -293,8 +321,8 @@
         float sea_k = smoothstep(1350.0, 1750.0, rm_home_dist(pos.xz));
         // (only as high as the sand can reach - 2.45 m over the water: above that its weight
         //  is 0, and its four noises were worked out for every pixel of the wider world)
-        if (sea_k > 0.0 && scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 2.5) {
-            float wl = scene.water_params.y;
+        if (sea_k > 0.0 && scene.water_params.x > 0.5 && pos.y < rm_wl_here + 2.5) {
+            float wl = rm_wl_here;
             float edge = wl + 0.5 + 1.0 * tile_noise2(pos.xz, 0.045, vec2(0.0)) + 0.35 * tile_noise2(pos.xz, 0.31, vec2(0.0));
             float sand = sea_k * (1.0 - smoothstep(edge - 0.5, edge + 0.6, pos.y));
             // (a little lighter than the lake shore's sand, no more: at 0.56 the beach burnt out
@@ -304,10 +332,54 @@
             mate = mix(mate, sandc, sand);
         }
     }
+    // The bank strip (the reference's bank layer - a painted ground layer there, a rule here): a
+    // margin of shingle / gravel / mud along every river, stream and lake bank, from the waterline
+    // up 0.2 - 0.7 m over it (ragged, wider on gentle banks), chosen by the current as the bed is
+    // (water_bed.glsl: the SAME scanned sets, so the material runs through the waterline - only the
+    // wet band and the water's tint change): stones where the water runs fast (the stream's falls
+    // and runs, the river), silt where it is slow (pools), a mix - gravel and sand - at a lake.
+    // Height-blended against the ground's own scan (the turf ends raggedly over the stones), its
+    // height into the displacement's height byte. Baked with the ground (this is RM_PART 2).
+    // water_wet bit 512 (VIBE_NO_BANK_STRIP=1: off).
+#if !defined(VIBE_LITE) && !defined(VIBE_WATER) && !defined(VIBE_MARCH_ONLY) && !defined(RM_NO_BANK_STRIP)      // (the bake and the ground pass alike: since the split into passes the ground build has room for it)
+    if (SW_ON(512) && wb_on() && scene.water_params.x > 0.5 && rm_road.x + rm_road.y < 0.5 && nor.y > 0.45 && t < 400.0) {
+        float wl = rm_wl_here, bspeed;
+        float st = -1e9, st_sl = 0.0;      // (the stream's surface here, where it runs)
+        WcAt BA = wc_stream_at(pos.xz);
+        if (BA.on) { float over = BA.dist - wc_wet_reach(BA); st = over < 1.5 ? BA.surf - max(over, 0.0) : -1e9; st_sl = BA.sslope + (BA.drop > 0.05 ? 0.35 : 0.0); }
+        if (st > wl) {
+            bspeed = min(0.75 + 3.0 * st_sl, 4.5);      // (the stream: the reference's speed rule)
+            wl = st;
+        } else {
+            bspeed = mix(1.0, 0.45, 1.0 - smoothstep(30.0, 80.0, distance(pos.xz, vec2(62.0, 36.0))));   // (the river; home's lake slower: gravel and sand)
+        }
+        float hab = pos.y - wl;
+        float sea_b = smoothstep(1350.0, 1750.0, rm_home_dist(pos.xz));
+        if (hab > -0.3 && hab < 1.4 && sea_b < 1.0) {
+            float top = (0.30 + 0.60 * tile_noise2(pos.xz, 0.37, vec2(19.0)) + 0.10 * tile_noise2(pos.xz, 2.3, vec2(7.0))) *      // (2026-11-27: wider and up steeper banks - at the river and the lake it was a thread under the reeds)
+                        mix(0.6, 1.3, smoothstep(0.75, 0.97, nor.y));
+            float bw = (1.0 - smoothstep(top - 0.12, top + 0.12, hab)) * smoothstep(0.45, 0.65, nor.y) * (1.0 - sea_b) *
+                       (1.0 - clamp(rm_cliff, 0.0, 1.0));
+            if (bw > 0.005) {
+                float bfp = max(t, 0.05) * 2.0 * scene.viewport.w;
+                WbW W = wb_weights(pos.xz, bspeed, 0.0, nor.y, bfp);
+                vec2 btn;
+                vec4 M = wb_dominant(pos.xz, W, btn);        // (the dominant set: wb_material twice was too large)
+                bw = rm_height_blend(clamp(gnd_det_h, 0.0, 1.0), M.a, bw);
+                mate = mix(mate, M.rgb, bw);
+                nor = normalize(nor + vec3(btn.x, 0.0, -btn.y) * bw);
+                if (GND_SSDM && t < kSsdmReach) g_gnd_ssdm_h = mix(g_gnd_ssdm_h, max(M.a, 0.006) * kGndSsdmMax, bw);
+            }
+        }
+    }
+#endif
     // The soft water edge, the land's side: just above the waterline the ground is wet and
     // darker (a few centimetres at a lake or the river, a little more where the sea's surf runs
     // up), so the water does not end on dry ground in a line. (terrain_rm_main_water.glsl wt_edge)
-    if (scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 0.4) {
+    // (2026-11-26: replaced by the reference's wet band, shore_wet.glsl, applied at the start of
+    //  terrain_rm_main_gi.glsl - after the baked ground, so the moving waterline is never baked;
+    //  this smooth darkening is kept for VIBE_NO_WET_BAND=1)
+    if (!SW_ON(1) && scene.water_params.x > 0.5 && pos.y < scene.water_params.y + 0.4) {
         float wl = scene.water_params.y;
         // (the waterline is the higher of the authored top and the shallow-water solver's surface:
         //  water piled against a bank or pushed up by a wader wets it - the reference's rule)
@@ -374,12 +446,31 @@
     // The lake bed seen directly (camera under water): the same stones as
     // the bed seen through the surface from above (water branch, bed_h).
     float bed_sub = 0.0;
-    if (scene.water_params.x > 0.5 && pos.y < scene.water_params.y - 0.02) {
-        bed_sub = smoothstep(0.02, 0.12, scene.water_params.y - pos.y);
+    float bed_sub_hn = 0.5;
+    if (scene.water_params.x > 0.5 && pos.y < rm_wl_here - 0.02) {
+        bed_sub = smoothstep(0.02, 0.12, rm_wl_here - pos.y);
         float bfp = max(t, 0.05) * 2.0 * scene.viewport.w;      // ~metres per pixel
         float bwA = smoothstep(2.0, 5.0, 0.22 / bfp) * bed_sub;
         float bwB = smoothstep(2.0, 5.0, 0.075 / bfp);
-        if (bwA > 0.01) {
+        bool  wb_done = false;
+        // (the bed from the scanned sets, water_bed.glsl - as the bed seen through the surface; the
+        //  current is not known here: a middling 0.6 m/s, the sets' patches decide)
+        if (wb_on() && bed_sub > 0.01) {
+            wb_done = true;
+            float below = rm_wl_here - pos.y;
+            WbW W = wb_weights(pos.xz, 0.6, below, nor.y, bfp);
+            WbMat M = wb_material(pos.xz, W);
+            wb_growth(M, pos.xz, W.lod, sw_growth(pos.xz, M.hn, nor.y, below));
+            mate = mix(mate, M.alb, bed_sub);
+            nor = normalize(nor + vec3(M.tn.x, 0.0, -M.tn.y) * bed_sub);
+            bed_sub_hn = M.hn;
+            // (its height into the displacement's height byte)
+            if (GND_SSDM && t < kSsdmReach) g_gnd_ssdm_h = mix(g_gnd_ssdm_h, max(M.hn, 0.006) * kGndSsdmMax, bed_sub);
+            if (SW_ON(1)) mate = mix(mate, sw_wet_albedo(mate, 1.0), bed_sub);
+            float rk;
+            mate = mix(mate, sw_bed_tint(mate, below, clamp(scene.water_color.rgb * 2.5, vec3(0.01), vec3(0.9)), rk), bed_sub);
+        }
+        if (!wb_done && bwA > 0.01) {
             vec2  bp = pos.xz;
             float be = max(0.004, 1.5 * bfp), bid, bk, tmp1, tmp2;
             float bhR = bed_h(bp + vec2(be, 0.0), bwA, bwB, tmp1, tmp2);
@@ -387,6 +478,7 @@
             float bhC = bed_h(bp, bwA, bwB, bid, bk);
             nor = normalize(nor + vec3(bhC - bhR, 0.0, bhC - bhU) / be * 0.9);
             float crev = smoothstep(0.0, 0.045, bhC) * smoothstep(0.0, 0.45, bk);
+            bed_sub_hn = clamp(bhC / 0.10, 0.0, 1.0);
             float gl = max(dot(mate, vec3(0.3, 0.5, 0.2)), 0.03);
             vec3 sc = gl * mix(vec3(1.35, 1.15, 1.05), vec3(1.05, 1.0, 0.95), fract(bid * 5.3)) *
                       mix(0.55, 1.45, fract(bid * 23.1));
@@ -395,6 +487,23 @@
             sc = mix(sc, gl * vec3(2.20, 2.10, 1.95), step(0.92, fract(bid * 17.9)));    // pale
             sc *= mix(0.85, 1.15, noise2(bp * 90.0 + bid * 40.0));
             mate = mix(mate, mix(mate * 0.45, sc, smoothstep(0.0, 0.2, bk)), bwA) * mix(1.0, mix(0.10, 1.0, crev), bwA);
+        }
+        bed_sub_hn = (bwA > 0.01) ? bed_sub_hn : 0.5;
+        // (forced wet, growth on the up-facing bed - its height raises the displacement's height
+        //  byte -, the tint by depth: shore_wet.glsl, as for the bed seen through the surface)
+        if (!wb_done && SW_ON(1)) mate = mix(mate, sw_wet_albedo(mate, 1.0), bed_sub);
+        if (!wb_done) {
+            float below = rm_wl_here - pos.y;
+            float gM = sw_growth(pos.xz, bed_sub_hn, nor.y, below);
+            if (gM > 0.0) {
+                float gh;
+                vec3  gc = sw_growth_col(pos.xz, gh);
+                mate = mix(mate, gc, gM);
+                // (height h -> saturate(M 0.25 mossH + (2 - M) h), the reference's; never quite 0 within reach)
+                if (GND_SSDM && t < kSsdmReach) g_gnd_ssdm_h = max(clamp(gM * 0.25 * gh + (2.0 - gM) * (g_gnd_ssdm_h / kGndSsdmMax), 0.0, 1.0) * kGndSsdmMax, 0.006 * kGndSsdmMax);
+            }
+            float rk;
+            mate = mix(mate, sw_bed_tint(mate, below, clamp(scene.water_color.rgb * 2.5, vec3(0.01), vec3(0.9)), rk), bed_sub);
         }
     }
     // Pebbles: each stone its own colour (greys, tans, a few dark and a few
@@ -449,6 +558,20 @@
         // Stone-to-stone colour variation: patches of lighter / darker and
         // slightly warmer / cooler stone, plus some sun-bleached wear.
         vec3 cob = textureLod(u_albedo[kRmMatRoad], rm_road_uv, rm_road_lod).rgb * kRmAlbedoScale;
+        // Limestone: the scan's cobbles are mostly dark field stones; the castle road's are pale
+        // limestone - cream to light grey, a few a shade warmer. The scan's own light and dark
+        // (each stone's grain, its edges, the joints) is kept, measured against the scan's mean.
+        {
+            const vec3 kLum = vec3(0.2126, 0.7152, 0.0722);
+            float lm = max(dot(textureLod(u_albedo[kRmMatRoad], rm_road_uv, 12.0).rgb * kRmAlbedoScale, kLum), 0.01);
+            float detail = clamp(dot(cob, kLum) / lm, 0.35, 1.7);
+            float tone = tile_noise2(pos.xz, 3.1, vec2(23.0));                                   // (stone to stone: cream, grey, a warmer one)
+            // (2026-11-27, the owner: "too white - a bit more like sand colour": sandy stone, buff to
+            //  a greyer sand, a few ochre ones; was cream 0.46/0.43/0.36 and grey 0.42/0.42/0.40)
+            vec3 lime = mix(vec3(0.300, 0.235, 0.145), vec3(0.280, 0.235, 0.170), smoothstep(0.35, 0.65, tone));
+            lime = mix(lime, vec3(0.31, 0.22, 0.12), smoothstep(0.82, 0.95, tone));
+            cob = mix(cob, lime * mix(1.0, detail, 0.65), 0.88);
+        }
         float cv1 = tile_noise2(pos.xz, 6.5, vec2(9.1)) * 0.6 + tile_noise2(pos.xz, 2.1, vec2(1.7)) * 0.4, cv2 = tile_noise2(pos.xz, 0.55, vec2(3.3));
         cob *= mix(0.74, 1.22, cv1) * mix(vec3(1.06, 1.0, 0.92), vec3(0.94, 0.98, 1.05), cv2);
         {   // (the wheel lines of terrain_rm_main_ground.glsl: dirt in the joints, the tops rubbed pale)
@@ -494,18 +617,6 @@
                         float x = 0.02 * float(k);
                         shade = max(shade, smoothstep(0.0, 0.008, (dC - foot_depth(pos.xz + sdir * x)) * 0.45 - x * rise));
                     }
-        // Limestone: the scan's cobbles are mostly dark field stones; the castle road's are pale
-        // limestone - cream to light grey, a few a shade warmer. The scan's own light and dark
-        // (each stone's grain, its edges, the joints) is kept, measured against the scan's mean.
-        {
-            const vec3 kLum = vec3(0.2126, 0.7152, 0.0722);
-            float lm = max(dot(textureLod(u_albedo[kRmMatRoad], rm_road_uv, 12.0).rgb * kRmAlbedoScale, kLum), 0.01);
-            float detail = clamp(dot(cob, kLum) / lm, 0.35, 1.7);
-            float tone = tile_noise2(pos.xz, 3.1, vec2(23.0));                                   // (stone to stone: cream, grey, a warmer one)
-            vec3 lime = mix(vec3(0.46, 0.43, 0.36), vec3(0.42, 0.42, 0.40), smoothstep(0.35, 0.65, tone));
-            lime = mix(lime, vec3(0.48, 0.40, 0.29), smoothstep(0.82, 0.95, tone));
-            cob = mix(cob, lime * mix(1.0, detail, 0.65), 0.88);
-        }
                 }
                 sand *= mix(1.0, 0.80, smoothstep(0.0, 0.05, dC)) * mix(1.0, 0.55, shade);
             }

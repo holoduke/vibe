@@ -275,6 +275,13 @@ void VulkanEngine::destroy_terrain_pipelines() {
     terrain_vert_module_ = terrain_shadow_vert_module_ = VK_NULL_HANDLE;
 }
 
+// The ground shader's variants built on demand (terrain_rm_request_variant): their pipeline set-up.
+static vkpipe::GraphicsPipelineConfig g_rm_variant_cfg[3];
+static bool g_rm_variant_ok[3] = { false, false, false };
+// The mesh terrain's water plane, also on demand (terrain_water_plane_request).
+static vkpipe::GraphicsPipelineConfig g_water_plane_cfg;
+static bool g_water_plane_ok = false;
+
 void VulkanEngine::init_terrain_raymarch_pipeline() {
     std::string sd = VIBE_SHADER_DIR;
     terrain_raymarch_vert_module_ = vkpipe::load_shader_module(
@@ -337,28 +344,41 @@ void VulkanEngine::init_terrain_raymarch_pipeline() {
         vr.enable_vrs = false;
         tr_->vrs_pipeline = vkpipe::build_graphics_pipeline(device_, vr);
     }
-    // Three builds, each on a thread of its own (see the header): collected by
-    // finish_terrain_raymarch_pipeline().
+    // Three builds in the background, in the queue of the large builds (vk_pipelines.h: one
+    // at a time by default - side by side the driver's compiler took many GB for each):
+    // collected by finish_terrain_raymarch_pipeline(). Order: the ground's bake (terrain_bake.cpp),
+    // the full shader, its low-resolution build, then the summer build (only 0.2 - 0.4 ms faster
+    // than the full one, which is drawn till then) and the mesh terrain's water.
+    init_terrain_water_pass();      // (terrain_water_pass.cpp: queued before the ground builds, which need it)
     const VkDevice dev = device_;
-    auto build = [dev](vkpipe::GraphicsPipelineConfig c) {
-        return std::async(std::launch::async, [dev, c]() { return vkpipe::build_graphics_pipeline(dev, c); });
-    };
+    auto build = [dev](const vkpipe::GraphicsPipelineConfig& c, int prio = 0) { return vkpipe::build_graphics_pipeline_async(dev, c, prio); };
     terrain_rm_build_[0] = build(cfg);
     {
         // No snow, no winter code: a build of the same shader without it (0.2 - 0.4 ms).
         terrain_raymarch_summer_module_ = vkpipe::load_shader_module(device_, sd + "/terrain_raymarch_summer.frag.spv");
         if (terrain_raymarch_summer_module_) {
-            vkpipe::GraphicsPipelineConfig su = cfg;
-            su.frag = terrain_raymarch_summer_module_;
-            terrain_rm_build_[1] = build(su);
+            g_rm_variant_cfg[1] = cfg;
+            g_rm_variant_cfg[1].frag = terrain_raymarch_summer_module_;
+            g_rm_variant_ok[1] = true;
         }
     }
     {
-        vkpipe::GraphicsPipelineConfig lr = cfg;
-        lr.color_formats = { scene_color_format_, motion_vec_format_ };
-        lr.enable_vrs = false;
-        terrain_rm_build_[2] = build(lr);
+        g_rm_variant_cfg[2] = cfg;
+        g_rm_variant_cfg[2].color_formats = { scene_color_format_, motion_vec_format_ };
+        g_rm_variant_cfg[2].enable_vrs = false;
+        g_rm_variant_ok[2] = true;
     }
+    // (the summer and the low-resolution builds are not compiled at start: only when a frame asks
+    //  for them - terrain_rm_request_variant - so a first start compiles what the settings use)
+}
+
+// A variant of the ground shader (1 summer, 2 low-resolution) is wanted by this frame: queued once,
+// collected by finish_terrain_raymarch_pipeline; the frame draws what it has meanwhile.
+void VulkanEngine::terrain_rm_request_variant(int i) {
+    if (i < 1 || i > 2 || !g_rm_variant_ok[i] || terrain_rm_build_[i].valid()) return;
+    if ((i == 1 && terrain_raymarch_summer_pipeline_) || (i == 2 && terrain_raymarch_lr_pipeline_)) return;
+    g_rm_variant_ok[i] = false;
+    terrain_rm_build_[i] = vkpipe::build_graphics_pipeline_async(device_, g_rm_variant_cfg[i], i == 1 ? 1 : 0);
 }
 
 void VulkanEngine::finish_terrain_raymarch_pipeline(int mode) {
@@ -383,7 +403,15 @@ void VulkanEngine::finish_terrain_raymarch_pipeline(int mode) {
         // Still compiling: this only happens on a first start (or after a driver update).
         const float s = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
         char label[160];
-        std::snprintf(label, sizeof(label), "Preparing shaders for your graphics card - first start only (%d s)", int(s));
+        {
+            // (the same numbers as the in-game notice: vk_pipelines.cpp compile_status)
+            const vkpipe::CompileStatus cs = vkpipe::compile_status();
+            if (cs.active)
+                std::snprintf(label, sizeof(label), "Preparing shaders for your graphics card - %d of %d, about %d s left",
+                              std::min(cs.total, cs.done + std::max(cs.running, 1)), cs.total, int(cs.remaining + 0.5));
+            else
+                std::snprintf(label, sizeof(label), "Preparing shaders for your graphics card (%d s)", int(s));
+        }
         present_loader_frame(s > 1.5f ? label : "Ready", 0.97f);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
@@ -398,6 +426,7 @@ void VulkanEngine::destroy_terrain_raymarch_pipeline() {
     // shutdown, and presenting "loading" frames here (as the wait at start-up does) ran into
     // frame generation timing out on them: a device-lost error on the way out.
     for (auto& f : terrain_rm_build_) if (f.valid()) f.wait();
+    destroy_terrain_water_pass();
     if (terrain_water_build_.valid()) terrain_water_build_.wait();
     finish_terrain_raymarch_pipeline();          // (all ready now: just collects them)
     if (terrain_raymarch_lite_pipeline_)    vkDestroyPipeline(device_, terrain_raymarch_lite_pipeline_, nullptr);
@@ -543,8 +572,15 @@ void VulkanEngine::init_terrain_water_pipeline() {
 
     // (Only drawn with the mesh terrain; another large shader. Built on a thread, never waited
     // for: the draw skips it until it is there.)
-    const VkDevice dev = device_;
-    terrain_water_build_ = std::async(std::launch::async, [dev, cfg]() { return vkpipe::build_graphics_pipeline(dev, cfg); });
+    // (now only when the mesh terrain draws water: terrain_water_plane_request)
+    g_water_plane_cfg = cfg;
+    g_water_plane_ok = true;
+}
+
+void VulkanEngine::terrain_water_plane_request() {
+    if (!g_water_plane_ok || terrain_water_pipeline_ || terrain_water_build_.valid()) return;
+    g_water_plane_ok = false;
+    terrain_water_build_ = vkpipe::build_graphics_pipeline_async(device_, g_water_plane_cfg, 2);
 }
 
 void VulkanEngine::destroy_terrain_water_pipeline() {
@@ -1814,6 +1850,9 @@ uint64_t shader_set_stamp() {
 } // namespace
 
 void VulkanEngine::init_pipeline_cache() {
+    // VIBE_NO_PIPELINE_CACHE=1: no cache read or written (with the driver's own disk cache off,
+    // __GL_SHADER_DISK_CACHE=0 on NVIDIA, a test copy compiles every shader as a first start does).
+    if (std::getenv("VIBE_NO_PIPELINE_CACHE")) { log::info("pipeline cache: off (VIBE_NO_PIPELINE_CACHE)"); return; }
     g_cache_shader_stamp = shader_set_stamp();
     // (the stamp file: the shaders the cache was saved for, and the size it had then - a
     // cache of another size was written by something else, an older build for one)

@@ -38,15 +38,21 @@ constexpr size_t kMaxRipples = 16;
 constexpr size_t kMaxDrops = 1400;
 }
 
+namespace { float stream_relief(glm::vec2 p, const wc::At& A); }
 float VulkanEngine::water_surface_y(float x, float z) const {
-    return std::max(rt_.water_level + water_swell_height(x, z), wc::stream_surface(glm::vec2(x, z), rt_.water_level));
+    float s = wc::stream_surface(glm::vec2(x, z), rt_.water_level);
+    if (s > -1e8f) {
+        const wc::At A = wc::at(wc::stream(rt_.water_level), glm::vec2(x, z));
+        if (A.on && A.dist < wc::wet_reach(A)) s += stream_relief(glm::vec2(x, z), A);
+    }
+    return std::max(rt_.water_level + water_level_off(x, z) + water_swell_height(x, z), s);
 }
 
 // Open water at (x, z): the water plane is above the ground there.
 bool VulkanEngine::water_at(float x, float z) const {
     if (!rt_.water_enabled) return false;
     const float g = sample_terrain_height(x, z);
-    if (g < rt_.water_level - 0.02f) return true;
+    if (g < rt_.water_level + water_level_off(x, z) - 0.02f) return true;
     // (the stream: water above the sea - engine/water_course.h)
     return g < wc::stream_surface(glm::vec2(x, z), rt_.water_level) - 0.02f;
 }
@@ -86,6 +92,42 @@ float swell_noise(glm::vec2 x, glm::vec2 drift) {
 }
 }  // namespace
 
+// THE WATER'S LEVEL under the datum (rt_.water_level) at (x, z) - the CPU twin of
+// shaders/water_level.glsl wl_off (keep in step): the open sea 1 m under it, the river falling from
+// the datum (down to below the stone bridge's pool) to the sea's level down its course, evenly with
+// three short rapids; lakes away from the river at the datum. VIBE_NO_SLOPED_RIVER=1: 0 everywhere.
+// The river's level under the datum `along` metres down its course (water_level.glsl wl_profile).
+static float river_level_profile(float along) {
+    const float g = std::clamp((along - 350.0f) / 2050.0f, 0.0f, 1.0f);
+    const float r = glm::smoothstep(696.0f, 704.0f, along) + glm::smoothstep(1246.0f, 1254.0f, along) + glm::smoothstep(1796.0f, 1804.0f, along);
+    return -(0.31f * g + 0.23f * r);
+}
+float water_level_off(float x, float z) {
+    static const bool off = [] { const char* e = std::getenv("VIBE_NO_SLOPED_RIVER"); return e && *e && *e != '0'; }();
+    if (off) return 0.0f;
+    const float sk = sea_weight(x, z);
+    if (sk >= 0.999f) return -1.0f;
+    float riv = 0.0f;
+    if (globe::current().home && x > -200.0f && x < 2250.0f && z > -250.0f && z < 900.0f) {
+        const glm::vec2* rp = nullptr;
+        const int rn = world_river_course(rp);
+        const glm::vec2 p(x, z);
+        float d2 = 1e12f, along = 0.0f, cum = 0.0f;
+        for (int i = 0; i + 1 < rn; ++i) {
+            const glm::vec2 a = rp[i], ab = rp[i + 1] - a;
+            const float len = glm::length(ab);
+            const float u = std::clamp(glm::dot(p - a, ab) / glm::dot(ab, ab), 0.0f, 1.0f);
+            const glm::vec2 dv = p - (a + ab * u);
+            const float e2 = glm::dot(dv, dv);
+            if (e2 < d2) { d2 = e2; along = cum + u * len; }
+            cum += len;
+        }
+        const float rk = 1.0f - glm::smoothstep(90.0f, 170.0f, std::sqrt(d2));
+        if (rk > 0.0f) riv = rk * river_level_profile(along);
+    }
+    return glm::mix(riv, -1.0f, sk);
+}
+
 float VulkanEngine::water_swell_height(float x, float z) const {
     const glm::vec4 W = env_->water_wind;
     static const bool no_fft = std::getenv("VIBE_NO_FFT") != nullptr, no_sdf = std::getenv("VIBE_NO_SHORE_SDF") != nullptr;
@@ -95,7 +137,7 @@ float VulkanEngine::water_swell_height(float x, float z) const {
     const float sea_k = sea_weight(x, z);
     if (sea_k <= 0.0f) return 0.0f;
     const float g0 = sample_terrain_height(x, z);
-    const float depth = rt_.water_level - g0;
+    const float depth = rt_.water_level + water_level_off(x, z) - g0;
     // The swell and the wind sea's cascades fade toward the coast by its distance (the shader's
     // ww_shore_dist: depth / the bed's slope, two more taps; within 60 m of depth only) and by the
     // depth (terrain_raymarch.frag, the sea's hit - keep in step).
@@ -199,6 +241,7 @@ uint64_t water_bed_obstacles(glm::vec2 c, float reach, std::vector<glm::vec4>& o
 float water_sea_weight(float x, float z) { return sea_weight(x, z); }
 void water_boulder_add(glm::vec2 p, float ground, float r) {
     bed_obs_put(glm::vec4(p, r, ground - 0.35f * r));
+    for (glm::vec4& q : g_river_piers) if (glm::distance(glm::vec2(q), p) < 0.5f) q.w = ground + 0.65f * r;     // (its top: river_piers w)
     if (r < 0.4f) return;
     const collision::AABB b{ glm::vec3(p.x - 0.7f * r, ground - 0.35f * r, p.y - 0.7f * r), glm::vec3(p.x + 0.7f * r, ground + 0.6f * r, p.y + 0.7f * r) };
     for (collision::AABB& q : g_water_boulders)
@@ -212,10 +255,13 @@ void water_boulder_colliders(glm::vec3 c, float reach, std::vector<collision::AA
 }
 
 void river_piers_clear() { g_river_piers.clear(); }
-void river_pier_add(glm::vec2 p, float half_width) {
-    bed_obs_put(glm::vec4(p, half_width, 1e5f));
-    for (const glm::vec4& q : g_river_piers) if (glm::distance(glm::vec2(q), p) < 0.5f) return;      // (the world built again: the same piers)
-    g_river_piers.push_back(glm::vec4(p, half_width, 0.0f));
+void river_pier_add(glm::vec2 p, float half_width, float top) {
+    // (a stone whose top is known (under 1e4): a round stone in the solver's bed with that top;
+    //  else a wall. river_piers w = the top: the stream's surface humps over one that lies under
+    //  the water - water_course.glsl wc_relief)
+    bed_obs_put(top < 1e4f ? glm::vec4(p, half_width, top - half_width) : glm::vec4(p, half_width, 1e5f));
+    for (glm::vec4& q : g_river_piers) if (glm::distance(glm::vec2(q), p) < 0.5f) { q.w = top; return; }      // (the world built again: the same piers)
+    g_river_piers.push_back(glm::vec4(p, half_width, top));
 }
 // The stone bridge's two piers (game/level.cpp append_stone_bridge: the same layout - keep in step).
 void river_piers_stone_bridge(glm::vec3 a, glm::vec3 b, const std::function<float(float, float)>& ground, float water_level) {
@@ -240,6 +286,68 @@ int river_piers_fill(glm::vec4* out, glm::vec3 eye) {
     for (int i = 0; i < 24; ++i) out[i] = i < n ? v[size_t(i)] : glm::vec4(0.0f);
     return n;
 }
+
+// The stream's surface in relief - the CPU twin of shaders/water_relief.glsl wr_relief (keep the two
+// in step; the solver's part is the GPU's only): humps over the stones under the surface with a dip
+// and standing waves behind, the pillow against a stone standing out and the drawdown in its lee,
+// a rounded pillow where stones squeeze the flow. All stones within reach (the GPU has the 24
+// nearest the eye: the same ones near the player). water_wet bit 4096 (VIBE_NO_STREAM_RELIEF=1).
+namespace {
+float stream_relief(glm::vec2 p, const wc::At& A) {
+    static const bool off = [] { const char* e = std::getenv("VIBE_NO_STREAM_RELIEF"); return e && *e && *e != '0'; }();
+    if (off || !A.on) return 0.0f;
+    const float sl = std::max(A.sslope, A.drop > 0.01f ? A.slope : 0.0f);
+    const float sn = sl / std::sqrt(1.0f + sl * sl);
+    const float U = std::min(0.75f + 3.0f * sn, 4.5f);
+    const float hv = U * U / 19.62f;
+    const float lam = std::clamp(6.2832f * U * U / 9.81f, 0.6f, 4.0f);
+    const glm::vec2 fd = A.dir, ac(-fd.y, fd.x);
+    const float S0 = A.surf;
+    float h = 0.0f, gl = 1e9f, gr = 1e9f;
+    for (const glm::vec4& P : g_river_piers) {
+        const glm::vec2 d = p - glm::vec2(P);
+        const float a = std::max(P.z, 0.12f);
+        const float reach = 2.0f * a + 3.0f * lam + 1.0f;
+        const float r2 = glm::dot(d, d);
+        if (r2 > reach * reach) continue;
+        const float down = glm::dot(d, fd), lat = glm::dot(d, ac), r = std::sqrt(r2);
+        const float rf = 1.0f - glm::smoothstep(0.75f * reach, reach, r);
+        const float S0c = S0 + sl * down;
+        const float bsub = glm::smoothstep(-0.03f, 0.07f, S0c - P.w);
+        {
+            const float s = std::max(S0c - P.w, 0.0f);
+            const float hc = std::min(0.9f * hv * a / (a + s), 0.45f);
+            const glm::vec2 dd = d - fd * (0.35f * a);
+            const float R = 1.4f * a + 0.3f, q = glm::dot(dd, dd) / (R * R);
+            if (q < 1.0f) h += bsub * hc * (1.0f - q) * (1.0f - q);
+            const float xi = down - (1.5f * a + 0.25f);
+            const float wd = 1.1f * a + 0.2f + 0.15f * std::max(down, 0.0f);
+            const float wl = std::exp(-lat * lat / (wd * wd));
+            h += 0.55f * hc * -std::cos(6.2832f * xi / lam) * std::exp(-std::max(xi, 0.0f) / (1.5f * lam)) * glm::smoothstep(-0.6f * a - 0.2f, 0.0f, xi) * wl * rf * bsub;
+        }
+        {
+            const float ring = std::max(r - a, 0.0f);
+            const float inside = glm::smoothstep(0.8f * a, a, r);
+            h += 0.8f * hv * std::exp(-ring / (0.3f + 0.2f * a)) * glm::smoothstep(-0.3f * a, 0.6f * a, -down) * inside * rf * (1.0f - bsub);
+            h -= 0.5f * hv * std::exp(-lat * lat / (a * a)) * std::exp(-std::max(down, 0.0f) / (1.2f * a + 0.5f)) * glm::smoothstep(0.0f, 0.4f * a, down) * inside * rf * (1.0f - bsub);
+            const float e = std::max(std::abs(lat) - a, 0.0f) + 0.05f + 20.0f * std::max(glm::smoothstep(a + 0.3f, a + 0.8f, std::abs(down)), bsub);
+            if (lat > 0.0f) gr = std::min(gr, e); else gl = std::min(gl, e);
+        }
+    }
+    {
+        const float hwb = A.half_w;
+        gl = std::min(gl, std::max(hwb - A.lat, 0.05f));
+        gr = std::min(gr, std::max(hwb + A.lat, 0.05f));
+        const float g = gl + gr;
+        const float sq = 1.0f - glm::smoothstep(0.35f, 0.75f, g / std::max(2.0f * hwb, 0.1f));
+        h += 0.6f * hv * sq * std::pow(std::sin(3.1416f * std::clamp(gl / g, 0.0f, 1.0f)), 0.7f);
+    }
+    h *= 1.0f - glm::smoothstep(0.3f, 0.8f, A.slope) * (A.drop >= 0.01f ? 1.0f : 0.0f);
+    h *= 1.0f - glm::smoothstep(0.65f, 1.0f, A.dist / std::max(wc::wet_reach(A), 0.1f));
+    h = std::max(h, -0.33f * A.depth * (1.0f - glm::smoothstep(0.3f, 0.9f, A.dist / std::max(A.half_w, 0.1f))));      // (a dip never bares the bed)
+    return std::clamp(h, -0.3f, 0.5f);
+}
+}  // namespace
 
 // The current parts round the piers and rocks standing in it: potential flow round a cylinder
 // of the obstacle's radius (the water shader does the same, and adds the eddies behind it).
@@ -273,7 +381,7 @@ glm::vec2 VulkanEngine::water_course_flow(float x, float z) const {
     // where its surface stands above the river's: its last points lie in the river at the river's
     // level, and there the shader draws the river (the plane is met first), so the river's current
     // is what carries things there too.
-    if (wc::stream_surface(glm::vec2(x, z), rt_.water_level) > rt_.water_level + 0.005f) {
+    if (wc::stream_surface(glm::vec2(x, z), rt_.water_level) > rt_.water_level + water_level_off(x, z) + 0.005f) {
         const glm::vec2 sf = wc::stream_flow(glm::vec2(x, z), rt_.water_level);
         if (sf.x != 0.0f || sf.y != 0.0f) return sf;
     }
@@ -284,9 +392,12 @@ glm::vec2 VulkanEngine::water_course_flow(float x, float z) const {
               (1.0f - glm::smoothstep(1880.0f, 1990.0f, x));
     if (k <= 0.0f) return glm::vec2(0.0f);
     k *= 1.0f - sea_weight(x, z);
-    const float depth = std::max(0.0f, rt_.water_level - sample_terrain_height(x, z));
+    const float depth = std::max(0.0f, rt_.water_level + water_level_off(x, z) - sample_terrain_height(x, z));
     if (depth <= 0.0f) return glm::vec2(0.0f);
-    const float speed = (0.30f + 1.10f * glm::smoothstep(0.3f, 2.2f, depth)) * (1.0f - 0.6f * rv.pool);
+    float speed = (0.30f + 1.10f * glm::smoothstep(0.3f, 2.2f, depth)) * (1.0f - 0.6f * rv.pool);
+    // (the rapids where the river's level falls: terrain_rm_main_water.glsl, the same)
+    static const bool flat_river = [] { const char* e = std::getenv("VIBE_NO_SLOPED_RIVER"); return e && *e && *e != '0'; }();
+    if (!flat_river) speed += 3.0f * std::clamp((river_level_profile(rv.along - 6.0f) - river_level_profile(rv.along + 6.0f)) / 12.0f, 0.0f, 0.03f) * 25.0f;
     const glm::vec4 W = env_->water_wind;
     return k * (rv.dir * speed + glm::vec2(W.x, W.y) * (0.012f * W.z));
 }

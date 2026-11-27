@@ -55,6 +55,13 @@ void VulkanEngine::tick_water_spray(float dt) {
         };
         // ---- the stream's falls: at the foot of each step within reach
         const wc::Course& st = wc::stream(rt_.water_level);
+        static bool listed = false;
+        if (lg && !listed && st.ok) {
+            listed = true;
+            for (size_t k = 0; k + 1 < st.pts.size(); ++k)
+                if (st.pts[k + 1].w < 0.0f && st.pts[k].z - st.pts[k + 1].z >= 0.25f)
+                    log::infof("[spray] the stream's step %zu: %.2f m at (%.1f, %.2f, %.1f)", k, double(st.pts[k].z - st.pts[k + 1].z), double(st.pts[k + 1].x), double(st.pts[k + 1].z), double(st.pts[k + 1].y));
+        }
         for (size_t k = 0; st.ok && k + 1 < st.pts.size(); ++k) {
             const glm::vec4 A = st.pts[k], B = st.pts[k + 1];
             if (B.w >= 0.0f) continue;                       // (only a segment that ends in a step)
@@ -65,6 +72,7 @@ void VulkanEngine::tick_water_spray(float dt) {
             const float hw = std::abs(B.w);
             const float rate = sw::spray_rate_fall(fall, 1.6f * hw);
             ++S.emitters;
+            if (lg && S.log_t <= 0.0f) log::infof("[spray] a fall of %.2f m at (%.1f, %.2f, %.1f), flowing (%.2f, %.2f)", double(fall), double(b.x), double(B.z), double(b.y), double(d.x), double(d.y));
             for (int i = count(rate, dt); i > 0; --i) {
                 const glm::vec2 q = b + n * rr(-0.8f, 0.8f) * hw + d * rr(-0.2f, 0.6f);
                 const float y = water_surface_y(q.x, q.y);
@@ -73,10 +81,23 @@ void VulkanEngine::tick_water_spray(float dt) {
                 drop(glm::vec3(q.x, y + 0.05f, q.y), glm::vec3(h.x, up, h.y), rr(0.0025f, 0.006f), rr(0.8f, 1.6f));
             }
             // (the mist: a soft sheet hanging over the foot, rising and drifting down the stream)
-            for (int i = count(1.2f * std::min(fall, 3.0f) * std::clamp(hw, 0.5f, 3.0f), dt); i > 0; --i) {
-                const glm::vec2 q = b + n * rr(-0.7f, 0.7f) * hw + d * rr(0.0f, 1.2f);
-                puff(glm::vec3(q.x, water_surface_y(q.x, q.y) + rr(0.1f, 0.5f) * std::sqrt(fall), q.y),
-                     glm::vec3(d.x * 0.5f, rr(0.15f, 0.45f), d.y * 0.5f), rr(0.6f, 1.2f) * std::sqrt(std::min(fall, 3.0f)), rr(0.10f, 0.20f), rr(2.0f, 3.5f));
+            // (2026-11-26, the owner's "big white fog" by the rapid: the puffs were 0.6 - 2 m, 10 - 20 %
+            //  opaque, lived 3.5 s and grew 2.4x - a bank of fog over every step. Now only a real fall
+            //  (>= 0.5 m) mists, the puffs are small, faint and gone in a second or two.)
+            const int nm = fall >= 0.5f ? count(0.6f * std::min(fall, 3.0f) * std::clamp(hw, 0.5f, 2.0f), dt) : 0;
+            for (int i = nm; i > 0; --i) {
+                const glm::vec2 q = b + n * rr(-0.6f, 0.6f) * hw + d * rr(0.0f, 0.8f);
+                puff(glm::vec3(q.x, water_surface_y(q.x, q.y) + rr(0.05f, 0.3f) * std::sqrt(fall), q.y),
+                     glm::vec3(d.x * 0.4f, rr(0.10f, 0.30f), d.y * 0.4f), rr(0.3f, 0.6f) * std::sqrt(std::min(fall, 3.0f)), rr(0.04f, 0.08f), rr(1.0f, 1.8f));
+            }
+            // (2026-11-27, a WATERFALL - a fall over 1.2 m, its face near sheer: water_course.cpp - also
+            //  breathes a veil of mist up its foot: puffs rising along the face, larger and a little longer
+            //  lived, still faint)
+            const int nw = fall >= 1.2f ? count(0.8f * std::min(fall, 4.0f) * std::clamp(hw, 0.5f, 2.0f), dt) : 0;
+            for (int i = nw; i > 0; --i) {
+                const glm::vec2 q = b + n * rr(-0.7f, 0.7f) * hw + d * rr(-0.3f, 1.2f);
+                puff(glm::vec3(q.x, water_surface_y(q.x, q.y) + rr(0.1f, 0.6f) * fall, q.y),
+                     glm::vec3(d.x * 0.5f, rr(0.25f, 0.6f), d.y * 0.5f), rr(0.5f, 1.0f) * std::sqrt(std::min(fall, 4.0f)), rr(0.03f, 0.06f), rr(1.4f, 2.4f));
             }
         }
         // ---- stones, rocks and piers the current runs into
@@ -104,8 +125,9 @@ void VulkanEngine::tick_water_spray(float dt) {
                 const glm::vec2 h = -fd * rr(0.0f, 0.6f) + n * rr(-0.7f, 0.7f);
                 drop(glm::vec3(q.x, ys + 0.03f, q.y), glm::vec3(h.x, rr(0.8f, 2.2f) * std::sqrt(sp - 0.9f), h.y), rr(0.002f, 0.005f), rr(0.5f, 1.1f));
             }
-            for (int i = count(0.35f * (sp - 1.0f) * std::clamp(r, 0.3f, 2.0f), dt); i > 0; --i)
-                puff(glm::vec3(up.x, ys + 0.2f, up.y), glm::vec3(fd.x * 0.4f, 0.25f, fd.y * 0.4f), rr(0.35f, 0.7f) * std::clamp(r, 0.5f, 2.0f), rr(0.06f, 0.12f), rr(1.2f, 2.2f));
+            // (mist only where the water hits hard - over 2 m/s -, small, faint and brief)
+            for (int i = sp > 2.0f ? count(0.15f * (sp - 2.0f) * std::clamp(r, 0.3f, 1.5f), dt) : 0; i > 0; --i)
+                puff(glm::vec3(up.x, ys + 0.15f, up.y), glm::vec3(fd.x * 0.3f, 0.2f, fd.y * 0.3f), rr(0.2f, 0.4f) * std::clamp(r, 0.5f, 1.5f), rr(0.03f, 0.06f), rr(0.7f, 1.3f));
         }
         // ---- the open sea's whitecaps in a strong wind
         const glm::vec4 W = env_->water_wind;
@@ -174,8 +196,8 @@ void VulkanEngine::water_spray_fx(std::vector<Vertex>& drops, std::vector<Vertex
     }
     for (const Mist& m : S.mist) {
         const float k = m.t / m.life;
-        const float r = m.r * (1.0f + 1.4f * k);
-        const float a = m.a * glm::smoothstep(0.0f, 0.15f, k) * (1.0f - glm::smoothstep(0.5f, 1.0f, k));
+        const float r = m.r * (1.0f + 0.8f * k);
+        const float a = m.a * glm::smoothstep(0.0f, 0.15f, k) * (1.0f - glm::smoothstep(0.3f, 1.0f, k));
         const glm::vec3 Rr = R * r, Uu = U * r;
         const glm::vec3 tint(a, 1.0f, m.seed);
         const Vertex q0{ m.p - Rr - Uu, tint, { -1.0f, -1.0f } }, q1{ m.p + Rr - Uu, tint, { 1.0f, -1.0f } };

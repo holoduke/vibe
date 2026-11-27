@@ -42,4 +42,67 @@ vec3 glass_glint(vec3 R, float tight, float tight_gain, float wide, float wide_g
     return glass_sunlight() * (pow(sd, tight) * tight_gain + pow(sd, wide) * wide_gain);
 }
 
-float glass_fresnel(float ndv) { return 0.04 + 0.96 * pow(1.0 - ndv, 5.0); }
+// (2026-11-27, "windows should have slightly more reflection"): 7.5 % head-on - a double-glazed
+// window has four faces that each give back 4 % (the first two dominate) - rising to a mirror at
+// a grazing angle.
+float glass_fresnel(float ndv) { return 0.075 + 0.925 * pow(1.0 - ndv, 5.0); }
+
+// ON IT, from what is on the screen: the mirrored line of sight marched through the depth
+// buffer in world space, each step projected by `vp` (world -> clip), up to ~70 m. A hit is a
+// step that went behind what is drawn there by less than the step's own length; it is refined
+// by halving. rgb: the lit scene there (the frame copy), a: how sure (0 = nothing found: off the
+// screen, the sky, or it went behind the eye - then the caller's fallback shows).
+vec4 glass_ssr(vec3 P, vec3 R, mat4 vp) {
+    float t = 0.12, prev = 0.0;
+    for (int i = 0; i < 30; ++i) {
+        vec4 c = vp * vec4(P + R * t, 1.0);
+        if (c.w < 0.08) break;                                         // (behind the eye)
+        vec2 s = c.xy / c.w * 0.5 + 0.5;
+        if (s.x < 0.0 || s.y < 0.0 || s.x > 1.0 || s.y > 1.0) break;
+        float zs = textureLod(u_scene_depth, s, 0.0).r;
+        float ds = scene.lp_params.x / (zs + scene.lp_params.y);       // view depth of what is drawn there
+        if (c.w > ds + 0.02 && ds > 0.05) {
+            if (c.w - ds > (t - prev) * 1.5 + 0.25) break;             // went behind something thick: hidden, not hit
+            float lo = prev, hi = t;
+            for (int k = 0; k < 5; ++k) {
+                float m = 0.5 * (lo + hi);
+                vec4 cm = vp * vec4(P + R * m, 1.0);
+                vec2 sm = cm.xy / cm.w * 0.5 + 0.5;
+                float dm = scene.lp_params.x / (textureLod(u_scene_depth, sm, 0.0).r + scene.lp_params.y);
+                if (cm.w > dm) hi = m; else lo = m;
+            }
+            vec4 ch = vp * vec4(P + R * hi, 1.0);
+            vec2 sh = ch.xy / ch.w * 0.5 + 0.5;
+            vec2 e = min(sh, 1.0 - sh);
+            float conf = smoothstep(0.0, 0.08, min(e.x, e.y)) * (1.0 - smoothstep(40.0, 70.0, t));
+            return vec4(textureLod(u_scene_copy, clamp(sh, vec2(0.001), vec2(0.999)), 0.0).rgb, conf);
+        }
+        prev = t;
+        t = t * 1.22 + 0.05;
+    }
+    return vec4(0.0);
+}
+
+// A room seen in its own window (the eye indoors): what is behind the eye is not on the screen,
+// but a room is much the same all round - its own picture turned about the middle of the screen,
+// softened. Dark outside, this is what the glass shows (as in life, a window at night is a
+// mirror of the room); by day the bright view through it outshines it.
+vec3 glass_room(vec2 uv) {
+    vec2 m = vec2(1.0 - uv.x, uv.y);
+    vec3 a = vec3(0.0);
+    a += textureLod(u_scene_copy, clamp(m, vec2(0.001), vec2(0.999)), 0.0).rgb * 0.36;
+    a += textureLod(u_scene_copy, clamp(m + vec2( 0.035, 0.0), vec2(0.001), vec2(0.999)), 0.0).rgb * 0.16;
+    a += textureLod(u_scene_copy, clamp(m + vec2(-0.035, 0.0), vec2(0.001), vec2(0.999)), 0.0).rgb * 0.16;
+    a += textureLod(u_scene_copy, clamp(m + vec2(0.0,  0.05), vec2(0.001), vec2(0.999)), 0.0).rgb * 0.16;
+    a += textureLod(u_scene_copy, clamp(m + vec2(0.0, -0.05), vec2(0.001), vec2(0.999)), 0.0).rgb * 0.16;
+    return a * 0.9;
+}
+
+// What the pane mirrors: the scene on the screen where the mirrored ray finds it, else the
+// room (eye indoors: `indoor` 1) or the sky and the ground (outdoors), and - outdoors - the sun.
+// (scene.lp_params: this frame's projection, filled every frame by light_port.cpp.)
+vec3 glass_reflection(vec3 P, vec3 R, mat4 vp, vec2 uv, float indoor) {
+    vec4 ssr = glass_ssr(P, R, vp);
+    vec3 fall = mix(glass_mirror(R) + glass_glint(R, 900.0, 60.0, 24.0, 0.12), glass_room(uv), clamp(indoor, 0.0, 1.0));
+    return mix(fall, ssr.rgb, ssr.a);
+}

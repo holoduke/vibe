@@ -17,7 +17,7 @@
 //     falling where it drops away, drawn as lit points at the end of render_fx;
 //   * the CPU read-back (f32 height + 2 x f16 velocity per cell, every other frame, read two frames
 //     later): water_flow_at - the current that carries the swimmer and the wader, splashes and rings.
-// Switches: VIBE_NO_SOLVER=1 (the analytic water alone), VIBE_NO_FOAM_PARTICLES=1. Hooks:
+// Switches: VIBE_NO_SOLVER=1 (the analytic water alone), VIBE_NO_FOAM_PARTICLES=1, VIBE_NO_FOAM_DRIFT=1 (no long-lived foam lines). Hooks:
 // VIBE_SW_STEPS=<n> (exactly n steps every frame: pictures that do not depend on the frame rate),
 // VIBE_LOG_SOLVER=1 (once a second: steps, particles, the read-back at the player).
 #include "engine/vk_engine/internal.h"
@@ -312,6 +312,11 @@ void VulkanEngine::water_solver_fill(SceneUBO& d) {
         const double dt = W.clock < 0.0 ? 0.0 : now - W.clock;
         W.clock = now;
         int steps = fixed >= 0 ? fixed : sw::take_steps(W.acc, dt);
+        // (VIBE_SHOT_WAIT_FULL: a test copy's picture waits for the full terrain shader - the water
+        //  waits with it, so two pictures N frames apart are N frames of water apart however long
+        //  the compile took)
+        static const bool wait_full = std::getenv("VIBE_SHOT_WAIT_FULL") != nullptr;
+        if (wait_full && W.have_state && terrain_rm_build_[0].valid()) steps = 0;
         const glm::ivec2 mv = corner - W.corner;
         if (!W.have_state || std::abs(mv.x) > int(kN) / 4 || std::abs(mv.y) > int(kN) / 4) {
             // (the first frame, or a jump: everything new, and a second and a half of water first)
@@ -365,6 +370,7 @@ void VulkanEngine::water_solver_update(VkCommandBuffer cmd) {
     Solver& W = g_sw;
     if (!W.ok) return;
     static const bool no_parts = env_on("VIBE_NO_FOAM_PARTICLES"), log_on = env_on("VIBE_LOG_SOLVER");
+    static const bool no_drift = env_on("VIBE_NO_FOAM_DRIFT");      // (the long-lived drift foam: water_solver.comp z)
     // ---- the CPU's copy of the read-back two frames old (written every other frame)
     {
         int best = -1;
@@ -488,7 +494,7 @@ void VulkanEngine::water_solver_update(VkCommandBuffer cmd) {
             const int i = int(k % size_t(kFlowN)), j = int(k / size_t(kFlowN));
             const glm::vec2 p = (glm::vec2(W.flow_corner + glm::ivec2(i, j)) + 0.5f) * kFlowCell;
             const glm::vec2 f = water_course_flow(p.x, p.y);
-            W.flow[k] = glm::vec4(f, water_sea_weight(p.x, p.y) > 0.5f ? 1.0f : 0.0f, 0.0f);
+            W.flow[k] = glm::vec4(f, water_sea_weight(p.x, p.y) > 0.5f ? 1.0f : 0.0f, water_level_off(p.x, p.y));      // (w: the level under the datum - the river falls down its course: the solver's authored top slopes, its water runs by gravity)
             W.flow_fresh[k] = 1;
         };
         int budget = W.reset_all ? int(nn) : 256;
@@ -514,6 +520,7 @@ void VulkanEngine::water_solver_update(VkCommandBuffer cmd) {
         Push p{};
         p.m = glm::ivec4(mode, step, W.cur, flags);
         p.s = glm::ivec4(sh, 0, 0);
+        p.f = glm::vec4(no_drift ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f);
         vkCmdPushConstants(cmd, W.layout, VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(p), &p);
         vkCmdDispatch(cmd, gx, gy, 1);
         barrier_all(cmd);
@@ -559,8 +566,8 @@ void VulkanEngine::water_solver_update(VkCommandBuffer cmd) {
         log::infof("[solver] window (%.1f, %.1f), %d steps this frame, %d obstacles, %d bodies; at the player: %s h %.3f (authored %.3f), current (%.2f, %.2f) vs the analytic (%.2f, %.2f)",
                    double(org.x), double(org.y), W.steps, W.last_obs, W.last_bodies, got ? "water" : "no water/no read-back",
                    double(h), double(water_surface_y(pp.x, pp.z)), double(v.x), double(v.y), double(an.x), double(an.y));
-        log::infof("[solver] foam rule: max O %.4f, max foam %.3f, %u cells with O > 0.004; max approach %.2f m/s, max rough x rise %.3f, max depth %.2f m",
-                   double(W.stat[0]) * 1e-4, double(W.stat[1]) * 1e-4, W.stat[2], double(W.stat[3]) * 0.01, double(W.stat[4]) * 1e-4, double(W.stat[5]) * 0.01);
+        log::infof("[solver] foam rule: max O %.4f, max foam %.3f, %u cells with O > 0.004; max approach %.2f m/s, max rough x rise %.3f, max depth %.2f m; sudden-rise cells %u, pillow cells %u",
+                   double(W.stat[0]) * 1e-4, double(W.stat[1]) * 1e-4, W.stat[2], double(W.stat[3]) * 0.01, double(W.stat[4]) * 1e-4, double(W.stat[5]) * 0.01, W.stat[6], W.stat[7]);
     }
 }
 

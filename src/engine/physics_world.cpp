@@ -255,6 +255,7 @@ struct PhysicsWorld::Impl {
     size_t voxel_shape_hash = 0;
     struct Ragdoll { std::vector<JPH::BodyID> bodies; std::vector<JPH::Ref<JPH::Constraint>> joints; JPH::BodyID floor; };
     std::unordered_map<uint32_t, Ragdoll> ragdolls;
+    std::unordered_map<uint32_t, JPH::BodyID> corpse_cars;     // (corpse_cars_set)
     std::unordered_map<uint32_t, JPH::BodyID> ids;
     // Reverse lookup so raycast hits → user id is O(1) instead of a
     // linear walk over `ids`. Keyed on BodyID's internal index value
@@ -346,7 +347,7 @@ bool PhysicsWorld::mesh_piece_ready(int piece) const {
     return piece >= 0 && size_t(piece) < impl_->mesh_ready.size() && impl_->mesh_ready[size_t(piece)] != 0;
 }
 
-uint32_t PhysicsWorld::add_mesh_instance(int piece, glm::vec3 pos, float yaw, float scale) {
+uint32_t PhysicsWorld::add_mesh_instance(int piece, glm::vec3 pos, float yaw, float scale, float tilt) {
     JPH::RefConst<JPH::Shape> base;
     {
         std::lock_guard<std::mutex> lk(impl_->mesh_mutex);
@@ -355,7 +356,7 @@ uint32_t PhysicsWorld::add_mesh_instance(int piece, glm::vec3 pos, float yaw, fl
     }
     JPH::RefConst<JPH::Shape> shape = base;
     if (std::abs(scale - 1.0f) > 1e-4f) shape = new JPH::ScaledShape(base, JPH::Vec3::sReplicate(scale));
-    JPH::BodyCreationSettings bcs(shape, JPH::RVec3(pos.x, pos.y, pos.z), JPH::Quat::sRotation(JPH::Vec3::sAxisY(), yaw),
+    JPH::BodyCreationSettings bcs(shape, JPH::RVec3(pos.x, pos.y, pos.z), JPH::Quat::sRotation(JPH::Vec3::sAxisY(), yaw) * JPH::Quat::sRotation(JPH::Vec3::sAxisX(), tilt),
                                   JPH::EMotionType::Static, Layers::NON_MOVING);
     bcs.mFriction = 0.8f;          // (rough rock)
     bcs.mRestitution = 0.05f;
@@ -1018,6 +1019,66 @@ void PhysicsWorld::remove_ragdoll(uint32_t id) {
     impl_->ragdolls.erase(it);
 }
 
+// What a fallen body lies on besides the world (physics_world.h "WHAT A FALLEN BODY LIES ON").
+void PhysicsWorld::corpse_props_add(const CorpseProp* boxes, size_t n) {
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    for (size_t i = 0; i < n; ++i) {
+        const glm::vec3 he = glm::max(boxes[i].half_extents, glm::vec3(0.02f));
+        JPH::BoxShapeSettings ss(JPH::Vec3(he.x, he.y, he.z), calc_box_convex_radius(std::min({ he.x, he.y, he.z })));
+        ss.SetEmbedded();
+        JPH::ShapeSettings::ShapeResult sr = ss.Create();
+        if (sr.HasError()) continue;
+        const glm::vec3 c = boxes[i].center;
+        const JPH::Quat q = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), boxes[i].yaw);
+        // (static, in the CORPSE layer: only the bodies that fell meet it)
+        JPH::BodyCreationSettings bcs(sr.Get(), JPH::RVec3(c.x, c.y, c.z), q, JPH::EMotionType::Static, Layers::CORPSE);
+        bcs.mFriction = 0.8f;
+        bi.CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+    }
+}
+
+void PhysicsWorld::corpse_cars_set(const CorpseCar* cars, size_t n, float dt) {
+    JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
+    std::unordered_map<uint32_t, bool> seen;
+    for (size_t i = 0; i < n; ++i) {
+        const CorpseCar& c = cars[i];
+        if (!c.boxes || !c.n_boxes) continue;
+        const glm::quat gq = glm::normalize(glm::quat_cast(glm::mat3(c.body)));
+        if (!std::isfinite(c.body[3].x + c.body[3].y + c.body[3].z + gq.x + gq.y + gq.z + gq.w)) continue;
+        const JPH::Quat q(gq.x, gq.y, gq.z, gq.w);
+        const JPH::RVec3 p(c.body[3].x, c.body[3].y, c.body[3].z);
+        seen[c.key] = true;
+        auto it = impl_->corpse_cars.find(c.key);
+        if (it == impl_->corpse_cars.end()) {
+            JPH::StaticCompoundShapeSettings cs;
+            for (size_t b = 0; b < c.n_boxes; ++b) {
+                const StaticBox& sb = c.boxes[b];
+                const JPH::Vec3 he((std::max)(sb.half_extents.x, 0.05f), (std::max)(sb.half_extents.y, 0.05f), (std::max)(sb.half_extents.z, 0.05f));
+                cs.AddShape(JPH::Vec3(sb.center.x, sb.center.y, sb.center.z), JPH::Quat::sIdentity(), new JPH::BoxShape(he, 0.03f));
+            }
+            JPH::ShapeSettings::ShapeResult sr = cs.Create();
+            if (sr.HasError()) continue;
+            JPH::BodyCreationSettings bcs(sr.Get(), p, q, JPH::EMotionType::Kinematic, Layers::CORPSE);
+            bcs.mFriction = 0.6f;
+            const JPH::BodyID id = bi.CreateAndAddBody(bcs, JPH::EActivation::Activate);
+            if (!id.IsInvalid()) impl_->corpse_cars.emplace(c.key, id);
+            continue;
+        }
+        const JPH::RVec3 was = bi.GetPosition(it->second);
+        if ((p - was).Length() > 4.0f || dt <= 1e-4f) {
+            bi.SetPositionAndRotation(it->second, p, q, JPH::EActivation::Activate);
+            bi.SetLinearAndAngularVelocity(it->second, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+        } else bi.MoveKinematic(it->second, p, q, (std::max)(dt, 1.0f / 240.0f));
+    }
+    for (auto it = impl_->corpse_cars.begin(); it != impl_->corpse_cars.end();) {
+        if (seen.count(it->first)) { ++it; continue; }
+        bi.RemoveBody(it->second); bi.DestroyBody(it->second);
+        it = impl_->corpse_cars.erase(it);
+    }
+}
+
+size_t PhysicsWorld::corpse_cars_count() const { return impl_->corpse_cars.size(); }
+
 void PhysicsWorld::remove_body(uint32_t id) {
     auto it = impl_->ids.find(id);
     if (it == impl_->ids.end()) return;
@@ -1172,6 +1233,7 @@ struct PhysicsWorld::VehicleImpl {
     float over_t = 0.0f;               // how long the engine has been over the speed to change up at
     bool  own_shift = false;           // a change up of our own is under way (vehicle_input)
     int   own_gear = 0; float own_t = 0.0f;
+    bool  burnout = false;             // vehicle_burnout: the front brakes hold, the rear tyres spin
     // The air on the car, every physics step: downforce along the car's own down, drag against its motion.
     struct Aero : JPH::PhysicsStepListener {
         JPH::BodyID body; float down = 0.0f, drag = 0.0f;
@@ -1256,7 +1318,9 @@ uint32_t PhysicsWorld::vehicle_create(const VehicleDesc& d) {
     // real numbers - mass, springs, tyres, engine - only behaves like one under the Earth's:
     // at 25 it sat on its bump stops, cornered at 2.5 g and stalled on the slightest hill.
     // So the vehicle falls at 9.81, and everything below is sized for that.
-    const float grav = 9.81f;
+    // (2026-11-27: the fall is the desc's own - VehicleDesc::gravity - so that a car can land
+    //  sooner than the Earth's 9.81 would let it; the springs and tyres below follow it)
+    const float grav = std::clamp(d.gravity, 4.0f, 30.0f);
     bcs.mGravityFactor = grav / std::max(impl_->system.GetGravity().Length(), 0.1f);
     JPH::Body* body = bi.CreateBody(bcs);
     if (!body) { vehicle_.reset(); return 0; }
@@ -1380,9 +1444,12 @@ uint32_t PhysicsWorld::vehicle_create(const VehicleDesc& d) {
     // One tyre has one grip to spend: what it uses along (spinning under power, locked under
     // the brake) it has not across. (Jolt limits the two separately: a wheel spinning freely
     // still held the car sideways at full strength - no power slide, no locked-wheel plough.)
+    // (a burnout: the rear tyres hold a little over half as much along - they spin up under the
+    //  engine against the front brakes, and the car does not creep away while they do)
+    VehicleImpl* const vimpl = vehicle_.get();
     static_cast<JPH::WheeledVehicleController*>(vehicle_->constraint->GetController())->SetTireMaxImpulseCallback(
-        [](JPH::uint, float& out_long, float& out_lat, float susp, float f_long, float f_lat, float slip_long, float, float) {
-            out_long = susp * f_long;
+        [vimpl](JPH::uint wheel, float& out_long, float& out_lat, float susp, float f_long, float f_lat, float slip_long, float, float) {
+            out_long = susp * f_long * (vimpl->burnout && wheel >= 2 ? 0.55f : 1.0f);
             const float spent = std::clamp((slip_long - 0.10f) / 0.30f, 0.0f, 1.0f);
             out_lat = susp * f_lat * (1.0f - 0.45f * spent);
         });
@@ -1525,6 +1592,28 @@ void PhysicsWorld::vehicle_shift(glm::vec3 delta) {
     JPH::BodyInterface& bi = impl_->system.GetBodyInterface();
     const JPH::RVec3 p = bi.GetPosition(vehicle_->body);
     bi.SetPosition(vehicle_->body, p + JPH::RVec3(delta.x, delta.y, delta.z), JPH::EActivation::DontActivate);
+}
+
+void PhysicsWorld::vehicle_burnout(bool on) {
+    if (!vehicle_exists() || vehicle_->burnout == on) return;
+    vehicle_->burnout = on;
+    // The brake input works on every wheel by its own settings' torque: the rear wheels' is
+    // taken away for the burnout (and given back after), so the pedal holds the front only.
+    for (JPH::uint i = 2; i < 4; ++i) {
+        auto* ws = const_cast<JPH::WheelSettings*>(vehicle_->constraint->GetWheel(i)->GetSettings());
+        static_cast<JPH::WheelSettingsWV*>(ws)->mMaxBrakeTorque = on ? 0.0f : vehicle_->desc.brake_torque * 0.6f;
+    }
+    // ... and the front axle is out of the drive for as long: Jolt couples the engine to the mean
+    // speed of every wheel on a differential, the front ones too (even with no torque share), so
+    // the two held front wheels kept the engine at its idle while the rear ones spun - no revs.
+    // All the torque to the rear, the engine against the rear wheels alone.
+    auto* c = static_cast<JPH::WheeledVehicleController*>(vehicle_->constraint->GetController());
+    auto& diffs = c->GetDifferentials();
+    if (diffs.size() >= 2) {
+        diffs[0].mLeftWheel = on ? -1 : 0; diffs[0].mRightWheel = on ? -1 : 1;
+        diffs[0].mEngineTorqueRatio = on ? 0.0f : vehicle_->desc.front_drive;
+        diffs[1].mEngineTorqueRatio = on ? 1.0f : 1.0f - vehicle_->desc.front_drive;
+    }
 }
 
 void PhysicsWorld::vehicle_impulse(glm::vec3 impulse, glm::vec3 at) {

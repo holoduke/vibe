@@ -84,3 +84,4 @@ screenshots/
 cache/
 vibe_pipeline.cache.stamp
 vibe_pipeline.cache.tmp
+vibe_pipeline_times.txt

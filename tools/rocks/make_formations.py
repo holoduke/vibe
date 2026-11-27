@@ -4,11 +4,12 @@
 #
 #   "C:\Program Files\Blender Foundation\Blender 5.3\blender.exe" -b --python tools/rocks/make_formations.py
 #
-# writes assets/rocks/formations.rockf (read by src/engine/vk_engine/rock_formations.cpp).
+# writes assets/rocks/kit.rockf (read by src/engine/vk_engine/rock_formations.cpp).
 # Options after "--":  --only arch,pile   make only these (the file then holds only these)
 #                      --quick            a quarter of the dense triangles (a fast look)
 #                      --preview DIR      also render each piece to DIR/<name>.png
-#                      --out FILE         another output file
+#                      --out FILE         another output file (the bake goes beside it)
+#                      --bake N           the bake's size (1024; 512 with --quick)
 # Deterministic: the same script gives the same file (every random number comes from the
 # piece's seed; no Blender random operators are used).
 #
@@ -28,19 +29,28 @@
 #      on the faces, hair cracks, pits (less of all of it on the weathered tops).
 #   5. Three game meshes by edge-collapse decimation of the dense mesh (the holes stay: a
 #      collapse does not close a hole). Normals: smooth, split at edges sharper than 42 degrees.
-#      No normal-map bake: eight pieces would need eight more texture slots and a UV unwrap of
-#      shapes with holes; the fine relief comes from the tiling rock material (colour, normal,
-#      height through the engine's screen-space displacement) laid on by world position.
-#   6. Per vertex, for the material: u = ambient occlusion (rays against the nearest mesh;
-#      dark in clefts and under overhangs), v = curvature (0.5 flat, more = an edge, less = a
-#      crease).
+#   6. THE BAKE (bake_piece): level 0 is unwrapped (smart projection; the coarser levels are
+#      decimated from it and keep its unwrap) and the dense mesh is baked onto it with Cycles
+#      on the CPU: its normal in the piece's own axes, its place (from which the height over
+#      the level-0 surface), ambient occlusion; from those, in numpy, the weight of the
+#      ground on tops and ledges (up-facing, open to the sky). Written block-compressed
+#      (two channels a layer) with five mip levels into <out>_bake.bin, three layers a piece:
+#        layer 3p     : normal x, normal z (game axes)
+#        layer 3p + 1 : normal y, height (0.5 = on the level-0 surface, +- the piece's range)
+#        layer 3p + 2 : ambient occlusion, the ground's weight on tops
+#      and after the pieces two layers of the BREAKER pattern shared by every steep rock face
+#      (breaker_pattern): strata tone, stain tone / relief, cracks. A tile is 24 m.
+#      The tiling rock material (colour, normal, height) stays as the fine detail on top.
 #   7. Collision: the piece's solid cells in a coarse grid (0.5 - 1.4 m), so the arch's
 #      opening and the big gaps stay open; the engine turns them into boxes where it stands.
 #
-# FILE (little endian): "RKF1", u32 pieces; per piece: char name[24], u32 levels; per level:
-# u32 vertices, u32 indices, f32 bmin[3], f32 bmax[3], vertices (f32 pos[3], normal[3], ao,
-# curvature), indices u32; then the grid: f32 origin[3] (its least corner), f32 cell,
+# FILE (little endian): "RKF2", u32 pieces; per piece: char name[24], u32 levels; per level:
+# u32 vertices, u32 indices, f32 bmin[3], f32 bmax[3], vertices (f32 pos[3], normal[3], the
+# bake's u, v), indices u32; then the grid: f32 origin[3] (its least corner), f32 cell,
 # u32 nx, ny, nz, u8 solid[nx * ny * nz] (x fastest, then y, then z).
+# BAKE FILE: "RKB1", u32 size, u32 layers, u32 mips, u32 pieces, f32 height range (m) per
+# piece, then per layer, per mip (largest first) its 4 x 4 blocks, 16 bytes each (two
+# single-channel blocks: the format the GPU calls BC5); row 0 is v = 0.
 # Game axes: x = the piece's width, y = up, z = toward its FRONT (its back, z < 0, is what is
 # sunk into a slope). y = 0 is where the ground is meant to be; every piece has a root below.
 import bpy
@@ -56,19 +66,28 @@ from mathutils.bvhtree import BVHTree
 
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-OUT = os.path.join(ROOT, "assets", "rocks", "formations.rockf")
+OUT = os.path.join(ROOT, "assets", "rocks", "kit.rockf")
 ONLY = None
 QUICK = False
 PREVIEW = None
+BAKE = 0
+SET = "kit"           # --set cliffs: the cliff-wall family (CLIFFS) into assets/cliffs/cliffs.rockf, bake 512
 i = 0
 while i < len(argv):
     if argv[i] == "--only": ONLY = argv[i + 1].split(","); i += 1
     elif argv[i] == "--quick": QUICK = True
     elif argv[i] == "--preview": PREVIEW = os.path.abspath(argv[i + 1]); i += 1
     elif argv[i] == "--out": OUT = os.path.abspath(argv[i + 1]); i += 1
+    elif argv[i] == "--bake": BAKE = int(argv[i + 1]); i += 1
+    elif argv[i] == "--set": SET = argv[i + 1]; i += 1
     i += 1
+if SET == "cliffs" and "--out" not in argv: OUT = os.path.join(ROOT, "assets", "cliffs", "cliffs.rockf")
+if SET == "cliffs" and BAKE == 0: BAKE = 512
 
 DENSE_TRIS = 500000 if QUICK else 2000000
+if BAKE == 0: BAKE = 512 if QUICK else 1024
+BAKE_MIPS = 5
+BAKE_OUT = os.path.splitext(OUT)[0] + "_bake.bin"
 T0 = time.time()
 
 
@@ -374,21 +393,6 @@ KIT = [("arch", 11, blockout_arch), ("cleft", 23, blockout_cleft), ("overhang", 
        ("buttress", 79, blockout_buttress), ("outcrop", 83, blockout_outcrop)]
 
 
-# ---------------------------------------------------------------- the cliff-face family ---
-# Sheer faces to stand side by side along a cliff line (the white cliffs of a chalk coast; in
-# the dark rock, an inland crag band). A piece is FACE_W wide and FACE_H high at size 1; its
-# two ENDS are the same on every variant - the same block-out there, and the relief of the
-# face (face_field) goes over, within 4.5 m of an end, into one relief that every piece
-# shares - so any two stood FACE_W apart (the engine lays them a little into each other) meet
-# without a step. The headland matches at its left end only and turns the corner at its
-# right; the sea stack stands alone.
-# What a face is made of: a wall leaning back 3.5 degrees; buttresses and gullies between
-# upright joints; faint level beds a metre thick with a parting between them and, every fourth
-# bed, a line of flint nodules; blocks a little in or out of line, and scars where a panel of
-# them fell; a ragged wave notch at the foot; a rubble ramp and fallen blocks in front (the
-# blocks are added after the relief of the face, so they keep their shape); the turf of the
-# top hanging over the lip, slumped behind it.
-FACE_W, FACE_H = 30.0, 45.0
 # ---------------------------------------------------------------- river boulders ---
 # Single water-worn stones for the river's banks (rock_formations.cpp place_river_boulders):
 # four small (0.6 - 1.1 m across), four medium (1.6 - 2.4 m), four large (3.4 - 5.2 m). A
@@ -426,6 +430,21 @@ BOULDERS = [      # (added after the whole kit, cliff faces included, in main():
 ]
 
 
+# ---------------------------------------------------------------- the cliff-face family ---
+# Sheer faces to stand side by side along a cliff line (the white cliffs of a chalk coast; in
+# the dark rock, an inland crag band). A piece is FACE_W wide and FACE_H high at size 1; its
+# two ENDS are the same on every variant - the same block-out there, and the relief of the
+# face (face_field) goes over, within 4.5 m of an end, into one relief that every piece
+# shares - so any two stood FACE_W apart (the engine lays them a little into each other) meet
+# without a step. The headland matches at its left end only and turns the corner at its
+# right; the sea stack stands alone.
+# What a face is made of: a wall leaning back 3.5 degrees; buttresses and gullies between
+# upright joints; faint level beds a metre thick with a parting between them and, every fourth
+# bed, a line of flint nodules; blocks a little in or out of line, and scars where a panel of
+# them fell; a ragged wave notch at the foot; a rubble ramp and fallen blocks in front (the
+# blocks are added after the relief of the face, so they keep their shape); the turf of the
+# top hanging over the lip, slumped behind it.
+FACE_W, FACE_H = 30.0, 45.0
 
 
 def face_base(bm, x0=-15.2, x1=15.2):
@@ -547,6 +566,154 @@ def geology_face(co, no, P, seed):
     co[:, 2] += top * win * 0.9 * (fbm(np.stack([x / 5.0, y / 5.0, zero], 1), seed + 6, 3) - 0.5)
 
 
+# ---------------------------------------------------------------- the cliff-wall family ---
+# ROCK WALLS THAT COVER STEEP GROUND (--set cliffs -> assets/cliffs/cliffs.rockf + _bake.bin,
+# placed by rock_formations.cpp cliff_stream round the camera wherever the ground is steeper
+# than about 55 degrees). The landscape is a height field: on near-vertical ground its
+# texture stretches. These pieces lie ON such a slope as a skin of real rock.
+#
+# Every piece is built round one PLANE - the slope it is laid on, leaning back 25 degrees from
+# the vertical (a 65-degree slope; the engine tilts a piece by up to +-15 degrees to the slope it
+# finds: kCliffLean). Behind the plane is a block 0.16 x its size + 1.4 m deep (always inside the hill);
+# in front of it the rock stands out as one relief (cliff_pillow: up to 0.1 x its size plus
+# 0.6 m) that goes back INTO the plane along all four edges (cliff_window: the outer 22 % of its
+# width, 16 % at the foot, 20 % at the top). So every piece's ends are the same - the slope's
+# plane - and pieces laid over and beside each other, up and along a slope, meet there without
+# a step; what is behind the plane is never seen and gets a sixteenth of the bake's texels.
+# On the relief: ledges (level, with the ground's weight on their tops from the bake),
+# overhangs (a block standing out, hollowed under), gullies, a notch at the foot, flakes.
+# Four kinds of rock, by the geology's numbers (geology_coarse):
+#   sand  - layered sandstone: beds 0.75 m of uneven hardness, wide joints, soft beds eaten back
+#   gran  - blocky granite: sheets 2.4 m, close joints, blocks out of line and fallen out
+#   slate - fractured slate: thin beds dipping steeply into the slope, many joints
+#   round - rounded, weathered rock: swelling bosses, little bedding
+# Three sizes, two shapes each: large (34 x 28 m, 40 x 22 m), medium (16 x 14, 12 x 18),
+# small (7 x 6, 5 x 8) - and the engine scales them 0.8 - 1.25: 4 - 50 m.
+# Game axes as the kit: x width, y up, z front; the plane is z = -y * CLIFF_TL (its foot at the
+# origin), its middle at (0, H / 2, -H / 2 * CLIFF_TL).
+CLIFF_TL = math.tan(math.radians(25.0))
+CLIFF_NF = np.array([0.0, -math.cos(math.radians(25.0)), math.sin(math.radians(25.0))])   # (the plane's front normal, Blender axes)
+
+CLIFF_GEO = {
+    "sand":  dict(bed=0.75, joint=5.5, amp=1.4, missing=0.05, warp=0.5, lean=0.04),
+    "gran":  dict(bed=3.1, joint=4.6, amp=0.8, missing=0.18, warp=1.3, joint_angle=0.2, lean=0.3),
+    "slate": dict(bed=0.24, joint=1.5, amp=1.3, missing=0.10, warp=0.6, dip_x=0.25, dip_y=1.1),
+    "round": dict(bed=2.6, joint=9.0, amp=0.22, missing=0.0, warp=1.7, bosses=1.5),
+}
+
+
+def cliff_window(co, P):
+    W, H = P["W"], P["H"]
+    x, z = co[:, 0], co[:, 2]
+    return sstep(0.0, 0.22 * W, 0.5 * W - np.abs(x)) * sstep(0.0, 0.16 * H, z) * sstep(0.0, 0.2 * H, H - z)
+
+
+def cliff_pillow(P, seed):
+    W, H, r = P["W"], P["H"], P["relief"]
+    def fn(co, no):
+        fw = sstep(0.25, 0.7, no @ CLIFF_NF)
+        x, z = co[:, 0], co[:, 2]
+        zero = np.zeros(len(co))
+        if P["geo"] == "round":     # (bosses: swelling domes with hollows between)
+            b = vnoise(np.stack([x / (0.22 * W), z / (0.22 * H), zero], 1), seed + 33)
+            sh = 0.35 + 0.75 * np.sqrt(np.clip(1.0 - np.abs(2.0 * b - 1.0), 0.0, 1.0))
+        else:
+            sh = 0.35 + 0.9 * fbm(np.stack([x / (0.32 * W), z / (0.32 * H), zero], 1), seed + 31, 3)
+        co += np.outer(fw * cliff_window(co, P) * r * P.get("bosses", 1.0) * sh, CLIFF_NF)
+    return fn
+
+
+def plane_y(z): return z * CLIFF_TL
+
+
+def f_ledge(h, w, out=2.0, x=0.0):
+    """A level ledge across the face at h x its height, w x its width, standing out `out` x size/10 m."""
+    def f(bm, cuts, rng, W, H, rel, k):
+        zl = h * H + rng.uniform(-0.04, 0.04) * H
+        o = 0.5 * out * min(W, H) / 10.0 * rng.uniform(0.8, 1.2) + 0.9 * rel
+        t = max(0.5, 0.05 * min(W, H)) * rng.uniform(0.8, 1.3)
+        # (a chopped slab, not a plank: flat on top, its front and ends broken)
+        lump(bm, rng, (x * W + rng.uniform(-0.08, 0.08) * W, plane_y(zl) - 0.5 * o + 1.0, zl), (0.5 * w * W, 0.5 * o + 1.0, 0.5 * t), chops=12, sub=3,
+             r=(rng.uniform(-0.05, 0.05), rng.uniform(-0.04, 0.04), rng.uniform(-0.05, 0.05)))
+    return f
+
+
+def f_overhang(h, x=0.0, w=0.35, out=2.2):
+    """A block standing out near the top, hollowed under (a roof one can shelter under)."""
+    def f(bm, cuts, rng, W, H, rel, k):
+        zl = h * H
+        o = 0.6 * out * min(W, H) / 10.0 + 0.9 * rel
+        t = 0.14 * H
+        cx = x * W + rng.uniform(-0.05, 0.05) * W
+        box(bm, (cx, plane_y(zl) - 0.5 * o + 1.0, zl), (w * W, o + 2.0, t), (0.06, rng.uniform(-0.05, 0.05), rng.uniform(-0.08, 0.08)))
+        lump(bm, rng, (cx + 0.1 * w * W, plane_y(zl) - 0.6 * o, zl + 0.2 * t), (0.42 * w * W, 0.45 * o, 0.6 * t), chops=9, sub=3)
+        zu = zl - 0.75 * t
+        cuts.append(cutter_ball("ov%d" % k, rng, (cx, plane_y(zu) - 0.25 * rel, zu - 0.35 * t), (0.42 * w * W, 0.55 * rel + 0.6, 0.55 * t), seed=k + 5))
+    return f
+
+
+def f_gully(x=0.0, w=0.09):
+    """An upright gully (a chimney) cut into the face."""
+    def f(bm, cuts, rng, W, H, rel, k):
+        zc = 0.55 * H
+        cuts.append(cutter_ball("gu%d" % k, rng, (x * W + rng.uniform(-0.05, 0.05) * W, plane_y(zc) - 0.55 * rel, zc), (0.5 * w * W, 0.65 * rel + 0.5, 0.38 * H), (-0.436, rng.uniform(-0.06, 0.06), rng.uniform(-0.1, 0.1)), rough=0.25, seed=k + 13))
+    return f
+
+
+def f_notch(x=0.0, w=0.3):
+    """A hollow at the foot (an overhanging notch, a shallow cave)."""
+    def f(bm, cuts, rng, W, H, rel, k):
+        zc = 0.2 * H
+        cuts.append(cutter_ball("no%d" % k, rng, (x * W, plane_y(zc) - 0.15 * rel, zc), (0.5 * w * W, 0.8 * rel + 0.5, 0.13 * H), seed=k + 9))
+    return f
+
+
+def f_flake(x=0.25):
+    """A slab standing proud of the face, upright, parted from it at the top."""
+    def f(bm, cuts, rng, W, H, rel, k):
+        zc = 0.5 * H
+        box(bm, (x * W, plane_y(zc) - 0.8 * rel, zc), (0.14 * W, 0.6 * rel + 1.0, 0.62 * H), (-0.436, rng.uniform(-0.05, 0.05), rng.uniform(-0.12, 0.12)))
+        zt = 0.78 * H
+        cuts.append(cutter_box("fl%d" % k, (x * W, plane_y(zt) - 0.55 * rel, zt), (0.1 * W, 0.25 * rel + 0.2, 0.12 * H), (-0.436, 0.0, 0.0)))
+    return f
+
+
+def cliff_blockout(geo, W, H, feats):
+    def fn(rng, seed):
+        bm = bmesh.new()
+        D = 0.16 * min(W, H) + 1.4                     # (shallow: on a ridge or a bulge a deep block would come out of the hill behind)
+        rel = 0.10 * min(W, H) + 1.2                   # (0.6 m of it only brings the front out to the plane)
+        ret = bmesh.ops.create_cube(bm, size=1.0)
+        for v in ret["verts"]:
+            x, y, z = v.co
+            zz = (z + 0.5) * (H + 1.0) - 1.0
+            yy = 0.6 + (y + 0.5) * (D - 0.6)
+            v.co = Vector((x * W, yy + plane_y(zz), zz))
+        cuts = []
+        for k, f in enumerate(feats): f(bm, cuts, rng, W, H, rel, seed * 10 + k)
+        big = max(W, H)
+        lods, dense = ((40000, 9000, 2000), 2000000) if big > 25.0 else (((16000, 4000, 900), 1200000) if big > 10.0 else ((6000, 1600, 400), 500000))
+        if QUICK: dense //= 4
+        P = dict(style="cliff", geo=geo, W=W, H=H, relief=rel, lods=lods, dense=dense, **CLIFF_GEO[geo])
+        P["pre"] = cliff_pillow(P, seed)
+        return bm, cuts, P
+    return fn
+
+
+CLIFF_SHAPES = [   # (tier+n, W, H, features)
+    ("l1", 34.0, 28.0, [f_ledge(0.36, 0.55, x=-0.08), f_ledge(0.66, 0.42, out=1.6, x=0.12), f_overhang(0.84, x=-0.18)]),
+    ("l2", 40.0, 22.0, [f_gully(x=0.12), f_notch(x=-0.2, w=0.28), f_ledge(0.52, 0.38, x=-0.15)]),
+    ("m1", 16.0, 14.0, [f_ledge(0.45, 0.5), f_overhang(0.8, x=0.12, w=0.4)]),
+    ("m2", 12.0, 18.0, [f_flake(x=-0.15), f_notch(x=0.15, w=0.35), f_ledge(0.62, 0.35, x=0.15)]),
+    ("s1", 7.0, 6.0, [f_ledge(0.5, 0.55, out=1.4)]),
+    ("s2", 5.0, 8.0, [f_overhang(0.74, w=0.5, out=1.6)]),
+]
+CLIFFS = []
+for gi, geo in enumerate(("sand", "gran", "slate", "round")):
+    for si, (tag, W, H, feats) in enumerate(CLIFF_SHAPES):
+        CLIFFS.append(("cliff_%s_%s" % (geo, tag), 301 + 20 * gi + 2 * si, cliff_blockout(geo, W, H, feats)))
+
+
 # ---------------------------------------------------------------- geology ----------------
 def geology_coarse(co, no, P, seed):
     """Beds, joints, blocks, weathered tops: moves the points level (faces) or upright (tops)."""
@@ -554,7 +721,7 @@ def geology_coarse(co, no, P, seed):
     x, y, z = co[:, 0], co[:, 1], co[:, 2]
     zero = np.zeros(len(co))
     slow = vnoise(np.stack([x * 0.07 / tb, y * 0.07 / tb, zero], 1), seed + 1)
-    zw = z + 0.03 * x + 0.9 * tb * (slow - 0.5)
+    zw = z + P.get("dip_x", 0.03) * x + P.get("dip_y", 0.0) * y + 0.9 * tb * (slow - 0.5)
     bc = zw / tb
     bc = bc + 0.40 * np.sin(bc * 1.7 + seed) + 0.9 * (vnoise(np.stack([bc * 0.37, zero, zero], 1), seed + 9) - 0.5)   # beds of uneven thickness
     bid = np.floor(bc); bf = bc - bid
@@ -664,7 +831,7 @@ def vertex_curvature(me):
 
 
 def game_mesh(me, bvh, reach):
-    """Vertices (pos, normal, ao, curvature) and indices, in game axes."""
+    """Vertices (pos, normal, the bake's uv) and indices, in game axes."""
     for p in me.polygons: p.use_smooth = True
     me.set_sharp_from_angle(angle=math.radians(42.0))
     nl = len(me.loops)
@@ -672,15 +839,17 @@ def game_mesh(me, bvh, reach):
     cn = np.empty(nl * 3); me.corner_normals.foreach_get("vector", cn); cn = cn.reshape(-1, 3)
     ls = np.empty(len(me.polygons), dtype=np.int32); me.polygons.foreach_get("loop_start", ls)
     co = coords(me)
-    ao = vertex_ao(me, bvh, reach)
-    cv = vertex_curvature(me)
-    key = np.concatenate([vi[:, None].astype(np.int64), np.round(cn * 100.0).astype(np.int64)], 1)
+    uv = np.zeros(nl * 2)
+    if me.uv_layers.active is not None: me.uv_layers.active.uv.foreach_get("vector", uv)
+    uv = uv.reshape(-1, 2)
+    key = np.concatenate([vi[:, None].astype(np.int64), np.round(cn * 100.0).astype(np.int64), np.round(uv * 8192.0).astype(np.int64)], 1)
     uniq, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
     inv = inv.reshape(-1)
     v = vi[first]; n = cn[first]
     n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
     p = co[v]
-    verts = np.stack([p[:, 0], p[:, 2], -p[:, 1], n[:, 0], n[:, 2], -n[:, 1], ao[v], cv[v]], 1).astype("<f4")
+    t = uv[first]
+    verts = np.stack([p[:, 0], p[:, 2], -p[:, 1], n[:, 0], n[:, 2], -n[:, 1], t[:, 0], t[:, 1]], 1).astype("<f4")
     idx = np.stack([inv[ls], inv[ls + 1], inv[ls + 2]], 1).astype("<u4")
     return verts, idx
 
@@ -728,6 +897,290 @@ def preview(ob, name):
         log("preview failed:", e)
 
 
+# ---------------------------------------------------------------- the bake ----------------
+def unwrap(ob, P):
+    """Charts of a rough mesh: every face goes to the one of six axes its SMOOTHED normal is
+    nearest (the normal averaged over a metre or so of neighbours - a projection by the face's
+    own normal cuts a rock into thousands of crumbs), small patches are given to their
+    surroundings, the borders become seams, each chart is flattened (conformal) and the charts
+    packed at one scale. What is never seen - the root under the ground line, a face piece's
+    back and the ends that lie inside its neighbours - is cut off into charts of its own and
+    given a quarter of the scale (a sixteenth of the texels)."""
+    me = ob.data
+    bm = bmesh.new(); bm.from_mesh(me)
+    bm.faces.ensure_lookup_table(); bm.edges.ensure_lookup_table()
+    fn = np.array([f.normal[:] for f in bm.faces])
+    fc = np.array([f.calc_center_median()[:] for f in bm.faces])
+
+    pe = [(i, e.link_faces[0].index, e.link_faces[1].index) for i, e in enumerate(bm.edges) if len(e.link_faces) == 2]
+    pe = np.array(pe, dtype=np.int64)
+    a, b = pe[:, 1], pe[:, 2]
+    s = fn.copy()
+    for it in range(60):
+        acc = s.copy()
+        np.add.at(acc, a, s[b]); np.add.at(acc, b, s[a])
+        s = acc / np.maximum(np.linalg.norm(acc, axis=1, keepdims=True), 1e-9)
+    D = np.array([[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]], dtype=np.float64)
+    ax = np.argmax(s @ D.T, axis=1)
+    for it in range(8):
+        # (a face takes the axis most of its neighbours and itself have; ties: its own)
+        votes = np.zeros((len(ax), 6))
+        votes[np.arange(len(ax)), ax] += 1.5
+        np.add.at(votes, (a, ax[b]), 1.0); np.add.at(votes, (b, ax[a]), 1.0)
+        ax = np.argmax(votes, axis=1)
+    # (by the charts' axes, so that the hidden parts are whole charts and not crumbs)
+    hid = fc[:, 2] < -0.6
+    if P.get("style") == "cliff": hid |= (fc[:, 1] - fc[:, 2] * CLIFF_TL) > 1.2      # (inside the slope: behind the plane)
+    if P.get("style") == "face" and P.get("ends") != "none":
+        hid |= (ax == 2) & (fc[:, 1] > 8.0)
+        hid |= (ax == 1) & (fc[:, 0] < -14.0)
+        if P["ends"] == "both": hid |= (ax == 0) & (fc[:, 0] > 14.0)
+    seam = (ax[a] != ax[b]) | (hid[a] != hid[b])
+    for k in range(len(pe)): bm.edges[int(pe[k, 0])].seam = bool(seam[k])
+    bm.to_mesh(me); bm.free()
+    sc = bpy.context.scene
+    for o in sc.objects: o.select_set(False)
+    ob.select_set(True); bpy.context.view_layer.objects.active = ob
+    if not me.uv_layers: me.uv_layers.new(name="bake")
+    for method in ("CONFORMAL",):          # (minimum stretch tried first until 2026-11-26: the arch lost 13 % of its bake rays to its folds, 0.1 % conformal)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        try: bpy.ops.uv.unwrap(method=method, margin=0.003)           # (areas kept: a conformal chart of a bent face pinches)
+        except Exception: bpy.ops.uv.unwrap(method="CONFORMAL", margin=0.003)
+        bpy.ops.uv.select_all(action="SELECT")
+        bpy.ops.uv.average_islands_scale()
+        bpy.ops.object.mode_set(mode="OBJECT")
+        # (minimum stretch can fold a chart over itself on a bent face - flipped triangles, and a
+        #  chart whose box is far larger than its area, which the packing then shrinks everything
+        #  else to fit: three face pieces came out with 0.3 % of the picture covered. Measured
+        #  here; a folded unwrap is made again conformal, which does not fold.)
+        nl = len(me.loops)
+        uvq = np.empty(nl * 2); me.uv_layers.active.uv.foreach_get("vector", uvq); uvq = uvq.reshape(-1, 2)
+        ls = np.empty(len(me.polygons), dtype=np.int32); me.polygons.foreach_get("loop_start", ls)
+        lt = np.empty(len(me.polygons), dtype=np.int32); me.polygons.foreach_get("loop_total", lt)
+        tri = lt >= 3
+        p0, p1, p2 = uvq[ls[tri]], uvq[ls[tri] + 1], uvq[ls[tri] + 2]
+        ar = (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1]) - (p2[:, 0] - p0[:, 0]) * (p1[:, 1] - p0[:, 1])
+        flipped = float(min((ar < 0).mean(), (ar > 0).mean()))
+        ext = uvq.max(0) - uvq.min(0)
+        fill = float(np.abs(ar).sum() * 0.5 / max(ext[0] * ext[1], 1e-12))
+        log("  unwrap %s: %.2f %% of the triangles folded, the charts fill %.1f %% of their box" % (method.lower(), 100.0 * flipped, 100.0 * fill))
+        if flipped < 0.005: break
+    if hid.any():
+        nl = len(me.loops)
+        uv = np.empty(nl * 2); me.uv_layers.active.uv.foreach_get("vector", uv); uv = uv.reshape(-1, 2)
+        lt = np.empty(len(me.polygons), dtype=np.int32); me.polygons.foreach_get("loop_total", lt)
+        uv[np.repeat(hid, lt)] *= 0.25
+        me.uv_layers.active.uv.foreach_set("vector", uv.reshape(-1)); me.update()
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.uv.select_all(action="SELECT")
+    bpy.ops.uv.pack_islands(margin=0.004, rotate=True)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def spread(maps, cov, passes=24):
+    """The covered texels' values carried out into the empty ones round them (every map by the same
+    neighbours), so filtering and the small mips mix in the chart's own edge, not nothing."""
+    C = np.stack(maps, 2)
+    M = cov.copy()
+    for it in range(passes):
+        acc = np.zeros_like(C); cnt = np.zeros(M.shape)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dx == 0 and dy == 0: continue
+                m = np.roll(np.roll(M, dy, 0), dx, 1)
+                acc += np.roll(np.roll(C, dy, 0), dx, 1) * m[:, :, None]; cnt += m
+        fill = (~M) & (cnt > 0)
+        C[fill] = acc[fill] / cnt[fill][:, None]
+        M = M | fill
+    return [C[:, :, i] for i in range(C.shape[2])], M
+
+
+def pos_material(name, lo, hi, img):
+    """Emits the point's place, 0..1 within the box lo..hi; `img`: the picture a bake onto this object fills."""
+    m = bpy.data.materials.new(name)
+    try: m.use_nodes = True
+    except Exception: pass
+    nt = m.node_tree; nt.nodes.clear()
+    geo = nt.nodes.new("ShaderNodeNewGeometry")
+    sub = nt.nodes.new("ShaderNodeVectorMath"); sub.operation = "SUBTRACT"; sub.inputs[1].default_value = tuple(lo)
+    div = nt.nodes.new("ShaderNodeVectorMath"); div.operation = "DIVIDE"; div.inputs[1].default_value = tuple(hi - lo)
+    em = nt.nodes.new("ShaderNodeEmission"); out = nt.nodes.new("ShaderNodeOutputMaterial")
+    nt.links.new(geo.outputs["Position"], sub.inputs[0]); nt.links.new(sub.outputs[0], div.inputs[0])
+    nt.links.new(div.outputs[0], em.inputs["Color"]); nt.links.new(em.outputs[0], out.inputs["Surface"])
+    if img is not None:
+        tex = nt.nodes.new("ShaderNodeTexImage"); tex.image = img
+        for n in nt.nodes: n.select = False
+        tex.select = True; nt.nodes.active = tex
+    return m
+
+
+def bake_pass(kind, low, high, img, extr, samples=1):
+    sc = bpy.context.scene
+    sc.cycles.samples = samples
+    for o in sc.objects: o.select_set(False)
+    if high is not None: high.select_set(True)
+    low.select_set(True); bpy.context.view_layer.objects.active = low
+    bpy.ops.object.bake(type=kind, normal_space="OBJECT", use_selected_to_active=high is not None, cage_extrusion=extr if high is not None else 0.0,
+                        max_ray_distance=3.0 * extr if high is not None else 0.0, margin=0, use_clear=True, target="IMAGE_TEXTURES")
+    S = img.size[0]
+    a = np.empty(S * S * 4, dtype=np.float32); img.pixels.foreach_get(a)
+    return a.reshape(S, S, 4)[:, :, :3].astype(np.float64)
+
+
+def blur(a, r):
+    out = np.zeros_like(a)
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            out += np.roll(np.roll(a, dy, 0), dx, 1)
+    return out / float((2 * r + 1) ** 2)
+
+
+def bake_piece(low, dense, name, P):
+    """The dense mesh baked onto level 0's unwrap: three two-channel layers and the height's range (m)."""
+    t0 = time.time()
+    S = BAKE
+    unwrap(low, P)
+    t1 = time.time()
+    sc = bpy.context.scene
+    sc.render.engine = "CYCLES"
+    sc.cycles.device = "CPU"
+    try: sc.cycles.use_denoising = False
+    except Exception: pass
+    if sc.world is None: sc.world = bpy.data.worlds.new("w")
+    img = bpy.data.images.new("bake", width=S, height=S, alpha=False, float_buffer=True)
+    img.colorspace_settings.name = "Non-Color"
+    co = coords(dense.data)
+    lo = co.min(0) - 0.5; hi = co.max(0) + 0.5
+    ml = pos_material("m_low", lo, hi, img); mh = pos_material("m_high", lo, hi, None)
+    low.data.materials.clear(); low.data.materials.append(ml)
+    dense.data.materials.clear(); dense.data.materials.append(mh)
+    dense.data.polygons.foreach_set("use_smooth", np.ones(len(dense.data.polygons), dtype=bool)); dense.data.update()
+    for p in low.data.polygons: p.use_smooth = True
+    big = float((hi - lo).max())
+    extr = float(np.clip(0.012 * big, 0.08, 0.35))
+    n_hi = bake_pass("NORMAL", low, dense, img, extr) * 2.0 - 1.0
+    p_hi = bake_pass("EMIT", low, dense, img, extr)
+    ao = bake_pass("AO", low, dense, img, extr, samples=24)[:, :, 0]
+    n_lo = bake_pass("NORMAL", low, None, img, 0.0) * 2.0 - 1.0
+    p_lo = bake_pass("EMIT", low, None, img, 0.0)
+    cov = p_lo.max(2) > 0.0                                   # the texels a chart covers
+    miss = cov & ((p_hi.max(2) <= 0.0) | (np.abs(n_hi + 1.0).max(2) < 1e-4))
+    if miss.sum() > 0.01 * max(cov.sum(), 1):
+        # (where the level-0 mesh stands further off the sculpt than the cage - the arch's span,
+        #  thin fins: once more from a cage four times as far, for the missed texels only)
+        n2 = bake_pass("NORMAL", low, dense, img, 4.0 * extr) * 2.0 - 1.0
+        p2 = bake_pass("EMIT", low, dense, img, 4.0 * extr)
+        a2 = bake_pass("AO", low, dense, img, 4.0 * extr, samples=24)[:, :, 0]
+        ok2 = miss & (p2.max(2) > 0.0) & (np.abs(n2 + 1.0).max(2) >= 1e-4)
+        n_hi[ok2] = n2[ok2]; p_hi[ok2] = p2[ok2]; ao[ok2] = a2[ok2]
+        log("  second cage: %.2f %% of the charts' texels were missed, %.2f %% after it" % (100.0 * miss.sum() / max(cov.sum(), 1), 100.0 * (miss & ~ok2).sum() / max(cov.sum(), 1)))
+        miss = miss & ~ok2
+    n_hi[miss] = n_lo[miss]; p_hi[miss] = p_lo[miss]; ao[miss] = 1.0
+    ln = np.maximum(np.linalg.norm(n_hi, axis=2, keepdims=True), 1e-6); n_hi = n_hi / ln
+    ll = np.maximum(np.linalg.norm(n_lo, axis=2, keepdims=True), 1e-6); n_lo = n_lo / ll
+    h = (((p_hi - p_lo) * (hi - lo)[None, None, :]) * n_lo).sum(2)
+    hr = float(np.clip(np.percentile(np.abs(h[cov]), 99.0), 0.01, 0.5))
+    H = np.clip(0.5 + 0.5 * h / hr, 0.0, 1.0)
+    (nx, ny, nz, H, ao, lz), full = spread([n_hi[:, :, 0], n_hi[:, :, 1], n_hi[:, :, 2], H, ao, n_lo[:, :, 2]], cov)
+    nx[~full] = 0.0; ny[~full] = 0.0; nz[~full] = 1.0; H[~full] = 0.5; ao[~full] = 1.0; lz[~full] = 0.0
+    n_hi = np.stack([nx, ny, nz], 2)
+    n_hi = n_hi / np.maximum(np.linalg.norm(n_hi, axis=2, keepdims=True), 1e-6)
+    # the ground's weight: broad tops and ledges open to the sky (not faces, not under overhangs)
+    W = sstep(0.70, 0.92, lz) * sstep(0.50, 0.90, n_hi[:, :, 2]) * sstep(0.45, 0.75, blur(ao, 2))
+    W = blur(W, 1)
+    bpy.data.images.remove(img)
+    low.data.materials.clear(); dense.data.materials.clear()
+    bpy.data.materials.remove(ml); bpy.data.materials.remove(mh)
+    log("  bake %d x %d: unwrap %.1f s, five passes %.1f s; missed %.2f %%, height range +-%.3f m, tops %.1f %%" %
+        (S, S, t1 - t0, time.time() - t1, 100.0 * miss.sum() / max(cov.sum(), 1), hr, 100.0 * (W > 0.5).mean()))
+    log("  charts cover %.1f %% of the picture" % (100.0 * cov.mean()))
+    if PREVIEW:
+        # (the bake as pictures, to look at: normal, height / occlusion / tops)
+        for tag, rgb in (("n", np.stack([0.5 + 0.5 * n_hi[:, :, 0], 0.5 + 0.5 * n_hi[:, :, 1], 0.5 + 0.5 * n_hi[:, :, 2]], 2)), ("haw", np.stack([H, ao, W], 2))):
+            im = bpy.data.images.new("pv", width=S, height=S, alpha=False)
+            im.colorspace_settings.name = "Non-Color"
+            im.pixels.foreach_set(np.concatenate([rgb, np.ones((S, S, 1))], 2).astype(np.float32).reshape(-1))
+            im.filepath_raw = os.path.join(PREVIEW, "%s_bake_%s.png" % (name, tag)); im.file_format = "PNG"; im.save()
+            bpy.data.images.remove(im)
+    # game axes: x = x, y = z, z = -y
+    return [(0.5 + 0.5 * n_hi[:, :, 0], 0.5 - 0.5 * n_hi[:, :, 1]), (0.5 + 0.5 * n_hi[:, :, 2], H), (ao, W)], hr
+
+
+def bc4(ch):
+    """A single-channel picture 0..1 as 4 x 4 blocks of 8 bytes."""
+    S = ch.shape[0]
+    v = np.clip(np.rint(ch * 255.0), 0, 255).astype(np.int64)
+    b = v.reshape(S // 4, 4, S // 4, 4).transpose(0, 2, 1, 3).reshape(-1, 16)
+    r0 = b.max(1); r1 = b.min(1)
+    d = np.maximum(r0 - r1, 1)
+    k = np.rint((r0[:, None] - b) * 7.0 / d[:, None]).astype(np.int64)        # 0 = the high end ... 7 = the low end
+    idx = np.where(k == 0, 0, np.where(k == 7, 1, k + 1)).astype(np.uint64)
+    bits = np.zeros(len(b), dtype=np.uint64)
+    for i in range(16): bits |= idx[:, i] << np.uint64(3 * i)
+    out = np.zeros((len(b), 8), dtype=np.uint8)
+    out[:, 0] = r0; out[:, 1] = r1
+    for i in range(6): out[:, 2 + i] = ((bits >> np.uint64(8 * i)) & np.uint64(255)).astype(np.uint8)
+    return out
+
+
+def bc5_mips(a, b):
+    out = bytearray()
+    for m in range(BAKE_MIPS):
+        out += np.concatenate([bc4(a), bc4(b)], 1).tobytes()
+        a = 0.25 * (a[0::2, 0::2] + a[1::2, 0::2] + a[0::2, 1::2] + a[1::2, 1::2])
+        b = 0.25 * (b[0::2, 0::2] + b[1::2, 0::2] + b[0::2, 1::2] + b[1::2, 1::2])
+    return out
+
+
+def pnoise(S, cx, cy, seed):
+    """Value noise 0..1 on an S x S picture that repeats: cx by cy lattice cells across it."""
+    y, x = np.mgrid[0:S, 0:S].astype(np.float64)
+    px = x * cx / S; py = y * cy / S
+    ix = np.floor(px); iy = np.floor(py)
+    fx = px - ix; fy = py - iy
+    fx = fx * fx * (3.0 - 2.0 * fx); fy = fy * fy * (3.0 - 2.0 * fy)
+    def g(dx, dy): return hash3(np.mod(ix + dx, cx), np.mod(iy + dy, cy), 0, seed)
+    return (g(0, 0) * (1 - fx) + g(1, 0) * fx) * (1 - fy) + (g(0, 1) * (1 - fx) + g(1, 1) * fx) * fy
+
+
+def breaker_pattern(S, seed=777):
+    """The pattern every steep rock face shares (a tile is 24 m; u along the face, v up): beds
+    of uneven thickness and hardness, offset where three faults cross them, cut by joints that
+    do not line up from bed to bed; streaks and blotches. Two layers: (strata tone, stain
+    tone), (relief, cracks). Tones: 0.5 = no change."""
+    y, x = np.mgrid[0:S, 0:S].astype(np.float64) / S
+    rng = np.random.RandomState(seed)
+    warp = (pnoise(S, 3, 3, seed + 1) - 0.5) * 0.050 + (pnoise(S, 9, 7, seed + 2) - 0.5) * 0.014
+    fx = np.array([0.13, 0.44, 0.71]); foff = np.array([0.0, 0.037, -0.026, 0.0])
+    xw = np.mod(x + 0.018 * np.sin(2.0 * math.pi * y) + (pnoise(S, 2, 5, seed + 3) - 0.5) * 0.02, 1.0)
+    seg = np.searchsorted(fx, xw)
+    fdist = np.min(np.abs(xw[:, :, None] - fx[None, None, :]), 2)
+    vb = np.mod(y + warp + foff[seg], 1.0)
+    th = rng.uniform(0.4, 1.0, 20) ** 2.0 + 0.08
+    edges = np.cumsum(th) / th.sum()
+    bid = np.minimum(np.searchsorted(edges, vb), len(th) - 1)
+    b0 = np.concatenate([[0.0], edges[:-1]])[bid]
+    bf = (vb - b0) / (edges[bid] - b0)
+    hard = hash3(bid, 1, 0, seed)
+    lam = pnoise(S, 6, 96, seed + 4)
+    strata = np.clip(0.5 + (hard - 0.5) * 0.62 + (lam - 0.5) * 0.16, 0.0, 1.0)
+    part = 1.0 - sstep(0.0, 0.07, np.minimum(bf, 1.0 - bf))                    # the parting between two beds
+    nj = 3.0 + np.floor(hash3(bid, 2, 0, seed) * 6.0)
+    uj = xw * nj + hash3(bid, 3, 0, seed) + 0.25 * (pnoise(S, 5, 14, seed + 5) - 0.5)
+    jf = uj - np.floor(uj)
+    joint = (1.0 - sstep(0.0, 0.010 * nj, np.minimum(jf, 1.0 - jf))) * (hash3(bid, np.floor(uj), 4, seed) > 0.25)
+    fault = 1.0 - sstep(0.0, 0.006, fdist)
+    blk = hash3(bid, np.floor(uj), 5, seed)
+    relief = np.clip((0.06 + 0.22 * hard * sstep(0.0, 0.2, np.minimum(bf, 1.0 - bf)) + 0.10 * (blk - 0.5) * hard) * (1.0 - joint) * (1.0 - 0.8 * fault), 0.0, 1.0)
+    cracks = np.clip(np.maximum(np.maximum(joint, 0.7 * part), fault), 0.0, 1.0)
+    streak = pnoise(S, 40, 3, seed + 6) * 0.6 + pnoise(S, 90, 5, seed + 7) * 0.4
+    blotch = pnoise(S, 5, 5, seed + 8) * 0.65 + pnoise(S, 13, 13, seed + 9) * 0.35
+    stain = np.clip(0.5 + 0.55 * (blotch - 0.5) - 0.45 * sstep(0.58, 0.78, streak) * sstep(0.35, 0.6, pnoise(S, 4, 2, seed + 10)), 0.0, 1.0)
+    return [(strata, stain), (relief, cracks)]
+
+
 def make(name, seed, blockout):
     rng = np.random.RandomState(seed)
     bm, cuts, P = blockout(rng, seed)
@@ -738,6 +1191,9 @@ def make(name, seed, blockout):
     # 2. fuse, bend
     remesh(ob, big / 170.0)
     co = coords(ob.data)
+    if P.get("pre") is not None:
+        # (a cliff wall: its front pushed out of the slope's plane as one relief - cliff_pillow)
+        P["pre"](co, normals(ob.data))
     w = P.get("warp", 1.0) * 0.055 * big
     f = 1.0 / (0.33 * big)
     face = P.get("style") == "face"
@@ -746,12 +1202,14 @@ def make(name, seed, blockout):
         # (a face: bent only away from its ends, and leaning back)
         bend *= 0.3 * face_window(co[:, 0], P["ends"])[:, None]
         co[:, 1] += P.get("lean", 0.06) * np.maximum(co[:, 2], 0.0)
+    if P.get("style") == "cliff":
+        bend *= 0.45 * cliff_window(co, P)[:, None]          # (its edges stay in the slope's plane: pieces meet there)
     co += bend
     set_coords(ob.data, co)
     # 3. holes
     for c in cuts: cut(ob, c)
     # 4. dense, geology
-    voxel = float(np.clip(math.sqrt(2.0 * area(ob.data) / DENSE_TRIS), 0.012, 0.09))
+    voxel = float(np.clip(math.sqrt(2.0 * area(ob.data) / P.get("dense", DENSE_TRIS)), 0.012, 0.09))
     remesh(ob, voxel)
     co = coords(ob.data); no = normals(ob.data)
     if face: geology_face(co, no, P, seed)
@@ -784,6 +1242,7 @@ def make(name, seed, blockout):
             ps = [tuple(p.vertices) for p in me.polygons]
             bvh = BVHTree.FromPolygons(vs, ps)
             src = lod                                    # the coarser levels from the first: fast
+            layers, hr = bake_piece(lod, ob, name, P)
             if PREVIEW: preview(lod, name)
         verts, idx = game_mesh(lod.data, bvh, reach)
         levels.append((verts, idx))
@@ -795,17 +1254,19 @@ def make(name, seed, blockout):
         me = o.data
         bpy.data.objects.remove(o)
         if me.users == 0: bpy.data.meshes.remove(me)
-    return levels, (org, cell, grid)
+    return levels, (org, cell, grid), layers, hr
 
 
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     if PREVIEW: os.makedirs(PREVIEW, exist_ok=True)
-    kit = [k for k in KIT + BOULDERS if ONLY is None or k[0] in ONLY]
+    kit = [k for k in (CLIFFS if SET == "cliffs" else KIT + BOULDERS) if ONLY is None or k[0] in ONLY]
     blob = bytearray()
-    blob += b"RKF1" + struct.pack("<I", len(kit))
+    blob += b"RKF2" + struct.pack("<I", len(kit))
+    bake = []; ranges = []
     for name, seed, fn in kit:
-        levels, (org, cell, grid) = make(name, seed, fn)
+        levels, (org, cell, grid), layers, hr = make(name, seed, fn)
+        bake += layers; ranges.append(hr)
         blob += struct.pack("<24sI", name.encode("ascii"), len(levels))
         for verts, idx in levels:
             lo = verts[:, 0:3].min(0); hi = verts[:, 0:3].max(0)
@@ -817,6 +1278,13 @@ def main():
     with open(OUT, "wb") as f:
         f.write(blob)
     log("wrote %s (%d pieces, %.1f MB)" % (OUT, len(kit), len(blob) / 1e6))
+    bake += breaker_pattern(BAKE)
+    bb = bytearray()
+    bb += b"RKB1" + struct.pack("<4I", BAKE, len(bake), BAKE_MIPS, len(kit)) + struct.pack("<%df" % len(kit), *ranges)
+    for a, b in bake: bb += bc5_mips(a, b)
+    with open(BAKE_OUT, "wb") as f:
+        f.write(bb)
+    log("wrote %s (%d layers of %d x %d, %.1f MB)" % (BAKE_OUT, len(bake), BAKE, BAKE, len(bb) / 1e6))
 
 
 main()

@@ -86,14 +86,18 @@ float rm_ground_detail_raw(vec2 wp, float t, float h) {
         float keep = scene.road_info.y;
         float rdist = rm_road_dist_thr(wp, keep + 0.9);                 // paving only; the dirt verge keeps its relief
         road_keep = smoothstep(keep + 0.1, keep + 0.9, rdist);
-        if (road_keep <= 0.0) {
-            if (g_snow < 0.01) return sand_road_h(wp) * w;          // (a real branch, not ?: - the winter side has loops)
-            return rm_snow_on(0.0, wp, h, 0.0) * w;
-        }
     }
     // (only where there is road: this runs for every near step of the march, and the sand's
     // noise was being worked out - and thrown away - over all the open ground)
     float rsand = road_keep < 0.999 ? sand_road_h(wp) * (1.0 - road_keep) : 0.0;       // (the sand thins out over the verge)
+    // ONE call of rm_snow_on (and of sand_road_h) at the end: this function is part of the height,
+    // which is in the compiled shader once per place that asks for a height - every extra call
+    // here was multiplied by all of them.
+    float sn_d;
+    if (road_keep <= 0.0) {
+        if (g_snow < 0.01) return rsand * w;          // (road_keep is 0 here: rsand = the sand's height)
+        sn_d = 0.0;
+    } else {
     // (the same in every tile - scene_ubo.glsl tile_noise2 - so the rills stay where they are when
     // the engine re-centres; twins: grass_raymarch.frag grass_ground_relief, terrain.cpp raymarch_ground_relief)
     float wn = tile_noise2(wp, 0.21, vec2(0.0));       // one noise warps both axes
@@ -104,9 +108,10 @@ float rm_ground_detail_raw(vec2 wp, float t, float h) {
     // instead of three plus a texture fetch on every near-ground step. The
     // hit point lands within ~5 cm of the full surface; the normal and the
     // shading (called without the flag) still use the full relief.
-    if (g_rm_ray_y > -1e8) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
-                                              (RMDBG(32768) ? 0.0 : rm_pebbles_march(wp, t))) * road_keep + rsand, wp, h, road_keep) * w;
-    if (g_rm_relief_lite) return rm_snow_on((0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045) * road_keep + rsand, wp, h, road_keep) * w;
+    if (g_rm_ray_y > -1e8) sn_d = (0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045 +
+                                   (RMDBG(32768) ? 0.0 : rm_pebbles_march(wp, t))) * road_keep + rsand;
+    else if (g_rm_relief_lite) sn_d = (0.11 * (1.0 - g1) + 0.045 * 0.86 + 0.045) * road_keep + rsand;
+    else {
     float lod = log2(max(t * 2.0 * scene.viewport.w * 0.45 * 2048.0, 1.0));
     float disp = textureLod(u_normal[9], wp * TILE_FREQ(0.45), lod).a;
     float g2 = 1.0 - smoothstep(0.0, 0.25, abs(tile_noise2(wp, 1.485, qo * 2.7 + 3.1) * 2.0 - 1.0));  // side cracks
@@ -116,7 +121,10 @@ float rm_ground_detail_raw(vec2 wp, float t, float h) {
     // (No stones here: this full variant is also what every terrain-shadow
     // and reflection step evaluates. The normal adds them itself, the march
     // has its own cut-down version above.)
-    return rm_snow_on(d * road_keep + rsand, wp, h, road_keep) * w;
+    sn_d = d * road_keep + rsand;
+    }
+    }
+    return rm_snow_on(sn_d, wp, h, road_keep) * w;
 }
 
 // Beyond the home tile: the ground round the camera as the engine bakes it while it moves
@@ -361,6 +369,32 @@ float terrainB_slope(vec2 wp, float ray_t, float tpl, float e, out float bR, out
 float terrainH_lod_pw(vec2 p, float ray_t, float tpl) {
     float h = terrainB_lod_pw(p, ray_t, tpl);
     return h + rm_ground_detail(p, ray_t, h) * (1.0 - tpl);
+}
+// (RM_ONE_COPY: [[dont_unroll]] where the includer defines it so, as terrain_raymarch.frag does;
+//  other includers get a plain loop)
+#ifndef RM_ONE_COPY
+#define RM_ONE_COPY
+#endif
+// Several taps of the height in ONE loop, so the (very large) height function is in the compiled
+// shader once instead of once per tap - a driver compiles every call site as a copy of it.
+// (x, y, z, w) = h(p - (e,0)), h(p + (e,0)), h(p - (0,e)), h(p + (0,e)).
+vec4 rm_h4_cross(vec2 p, float e, float ray_t, float tpl) {
+    vec4 r = vec4(0.0);
+    RM_ONE_COPY for (int i = 0; i < 4; ++i) {
+        vec2 o = i < 2 ? vec2(e, 0.0) : vec2(0.0, e);
+        float h = terrainH_lod_pw((i & 1) == 0 ? p - o : p + o, ray_t, tpl);
+        if (i == 0) r.x = h; else if (i == 1) r.y = h; else if (i == 2) r.z = h; else r.w = h;
+    }
+    return r;
+}
+// (x, y, z) = terrainM_lod at p, p + (e,0), p + (0,e).
+vec3 rm_m3_corner(vec2 p, float e, float ray_t) {
+    vec3 r = vec3(0.0);
+    RM_ONE_COPY for (int i = 0; i < 3; ++i) {
+        float h = terrainM_lod(i == 0 ? p : p + (i == 1 ? vec2(e, 0.0) : vec2(0.0, e)), ray_t);
+        if (i == 0) r.x = h; else if (i == 1) r.y = h; else r.z = h;
+    }
+    return r;
 }
 // The slope of the landscape under the relief at the pixel being shaded, left by calcNormal:
 // (-dh/dx, -dh/dz), its height, and whether it is valid for this pixel.

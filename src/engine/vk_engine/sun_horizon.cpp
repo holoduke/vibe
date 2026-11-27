@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 
 namespace vibe {
 
@@ -206,6 +207,36 @@ void VulkanEngine::tick_sun_horizon() {
         sun_->horizon_s.swap(sun_->horizon_s_bake);
         sun_->horizon_dir = sun_->horizon_bake_dir;
         sun_->horizon_upload_pending = true;
+        // VIBE_LOG_SUN_HZ=1: march from the player's feet toward the sun over the
+        // CPU ground for 4 km and compare the highest elevation angle with the map.
+        if (std::getenv("VIBE_LOG_SUN_HZ")) {
+            const glm::vec3 L = sun_->horizon_dir;
+            const glm::vec3 p = player_.eye_position() - glm::vec3(0, 1.6f, 0);
+            const glm::vec2 d = glm::normalize(glm::vec2(L.x, L.z));
+            float best = -90.0f, best_t = 0.0f, best_h = 0.0f;
+            for (float t = 2.0f; t < 4000.0f; t += 2.0f) {
+                const float h = sample_terrain_height(p.x + d.x * t, p.z + d.y * t);
+                const float a = glm::degrees(std::atan2(h - p.y, t));
+                if (a > best) { best = a; best_t = t; best_h = h; }
+            }
+            const float cell = kHzSide / float(kHzDim);
+            const int i = int(std::floor((p.x + 0.5f * kHzSide) / cell));
+            const int j = int(std::floor((p.z + 0.5f * kHzSide) / cell));
+            const float S = (i >= 0 && j >= 0 && i < kHzDim && j < kHzDim) ? sun_->horizon_s[size_t(j) * kHzDim + i] : kHzLit;
+            log::infof("sun-hz: p=(%.1f %.1f %.1f) ground=%.2f sun elev=%.1f deg  max terrain elev=%.1f deg at %.0f m (h %.1f)  map S=%.2f vis=%.2f",
+                     p.x, p.y, p.z, sample_terrain_height(p.x, p.z), glm::degrees(std::asin(L.y)), best, best_t, best_h, S,
+                     sun_horizon_visibility(p + glm::vec3(0, 0.3f, 0)));
+            // (and from the GROUND 0 .. 12 m toward the sun: the bank beside the player)
+            for (float o = 0.0f; o <= 12.0f; o += 3.0f) {
+                const glm::vec2 q(p.x + d.x * o, p.z + d.y * o);
+                const float g = sample_terrain_height(q.x, q.y);
+                float bq = -90.0f;
+                for (float t = 1.0f; t < 2000.0f; t += 1.0f)
+                    bq = std::max(bq, glm::degrees(std::atan2(sample_terrain_height(q.x + d.x * t, q.y + d.y * t) - g, t)));
+                log::infof("sun-hz: ground at %.0f m toward the sun (%.1f, %.1f) h %.2f: highest terrain %.1f deg (sun %.1f)",
+                           o, q.x, q.y, g, bq, glm::degrees(std::asin(L.y)));
+            }
+        }
     }
     if (sun_->horizon_baking || sun_->horizon_upload_pending) return;
     const float p = glm::radians(rt_.sun_pitch_deg), y = glm::radians(rt_.sun_yaw_deg);

@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <cmath>
+#include <functional>
 #include <vector>
 
 namespace vibe {
@@ -142,6 +143,22 @@ ScatterSet build_scatter(VkDevice device, VmaAllocator alloc, VkQueue queue,
                          const ScatterParams& params);
 
 void destroy_scatter(VmaAllocator alloc, ScatterSet& s);
+
+// Scree and boulder fields by rule, for the 5 m cells [cx0, cx1) x [cz0, cz1) (cell k covers
+// k x kScreeCell .. (k + 1) x kScreeCell); out[k] receives the rocks of scree mesh k. Returns how
+// many were placed; *at_cliff (if given) is raised by those below a cliff. Streamed round the
+// camera by vk_engine/scree_stream.cpp. Deterministic (hashes of the cell).
+constexpr float kScreeCell = 5.0f;
+constexpr int   kScreeMeshes = 4;
+int scree_place(const ScatterParams& params, const std::function<float(float, float)>& h_at,
+                int cx0, int cx1, int cz0, int cz1, std::vector<ScatterInstance>* out, int* at_cliff = nullptr);
+// The angular scree mesh `kind` (0 .. kScreeMeshes - 1): flat faces, base 0.3 below its middle.
+void build_scree_mesh_data(int kind, std::vector<Vertex>& verts, std::vector<uint32_t>& idx);
+// Scree mesh `kind`'s outline at scale 1: the largest horizontal radius and its lowest point
+// (the bed, below the base: < 0). Made once from the mesh. scree_place sinks each stone so that
+// its bed reaches the lowest ground under its outline.
+struct ScreeExtent { float radius = 1.0f; float bed = 0.0f; };
+ScreeExtent scree_mesh_extent(int kind);
 
 // Move all instances onto the raymarched surface (on) or back onto the
 // CPU heightmap surface (off). Cheap: rewrites the mapped buffers.

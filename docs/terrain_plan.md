@@ -2,8 +2,8 @@
 
 The arena's flat-floor + brick-wall perimeter is being replaced with a
 procedurally-generated heightmap terrain. Target world size: 5 km × 5 km
-with a flat plateau hosting the castle. AAA references: GTA's TerrainGen,
-Fortnite's Volumetric Heightmap, UE's Landscape, Frostbite's terrain.
+with a flat plateau hosting the castle. References: the heightmap terrain systems of
+large commercial engines.
 
 ## Architecture (target end state)
 

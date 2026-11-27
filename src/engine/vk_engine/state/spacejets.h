@@ -18,6 +18,12 @@ struct VulkanEngine::SpacejetState {
     float     spawn_timer     = 1.0f;   // first wave after 2s
     uint32_t  rng_state       = 0xC0DEFEEDu;
     uint32_t  next_id         = 0;
+    // Where the aircraft patrol (x, z, radius m): the castle, the launch site (the base with the
+    // pad, the pavilion and the station) and the open sea beyond the coast east of it. Made once
+    // (props.cpp jet_zones), [0] is the castle.
+    std::vector<glm::vec3> zones;
+    glm::vec2 zone_mid{0.0f};
+    float     zone_reach = 1350.0f;   // waves come in from this far beyond the middle
 };
 
 } // namespace vibe

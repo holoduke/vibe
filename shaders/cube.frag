@@ -148,7 +148,7 @@ layout(set = 0, binding = 25, std430) readonly buffer VoxShapeDir {
 const uint kVoxEmpty = 0xFFFFFFFFu;
 
 // Bound texture arrays (must match kTextureCount on the C++ side).
-const int kTextureCount = 43;     // +1 for kTexProcGrass (slot 12)
+const int kTextureCount = 48;     // +1 for kTexProcGrass (slot 12)
 // Procedurally-baked terrain material slots (see bake_terrain_materials
 // in world.cpp). Must match kTexRock/.. in vk_engine.h.
 const int kMatRock  = 7;
@@ -276,14 +276,18 @@ layout(push_constant) uniform PC {
 #include "cube_wall_relief.glsl"   // Castle wall box relief (br_*): solidity margin, exit, open-air probe, silhouette clip
 #include "rock_form.glsl"   // Rock formations (rf_*): the landscape's rock scan on a mesh, its colour; used in cube_main_surfaces.glsl
 #include "water_course.glsl"   // the stream's surface (wc_stream_surface): a rock standing in water is wet below its waterline
+#include "shore_wet.glsl"     // materials at the water (sw_*): the wet band, growth and tint on every mesh at the water - before the G-buffer write
 #include "ground_fx.glsl"      // the ground's object effects block (scene binding 60: ground_fx.cpp)
 #include "ground_paste.glsl"   // meshes pasted into the ground at their contact line (gp_*): used after cube_main_surfaces.glsl
+#include "rock_breaker.glsl"   // the rock kit's bake, the breaker pattern, the colour strip by altitude (rk_*): the rock branch of cube_main_surfaces.glsl
+#include "people.glsl"         // skinned characters: regions, the look block, skin / hair materials (people_surface; the skinned branch of cube_main_surfaces.glsl)
 // (set by the surface branches for the paste below: the material's own height 0..1 where it
 //  knows one (-1: taken from the colour), a rock (its ground line, metres))
 float g_gp_h = -1.0;
 bool  g_gp_self_rock = false;
 float g_gp_rock_above = 1e9;
 float g_gp_share = 0.0;          // the ground's share at the pixel (its roughness)
+float g_rf_rough = 1.0;          // a rock formation's detail roughness close by (x the surface's)
 void main() {
     // Default depth = rasterized depth; SPOM silhouette path may bump
     // to 1.0 below. The depth_greater qualifier on the gl_FragDepth
@@ -846,7 +850,7 @@ void main() {
                     vec3 ref = use_albedo ? textureLod(u_albedo[clamp(albedo_idx_raw, 0, kTextureCount - 1)], vec2(0.5), 12.0).rgb * vColor : vColor;
                     mh = clamp(0.5 * dot(albedo, vec3(0.333)) / max(dot(ref, vec3(0.333)), 1e-3), 0.0, 1.0);
                 }
-                g_gp_share = gp_paste(albedo, N, vWorldPos, Ngp, mh, cam_dist, gg, g_gp_self_rock, built ? 0.78 : 0.62);
+                g_gp_share = max(g_gp_share, gp_paste(albedo, N, vWorldPos, Ngp, mh, cam_dist, gg, g_gp_self_rock, built ? 0.78 : 0.62));
             }
         }
     }
@@ -1115,14 +1119,46 @@ void main() {
         // deferred_lighting.frag; their roughness the game's too: glossier close by, matt with
         // distance; a far card 0.9)
         bool cd_leaf = is_foliage_px && !g_veg_solid;
+        // AT THE WATER, every mesh (rocks, piers, walls, boulders, ...) the same as the ground
+        // (shore_wet.glsl, the reference's rule): the wet band over W above the waterline (the
+        // water level or the stream's surface), forced wet below it, growth on the up-facing
+        // submerged faces, the tint by depth. (The mesh terrain has its own water plane.)
+        float sw_v = 0.0, sw_m = 0.0, sw_g = 0.0;
+        if (!is_terrain_pre && !cd_leaf && scene.water_params.x > 0.5 && SW_ON(1)) {
+            float st = wc_stream_surface(vWorldPos.xz);
+            float wl = max(scene.water_params.y, st);
+            float W  = st > scene.water_params.y ? scene.water_wet.w : scene.water_wet.z;
+            if (vWorldPos.y < wl + W) {
+                sw_v = sw_band(vWorldPos.y, wl, W, vWorldPos.xz);
+                sw_m = sw_wet_m(sw_v);
+                albedo = sw_wet_albedo(albedo, sw_m);
+                float below = wl - vWorldPos.y;
+                if (below > 0.0) {
+                    sw_g = sw_growth(vWorldPos.xz, g_gp_h >= 0.0 ? g_gp_h : 0.5, N.y, below);
+                    if (sw_g > 0.0) {
+                        float gh;
+                        albedo = mix(albedo, sw_growth_col(vWorldPos.xz, gh), sw_g);
+                        N = normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.3 * sw_g));
+                    }
+                    float rk;
+                    albedo = sw_bed_tint(albedo, below, clamp(scene.water_color.rgb * 2.5, vec3(0.01), vec3(0.9)), rk);
+                }
+            }
+        }
         int fast_mat = is_terrain_pre ? 3 : (cd_leaf ? 2 : 1);
         outColor    = vec4(albedo, 1.0);
         outGBuffer0 = vec4(clamp(albedo * terrain_grass_occ, vec3(0.0), vec3(1.0)),
                            float(fast_mat) / 255.0);
         vec2 rmf = surface_rough_metal(albedo_idx_raw, is_foliage_px, is_mesh_draw);
         rmf.x = mix(mix(rmf.x, rmf.x * 0.55, rain_wet), 0.04, rain_pool);
+        rmf.x = clamp(rmf.x * g_rf_rough, 0.05, 1.0);
         rmf.x = mix(rmf.x, 0.92, g_gp_share);          // (the ground pasted on: soil's roughness)
+        rmf.x = mix(sw_wet_rough(rmf.x, sw_v, sw_m), 0.6, sw_g);     // (the wet band: a mirror at the waterline; the weed matt)
         if (cd_leaf) rmf.x = veg_imp ? 0.902 : min(length(vWorldPos - scene.camera_pos.xyz) * 0.005 + 0.45, 0.99);
+        if (g_people_mat > 0) {             // (a person: skin 4, hair 9 - people.glsl; lit by deferred_lighting.frag their own way)
+            outGBuffer0.a = float(g_people_mat) / 255.0;
+            rmf = vec2(clamp(g_people_rough, 0.04, 1.0), 0.0);
+        }
         outGBuffer1 = vec4(octa_encode(N), is_terrain_pre ? terrain_pom_vis : rmf.x, gbuf_flags(is_foliage_px, rmf.y));
         return;
     }
@@ -1131,10 +1167,12 @@ void main() {
     bool cd_leaf2 = is_foliage_px && !g_veg_solid;
     int mat_id = is_terrain_pre ? 3 : (cd_leaf2 ? 2 : 1);
     if (vEmissive.a > 0.5) mat_id = 5;     // emissive — handled above too
+    if (g_people_mat > 0 && mat_id == 1) mat_id = g_people_mat;
     outGBuffer0 = vec4(clamp(albedo * terrain_grass_occ, vec3(0.0), vec3(1.0)),
                        float(mat_id) / 255.0);
     vec2 rmf = surface_rough_metal(albedo_idx_raw, is_foliage_px, is_mesh_draw);
     if (cd_leaf2) rmf.x = veg_imp ? 0.902 : min(length(vWorldPos - scene.camera_pos.xyz) * 0.005 + 0.45, 0.99);
+    if (g_people_mat > 0) rmf = vec2(clamp(g_people_rough, 0.04, 1.0), 0.0);
     outGBuffer1 = vec4(octa_encode(N), is_terrain_pre ? terrain_pom_vis : rmf.x, gbuf_flags(is_foliage_px, rmf.y));
 }
 

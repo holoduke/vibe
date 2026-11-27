@@ -135,7 +135,7 @@ void light_port_destroy(VmaAllocator a) {
 }
 
 void VulkanEngine::light_port_fill(SceneUBO& d) {
-    static_assert(kTextureCount == 43, "LP_TEX_COUNT in deferred_lighting.frag must match");
+    static_assert(kTextureCount == 48, "LP_TEX_COUNT in deferred_lighting.frag must match");
     const bool contact = lp_switch("VIBE_LP_CONTACT", rt_.lp_contact_shadows);
     const bool far_ao  = lp_switch("VIBE_LP_FAR_AO", rt_.lp_far_ao);
     const bool leaf    = lp_switch("VIBE_LP_LEAF_TINT", rt_.lp_leaf_tint);
@@ -145,8 +145,12 @@ void VulkanEngine::light_port_fill(SceneUBO& d) {
     const bool smarch  = lp_switch("VIBE_LP_SCREEN_MARCH", rt_.lp_screen_march);
     // (the screen march reads last frame's lit picture: on from the frame after one was kept)
     g_march_want = smarch;
+    // VIBE_LEAF_SHADE_OLD=1: leaves / grass in ANY shadow lose 55 % of their sky light again (the
+    // old rule; now only under a blocker within a few metres - deferred_lighting.frag 'canopy').
+    static const bool leaf_shade_old = [] { const char* e = std::getenv("VIBE_LEAF_SHADE_OLD"); return e && e[0] == '1'; }();
     const int bits = (contact ? 1 : 0) | (far_ao ? 2 : 0) | (leaf ? 4 : 0) | (albedo ? 8 : 0) |
-                     (lamps ? 16 : 0) | ((smarch && light_port_prev_lit() != VK_NULL_HANDLE) ? 32 : 0);
+                     (lamps ? 16 : 0) | ((smarch && light_port_prev_lit() != VK_NULL_HANDLE) ? 32 : 0) |
+                     (leaf_shade_old ? 1024 : 0);
     // (the terrain's slot in the materials table: rt.cpp - after the brushes, when it is traced)
     d.lp_flags = glm::ivec4(bits, 0, tlas_includes_terrain_blas() ? int(world_.brushes.size()) : -1, 0);
     const glm::mat4& P = current_frame_view_.proj;
