@@ -109,7 +109,7 @@ struct WeaponDef {
     // while nothing is fired; 0 = it never does. It read as a weapon pointing the wrong way.)
     glm::vec3 ready_shift{0.015f, -0.135f, 0.015f};     // aim frame, added to shoulder_offset
     float     ready_pitch = 0.0f, ready_yaw = 0.0f;     // radians: muzzle down, and to the left
-    glm::vec3 ready_shift_fp{-0.045f, 0.050f, 0.020f};      // (was 0.020, -0.045, 0.030: only the barrel's end showed in the corner)
+    glm::vec3 ready_shift_fp{0.015f, 0.050f, 0.020f};       // (was -0.045: the owner, "head slightly to the left, the gun more to the right"; before that 0.020, -0.045, 0.030: only the barrel's end showed in the corner)
     float     ready_pitch_fp = 0.0f, ready_yaw_fp = 0.0f, ready_roll_fp = -0.07f;
     // Aiming, in the player's own view only: the weapon comes to the middle of the screen, its
     // sights under the crosshair. Nobody else sees this: for them it is in the shoulder.

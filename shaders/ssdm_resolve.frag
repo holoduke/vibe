@@ -41,6 +41,14 @@ void main() {
     float sd = texelFetch(u_depth, p, 0).r;
     float rz = uintBitsToFloat(hi & 0xFFFFFF00u);                  // 1 - z of the displaced surface
     bool  covered = ((hi & 192u) == 64u) && !(rz < 1e-05);
+    // A pixel the G-buffer does not describe (material 0 / no albedo: its colour comes from a
+    // later pass that tests against this depth) is kept exactly as it was - rebuilding it, or
+    // covering it with displaced ground, left the scene's clear colour (light blue) in rims
+    // round the bushes and grass.
+    {
+        vec4 gp = texelFetch(u_g0, p, 0);
+        if (sd > 0.0 && sd < 1.0 && (uint(gp.a * 255.0 + 0.5) == 0u || dot(gp.rgb, vec3(1.0)) < 1e-4)) covered = false;
+    }
 
     // ---------------- not covered, a surface: as it was, the depth pulled ----------------
     if (sd != 0.0 && !(covered || sd >= 1.0)) {

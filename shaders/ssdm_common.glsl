@@ -101,8 +101,12 @@ float ssdm_mat(ivec2 p) { return floor(texelFetch(u_g0, clamp(p, ivec2(0), ivec2
 uint ssdm_class(ivec2 p) {
     if (!ssdm_in(p)) return 0u;
     if (texelFetch(u_depth, p, 0).r >= 1.0) return 0u;
-    uint m = uint(texelFetch(u_g0, p, 0).a * 255.0 + 0.5);
+    vec4 g0 = texelFetch(u_g0, p, 0);
+    uint m = uint(g0.a * 255.0 + 0.5);
     if (m == 8u || m == 3u) return 3u;
+    // (no G-buffer write here - a depth-only fragment whose colour a later pass draws, as the
+    //  lighting pass reads it: deferred_lighting.frag. Never displaced: kept as foliage)
+    if (m == 0u || dot(g0.rgb, vec3(1.0)) < 1e-4) return 12u;
     if (texelFetch(u_g1, p, 0).a > 0.83) return 12u;
     return 1u;
 }
